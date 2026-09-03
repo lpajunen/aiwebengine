@@ -306,6 +306,10 @@ impl TestServer {
                 // the engine in a mode that hands the capability to anonymous
                 // callers.
                 bootstrap_admin_usernames: vec![TEST_ADMIN_USERNAME.to_string()],
+                // On, like every shipped template, so the suite exercises the
+                // recovery endpoints the way a deployment has them. The tests
+                // that are about the switch being off start their own server.
+                allow_recovery_codes: true,
                 ..InternalAuthConfig::default()
             },
             ..AuthConfig::default()
@@ -445,7 +449,15 @@ pub struct AdminServer {
 impl AdminServer {
     /// Start the server and sign in as [`TEST_ADMIN_USERNAME`].
     pub async fn start() -> anyhow::Result<Self> {
-        let server = TestServer::start_with_auth().await?;
+        Self::start_customized(|_| {}).await
+    }
+
+    /// The same, with a chance to change the configuration first — for a test
+    /// about a switch this server does not have in its default position.
+    pub async fn start_customized(
+        customize: impl FnOnce(&mut config::Config),
+    ) -> anyhow::Result<Self> {
+        let server = TestServer::start_with_auth_customized(customize).await?;
         let port = server.port();
         wait_for_server(port, 30).await?;
 

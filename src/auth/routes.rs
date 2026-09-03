@@ -398,6 +398,22 @@ const AUTH_PAGE_STYLES: &str = r#"        body {
             color: #6c757d;
             text-align: left;
         }
+
+        .codes {
+            list-style: none;
+            margin: 0 0 1.5rem;
+            padding: 0.75rem;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            background: #f8f9fa;
+            font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+            font-size: 1rem;
+            letter-spacing: 0.05em;
+        }
+
+        .codes li {
+            padding: 0.15rem 0;
+        }
 "#;
 
 /// Login page parameters
@@ -413,6 +429,9 @@ pub struct LoginPageParams {
     /// Show the sign-up form rather than the sign-in form.
     #[serde(default)]
     signup: Option<String>,
+    /// Show the recovery form rather than the sign-in form.
+    #[serde(default)]
+    recover: Option<String>,
 }
 
 /// The message shown for a failed attempt.
@@ -431,12 +450,96 @@ fn login_error_message(code: &str) -> &'static str {
         "guests_disabled" => "Guest access is not enabled here.",
         "rate_limit" => "Too many attempts. Wait a moment and try again.",
         "csrf" => "That form expired. Try again.",
+        "recovery_disabled" => "Recovery codes are not enabled here.",
         _ => "Sign in failed. Try again.",
     }
 }
 
-/// Render the sign-in, sign-up and guest controls for credentials the engine
-/// holds itself.
+/// The message shown beside the recovery form.
+///
+/// Differs from [`login_error_message`] exactly where the same code means
+/// something else here: what did not match is a username and a code, and what
+/// was too short is the new password being chosen.
+fn recovery_error_message(code: &str) -> &'static str {
+    match code {
+        "credentials" => "That username and recovery code do not match an account.",
+        "password" => "That new password is too short.",
+        other => login_error_message(other),
+    }
+}
+
+/// The form that spends a recovery code.
+///
+/// Three fields, because recovery is not a sign-in: the code is not a password
+/// and cannot be used as one, so redeeming it and choosing the new password
+/// happen in the same act. Anything else would leave an account reachable by a
+/// code that had already been shown to work.
+fn render_recovery_form(
+    internal: &crate::auth::config::InternalAuthConfig,
+    csrf_token: &str,
+    redirect: &str,
+    encoded_redirect: &str,
+) -> String {
+    if !internal.allow_recovery_codes {
+        return String::new();
+    }
+
+    // Somebody who reached this form from a solution's page goes back to it.
+    // Somebody who reached it from nowhere in particular — the default "/" —
+    // goes to their account page instead, which is where the rest of their
+    // codes are counted and where a fresh set is generated.
+    let target = if redirect == "/" {
+        format!("{}?notice=recovered", ACCOUNT_PATH)
+    } else {
+        redirect.to_string()
+    };
+
+    format!(
+        r#"<form class="credentials" method="post" action="/auth/local/recover">
+                <h2>Use a recovery code</h2>
+                <p class="explain">One of the codes you were given when you set them up. Each works
+                once, and using one sets a new password and signs out everywhere else.</p>
+                <input type="hidden" name="csrf_token" value="{csrf}">
+                <input type="hidden" name="redirect" value="{redirect}">
+                <label for="username">Username</label>
+                <input id="username" name="username" type="text" required autocomplete="username"
+                       minlength="3" maxlength="32" autocapitalize="none" spellcheck="false">
+                <label for="code">Recovery code</label>
+                <input id="code" name="code" type="text" required autocomplete="one-time-code"
+                       autocapitalize="none" spellcheck="false">
+                <label for="new_password">New password</label>
+                <input id="new_password" name="new_password" type="password" required
+                       autocomplete="new-password" minlength="{min_password}">
+                <button type="submit">Set a new password</button>
+                <p class="switch">Remembered it? <a href="/auth/login?redirect={encoded_redirect}">Sign in</a></p>
+            </form>"#,
+        csrf = html_attribute(csrf_token),
+        redirect = html_attribute(&target),
+        min_password = internal
+            .min_password_length
+            .max(crate::auth::local::MIN_PASSWORD_LENGTH),
+        encoded_redirect = encoded_redirect,
+    )
+}
+
+/// Which of the sign-in page's forms is being shown.
+///
+/// One page with three states rather than three pages: they share the CSRF
+/// token, the redirect target, the provider list below the divider and the
+/// styling, and a person moving between them is answering one question — how
+/// am I getting in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginForm {
+    /// Username and password.
+    SignIn,
+    /// Create an account.
+    SignUp,
+    /// Spend a recovery code and set a new password.
+    Recover,
+}
+
+/// Render the sign-in, sign-up, recovery and guest controls for credentials the
+/// engine holds itself.
 ///
 /// Plain forms, no script: the engine's configured Content-Security-Policy
 /// names `script-src 'self'` with no inline allowance, and a sign-in page is
@@ -447,11 +550,19 @@ pub fn render_internal_auth_forms(
     csrf_token: &str,
     redirect: &str,
     encoded_redirect: &str,
-    signing_up: bool,
+    form: LoginForm,
 ) -> String {
     let mut blocks: Vec<String> = Vec::new();
 
-    if internal.enabled {
+    if internal.enabled && form == LoginForm::Recover {
+        blocks.push(render_recovery_form(
+            internal,
+            csrf_token,
+            redirect,
+            encoded_redirect,
+        ));
+    } else if internal.enabled {
+        let signing_up = form == LoginForm::SignUp;
         let (action, heading, button, name_field, switch) = if signing_up {
             (
                 "/auth/local/register",
@@ -470,13 +581,24 @@ pub fn render_internal_auth_forms(
                 "Sign in with a username",
                 "Sign in",
                 "",
-                if internal.allow_registration {
-                    format!(
-                        r#"<p class="switch">No account yet? <a href="/auth/login?signup=1&amp;redirect={}">Create one</a></p>"#,
-                        encoded_redirect
-                    )
-                } else {
-                    String::new()
+                {
+                    let mut links = String::new();
+                    if internal.allow_registration {
+                        links.push_str(&format!(
+                            r#"<p class="switch">No account yet? <a href="/auth/login?signup=1&amp;redirect={}">Create one</a></p>"#,
+                            encoded_redirect
+                        ));
+                    }
+                    // The only way a person who has forgotten their password
+                    // finds the thing that lets them in. It is on the sign-in
+                    // form because that is where they are when they find out.
+                    if internal.allow_recovery_codes {
+                        links.push_str(&format!(
+                            r#"<p class="switch">Forgotten it? <a href="/auth/login?recover=1&amp;redirect={}">Use a recovery code</a></p>"#,
+                            encoded_redirect
+                        ));
+                    }
+                    links
                 },
             )
         };
@@ -521,7 +643,7 @@ pub fn render_internal_auth_forms(
     // session and a current password, neither of which a sign-in page has —
     // and it is here because the sign-in page is where a person goes looking
     // when they are thinking about their password.
-    if internal.enabled && !signing_up {
+    if internal.enabled && form == LoginForm::SignIn {
         blocks.push(format!(
             r#"<p class="switch"><a href="{}">Change your password</a></p>"#,
             ACCOUNT_PATH
@@ -595,16 +717,33 @@ pub async fn login_page(
     let error_block = params
         .error
         .as_deref()
-        .map(|code| format!(r#"<div class="notice">{}</div>"#, login_error_message(code)))
+        .map(|code| {
+            // Read beside the recovery form, "that username and password do not
+            // match an account" is about a field the form does not have.
+            let message = if internal.allow_recovery_codes && params.recover.is_some() {
+                recovery_error_message(code)
+            } else {
+                login_error_message(code)
+            };
+            format!(r#"<div class="notice">{}</div>"#, message)
+        })
         .unwrap_or_default();
 
-    let signing_up = internal.allow_registration && params.signup.is_some();
+    // A form the configuration does not offer falls back to signing in, rather
+    // than rendering a control that posts to an endpoint that would refuse.
+    let form = if internal.allow_recovery_codes && params.recover.is_some() {
+        LoginForm::Recover
+    } else if internal.allow_registration && params.signup.is_some() {
+        LoginForm::SignUp
+    } else {
+        LoginForm::SignIn
+    };
     let internal_block = render_internal_auth_forms(
         internal,
         &csrf_token,
         &redirect_param,
         &encoded_redirect,
-        signing_up,
+        form,
     );
     let providers_intro = if providers.is_empty() {
         String::new()
@@ -708,6 +847,10 @@ fn account_notice_message(code: &str) -> &'static str {
             "Your password has been changed. Every other session this account had is signed out."
         }
         "claimed" => "Your username and password are set. You can sign in with them from now on.",
+        "recovered" => {
+            "Your password was set with a recovery code. That code is spent; the rest \
+                        of the set still works."
+        }
         _ => "Done.",
     }
 }
@@ -742,6 +885,7 @@ pub fn render_account_forms(
     csrf_token: &str,
     username: Option<&str>,
     provider: &str,
+    recovery_codes_left: Option<i64>,
 ) -> String {
     if !internal.enabled {
         return String::new();
@@ -767,10 +911,11 @@ pub fn render_account_forms(
                        autocomplete="new-password" minlength="{min_password}">
                 <button type="submit">Change password</button>
                 <p class="switch">Changing it signs out every other session this account has.</p>
-            </form>"#,
+            </form>{recovery}"#,
             csrf = html_attribute(csrf_token),
             username = html_attribute(username),
             min_password = min_password,
+            recovery = render_recovery_codes_form(internal, csrf_token, recovery_codes_left),
         ),
         None => {
             let explain = if provider == crate::auth::local::GUEST_PROVIDER {
@@ -801,6 +946,59 @@ pub fn render_account_forms(
             )
         }
     }
+}
+
+/// The recovery-codes block on the account page.
+///
+/// Empty unless the engine offers codes at all. `None` means the account cannot
+/// hold them — it has no password for a code to reset — and the caller has
+/// already decided that; what is left here is the count, which is the only
+/// thing that can honestly be reported about a set of codes the engine stores
+/// as hashes.
+///
+/// It asks for the current password, and it says out loud that generating
+/// replaces the set that exists. Both are the same point: a person should be
+/// able to take away codes that were seen by somebody, and a stolen session
+/// should not be able to mint codes that outlive the owner's next password
+/// change.
+fn render_recovery_codes_form(
+    internal: &crate::auth::config::InternalAuthConfig,
+    csrf_token: &str,
+    codes_left: Option<i64>,
+) -> String {
+    // Checked here as well as by the caller, so this cannot render a control
+    // for an endpoint the configuration would refuse however it is called.
+    if !internal.allow_recovery_codes {
+        return String::new();
+    }
+
+    let Some(codes_left) = codes_left else {
+        return String::new();
+    };
+
+    let standing = match codes_left {
+        0 => "You have no recovery codes. Without one, a forgotten password takes whoever runs \
+              this engine to reset."
+            .to_string(),
+        1 => "You have 1 unused recovery code left.".to_string(),
+        many => format!("You have {} unused recovery codes.", many),
+    };
+
+    format!(
+        r#"<form class="credentials" method="post" action="/auth/local/recovery_codes">
+                <h2>Recovery codes</h2>
+                <p class="explain">{standing} Each one can set a new password once, if you forget
+                it. Generating a set replaces whatever you have now.</p>
+                <input type="hidden" name="csrf_token" value="{csrf}">
+                <input type="hidden" name="redirect" value="/auth/account">
+                <label for="recovery_current_password">Current password</label>
+                <input id="recovery_current_password" name="current_password" type="password"
+                       required autocomplete="current-password">
+                <button type="submit">Generate new codes</button>
+            </form>"#,
+        standing = standing,
+        csrf = html_attribute(csrf_token),
+    )
 }
 
 /// The account page: what the signed-in person can do about their own way in.
@@ -886,11 +1084,27 @@ pub async fn account_page(
         (None, None) => String::new(),
     };
 
+    // Only for an account that holds a password, since setting one is all a
+    // code can do. A failed count is reported as no codes rather than as no
+    // feature: the form is still the way to get some.
+    let recovery_codes_left = if config.internal.allow_recovery_codes && username.is_some() {
+        match crate::auth::local::unused_recovery_code_count(&session.user_id).await {
+            Ok(count) => Some(count),
+            Err(e) => {
+                tracing::error!("Could not count recovery codes for an account page: {}", e);
+                Some(0)
+            }
+        }
+    } else {
+        None
+    };
+
     let forms = render_account_forms(
         &config.internal,
         &csrf_token,
         username.as_deref(),
         &session.provider,
+        recovery_codes_left,
     );
     let forms = if forms.is_empty() {
         r#"<p class="explain">This engine holds no credentials of its own, so there is nothing to change here.</p>"#
@@ -1143,6 +1357,44 @@ pub struct PasswordChangeRequest {
     pub csrf_token: Option<String>,
 }
 
+/// Request body for `POST /auth/local/recovery_codes`.
+#[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
+pub struct RecoveryCodesRequest {
+    /// The password the account has now. A set of recovery codes is a second
+    /// way in, and a session someone else got hold of must not be able to mint
+    /// one.
+    #[serde(default)]
+    pub current_password: String,
+    #[serde(default)]
+    pub redirect: Option<String>,
+    #[serde(default)]
+    pub csrf_token: Option<String>,
+}
+
+/// The one and only copy of a freshly issued set.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct RecoveryCodesResponse {
+    pub success: bool,
+    /// Shown once. The engine keeps only hashes, so it cannot show them again.
+    pub codes: Vec<String>,
+}
+
+/// Request body for `POST /auth/local/recover`.
+#[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
+pub struct RecoverRequest {
+    #[serde(default)]
+    pub username: String,
+    /// One recovery code, in whatever spelling it was written down in.
+    #[serde(default)]
+    pub code: String,
+    #[serde(default)]
+    pub new_password: String,
+    #[serde(default)]
+    pub redirect: Option<String>,
+    #[serde(default)]
+    pub csrf_token: Option<String>,
+}
+
 /// How a request arrived, which decides how the answer is shaped and whether a
 /// CSRF token is demanded.
 ///
@@ -1322,6 +1574,7 @@ fn error_code_for(error: &crate::auth::error::AuthError) -> &'static str {
         E::WeakPassword(_) => "password",
         E::LocalAuthDisabled => "disabled",
         E::GuestAuthDisabled => "guests_disabled",
+        E::RecoveryCodesDisabled => "recovery_disabled",
         E::RateLimitExceeded => "rate_limit",
         E::CsrfValidationFailed => "csrf",
         _ => "failed",
@@ -1333,13 +1586,33 @@ fn redirect_to_login_with_error(
     error: &crate::auth::error::AuthError,
     redirect: Option<&str>,
 ) -> Response {
+    redirect_to_login_form_with_error(error, redirect, LoginForm::SignIn)
+}
+
+/// The same, naming the form to come back to.
+///
+/// A failed recovery has to land on the recovery form and not on the sign-in
+/// form: the person submitting it does not know their password, which is the
+/// one thing the page would otherwise be asking them for.
+fn redirect_to_login_form_with_error(
+    error: &crate::auth::error::AuthError,
+    redirect: Option<&str>,
+    form: LoginForm,
+) -> Response {
+    let form_param = match form {
+        LoginForm::SignIn => "",
+        LoginForm::SignUp => "signup=1&",
+        LoginForm::Recover => "recover=1&",
+    };
+
     let target = match redirect {
         Some(value) => format!(
-            "/auth/login?error={}&redirect={}",
+            "/auth/login?{}error={}&redirect={}",
+            form_param,
             error_code_for(error),
             urlencoding::encode(&safe_redirect_target(Some(value)))
         ),
-        None => format!("/auth/login?error={}", error_code_for(error)),
+        None => format!("/auth/login?{}error={}", form_param, error_code_for(error)),
     };
     Redirect::to(&target).into_response()
 }
@@ -1791,6 +2064,204 @@ pub async fn change_password_route(
             success: true,
             user_id: Some(session.user_id),
             username: None,
+        },
+    )
+}
+
+/// Issue a fresh set of recovery codes for the account behind the session.
+///
+/// Answers with the codes themselves, which is the only time they exist: what
+/// is stored is a hash of each, so this response cannot be reproduced. A form
+/// submission therefore gets a page rather than a redirect — there is nowhere
+/// to redirect to that could carry them, and putting a credential in a URL is
+/// the one place it must not go.
+#[utoipa::path(
+    post,
+    path = "/auth/local/recovery_codes",
+    tags = ["Authentication"],
+    request_body = RecoveryCodesRequest,
+    responses(
+        (status = 200, description = "A new set of codes, shown once", body = RecoveryCodesResponse),
+        (status = 401, description = "No session, or the current password is wrong", body = crate::openapi_schemas::ErrorResponse),
+        (status = 403, description = "Recovery codes are not enabled", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn recovery_codes_route(
+    State(auth_manager): State<Arc<AuthManager>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, AuthErrorResponse> {
+    let (request, style) = parse_auth_body::<RecoveryCodesRequest>(&headers, &body);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
+    let config = auth_manager.config();
+
+    let token = session_token_from_headers(&headers, &config.session_cookie_name)
+        .ok_or(crate::auth::error::AuthError::AuthenticationRequired)?;
+    let session = auth_manager
+        .get_session(
+            &token,
+            &ip_addr,
+            &user_agent,
+            get_request_host(&headers).as_deref(),
+        )
+        .await
+        .map_err(|_| crate::auth::error::AuthError::AuthenticationRequired)?;
+
+    if require_session_form_csrf(
+        &auth_manager,
+        style,
+        request.csrf_token.as_deref(),
+        &session.user_id,
+        true,
+    )
+    .await
+    .is_err()
+    {
+        return Ok(redirect_to_form_with_error(
+            &crate::auth::error::AuthError::CsrfValidationFailed,
+            request.redirect.as_deref(),
+        ));
+    }
+
+    let codes = match auth_manager
+        .issue_recovery_codes(&session.user_id, &request.current_password, &ip_addr)
+        .await
+    {
+        Ok(codes) => codes,
+        Err(error) if style == RequestStyle::Form => {
+            return Ok(redirect_to_form_with_error(
+                &error,
+                request.redirect.as_deref(),
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    };
+
+    if style == RequestStyle::Form {
+        return Ok(render_recovery_codes_page(&codes));
+    }
+
+    Ok(Json(RecoveryCodesResponse {
+        success: true,
+        codes,
+    })
+    .into_response())
+}
+
+/// The page that shows a freshly issued set, once.
+fn render_recovery_codes_page(codes: &[String]) -> Response {
+    let nonce = crate::security::generate_nonce();
+    let items = codes
+        .iter()
+        .map(|code| format!("<li>{}</li>", html_escape::encode_text(code)))
+        .collect::<Vec<_>>()
+        .join("\n            ");
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recovery codes</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <style nonce="{style_nonce}">{styles}    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Recovery codes</h1>
+        <div class="notice ok">These replace any codes you had before.</div>
+        <p class="explain">Write them down somewhere that is not this computer. Each one can set a
+        new password once, and they are shown here and nowhere else — the engine keeps only a hash,
+        so it cannot show them to you again.</p>
+        <ul class="codes">
+            {items}
+        </ul>
+        <p class="switch"><a href="/auth/account">Back to your account</a></p>
+    </div>
+</body>
+</html>"#,
+        style_nonce = html_attribute(&nonce),
+        styles = AUTH_PAGE_STYLES,
+        items = items,
+    );
+
+    let mut response = html_page_response(html, &nonce);
+    // The one response in the engine that carries credentials in its body.
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
+/// Spend a recovery code: set a new password and sign the caller in.
+///
+/// Takes no session — the whole point is that whoever is calling cannot get
+/// one. What stands in for it is the code, which the account was issued ahead
+/// of time and which is single-use.
+#[utoipa::path(
+    post,
+    path = "/auth/local/recover",
+    tags = ["Authentication"],
+    request_body = RecoverRequest,
+    responses(
+        (status = 200, description = "Password reset and a session issued", body = InternalAuthResponse),
+        (status = 400, description = "New password rejected", body = crate::openapi_schemas::ErrorResponse),
+        (status = 401, description = "Unknown username, or a code that is wrong or already spent", body = crate::openapi_schemas::ErrorResponse),
+        (status = 403, description = "Recovery codes are not enabled", body = crate::openapi_schemas::ErrorResponse),
+        (status = 429, description = "Rate limit exceeded", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn recover_account(
+    State(auth_manager): State<Arc<AuthManager>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, AuthErrorResponse> {
+    let (request, style) = parse_auth_body::<RecoverRequest>(&headers, &body);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
+    let host = get_request_host(&headers);
+
+    require_form_csrf(&auth_manager, style, request.csrf_token.as_deref()).await?;
+
+    let token = match auth_manager
+        .recover_local_account(
+            &request.username,
+            &request.code,
+            &request.new_password,
+            &ip_addr,
+            &user_agent,
+        )
+        .await
+    {
+        Ok(token) => token,
+        Err(error) if style == RequestStyle::Form => {
+            return Ok(redirect_to_login_form_with_error(
+                &error,
+                request.redirect.as_deref(),
+                LoginForm::Recover,
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    };
+
+    let user_id = auth_manager
+        .get_session(&token, &ip_addr, &user_agent, host.as_deref())
+        .await
+        .ok()
+        .map(|session| session.user_id);
+
+    respond_to_style(
+        &auth_manager,
+        style,
+        &token,
+        request.redirect.as_deref(),
+        InternalAuthResponse {
+            success: true,
+            user_id,
+            username: Some(crate::auth::local::normalize_username(&request.username)),
         },
     )
 }
@@ -3706,6 +4177,8 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
         .route("/local/login", post(login_local))
         .route("/local/password", post(change_password_route))
         .route("/local/claim", post(claim_account))
+        .route("/local/recovery_codes", post(recovery_codes_route))
+        .route("/local/recover", post(recover_account))
         .route("/logout", get(logout).post(logout))
         .route("/refresh", post(refresh_session))
         .route("/status", get(auth_status))

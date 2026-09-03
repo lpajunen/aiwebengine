@@ -755,6 +755,143 @@ impl AuthManager {
         .await
     }
 
+    /// Issue a fresh set of recovery codes, returning the only copy of them.
+    ///
+    /// Asks for the current password even though the caller holds a session,
+    /// for the reason [`Self::change_local_password`] does: a set of recovery
+    /// codes is a second way into the account, and a session someone else got
+    /// hold of must not be able to mint one that outlives the owner changing
+    /// their password.
+    ///
+    /// Replaces whatever set the account had. Reissuing because the old codes
+    /// were seen by somebody has to actually take them away.
+    pub async fn issue_recovery_codes(
+        &self,
+        user_id: &str,
+        current_password: &str,
+        ip_addr: &str,
+    ) -> Result<Vec<String>, AuthError> {
+        if !self.config.internal.enabled {
+            return Err(AuthError::LocalAuthDisabled);
+        }
+
+        if !self.config.internal.allow_recovery_codes {
+            return Err(AuthError::RecoveryCodesDisabled);
+        }
+
+        if !self.security_context.check_auth_rate_limit(ip_addr).await {
+            return Err(AuthError::RateLimitExceeded);
+        }
+
+        crate::auth::local::verify_user_password(user_id, current_password).await?;
+        crate::auth::local::issue_recovery_codes(user_id).await
+    }
+
+    /// Spend a recovery code: set a new password, end every session the account
+    /// had, and sign the caller in.
+    ///
+    /// The way back for someone who has forgotten their password on a solution
+    /// they merely use. `--set-password` answers the operator's case and cannot
+    /// answer this one, and these accounts carry no verified address for a
+    /// reset link to go to.
+    ///
+    /// Throttled the way [`Self::login_local`] is, per address and per account,
+    /// because this is a second credential accepting guesses at the same
+    /// account — and only failures spend the account's budget, so nobody can
+    /// lock somebody out of their own recovery by burning it for them.
+    ///
+    /// Ending the account's sessions is not optional here. Recovery is the path
+    /// somebody takes when they have lost control of the account, and the
+    /// sessions that exist at that moment may be exactly the ones they are
+    /// trying to be rid of.
+    pub async fn recover_local_account(
+        &self,
+        username: &str,
+        code: &str,
+        new_password: &str,
+        ip_addr: &str,
+        user_agent: &str,
+    ) -> Result<String, AuthError> {
+        if !self.config.internal.enabled {
+            return Err(AuthError::LocalAuthDisabled);
+        }
+
+        if !self.config.internal.allow_recovery_codes {
+            return Err(AuthError::RecoveryCodesDisabled);
+        }
+
+        if !self.security_context.check_auth_rate_limit(ip_addr).await {
+            return Err(AuthError::RateLimitExceeded);
+        }
+
+        if !self.security_context.account_login_allowed(username).await {
+            return Err(AuthError::RateLimitExceeded);
+        }
+
+        let user_id = match crate::auth::local::redeem_recovery_code(
+            username,
+            code,
+            new_password,
+            self.config.internal.min_password_length,
+        )
+        .await
+        {
+            Ok(user_id) => user_id,
+            Err(e) => {
+                // A password this engine would refuse is the caller mistyping,
+                // not somebody guessing; spending the account's budget on it
+                // would let a person lock themselves out of their own recovery
+                // with a short password.
+                if !matches!(e, AuthError::WeakPassword(_)) {
+                    self.security_context
+                        .record_account_login_failure(username)
+                        .await;
+                    self.security_context
+                        .log_auth_failure(
+                            crate::auth::local::LOCAL_PROVIDER,
+                            "Invalid recovery code",
+                            Some(ip_addr),
+                        )
+                        .await;
+                }
+                return Err(e);
+            }
+        };
+
+        if let Err(e) = self
+            .session_manager()
+            .delete_all_sessions_for_user(&user_id)
+            .await
+        {
+            // The password is already changed. Say so loudly rather than
+            // reporting a failure that would send someone back through
+            // recovery to spend a second code.
+            tracing::error!(
+                "Password for {} was recovered but their sessions could not be ended: {}",
+                user_id,
+                e
+            );
+        }
+
+        crate::user_repository::apply_bootstrap_admin_username(
+            &user_id,
+            &crate::auth::local::normalize_username(username),
+        )
+        .await
+        .map_err(|e| AuthError::Internal(format!("Failed to apply configured role: {}", e)))?;
+
+        self.establish_session(SessionRequest {
+            user_id,
+            provider: crate::auth::local::LOCAL_PROVIDER.to_string(),
+            email: None,
+            name: None,
+            ip_addr: ip_addr.to_string(),
+            user_agent: user_agent.to_string(),
+            refresh_token: None,
+        })
+        .await
+    }
+
     /// Attach a credential to an account that has none, keeping its `user_id`.
     ///
     /// The reason a guest is worth offering at all: whatever they built up

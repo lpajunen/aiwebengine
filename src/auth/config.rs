@@ -89,6 +89,21 @@ pub struct InternalAuthConfig {
     #[serde(default)]
     pub bootstrap_admin_usernames: Vec<String>,
 
+    /// Let an account be issued recovery codes, and let one be redeemed for a
+    /// password reset.
+    ///
+    /// Off by default like everything else here, and for a sharper reason: it
+    /// is a second way to take over an account, and an upgrade must not switch
+    /// on a password-reset endpoint for a deployment that never asked for one.
+    ///
+    /// The codes are what makes recovery possible at all for these accounts.
+    /// They carry no verified address — that is the point of them — so the
+    /// reset link every other system sends has nowhere to go, and without codes
+    /// the only answer is `--set-password`, which needs the machine the engine
+    /// runs on.
+    #[serde(default = "default_false")]
+    pub allow_recovery_codes: bool,
+
     #[serde(default = "default_min_password_length")]
     pub min_password_length: usize,
 }
@@ -100,6 +115,7 @@ impl Default for InternalAuthConfig {
             allow_registration: false,
             allow_guests: false,
             bootstrap_admin_usernames: Vec::new(),
+            allow_recovery_codes: false,
             min_password_length: default_min_password_length(),
         }
     }

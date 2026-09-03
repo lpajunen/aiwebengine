@@ -116,6 +116,8 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::favicon_route,
         auth::routes::login_page,
         auth::routes::account_page,
+        auth::routes::recovery_codes_route,
+        auth::routes::recover_account,
         auth::routes::start_login,
         auth::routes::oauth_callback,
         auth::routes::logout,

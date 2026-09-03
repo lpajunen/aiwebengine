@@ -219,6 +219,44 @@ pub async fn attach_credential(
     Ok(normalized)
 }
 
+/// Check a password against the one an account holds.
+///
+/// The authorization for anything that acts on a credential from inside a
+/// session: changing the password, and issuing recovery codes. The session says
+/// which account, and this says it is really them — a session someone else got
+/// hold of must not be enough on its own, or the two things that can lock an
+/// owner out of their own account are both reachable from a stolen cookie.
+///
+/// An account with no credential answers the same as a wrong password, after
+/// hashing against the dummy, so this is not a way to learn which accounts have
+/// one.
+pub async fn verify_user_password(user_id: &str, password: &str) -> Result<(), AuthError> {
+    let pool = pool()?;
+    let row = sqlx::query("SELECT password_hash FROM local_credentials WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| AuthError::Internal(format!("credential lookup failed: {}", e)))?;
+
+    let Some(row) = row else {
+        // A guest, or a federated identity: there is no password here, and
+        // treating its absence as a pass would be a way to take an account over
+        // from whatever session happened to be open.
+        let _ = verify_password(password, DUMMY_HASH);
+        return Err(AuthError::InvalidCredentials);
+    };
+
+    let stored_hash: String = row
+        .try_get("password_hash")
+        .map_err(|e| AuthError::Internal(format!("credential row is malformed: {}", e)))?;
+
+    if !verify_password(password, &stored_hash) {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    Ok(())
+}
+
 /// Replace an account's password with another, given the one it has now.
 ///
 /// The lifecycle piece a personal install cannot do without: the credential is
@@ -237,30 +275,9 @@ pub async fn change_password(
     min_password_length: usize,
 ) -> Result<(), AuthError> {
     validate_password(new_password, min_password_length)?;
+    verify_user_password(user_id, current_password).await?;
 
     let pool = pool()?;
-    let row = sqlx::query("SELECT password_hash FROM local_credentials WHERE user_id = $1")
-        .bind(user_id)
-        .fetch_optional(&pool)
-        .await
-        .map_err(|e| AuthError::Internal(format!("credential lookup failed: {}", e)))?;
-
-    let Some(row) = row else {
-        // A guest, or a federated identity: there is no password here to
-        // change, and inventing one would be a way to take an account over
-        // from whatever session happened to be open.
-        let _ = verify_password(current_password, DUMMY_HASH);
-        return Err(AuthError::InvalidCredentials);
-    };
-
-    let stored_hash: String = row
-        .try_get("password_hash")
-        .map_err(|e| AuthError::Internal(format!("credential row is malformed: {}", e)))?;
-
-    if !verify_password(current_password, &stored_hash) {
-        return Err(AuthError::InvalidCredentials);
-    }
-
     let hash = hash_password(new_password)?;
     sqlx::query("UPDATE local_credentials SET password_hash = $1 WHERE user_id = $2")
         .bind(&hash)
@@ -394,6 +411,219 @@ pub async fn username_for_user(user_id: &str) -> Result<Option<String>, AuthErro
     }
 }
 
+/// How many codes an account is issued at once.
+///
+/// Ten because a set is written down once and used one at a time, and because
+/// the cost of a spare is nothing while the cost of running out is the thing
+/// this feature exists to prevent.
+pub const RECOVERY_CODE_COUNT: usize = 10;
+
+/// Characters a recovery code is built from.
+///
+/// No `i`, `l`, `o` or `u`: a code is copied onto paper and typed back months
+/// later, and a character somebody has to guess the identity of is a code that
+/// fails when it is needed. Lower case only, since the redeem path folds case
+/// anyway and a mixed-case alphabet would only add ways to mistype.
+const RECOVERY_ALPHABET: &[u8] = b"abcdefghjkmnpqrstvwxyz23456789";
+
+/// Characters per code, before the grouping hyphens.
+///
+/// Twenty of a thirty-character alphabet is a little over 98 bits. It does not
+/// need to be less guessable than that, and a code nobody can transcribe is
+/// worse than a shorter one.
+const RECOVERY_CODE_LENGTH: usize = 20;
+
+/// Fold a code to the one spelling that is looked up.
+///
+/// Everything that is not part of the alphabet goes: the hyphens this engine
+/// writes, the spaces a person types, the case a phone capitalised. What is
+/// left is compared, so a code read off paper matches however it was entered.
+pub fn normalize_recovery_code(code: &str) -> String {
+    code.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// Hash a code for storage.
+///
+/// SHA-256, no salt and no work factor — the same reasoning as
+/// [`crate::auth::refresh_tokens`]. This is a string the engine generated with
+/// about a hundred bits of entropy, not a password somebody chose, so there is
+/// nothing to guess and nothing to pre-compute; and it means redeeming a code
+/// is one indexed lookup rather than an Argon2 verification against every row
+/// the account holds.
+fn hash_recovery_code(code: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(normalize_recovery_code(code).as_bytes()))
+}
+
+/// One code, in the shape it is shown to a person: four groups of five.
+fn generate_recovery_code() -> String {
+    let modulus = RECOVERY_ALPHABET.len() as u8;
+    // The largest multiple of the alphabet that fits in a byte. Bytes at or
+    // above it are drawn again rather than folded, so every character is
+    // equally likely — a bias here is small, but it is free to not have one.
+    let ceiling = u8::MAX - (u8::MAX % modulus);
+
+    let mut code = String::with_capacity(RECOVERY_CODE_LENGTH + 3);
+    for position in 0..RECOVERY_CODE_LENGTH {
+        if position > 0 && position % 5 == 0 {
+            code.push('-');
+        }
+        let byte = loop {
+            let candidate: u8 = rand::random();
+            if candidate < ceiling {
+                break candidate;
+            }
+        };
+        code.push(RECOVERY_ALPHABET[(byte % modulus) as usize] as char);
+    }
+    code
+}
+
+/// Issue a fresh set of recovery codes, returning the only copy of them.
+///
+/// Replaces whatever the account held: a set is a set, and leaving the previous
+/// one working would mean a person who reissues because the old codes were seen
+/// by somebody has not actually taken them away.
+///
+/// The account must hold a credential. A code's whole power is to set a
+/// password, so issuing one to an account with no password would be issuing a
+/// credential that can do nothing — and to a guest, whose account has no way in
+/// by design, it would be a way in.
+pub async fn issue_recovery_codes(user_id: &str) -> Result<Vec<String>, AuthError> {
+    if !user_has_credential(user_id).await? {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    let codes: Vec<String> = (0..RECOVERY_CODE_COUNT)
+        .map(|_| generate_recovery_code())
+        .collect();
+    let hashes: Vec<String> = codes.iter().map(|code| hash_recovery_code(code)).collect();
+
+    let pool = pool()?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| AuthError::Internal(format!("storing recovery codes failed: {}", e)))?;
+
+    sqlx::query("DELETE FROM local_recovery_codes WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AuthError::Internal(format!("storing recovery codes failed: {}", e)))?;
+
+    // One statement rather than ten round trips, and inside the transaction
+    // that removed the previous set, so an account is never briefly holding no
+    // codes at all.
+    sqlx::query(
+        r#"
+        INSERT INTO local_recovery_codes (code_hash, user_id)
+        SELECT hash, $2 FROM UNNEST($1::text[]) AS hash
+        "#,
+    )
+    .bind(&hashes)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| AuthError::Internal(format!("storing recovery codes failed: {}", e)))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| AuthError::Internal(format!("storing recovery codes failed: {}", e)))?;
+
+    Ok(codes)
+}
+
+/// How many of an account's codes are still good, for the account page to
+/// report.
+pub async fn unused_recovery_code_count(user_id: &str) -> Result<i64, AuthError> {
+    let pool = pool()?;
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM local_recovery_codes WHERE user_id = $1 AND used_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| AuthError::Internal(format!("recovery code lookup failed: {}", e)))?;
+
+    Ok(count)
+}
+
+/// Spend a recovery code and set the password it was held against.
+///
+/// The username is asked for as well as the code, and both have to name the
+/// same account. Not because the code is ambiguous — it identifies an account
+/// on its own — but because it makes the form read like a sign-in, and because
+/// a code typed against the wrong account should fail rather than quietly reset
+/// whichever one it belongs to.
+///
+/// The code is spent in the same transaction that writes the password, and
+/// spending it is conditional on it still being unused, so two requests racing
+/// with the same code cannot both set a password. Every other code the account
+/// holds survives: a set of ten is ten emergencies, not one.
+///
+/// Returns the same error for an unknown username, a wrong code and a spent
+/// code. There is nothing to be learned here about which accounts exist or
+/// which codes were once real.
+pub async fn redeem_recovery_code(
+    username: &str,
+    code: &str,
+    new_password: &str,
+    min_password_length: usize,
+) -> Result<String, AuthError> {
+    validate_password(new_password, min_password_length)?;
+
+    // Hashed before the username is looked up, so an unknown name costs what a
+    // known one costs. Doing it after the lookup would make the whole Argon2
+    // hash the difference between "no such account" and "wrong code", which is
+    // the timing oracle `verify_login` hashes against a dummy to avoid.
+    let password_hash = hash_password(new_password)?;
+    let hash = hash_recovery_code(code);
+
+    let Some(user_id) = user_id_for_username(username).await? else {
+        return Err(AuthError::InvalidCredentials);
+    };
+
+    let pool = pool()?;
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| AuthError::Internal(format!("redeeming a recovery code failed: {}", e)))?;
+
+    let spent = sqlx::query(
+        r#"
+        UPDATE local_recovery_codes
+        SET used_at = NOW()
+        WHERE code_hash = $1 AND user_id = $2 AND used_at IS NULL
+        "#,
+    )
+    .bind(&hash)
+    .bind(&user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| AuthError::Internal(format!("redeeming a recovery code failed: {}", e)))?;
+
+    if spent.rows_affected() == 0 {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    sqlx::query("UPDATE local_credentials SET password_hash = $1 WHERE user_id = $2")
+        .bind(&password_hash)
+        .bind(&user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AuthError::Internal(format!("storing credential failed: {}", e)))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| AuthError::Internal(format!("redeeming a recovery code failed: {}", e)))?;
+
+    Ok(user_id)
+}
+
 /// An Argon2id hash of a value no one holds, verified against when the username
 /// is unknown so that branch costs what a real verification costs.
 const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHRzb21lc2FsdA$Rk9SIFRJTUlORyBPTkxZIC0gbmV2ZXIgbWF0Y2hlcw";
@@ -456,6 +686,58 @@ mod tests {
         let first = hash_password("same password").expect("hashing should succeed");
         let second = hash_password("same password").expect("hashing should succeed");
         assert_ne!(first, second, "each hash carries its own salt");
+    }
+
+    #[test]
+    fn a_recovery_code_is_readable_and_unambiguous() {
+        let code = generate_recovery_code();
+
+        assert_eq!(code, code.to_lowercase());
+        assert_eq!(
+            code.chars().filter(|c| *c == '-').count(),
+            3,
+            "four groups of five, so it can be read off paper"
+        );
+        assert_eq!(
+            normalize_recovery_code(&code).len(),
+            RECOVERY_CODE_LENGTH,
+            "the hyphens are decoration, not part of the secret"
+        );
+        assert!(
+            !code.contains(['i', 'l', 'o', 'u', '0', '1']),
+            "no character anybody has to guess the identity of: {}",
+            code
+        );
+    }
+
+    #[test]
+    fn recovery_codes_do_not_repeat() {
+        let codes: std::collections::HashSet<String> =
+            (0..64).map(|_| generate_recovery_code()).collect();
+        assert_eq!(codes.len(), 64, "each draw should be its own code");
+    }
+
+    /// A code is transcribed by hand, so the spelling that comes back is not
+    /// the spelling that went out. What is compared is what is left after the
+    /// decoration.
+    #[test]
+    fn a_code_matches_however_it_was_typed_back() {
+        let code = generate_recovery_code();
+        let typed = format!("  {}  ", code.to_uppercase().replace('-', " "));
+
+        assert_eq!(
+            normalize_recovery_code(&typed),
+            normalize_recovery_code(&code)
+        );
+        assert_eq!(hash_recovery_code(&typed), hash_recovery_code(&code));
+    }
+
+    #[test]
+    fn two_codes_hash_to_two_hashes() {
+        assert_ne!(
+            hash_recovery_code(&generate_recovery_code()),
+            hash_recovery_code(&generate_recovery_code())
+        );
     }
 
     #[test]

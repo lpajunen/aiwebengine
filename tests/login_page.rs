@@ -9,7 +9,7 @@
 mod common;
 
 use aiwebengine::auth::config::InternalAuthConfig;
-use aiwebengine::auth::routes::render_internal_auth_forms;
+use aiwebengine::auth::routes::{LoginForm, render_internal_auth_forms};
 
 fn config(enabled: bool, registration: bool, guests: bool) -> InternalAuthConfig {
     InternalAuthConfig {
@@ -17,12 +17,18 @@ fn config(enabled: bool, registration: bool, guests: bool) -> InternalAuthConfig
         allow_registration: registration,
         allow_guests: guests,
         bootstrap_admin_usernames: Vec::new(),
+        allow_recovery_codes: false,
         min_password_length: 12,
     }
 }
 
 fn render(config: &InternalAuthConfig, signing_up: bool) -> String {
-    render_internal_auth_forms(config, "csrf-token-value", "/after", "%2Fafter", signing_up)
+    let form = if signing_up {
+        LoginForm::SignUp
+    } else {
+        LoginForm::SignIn
+    };
+    render_internal_auth_forms(config, "csrf-token-value", "/after", "%2Fafter", form)
 }
 
 /// Off by default means off on the page too: an engine with no internal

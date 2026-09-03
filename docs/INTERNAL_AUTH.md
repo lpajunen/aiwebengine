@@ -70,6 +70,8 @@ allow_registration = true
 allow_guests = true
 # Local usernames that hold the administrator role, whatever the database says.
 bootstrap_admin_usernames = []
+# Let an account be issued recovery codes, and let one be redeemed for a reset.
+allow_recovery_codes = true
 # Minimum password length. The engine enforces a floor of 8 regardless.
 min_password_length = 12
 ```
@@ -165,22 +167,87 @@ must not and need not: a cross-site page can POST a form anywhere without a
 preflight, which is how login CSRF signs a victim into an attacker's account,
 but it cannot POST `application/json` without one the engine does not grant.
 
-| Endpoint                    | Requires                           | Does                                                                                                                                                                         |
-| --------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /auth/guest`          | `allow_guests`                     | Issues an identity and a session to a caller with no credential. Body: `{"name": "..."}` (optional).                                                                         |
-| `POST /auth/local/register` | `enabled` and `allow_registration` | Creates an account and issues a session. Body: `{"username", "password", "name"}`.                                                                                           |
-| `POST /auth/local/login`    | `enabled`                          | Signs in against a stored credential. Body: `{"username", "password"}`.                                                                                                      |
-| `POST /auth/local/claim`    | `enabled`, plus a session          | Attaches a credential to the calling account, keeping its `user_id`. Body: `{"username", "password"}`.                                                                       |
-| `POST /auth/local/password` | `enabled`, plus a session          | Replaces the calling account's password, given the one it has now. Ends every session the account held and issues a fresh one. Body: `{"current_password", "new_password"}`. |
+| Endpoint                          | Requires                                          | Does                                                                                                                                                                         |
+| --------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /auth/guest`                | `allow_guests`                                    | Issues an identity and a session to a caller with no credential. Body: `{"name": "..."}` (optional).                                                                         |
+| `POST /auth/local/register`       | `enabled` and `allow_registration`                | Creates an account and issues a session. Body: `{"username", "password", "name"}`.                                                                                           |
+| `POST /auth/local/login`          | `enabled`                                         | Signs in against a stored credential. Body: `{"username", "password"}`.                                                                                                      |
+| `POST /auth/local/claim`          | `enabled`, plus a session                         | Attaches a credential to the calling account, keeping its `user_id`. Body: `{"username", "password"}`.                                                                       |
+| `POST /auth/local/password`       | `enabled`, plus a session                         | Replaces the calling account's password, given the one it has now. Ends every session the account held and issues a fresh one. Body: `{"current_password", "new_password"}`. |
+| `POST /auth/local/recovery_codes` | `enabled`, `allow_recovery_codes`, plus a session | Issues a fresh set of recovery codes and answers with them, once. Replaces any set the account had. Body: `{"current_password"}`.                                            |
+| `POST /auth/local/recover`        | `enabled` and `allow_recovery_codes`              | Spends a recovery code: sets a new password, ends every session the account held, issues one. Body: `{"username", "code", "new_password"}`.                                  |
 
-Each of the first three sets the session cookie on success, and so does the
-fourth — the session it replaces is one of the ones it ended.
+`/auth/guest`, `/auth/local/register` and `/auth/local/login` set the session
+cookie on success, and so do `/auth/local/password` and `/auth/local/recover` —
+the session each of those issues replaces ones it has just ended.
+`/auth/local/claim` does not: the account and its roles are unchanged, only the
+way back in is new. `/auth/local/recovery_codes` is the exception in shape as
+well as in kind — it answers with credentials in the body, so a form submission
+gets a page listing them rather than a redirect, and none of it is ever put in a
+URL.
 
 `POST /auth/local/password` asks for the current password even though the caller
 already holds a session: a session someone else got hold of must not be enough
 to lock the owner out of their own account. Ending the other sessions is the
 other half of it — a password is changed because the old one may be known, and a
 session minted under it otherwise keeps working for up to `max_session_age`.
+
+## Recovery codes
+
+The answer to "I forgot my password" for someone who is not the operator.
+
+A code is a second credential for the same account, issued ahead of time and
+written down. It proves what a password proves, and the only thing it can do is
+set a new password. Ten are issued at a time, each about ninety-eight bits, from
+an alphabet with no `i`, `l`, `o` or `u` — a code is copied onto paper and typed
+back months later, and a character somebody has to guess the identity of is a
+code that fails when it is needed. What is compared is the code with its
+decoration removed, so the hyphens the engine writes, the spaces a person types
+and the case a phone capitalised all fall away.
+
+Only hashes are stored: SHA-256, no salt and no work factor, the same reasoning
+as `oauth_refresh_tokens.token_hash`. These are strings the engine generated
+with far more entropy than a password, so there is nothing to guess and nothing
+to pre-compute — and it means redeeming one is a single indexed lookup rather
+than an Argon2 verification against every row the account holds. The engine
+cannot show a code twice, which is why the page that issues a set says so.
+
+Rules that make a code a credential rather than a password with extra steps:
+
+- **Single use.** Spending one marks it used in the same transaction that writes
+  the password, conditional on it still being unused, so two requests racing
+  with the same code cannot both set one. The other nine survive: a set of ten
+  is ten emergencies.
+- **Bound to one account.** `/auth/local/recover` takes a username as well as a
+  code and both must name the same account. An unknown username, a wrong code
+  and a spent code are one answer — and one cost: the new password is hashed
+  before the username is looked up, so a whole Argon2 hash is not the difference
+  between "no such account" and "wrong code". That is the same oracle
+  `verify_login` hashes against a dummy to close.
+- **Issuing takes the current password**, even though the caller already holds a
+  session — the same rule as changing a password, for the same reason. A set of
+  codes is a way in that would otherwise outlive the owner noticing and changing
+  their password.
+- **Issuing replaces the previous set.** Reissuing because the old codes were
+  seen by somebody has to actually take them away.
+- **Redeeming ends every session the account had.** Recovery is what somebody
+  does when they have lost control of an account, and the sessions alive at that
+  moment may be the ones they are trying to be rid of.
+- **Throttled per address and per account**, like `login_local`, because this is
+  a second credential accepting guesses at the same account. Only failures spend
+  the account's budget, and a password the engine would refuse is not counted as
+  one — otherwise a person could lock themselves out of their own recovery by
+  typing a short password.
+- **Only for an account that holds a password.** Setting one is all a code can
+  do, and for a guest — an account with no way in by design — a code would be
+  one.
+
+On the pages: `/auth/login` links to `?recover=1`, which swaps the sign-in form
+for one taking a username, a code and the new password. Recovery is not a
+sign-in, so the code is spent and the password chosen in the same act; an
+account is never left reachable by a code already shown to work. `/auth/account`
+reports how many codes are left — the only thing that can honestly be said about
+codes stored as hashes — and issues a fresh set.
 
 ## Resetting a password from the command line
 
@@ -253,14 +320,16 @@ a password the sign-in page would then refuse.
 
 ## Not done yet
 
-- **No self-service recovery.** `--set-password` needs the machine the engine
-  runs on, so it answers a personal install and a deployment with an operator,
-  and nothing else: someone who forgot their password on a solution they merely
-  use has to ask whoever runs it. What would close that is recovery codes —
-  one-time codes issued when an account is created or claimed, hashed beside
-  the password, redeemable for a reset. They fit this design where an email
-  reset does not, because these accounts deliberately have no verified address.
-  For a guest there can be no recovery at all: no secret, nothing to recover.
+- **Recovery has to be set up in advance.** A code only helps an account that
+  asked for one before it needed it, and nothing prompts for that: the account
+  page offers it, and a person who never visits the account page has no codes on
+  the day they forget their password. What would close it is a solution being
+  able to walk its own users through issuing a set at sign-up. For a guest there
+  can be no recovery at all: no secret, nothing to recover.
+- **No administrator-issued reset.** An account with no codes and no operator
+  access has nowhere to go. An administrator can already reach `--set-password`
+  on the machine, but there is no endpoint that lets them issue a reset for an
+  account in their realm.
 - **No session visibility.** A person cannot list the sessions their account
   holds or end one of them. Changing a password ends them all, and an
   administrator's role change ends them all, and those are the only two

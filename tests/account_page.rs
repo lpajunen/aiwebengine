@@ -30,6 +30,7 @@ fn config(enabled: bool) -> InternalAuthConfig {
         allow_registration: true,
         allow_guests: true,
         bootstrap_admin_usernames: Vec::new(),
+        allow_recovery_codes: false,
         min_password_length: 12,
     }
 }
@@ -48,18 +49,18 @@ fn unique(label: &str) -> String {
 #[test]
 fn nothing_is_offered_when_the_engine_holds_no_credentials() {
     assert_eq!(
-        render_account_forms(&config(false), "token", None, "google"),
+        render_account_forms(&config(false), "token", None, "google", None),
         ""
     );
     assert_eq!(
-        render_account_forms(&config(false), "token", Some("player"), "local"),
+        render_account_forms(&config(false), "token", Some("player"), "local", None),
         ""
     );
 }
 
 #[test]
 fn an_account_with_a_password_is_offered_a_change() {
-    let html = render_account_forms(&config(true), "token", Some("player"), "local");
+    let html = render_account_forms(&config(true), "token", Some("player"), "local", None);
 
     assert!(html.contains(r#"action="/auth/local/password""#));
     assert!(html.contains(r#"name="current_password""#));
@@ -83,7 +84,7 @@ fn an_account_with_a_password_is_offered_a_change() {
 /// endpoint has been waiting for since it shipped.
 #[test]
 fn an_account_without_a_password_is_offered_one() {
-    let html = render_account_forms(&config(true), "token", None, GUEST_PROVIDER);
+    let html = render_account_forms(&config(true), "token", None, GUEST_PROVIDER, None);
 
     assert!(html.contains(r#"action="/auth/local/claim""#));
     assert!(html.contains(r#"name="username""#));
@@ -103,14 +104,14 @@ fn an_account_without_a_password_is_offered_one() {
 fn the_password_field_never_advertises_less_than_the_floor() {
     let mut low = config(true);
     low.min_password_length = 1;
-    let html = render_account_forms(&low, "token", Some("player"), "local");
+    let html = render_account_forms(&low, "token", Some("player"), "local", None);
     assert!(html.contains(r#"minlength="8""#));
 }
 
 #[test]
 fn every_form_carries_a_csrf_token() {
     for username in [Some("player"), None] {
-        let html = render_account_forms(&config(true), "csrf-token-value", username, "local");
+        let html = render_account_forms(&config(true), "csrf-token-value", username, "local", None);
         assert_eq!(
             html.matches(r#"name="csrf_token" value="csrf-token-value""#)
                 .count(),
@@ -126,7 +127,7 @@ fn every_form_carries_a_csrf_token() {
 #[test]
 fn both_forms_come_back_to_this_page() {
     for username in [Some("player"), None] {
-        let html = render_account_forms(&config(true), "token", username, "local");
+        let html = render_account_forms(&config(true), "token", username, "local", None);
         assert!(
             html.contains(r#"name="redirect" value="/auth/account?notice="#),
             "the form should land back on the account page"

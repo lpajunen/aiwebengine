@@ -109,6 +109,9 @@ pub enum AuthError {
     #[error("Guest accounts are not enabled")]
     GuestAuthDisabled,
 
+    #[error("Recovery codes are not enabled")]
+    RecoveryCodesDisabled,
+
     // Network/HTTP errors
     #[error("HTTP request failed: {0}")]
     HttpError(String),
@@ -157,7 +160,8 @@ impl AuthError {
 
             AuthError::InsufficientPermissions
             | AuthError::LocalAuthDisabled
-            | AuthError::GuestAuthDisabled => 403,
+            | AuthError::GuestAuthDisabled
+            | AuthError::RecoveryCodesDisabled => 403,
 
             AuthError::UsernameTaken | AuthError::CredentialAlreadySet => 409,
 

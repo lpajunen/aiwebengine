@@ -220,6 +220,12 @@ allow_guests = true
 # Sign in as this account and you administer the engine. Registration is open
 # in this template, so: create it once on the sign-in page, and it is yours.
 bootstrap_admin_usernames = ["admin"]
+# Let an account be issued recovery codes, and let one be redeemed for a
+# password reset. These accounts carry no verified address, so the reset link
+# every other system sends has nowhere to go; a code written down ahead of time
+# is what stands in for it. Without this, a forgotten password takes the
+# operator: aiwebengine --set-password <name>
+allow_recovery_codes = true
 # Minimum password length. The engine enforces a floor of 8 regardless.
 min_password_length = 12
 
