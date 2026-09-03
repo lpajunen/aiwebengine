@@ -5523,6 +5523,15 @@ pub fn delete_script(uri: &str) -> bool {
         Ok(existed) => {
             if existed {
                 scheduler::clear_script_jobs(uri);
+                // Its message listeners go with them. A listener names a
+                // script the dispatcher then cannot fetch, so every dispatch
+                // of that message type counts a failure for a script that no
+                // longer exists.
+                if let Err(e) =
+                    crate::dispatcher::GLOBAL_DISPATCHER.remove_listeners_for_script(uri)
+                {
+                    warn!("Failed to clear message listeners for '{}': {}", uri, e);
+                }
                 debug!("Deleted script from repository: {}", uri);
             } else {
                 debug!("Script not found in repository for deletion: {}", uri);

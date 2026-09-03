@@ -82,10 +82,9 @@ async fn a_listener_does_not_hold_more_than_the_caller_that_dispatched_it() {
     );
     let summary = response.text().await.expect("body");
 
-    // On the count rather than the exact tally: a script re-initialised after
-    // an upsert registers its listener again, so the same handler can be
-    // invoked more than once. What matters is that none of those invocations
-    // got the schema through.
+    // On the count rather than the exact tally: what matters here is that no
+    // invocation got the schema through, whatever the listener count is. That
+    // the count is one is `dispatch_registration.rs`'s subject.
     assert!(
         summary.contains("0 successful"),
         "an anonymous caller must not gain schema powers by dispatching a \

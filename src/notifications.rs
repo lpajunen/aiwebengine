@@ -318,6 +318,12 @@ impl NotificationListener {
         scheduler::clear_script_jobs_async(uri).await;
         debug!("Cleared scheduled jobs for script '{}'", uri);
 
+        // And its message listeners, which would otherwise keep naming a
+        // script this instance can no longer fetch.
+        if let Err(e) = crate::dispatcher::GLOBAL_DISPATCHER.remove_listeners_for_script(uri) {
+            warn!("Failed to clear message listeners for '{}': {}", uri, e);
+        }
+
         // Nothing is running here any more, so there is no revision to
         // attribute output to and nothing to be pinned to.
         revisions::forget_current(uri);

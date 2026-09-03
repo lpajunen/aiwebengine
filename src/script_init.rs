@@ -205,6 +205,21 @@ impl ScriptInitializer {
         // that would wake any of them.
         scheduler::clear_script_jobs_async(script_uri).await;
 
+        // And stale listeners, for the same reason. The dispatcher appends
+        // rather than replaces, and this pass runs the script's program and
+        // its `init()` again, so without this a script re-initialised once per
+        // upsert handled every message once per time it had been written since
+        // the engine started — a listener with a side effect running a number
+        // of times that depends on the deploy history. Registrations are
+        // rebuilt by the pass below, exactly as the scheduled jobs are.
+        if let Err(e) = crate::dispatcher::GLOBAL_DISPATCHER.remove_listeners_for_script(script_uri)
+        {
+            warn!(
+                "Failed to clear message listeners for script '{}': {}",
+                script_uri, e
+            );
+        }
+
         debug!("Initializing script: {}", script_uri);
 
         // Create init context
