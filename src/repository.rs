@@ -5425,64 +5425,20 @@ pub async fn bootstrap_scripts_async() -> AppResult<()> {
     if let Some(db) = get_db_pool() {
         let pool = db.pool();
 
-        // All former built-in scripts are now native Rust functionality
-        // (src/engine_api.rs); only test fixtures are bootstrapped here.
-        let mut all_scripts: Vec<(&str, &str)> = Vec::new();
-        let include_test_scripts =
-            std::env::var("AIWEBENGINE_INCLUDE_TEST_SCRIPTS").is_ok() || cfg!(test);
-
-        if include_test_scripts {
-            all_scripts.push((
-                "https://example.com/graphql_test",
-                include_str!("../scripts/test_scripts/graphql_test.js"),
-            ));
-            all_scripts.push((
-                "https://example.com/dispatcher_test",
-                include_str!("../scripts/test_scripts/dispatcher_test.js"),
-            ));
-        }
-
+        // Nothing is written into the database here any more. Every former
+        // built-in script is native Rust functionality now (src/engine_api.rs),
+        // and what remained was a pair of test fixtures inserted when
+        // AIWEBENGINE_INCLUDE_TEST_SCRIPTS merely *existed* in the environment —
+        // an empty value was enough, and in a release binary that variable was
+        // the only gate, since cfg!(test) is false there. Nothing in this
+        // repository ever set it, and the tests using those fixtures include
+        // them from the test crate and upsert them themselves, so its only
+        // reachable effect was to publish example.com scripts, with their routes
+        // and resolvers, into a production engine by accident.
+        //
+        // What is left is the other half: removing built-in scripts that native
+        // functionality replaced, so stale database copies stop executing.
         let result = async {
-            for (uri, code) in all_scripts {
-                let mut exists = false;
-                // Check if script already exists
-                if let Ok(Some(existing_content)) = db_get_script(pool, uri).await {
-                    debug!("Script already exists in database: {}", uri);
-                    exists = true;
-
-                    // Update if content differs
-                    if existing_content != code {
-                        info!("Updating bootstrap script in database: {}", uri);
-                        if let Err(e) = db_upsert_script(
-                            crate::database::TransactionExecutor::Pool(pool),
-                            uri,
-                            code,
-                        )
-                        .await
-                        {
-                            error!("Failed to update bootstrap script {}: {}", uri, e);
-                            return Err(e);
-                        }
-                    }
-                }
-
-                if !exists {
-                    // Insert the script
-                    if let Err(e) = db_upsert_script(
-                        crate::database::TransactionExecutor::Pool(pool),
-                        uri,
-                        code,
-                    )
-                    .await
-                    {
-                        error!("Failed to bootstrap script {}: {}", uri, e);
-                        return Err(e);
-                    } else {
-                        info!("Bootstrapped script into database: {}", uri);
-                    }
-                }
-            }
-
             // Remove built-in scripts that have been replaced by native Rust
             // functionality so stale database copies stop executing.
             for uri in RETIRED_BOOTSTRAP_SCRIPTS {
@@ -5868,30 +5824,6 @@ fn get_static_assets() -> HashMap<String, Asset> {
         script_uri: "https://example.com/core".to_string(),
     };
     m.insert("aiwebengine.d.ts".to_string(), aiwebengine_dts);
-
-    m
-}
-
-/// Helper function to get static scripts embedded at compile time
-fn get_static_scripts() -> HashMap<String, String> {
-    let mut m = HashMap::new();
-
-    // Include test scripts when appropriate
-    let include_test_scripts =
-        std::env::var("AIWEBENGINE_INCLUDE_TEST_SCRIPTS").is_ok() || cfg!(test);
-
-    if include_test_scripts {
-        let graphql_test = include_str!("../scripts/test_scripts/graphql_test.js");
-        m.insert(
-            "https://example.com/graphql_test".to_string(),
-            graphql_test.to_string(),
-        );
-        let dispatcher_test = include_str!("../scripts/test_scripts/dispatcher_test.js");
-        m.insert(
-            "https://example.com/dispatcher_test".to_string(),
-            dispatcher_test.to_string(),
-        );
-    }
 
     m
 }
@@ -6841,16 +6773,11 @@ impl Repository for PostgresRepository {
         let mut guard = safe_lock_scripts()?;
         let metadata = match guard.get_mut(uri) {
             Some(metadata) => metadata,
-            None => {
-                // If it's a static script, it might not be in dynamic scripts map yet
-                let static_scripts = get_static_scripts();
-                let Some(content) = static_scripts.get(uri) else {
-                    return Err(RepositoryError::ScriptNotFound(uri.to_string()).into());
-                };
-                guard
-                    .entry(uri.to_string())
-                    .or_insert_with(|| ScriptMetadata::new(uri.to_string(), content.clone()))
-            }
+            // Every script is a database script. The fallback that stood here
+            // resolved a URI against scripts compiled into the binary, which
+            // were the same two test fixtures the bootstrap inserted, behind
+            // the same environment variable.
+            None => return Err(RepositoryError::ScriptNotFound(uri.to_string()).into()),
         };
 
         // Registrations from a *failed* init() are partial by definition — the
