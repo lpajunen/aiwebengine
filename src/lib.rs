@@ -523,12 +523,10 @@ pub fn get_rust_openapi_spec() -> String {
                     }
                 }));
 
-                // Documentation routes are now handled by docs.js feature script
-                // OpenAPI spec is automatically generated from route registrations
-                // So these static entries are no longer needed:
-                // - /engine/docs (redirect)
-                // - /engine/docs/ (main page)
-                // - /engine/docs/* (wildcard)
+                // The OpenAPI spec is generated from route registrations, so
+                // nothing static is listed for /engine/docs — a surface no
+                // longer served by anything, since the feature script that once
+                // answered it is gone along with the concept.
             }
 
             serde_json::to_string_pretty(&spec_value)
@@ -1194,15 +1192,6 @@ async fn initialize_components(config: &config::Config) -> AppResult<()> {
 
     // Ensure scheduler state exists before scripts start registering jobs
     scheduler::initialize_global_scheduler();
-
-    // Bootstrap hardcoded scripts into database if configured
-    info!("Bootstrapping hardcoded scripts into database...");
-    if let Err(e) = repository::bootstrap_scripts_async().await {
-        warn!(
-            "Failed to bootstrap scripts: {}. Continuing with static scripts.",
-            e
-        );
-    }
 
     // Register engine-provided streams (e.g. /engine/script_updates) before any
     // script or connection can reference them
@@ -2850,23 +2839,6 @@ async fn setup_routes(
         axum::routing::get(|| serve_type_defs("aiwebengine.d.ts")),
     );
 
-    // Documentation routes are now handled by docs.js feature script
-    // Commented out to avoid conflicts with JavaScript implementation
-    // app = app.route(
-    //     "/engine/docs",
-    //     axum::routing::get(|axum::extract::Path(()): axum::extract::Path<()>| async {
-    //         axum::response::Redirect::permanent("/engine/docs/").into_response()
-    //     }),
-    // );
-    // app = app.route(
-    //     "/engine/docs/",
-    //     axum::routing::get(docs::handle_docs_request),
-    // );
-    // app = app.route(
-    //     "/engine/docs/{*path}",
-    //     axum::routing::get(docs::handle_docs_request),
-    // );
-
     // Add catch-all dynamic routes
     let auth_enabled_for_home = auth_enabled;
     let auth_enabled_for_path = auth_enabled;
@@ -3646,7 +3618,6 @@ mod tests {
     fn do_db_init(url: String) {
         // Must be called with an active tokio runtime context (either via block_on or block_in_place).
         // connect_lazy spawns maintenance tasks using the current runtime handle.
-        // bootstrap_scripts() calls run_blocking → block_in_place, which works in multi-thread.
         let pool = sqlx::PgPool::connect_lazy(&url).unwrap();
         let db = Arc::new(crate::database::Database::from_pool(pool.clone()));
         crate::database::initialize_global_database(db);
@@ -3654,8 +3625,6 @@ mod tests {
         crate::notifications::initialize_server_id(server_id.clone());
         let repo = crate::repository::PostgresRepository::new(pool, server_id);
         crate::repository::initialize_repository(repo);
-        // Bootstrap feature scripts so tests can fetch them.
-        let _ = crate::repository::bootstrap_scripts();
     }
 
     fn setup_db() {
@@ -3674,9 +3643,8 @@ mod tests {
                     tokio::task::block_in_place(|| do_db_init(url));
                 }
                 Err(_) => {
-                    // Plain #[test] – no active runtime. Provide one so connect_lazy and
-                    // bootstrap_scripts can work. block_in_place inside bootstrap_scripts is
-                    // valid because get_test_runtime() is a multi-thread runtime.
+                    // Plain #[test] – no active runtime. Provide one so connect_lazy
+                    // can work; get_test_runtime() is a multi-thread runtime.
                     get_test_runtime().block_on(async { do_db_init(url) });
                 }
             }

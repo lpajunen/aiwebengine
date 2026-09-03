@@ -6,7 +6,7 @@ use sqlx::{PgConnection, PgPool, Row};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 // TODO: Transaction Integration
 // All database operations in this file currently use &PgPool directly.
@@ -29,15 +29,6 @@ use tracing::{debug, error, info, warn};
 //
 // The synchronous wrappers (run_blocking) would check thread-local transaction
 // state and pass the appropriate executor.
-
-/// Built-in scripts that were bootstrapped by earlier versions of the engine
-/// and have since been replaced by native Rust functionality. They are
-/// removed from the database on startup so stale copies stop executing.
-const RETIRED_BOOTSTRAP_SCRIPTS: &[&str] = &[
-    "https://example.com/core",
-    "https://example.com/cli",
-    "https://example.com/auth",
-];
 
 /// Advisory lock key for the log pruning pass, so that in a multi-instance
 /// cluster one instance does the work on any given tick.
@@ -5415,60 +5406,6 @@ pub fn upsert_script_with_owner(
     Ok(())
 }
 
-/// Bootstrap hardcoded scripts into database on startup
-pub fn bootstrap_scripts() -> AppResult<()> {
-    run_blocking(bootstrap_scripts_async())
-}
-
-/// Async variant of [`bootstrap_scripts`] for callers already in async context
-pub async fn bootstrap_scripts_async() -> AppResult<()> {
-    if let Some(db) = get_db_pool() {
-        let pool = db.pool();
-
-        // Nothing is written into the database here any more. Every former
-        // built-in script is native Rust functionality now (src/engine_api.rs),
-        // and what remained was a pair of test fixtures inserted when
-        // AIWEBENGINE_INCLUDE_TEST_SCRIPTS merely *existed* in the environment —
-        // an empty value was enough, and in a release binary that variable was
-        // the only gate, since cfg!(test) is false there. Nothing in this
-        // repository ever set it, and the tests using those fixtures include
-        // them from the test crate and upsert them themselves, so its only
-        // reachable effect was to publish example.com scripts, with their routes
-        // and resolvers, into a production engine by accident.
-        //
-        // What is left is the other half: removing built-in scripts that native
-        // functionality replaced, so stale database copies stop executing.
-        let result = async {
-            // Remove built-in scripts that have been replaced by native Rust
-            // functionality so stale database copies stop executing.
-            for uri in RETIRED_BOOTSTRAP_SCRIPTS {
-                match db_delete_script(pool, uri).await {
-                    Ok(true) => info!("Removed retired bootstrap script from database: {}", uri),
-                    Ok(false) => {}
-                    Err(e) => warn!("Failed to remove retired bootstrap script {}: {}", uri, e),
-                }
-            }
-
-            Ok(())
-        }
-        .await;
-
-        match result {
-            Ok(()) => {
-                info!("Successfully bootstrapped scripts into database");
-                Ok(())
-            }
-            Err(e) => {
-                error!("Failed to bootstrap scripts: {}", e);
-                Err(e)
-            }
-        }
-    } else {
-        debug!("Database not configured, skipping script bootstrap");
-        Ok(())
-    }
-}
-
 /// Delete script with error handling
 pub fn delete_script(uri: &str) -> bool {
     let repo = get_repository();
@@ -7850,20 +7787,6 @@ mod tests {
         // Test delete
         assert!(delete_script(uri));
         assert!(!delete_script(uri)); // Should return false for non-existent
-    }
-
-    #[test]
-    fn test_bootstrap_scripts() {
-        if should_skip_db_tests() {
-            return;
-        }
-        let _lock = GLOBAL_TEST_LOCK.lock().unwrap();
-        // Test that bootstrap_scripts doesn't crash when database is available
-        let result = bootstrap_scripts();
-        assert!(
-            result.is_ok(),
-            "bootstrap_scripts should succeed even without database"
-        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
