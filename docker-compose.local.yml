@@ -56,6 +56,13 @@ services:
       - ./Cargo.lock:/app/Cargo.lock:ro
       # Mount migrations (required for sqlx::migrate! macro)
       - ./migrations:/app/migrations:ro
+      # Offline query metadata for the two sqlx::query! macros in the code.
+      # Without it the build has no way to verify them: the container has no
+      # DATABASE_URL at compile time, and could not usefully have one — it
+      # compiles before it runs, so on a fresh volume the schema those macros
+      # are checked against does not exist yet. Regenerate on the host with
+      # `cargo sqlx prepare` after changing one of them.
+      - ./.sqlx:/app/.sqlx:ro
       # Mount configuration (using config.local.toml as config.local.toml)
       - ./config.local.toml:/app/config.local.toml:ro
       # Mount scripts for testing
@@ -75,6 +82,8 @@ services:
     environment:
       - RUST_LOG=debug
       - RUST_BACKTRACE=1
+      # Verify the query! macros against ./.sqlx rather than a live database.
+      - SQLX_OFFLINE=true
       # Server configuration  
       - APP_SERVER__HOST=0.0.0.0
       - APP_SERVER__PORT=3000
@@ -124,6 +133,13 @@ services:
       - ./Cargo.lock:/app/Cargo.lock:ro
       # Mount migrations (required for sqlx::migrate! macro)
       - ./migrations:/app/migrations:ro
+      # Offline query metadata for the two sqlx::query! macros in the code.
+      # Without it the build has no way to verify them: the container has no
+      # DATABASE_URL at compile time, and could not usefully have one — it
+      # compiles before it runs, so on a fresh volume the schema those macros
+      # are checked against does not exist yet. Regenerate on the host with
+      # `cargo sqlx prepare` after changing one of them.
+      - ./.sqlx:/app/.sqlx:ro
       # Mount configuration (using config.local.toml as config.local.toml)
       - ./config.local.toml:/app/config.local.toml:ro
       # Mount scripts for testing
@@ -143,6 +159,8 @@ services:
     environment:
       - RUST_LOG=debug
       - RUST_BACKTRACE=1
+      # Verify the query! macros against ./.sqlx rather than a live database.
+      - SQLX_OFFLINE=true
       # Server configuration  
       - APP_SERVER__HOST=0.0.0.0
       - APP_SERVER__PORT=3000
