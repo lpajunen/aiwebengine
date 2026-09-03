@@ -75,9 +75,9 @@ config.*.yaml
 !config.staging.toml
 !config.local.toml
 
-# Scripts are a build input, not runtime data: src reads several of them with
-# include_str!, so the build context must carry them. Deliberately not excluded.
-# scripts/
+# Test fixtures. Only cfg(test) code includes these now, and the image builds
+# neither the tests nor anything that reads them at runtime.
+scripts/
 
 # Makefile
 Makefile
