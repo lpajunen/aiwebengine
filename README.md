@@ -233,8 +233,10 @@ Use DNS names locally without Let's Encrypt:
 # Add to /etc/hosts
 sudo sh -c 'echo "127.0.0.1 local.softagen.com" >> /etc/hosts'
 
-# Run without DNS token (uses self-signed cert)
-make docker-localhost
+# Run without DNS token (uses self-signed cert). SITE_HOSTS names the hosts
+# Caddy serves; it defaults to localhost, 127.0.0.1 and local.test, and a name
+# it does not list has no certificate and no site to route to.
+SITE_HOSTS=local.softagen.com make docker-localhost
 # Access at: https://local.softagen.com
 # Note: Accept self-signed certificate warning in browser
 ```

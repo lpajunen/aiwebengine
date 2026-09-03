@@ -19,7 +19,16 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     environment:
-      - DIGITALOCEAN_TOKEN=${DIGITALOCEAN_TOKEN}
+      # Only read by the tls_acme_dns snippet, so an empty value is fine in
+      # localhost mode.
+      - DIGITALOCEAN_TOKEN=${DIGITALOCEAN_TOKEN:-}
+      # The Caddyfile's defaults live here, not there: Caddy honours
+      # `{$VAR:default}` only for a variable that is *unset*, and compose always
+      # sets every key it lists. An empty SITE_HOSTS leaves the site block with
+      # no address, which fails to adapt and takes the whole proxy down with it.
+      # `make docker-dns` overrides both.
+      - SITE_HOSTS=${SITE_HOSTS:-localhost, 127.0.0.1, local.test}
+      - TLS_SNIPPET=${TLS_SNIPPET:-tls_internal}
     networks:
       - aiwebengine-dev-network
     depends_on:

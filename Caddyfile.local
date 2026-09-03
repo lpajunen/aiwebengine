@@ -1,13 +1,47 @@
 # Caddyfile for local development
-# Supports both localhost (offline) and optional DNS domain (with Let's Encrypt)
-
+#
+# One site block, addressed by SITE_HOSTS and issued a certificate by whichever
+# snippet TLS_SNIPPET names. It is written this way because a Caddyfile is
+# adapted whole and there is no way to make a site block conditional: an address
+# that expands to nothing fails the entire config with "server block without any
+# key is global configuration", which is what the optional {$DNS_DOMAIN:} block
+# that used to live here did on every run that did not set the variable.
+#
+# The defaults are in docker-compose.local.yml rather than in `{$VAR:default}`
+# here, deliberately. Caddy falls back to the default only when the variable is
+# *unset*, and every key a compose file lists is always set — empty counts as
+# set — so a default written here would never be reached from the stack that
+# needs it.
+#
+#   make docker-localhost   local names, Caddy's internal CA, works offline
+#   make docker-dns         SITE_HOSTS=$DNS_DOMAIN, publicly trusted cert
+#
 # Global options
 {
-    # Email for Let's Encrypt notifications (only used if DNS domain is configured)
+    # Email for Let's Encrypt notifications (only used by the DNS-01 issuer)
     email lpajunen@gmail.com
-    
+
     # Use production Let's Encrypt (comment out to use staging for testing)
     # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# Certificate issuers. TLS_SNIPPET names one of these; they are mutually
+# exclusive because a site block has one issuer, which is also why localhost and
+# a public hostname are not served at the same time.
+(tls_internal) {
+    # Caddy's own CA. No network, no DNS, one browser warning to accept.
+    tls internal
+}
+
+(tls_acme_dns) {
+    # A publicly trusted certificate for a name that resolves to a private
+    # address: the DNS-01 challenge is answered by writing a TXT record, so it
+    # needs no inbound connection — only a token that can edit the zone. Needs
+    # the caddy-dns/digitalocean plugin, which docker-compose.local.yml builds
+    # into the image.
+    tls {
+        dns digitalocean {env.DIGITALOCEAN_TOKEN}
+    }
 }
 
 # Shared configuration snippet
@@ -22,17 +56,17 @@
         header_up X-Forwarded-For {remote_host}
         # Load balancing policy
         lb_policy round_robin
-        
+
         # Health checks
         health_uri /health
         health_interval 10s
         health_timeout 5s
         health_status 2xx
     }
-    
+
     # Enable gzip compression
     encode gzip
-    
+
     # Access logging
     log {
         output stdout
@@ -45,22 +79,12 @@
     redir https://{host}{uri} permanent
 }
 
-# localhost and aliases - use self-signed certificate (works offline)
-# Add any of these to /etc/hosts to use DNS names without external DNS:
-#   127.0.0.1 local.softagen.com
-#   127.0.0.1 dev.aiwebengine.local
-localhost, 127.0.0.1, local.test {
-    tls internal
-    import common_config
-}
-
-# Optional: Public DNS domain - use Let's Encrypt with DNS-01 challenge
-# Only activates if DIGITALOCEAN_TOKEN is set and DNS_DOMAIN is defined
-# To use: export DNS_DOMAIN=local.softagen.com
-{$DNS_DOMAIN:} {
-    # Let's Encrypt with DNS-01 challenge using DigitalOcean
-    tls {
-        dns digitalocean {env.DIGITALOCEAN_TOKEN}
-    }
+# The hosts this stack answers on. Defaults (from the compose file) are the
+# local names; add any of them to /etc/hosts to reach the stack by name:
+#   127.0.0.1 local.test
+# With `make docker-dns` this is the public hostname instead, and the local
+# names are not served — one block, one issuer.
+{$SITE_HOSTS} {
+    import {$TLS_SNIPPET}
     import common_config
 }

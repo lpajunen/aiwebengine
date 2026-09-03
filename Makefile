@@ -159,11 +159,17 @@ docker-localhost:
 	@echo "Starting local development with localhost only..."
 	@echo "Access at: https://localhost"
 	@echo "Note: You may need to accept self-signed certificate warning"
-	@unset DIGITALOCEAN_TOKEN; \
-	unset DNS_DOMAIN; \
+	@echo "Serve a name of your own instead: SITE_HOSTS=my.example.test make docker-localhost"
+	@unset DIGITALOCEAN_TOKEN TLS_SNIPPET; \
 	docker-compose -f docker-compose.local.yml up
 
 # Start with DNS domain (requires DIGITALOCEAN_TOKEN)
+#
+# SITE_HOSTS and TLS_SNIPPET are what the Caddyfile reads; DNS_DOMAIN stays the
+# knob to set, and defaults to the name this repository uses. Both variables are
+# exported together because the issuer and the hostname have to agree: a DNS-01
+# certificate for `localhost` is not obtainable, and Let's Encrypt cannot be
+# asked for one for a name it cannot verify.
 docker-dns:
 	@echo "Starting local development with DNS domain..."
 	@if [ -z "$$DIGITALOCEAN_TOKEN" ]; then \
@@ -171,8 +177,10 @@ docker-dns:
 		echo "   Set it in .env file or export: export DIGITALOCEAN_TOKEN=your_token"; \
 		exit 1; \
 	fi
-	@export DNS_DOMAIN=local.softagen.com; \
-	echo "Access at: https://$$DNS_DOMAIN"; \
+	@export SITE_HOSTS=$${DNS_DOMAIN:-local.softagen.com}; \
+	export TLS_SNIPPET=tls_acme_dns; \
+	echo "Access at: https://$$SITE_HOSTS"; \
+	echo "Note: the local names (https://localhost) are not served in this mode"; \
 	docker-compose -f docker-compose.local.yml up
 
 # Check DNS domain availability
