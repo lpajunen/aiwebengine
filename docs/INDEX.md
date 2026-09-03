@@ -45,6 +45,7 @@ routeRegistry.registerRoute("/hello", "helloHandler", "GET");
 
 | Document                                                                                  | Description                                       |
 | ----------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| [Deployment Options](../DEPLOYMENT.md)                                                    | Which deployment shape to run, and what it needs  |
 | [01 - Getting Started](engine-administrators/01-GETTING-STARTED.md)                       | Prerequisites and first deployment                |
 | [02 - Configuration](engine-administrators/02-CONFIGURATION.md)                           | Configuration options and environment variables   |
 | [03 - Running Environments](engine-administrators/03-RUNNING-ENVIRONMENTS.md)             | Local, staging, and production deployment         |

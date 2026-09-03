@@ -169,7 +169,9 @@ cp .env.example .env
 docker-compose up -d
 ```
 
-For detailed Docker deployment instructions, see [docs/engine-administrators/03-RUNNING-ENVIRONMENTS.md](docs/engine-administrators/03-RUNNING-ENVIRONMENTS.md).
+For the deployment options and what each one requires, see
+[DEPLOYMENT.md](DEPLOYMENT.md); for step-by-step instructions, see
+[docs/engine-administrators/03-RUNNING-ENVIRONMENTS.md](docs/engine-administrators/03-RUNNING-ENVIRONMENTS.md).
 
 ### Development
 
