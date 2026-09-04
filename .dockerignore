@@ -52,9 +52,10 @@ docker-compose*.yml
 .github/
 .gitlab-ci.yml
 
-# Environment files
-.env
-.env.*
+# Environment files. The dash forms matter now that each environment has its
+# own: `.env.*` never matched `.env-production`, so a filled-in file with real
+# secrets would have been carried into the build context.
+.env*
 
 # Test artifacts
 .coverage
@@ -68,12 +69,10 @@ temp/
 # Lock files (we copy these explicitly)
 # Cargo.lock is needed for reproducible builds
 
-# Config files (we copy specific ones)
-config.*.toml
+# Configuration. config.toml is the one file and is copied into the image; the
+# per-environment values are environment variables, and the env files carrying
+# them are excluded above with .env*.
 config.*.yaml
-!config.production.toml
-!config.staging.toml
-!config.local.toml
 
 # Test fixtures. Only cfg(test) code includes these now, and the image builds
 # neither the tests nor anything that reads them at runtime.

@@ -1,0 +1,201 @@
+# aiwebengine configuration
+#
+# This is the only configuration file. Everything that differs between a
+# developer's machine, a staging host and production is an environment
+# variable, supplied by a per-environment env file (.env-local, .env-staging,
+# .env-production) rather than by a second copy of this file.
+#
+# How an override is named: APP_ + the section + __ + the key, upper-cased.
+#
+#   [server] port          -> APP_SERVER__PORT=3000
+#   [auth.internal] enabled -> APP_AUTH__INTERNAL__ENABLED=true
+#
+# A list is written as a JSON array in one variable:
+#
+#   APP_SERVER__MANAGEMENT_HOSTS='["manage.example.com"]'
+#
+# An environment variable that is set — even to an empty string — replaces what
+# this file says. "Leave it as the default" means leaving the key out of the env
+# file, not setting it empty.
+#
+# What this file must never contain is a secret, and what it deliberately does
+# not contain is a `${VAR}` placeholder: nothing expands those. The loader
+# merges this file and then the APP_ environment on top, so a placeholder left
+# unexpanded is not substituted, it is used — a literal "${...}" reaching the
+# code as a redirect URI or a signing key.
+#
+# Check a combination before deploying it:
+#
+#   aiwebengine --validate-config
+
+[server]
+host = "0.0.0.0"
+port = 3000
+# The default host this engine answers for. Every environment sets this.
+#   APP_SERVER__BASE_URL=https://example.com
+base_url = "http://localhost:3000"
+# Additional hostnames served by the same engine. A login started on one of
+# these completes there, so its session cookie is set on that host rather than
+# on base_url, and each entry's callback path must be registered with every
+# configured OAuth provider.
+#   APP_SERVER__ADDITIONAL_BASE_URLS='["https://manage.example.com"]'
+additional_base_urls = []
+# Hosts allowed to serve the management APIs. Every /engine/* endpoint except
+# the static /engine/installed page answers 404 elsewhere, and the engine's own
+# MCP tools are absent from any other host. Empty means every host, which is
+# what a single-host deployment wants.
+#   APP_SERVER__MANAGEMENT_HOSTS='["manage.example.com"]'
+management_hosts = []
+# Proxies whose X-Forwarded-For and X-Real-IP this engine believes, as addresses
+# or CIDR networks. A request that did not arrive from one of these is keyed by
+# the address it connected from, whatever its headers claim, which is what stops
+# a caller rotating one header to get a fresh rate-limit bucket per request.
+# Empty is correct when nothing sits in front of the engine; the containerised
+# deployments set the Docker bridge range.
+#   APP_SERVER__TRUSTED_PROXIES='["172.16.0.0/12"]'
+trusted_proxies = []
+graceful_shutdown = true
+shutdown_timeout_secs = 30
+
+[logging]
+# APP_LOGGING__LEVEL=debug on a developer's machine; json format wherever logs
+# are aggregated.
+level = "info"
+format = "json"
+
+[javascript]
+# A script's wall-clock budget. Short locally for fast feedback, longer in
+# production where real work happens.
+execution_timeout_ms = 10000
+max_memory_bytes = 134217728  # 128 MB
+# How many scripts may run at once. Each holds a blocking thread and a QuickJS
+# runtime allowed max_memory_bytes, so this and that setting together are the
+# engine's memory ceiling. A caller past the limit waits for a slot rather than
+# being refused, inside the timeout it already had.
+max_concurrent_executions = 200
+# Stack a script may use before QuickJS throws. A JavaScript frame costs about a
+# kilobyte, so this is roughly 500 frames of recursion.
+stack_size_bytes = 524288
+enable_init_functions = true
+# Budget for one test module, and for a whole run, in milliseconds.
+test_timeout_ms = 30000
+test_run_timeout_ms = 120000
+
+[repository]
+# PostgreSQL is the only storage backend, and its URL is always an environment
+# variable because it carries a password:
+#   APP_REPOSITORY__DATABASE_URL=postgresql://user:pass@host:5432/aiwebengine
+max_script_size_bytes = 1048576
+max_upload_size_bytes = 10485760
+# Maximum PostgreSQL connections. Every JavaScript database call holds one for
+# its whole round trip, so this caps concurrent script database work. Multiply
+# by the number of engine instances when sizing the server's own max_connections.
+max_connections = 32
+
+# Session guards, in milliseconds. Postgres is the only party that can interrupt
+# a database call: a script's execution budget is enforced between JavaScript
+# operations and cannot reach inside a host call, and the request timeout
+# abandons the thread without stopping the work on it. Without these, one
+# statement blocked on a lock waits forever while holding its own locks, and
+# every later writer queues behind it. 0 disables a guard.
+lock_timeout_ms = 5000
+statement_timeout_ms = 30000
+idle_in_transaction_timeout_ms = 300000
+
+[security]
+# Hold every session to the address it was signed in from. Off by default,
+# because a phone changing networks mid-session would be signed out for it.
+# Meaningful only because server.trusted_proxies establishes the address from
+# the connection rather than from a header the caller wrote.
+strict_ip_validation = false
+enable_cors = true
+# Origins allowed to read engine-owned responses (/engine, /auth, /graphql,
+# /mcp). Each entry is an origin — scheme://host[:port], no path — matched
+# exactly. Empty means same-origin only. A named origin may send the session
+# cookie; "*" may not, since a browser refuses to pair a wildcard with
+# credentials, so a wildcard grants only unauthenticated reads.
+#   APP_SECURITY__CORS_ALLOWED_ORIGINS='["http://localhost:5173"]'
+cors_allowed_origins = []
+enable_security_headers = true
+content_security_policy = "default-src 'self'; script-src 'self'; style-src 'self'"
+max_request_body_bytes = 10485760
+# The three keys below and auth.jwt_secret have no defaults on purpose. The
+# engine refuses to start without them when authentication is enabled, which is
+# the behaviour you want from a missing secret. Generate each with:
+#   openssl rand -base64 32
+#   APP_SECURITY__CSRF_KEY, APP_SECURITY__SESSION_ENCRYPTION_KEY,
+#   APP_SECURITY__SECRET_ENCRYPTION_KEY, APP_SECURITY__API_KEY
+
+[revisions]
+# Script revision history. A labelled revision, the newest revision whose init()
+# succeeded, and the newest revision of each script are kept regardless.
+prune_enabled = true
+retention_days = 30
+keep_per_script = 50
+prune_interval_secs = 3600
+
+[logs]
+# Both dials are enforced and either alone is enough to remove a line: the count
+# bounds a script that logs in a loop, the age bounds dormant scripts that would
+# otherwise sit on their full quota forever. Unlike [revisions], where a revision
+# has to fall outside both — a log line is a diagnostic, not history.
+prune_enabled = true
+retention_hours = 168
+keep_per_script = 1000
+prune_interval_secs = 3600
+
+[auth]
+enabled = true
+# No default: APP_AUTH__JWT_SECRET is required, and the engine refuses to start
+# without it. Minimum 32 characters.
+session_timeout = 3600
+max_session_age = 2592000
+max_concurrent_sessions = 3
+# Addresses that receive the administrator role on sign-in, matched against an
+# address a configured OAuth provider verified. This is how the first
+# administrator exists; the break-glass equivalent needs no running server:
+#   aiwebengine --grant-role <account> administrator
+#   APP_AUTH__BOOTSTRAP_ADMINS='["you@example.com"]'
+bootstrap_admins = []
+
+[auth.cookie]
+name = "aiwebengine_session"
+# Secure cookies require HTTPS, so a plain-HTTP local install sets this false:
+#   APP_AUTH__COOKIE__SECURE=false
+# The __Host- prefix is added automatically whenever the cookie is Secure, and
+# dropped when it is not, because a browser discards a __Host- cookie over HTTP.
+secure = true
+
+# Identities the engine authenticates itself — guests with no credential, and
+# username/password accounts. Everything here is off by default: a password
+# endpoint is the most-probed thing an engine can expose, so each switch is
+# turned on deliberately. A personal install turns them on because it is the
+# point of running one; a server may still want internal accounts for solutions
+# whose users should not hand a real-world identity to an OAuth provider, and
+# for break-glass access when a provider is down.
+#   APP_AUTH__INTERNAL__ENABLED, __ALLOW_REGISTRATION, __ALLOW_GUESTS,
+#   APP_AUTH__INTERNAL__BOOTSTRAP_ADMIN_USERNAMES='["admin"]'
+[auth.internal]
+enabled = false
+allow_registration = false
+allow_guests = false
+bootstrap_admin_usernames = []
+# Recovery codes are the reset path these accounts otherwise cannot have: they
+# carry no verified address, so the link every other system emails has nowhere
+# to go. Without this, a forgotten password takes the operator:
+#   aiwebengine --set-password <account>
+allow_recovery_codes = true
+min_password_length = 12
+
+# OAuth providers are configured entirely by environment variable. A section
+# here would only be a set of empty strings, and the loader creates the nested
+# keys from the environment on its own — a provider this file never mentions
+# registers when its three variables are present:
+#
+#   APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID
+#   APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET
+#   APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI
+#
+# Microsoft additionally takes __TENANT_ID, Apple __TEAM_ID and __KEY_ID. Every
+# hostname that serves a login needs its own callback path registered with the
+# provider.

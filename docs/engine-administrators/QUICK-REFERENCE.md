@@ -20,7 +20,7 @@ Fast lookup guide for common commands, environment variables, and operations.
 
 ```bash
 # Copy config and environment
-cp config.local.toml config.toml
+# nothing to copy: config.toml and .env-local are both in the repository
 cp .env.example .env
 
 # Edit .env with your credentials
@@ -37,7 +37,7 @@ make docker-local
 
 ```bash
 # Use staging config
-cp config.staging.toml config.toml
+cp .env.example .env-staging
 
 # Set environment variables
 export APP_AUTH__JWT_SECRET="$(openssl rand -base64 48)"
@@ -53,7 +53,7 @@ make docker-staging
 
 ```bash
 # Use production config
-cp config.production.toml config.toml
+cp .env.example .env-production
 
 # Set all secrets via environment (NEVER in files!)
 export APP_AUTH__JWT_SECRET="$(openssl rand -base64 48)"
@@ -162,13 +162,13 @@ The same operations are available as MCP tools: `list_secrets`, `write_secret`,
 
 ```bash
 # Local Development
-cp config.local.toml config.toml
+# nothing to copy: config.toml and .env-local are both in the repository
 
 # Staging
-cp config.staging.toml config.toml
+cp .env.example .env-staging
 
 # Production
-cp config.production.toml config.toml
+cp .env.example .env-production
 ```
 
 ### Key Differences
@@ -371,9 +371,9 @@ Example output: `Yp9oQn...` (32 characters)
 ### Configuration
 
 ```plaintext
-config.local.toml           # Local config template
-config.staging.toml         # Staging config template
-config.production.toml      # Production config template
+config.toml                 # The one configuration file
+.env-local                  # Development values (throwaway secrets)
+.env.example                # Template for a server env file
 config.toml                 # Active config (not in Git)
 .env                        # Environment variables (not in Git)
 .env.example                # Environment template (in Git)
@@ -532,7 +532,7 @@ gunzip < backup-20251024-120000.sql.gz | docker-compose exec -T postgres psql -U
 
 ### Local Development ✓
 
-- [ ] Copy `config.local.toml` to `config.toml`
+- [ ] Nothing to copy — `config.toml` and `.env-local` are both tracked
 - [ ] Copy `.env.example` to `.env`
 - [ ] Edit `.env` with OAuth credentials
 - [ ] Run `source .env && cargo run`
@@ -540,7 +540,7 @@ gunzip < backup-20251024-120000.sql.gz | docker-compose exec -T postgres psql -U
 
 ### Staging Deployment ✓
 
-- [ ] Copy `config.staging.toml` to `config.toml`
+- [ ] Copy `.env.example` to `.env-staging` and fill it in
 - [ ] Set all environment variables
 - [ ] Configure OAuth with staging URLs
 - [ ] Deploy with `make docker-staging`
@@ -549,7 +549,7 @@ gunzip < backup-20251024-120000.sql.gz | docker-compose exec -T postgres psql -U
 
 ### Production Deployment ✓
 
-- [ ] Copy `config.production.toml` to `config.toml`
+- [ ] Copy `.env.example` to `.env-production` and fill it in
 - [ ] Generate strong secrets
 - [ ] Set all secrets via environment (not files!)
 - [ ] Configure OAuth with production URLs

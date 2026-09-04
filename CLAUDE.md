@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Build & run
 cargo build --release
-source .env && cargo run                    # requires config.toml (copy from config.local.toml) and .env (from .env.example)
+source .env-local && cargo run              # config.toml and .env-local are both in the repository
 make dev                                     # cargo-watch auto-reload
 make dev-local                               # run with localhost OAuth redirect (http://localhost:3000)
 
@@ -36,7 +36,7 @@ make docker-localhost                        # https://localhost, self-signed ce
 make postgres-local                          # start only Postgres for local `cargo run` development
 ```
 
-Config files are environment-specific templates copied to `config.toml` (`config.local.toml` / `config.staging.toml` / `config.production.toml`), and are overridden via `APP_<SECTION>__<SUBSECTION>__<KEY>` env vars (figment). `cargo run -- --validate-config` validates config without starting the server.
+There is one configuration file, `config.toml`, holding defaults and their reasoning. Everything that differs between environments is an `APP_<SECTION>__<SUBSECTION>__<KEY>` environment variable (figment), supplied by a per-environment env file — `.env-local` (tracked, throwaway values), `.env-staging`, `.env-production` (copied from `.env.example`). Nothing expands `${VAR}` inside the TOML: the loader merges the file and then the `APP_` environment over it, so a placeholder left in a config file is used literally rather than substituted. A list is a JSON array in one variable. `cargo run -- --validate-config` checks a combination without starting the server.
 
 ## Architecture
 

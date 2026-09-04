@@ -143,7 +143,7 @@ git clone https://github.com/lpajunen/aiwebengine.git
 cd aiwebengine
 
 # Set up configuration
-cp config.local.toml config.toml
+# nothing to copy: config.toml and .env-local are both in the repository
 cp .env.example .env
 # Edit .env with your OAuth credentials and secrets
 
@@ -183,7 +183,7 @@ Simplest option for quick development without Docker:
 
 ```bash
 # Set up local configuration
-cp config.local.toml config.toml
+# nothing to copy: config.toml and .env-local are both in the repository
 cp .env.example .env
 # Edit .env with your development credentials
 

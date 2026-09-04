@@ -17,16 +17,16 @@ Complete guide for deploying aiwebengine in local, staging, and production envir
 
 ### Environment Comparison
 
-|                  | Local                   | Staging               | Production               |
-| ---------------- | ----------------------- | --------------------- | ------------------------ |
-| **Purpose**      | Development & debugging | Integration testing   | Live deployment          |
-| **Config File**  | `config.local.toml`     | `config.staging.toml` | `config.production.toml` |
-| **Security**     | Relaxed                 | Moderate              | Strict                   |
-| **Logging**      | `debug`                 | `info`                | `warn` or `error`        |
-| **HTTPS**        | Optional                | Recommended           | Required                 |
-| **Auto-migrate** | Enabled                 | Enabled               | Disabled                 |
-| **Console API**  | Enabled                 | Enabled               | Disabled                 |
-| **Secrets**      | `.env` file             | Environment vars      | Secret manager           |
+|                  | Local                   | Staging             | Production        |
+| ---------------- | ----------------------- | ------------------- | ----------------- |
+| **Purpose**      | Development & debugging | Integration testing | Live deployment   |
+| **Env file**     | `.env-local`            | `.env-staging`      | `.env-production` |
+| **Security**     | Relaxed                 | Moderate            | Strict            |
+| **Logging**      | `debug`                 | `info`              | `warn` or `error` |
+| **HTTPS**        | Optional                | Recommended         | Required          |
+| **Auto-migrate** | Enabled                 | Enabled             | Disabled          |
+| **Console API**  | Enabled                 | Enabled             | Disabled          |
+| **Secrets**      | `.env` file             | Environment vars    | Secret manager    |
 
 ### Choosing Your Environment
 
@@ -81,7 +81,7 @@ sudo systemctl start postgresql
 
 ```bash
 # 1. Copy configuration
-cp config.local.toml config.toml
+# nothing to copy: config.toml and .env-local are both in the repository
 
 # 2. Set up environment variables
 cp .env.example .env
@@ -100,7 +100,7 @@ source .env && cargo run --release
 
 ### Local Configuration
 
-**config.toml** (from `config.local.toml`):
+**config.toml** (defaults; `.env-local` overrides them):
 
 ```toml
 [server]
@@ -221,7 +221,7 @@ Staging mirrors production but with testing-friendly settings.
 
 ```bash
 # 1. Copy staging configuration
-cp config.staging.toml config.toml
+cp .env.example .env-staging
 
 # 2. Set environment variables (not .env file!)
 export APP_AUTH__JWT_SECRET="$(openssl rand -base64 48)"
@@ -273,7 +273,7 @@ secure = true  # If using HTTPS
 
 ### Staging Checklist
 
-- [ ] Use `config.staging.toml`
+- [ ] Use `.env-staging`
 - [ ] Generate strong secrets (don't reuse local ones)
 - [ ] Set up staging database
 - [ ] Configure OAuth with staging URLs
@@ -341,7 +341,7 @@ git clone https://github.com/lpajunen/aiwebengine.git
 cd aiwebengine
 
 # Use production config
-cp config.production.toml config.toml
+cp .env.example .env-production
 
 # Review Caddyfile for your domain
 nano Caddyfile.production
@@ -485,7 +485,7 @@ same_site = "strict"
 
 **Deployment:**
 
-- [ ] Use `config.production.toml`
+- [ ] Use `.env-production`
 - [ ] All secrets from environment (never files!)
 - [ ] Strong, unique secrets generated
 - [ ] Database migrations run manually
@@ -670,7 +670,7 @@ sudo mkdir -p /var/lib/aiwebengine/scripts
 sudo mkdir -p /var/lib/aiwebengine/data
 
 # Copy configuration
-sudo cp config.production.toml /etc/aiwebengine/config.toml
+sudo cp config.toml /etc/aiwebengine/config.toml
 
 # Create service user
 sudo useradd -r -s /bin/false aiwebengine

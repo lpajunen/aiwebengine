@@ -1,8 +1,13 @@
 /target
 node_modules/
-config.toml
+# config.toml is tracked: it is the one configuration file, and everything that
+# differs between environments is an environment variable rather than a second
+# copy of it. Editing it locally therefore shows up as a repository change,
+# which is the point — that drift used to be invisible in an ignored file.
 .env*
 !.env.example
+# Throwaway development values only, so a local install starts without ceremony.
+!.env-local
 .vscode/mcp.json
 aiwebengine_latest.tar
 

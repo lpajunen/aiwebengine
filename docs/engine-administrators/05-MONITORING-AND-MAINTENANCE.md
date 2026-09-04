@@ -663,7 +663,7 @@ git fetch origin
 git pull origin main
 
 # Check for config changes
-git diff HEAD@{1} config.production.toml
+git diff HEAD@{1} config.toml
 ```
 
 #### Rebuild and Deploy

@@ -107,7 +107,7 @@ curl http://localhost:3000/health
 2. ✅ Built Docker image with all dependencies
 3. ✅ Started PostgreSQL database
 4. ✅ Started aiwebengine server
-5. ✅ Configured with `config.local.toml` (development settings)
+5. ✅ Configured with `config.toml` plus `.env-local` (development values)
 
 #### Next Steps
 
@@ -133,16 +133,16 @@ aiwebengine provides three pre-configured environments:
 
 ```bash
 # Local development (relaxed security, verbose logging)
-cp config.local.toml config.toml
+# nothing to copy: config.toml and .env-local are both in the repository
 
 # Staging (moderate security, integration testing)
-cp config.staging.toml config.toml
+cp .env.example .env-staging
 
 # Production (strict security, optimized performance)
-cp config.production.toml config.toml
+cp .env.example .env-production
 ```
 
-**For first-time setup, use `config.local.toml`**
+**For first-time setup, `config.toml` and `.env-local` are already in the repository**
 
 ### Step 3: Configure Environment Variables
 
@@ -404,7 +404,7 @@ When using Docker:
 
 ### Configuration Active
 
-- **Config file:** `config.local.toml`
+- **Env file:** `.env-local`
 - **Environment overrides:** From `.env` file
 - **Log level:** `debug` (verbose output)
 - **Security:** Relaxed (for development)

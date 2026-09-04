@@ -69,7 +69,7 @@ The `.env` file contains the default redirect URI for Docker:
 export APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI=https://local.softagen.com/auth/callback/google
 ```
 
-### `config.local.toml`
+### `config.toml` and `.env-local`
 
 The fallback redirect URI in the config file:
 

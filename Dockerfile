@@ -86,7 +86,7 @@ COPY --from=builder /app/target/release/aiwebengine /usr/local/bin/aiwebengine
 # migrations are compiled in by sqlx::migrate!, and logs go to stdout. The
 # /app/logs, /app/scripts, /app/assets, /app/docs and /app/data directories this
 # replaced were created and populated for a runtime that never opened them.
-COPY config.production.toml /app/config.toml
+COPY config.toml /app/config.toml
 RUN chown aiwebengine:aiwebengine /app /app/config.toml
 
 # Switch to non-root user

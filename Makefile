@@ -152,7 +152,7 @@ docker-build-staging:
 # Start local/development environment with Docker Compose
 docker-local:
 	@echo "Starting local/development environment..."
-	docker-compose -f docker-compose.local.yml up
+	docker compose --env-file .env-local -f docker-compose.local.yml up
 
 # Start with localhost only (no DNS setup needed)
 docker-localhost:
@@ -161,7 +161,7 @@ docker-localhost:
 	@echo "Note: You may need to accept self-signed certificate warning"
 	@echo "Serve a name of your own instead: SITE_HOSTS=my.example.test make docker-localhost"
 	@unset DIGITALOCEAN_TOKEN TLS_SNIPPET; \
-	docker-compose -f docker-compose.local.yml up
+	docker compose --env-file .env-local -f docker-compose.local.yml up
 
 # Start with DNS domain (requires DIGITALOCEAN_TOKEN)
 #
@@ -181,7 +181,7 @@ docker-dns:
 	export TLS_SNIPPET=tls_acme_dns; \
 	echo "Access at: https://$$SITE_HOSTS"; \
 	echo "Note: the local names (https://localhost) are not served in this mode"; \
-	docker-compose -f docker-compose.local.yml up
+	docker compose --env-file .env-local -f docker-compose.local.yml up
 
 # Check DNS domain availability
 check-dns:
@@ -190,21 +190,23 @@ check-dns:
 # Start local/development environment in background
 docker-local-bg:
 	@echo "Starting local/development environment in background..."
-	docker-compose -f docker-compose.local.yml up -d
+	docker compose --env-file .env-local -f docker-compose.local.yml up -d
 	@echo "✓ Local/development environment started!"
 	@echo "View logs with: make docker-logs-local"
 
 # Start staging environment with Docker Compose
+# Each server environment is one env file: it supplies both the values compose
+# interpolates and, through ENV_FILE, the environment the containers receive.
 docker-staging:
 	@echo "Starting staging environment..."
-	docker-compose -f docker-compose.staging.yml up -d
+	docker compose --env-file .env-staging -f docker-compose.staging.yml up -d
 	@echo "✓ Staging environment started!"
 	@echo "View logs with: make docker-logs-staging"
 
 # Start production environment with Docker Compose
 docker-prod:
 	@echo "Starting production environment..."
-	docker-compose up -d
+	docker compose --env-file .env-production up -d
 	@echo "✓ Production environment started!"
 	@echo "View logs with: make docker-logs"
 
@@ -295,12 +297,12 @@ docker-stats:
 
 # Create .env file from example
 docker-env:
-	@if [ ! -f .env ]; then \
-		cp .env.example .env; \
-		echo "✓ Created .env file from .env.example"; \
-		echo "⚠ Please edit .env and set your credentials!"; \
+	@if [ ! -f .env-production ]; then \
+		cp .env.example .env-production; \
+		echo "✓ Created .env-production from .env.example"; \
+		echo "⚠ Fill it in, then check it: set -a; . ./.env-production; set +a; cargo run -- --validate-config"; \
 	else \
-		echo ".env file already exists"; \
+		echo ".env-production already exists"; \
 	fi
 
 # Complete Docker setup for first-time use

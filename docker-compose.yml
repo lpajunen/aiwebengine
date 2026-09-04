@@ -60,43 +60,23 @@ services:
     # Docker to collect — the ./scripts, ./data and ./logs mounts this replaced
     # were bind mounts onto directories no code has opened since the repository
     # moved into the database.
+    # Every APP_* setting comes from one per-environment file, named by
+    # ENV_FILE. Listing keys here instead would set each one whether the
+    # environment defines it or not: `${VAR:-}` is an empty value, and an empty
+    # value overrides config.toml just as a real one does.
+    env_file:
+      # required: false so that `docker compose down`, `ps` and `logs` still
+      # work in a checkout that has no env file yet. A run without one starts
+      # from config.toml alone and stops on the first missing secret, which is
+      # a clearer failure than a compose parse error.
+      - path: ${ENV_FILE:-.env}
+        required: false
     environment:
-      - RUST_LOG=info
-      # Extra hostnames served alongside server.base_url are configured in
-      # config.production.toml (server.additional_base_urls), which the image
-      # bakes in as /app/config.toml. Deliberately NOT set here: an env value
-      # overrides the file wholesale, so a default of [] would silently drop
-      # every extra host. To override per-deployment instead of editing the
-      # file, uncomment the line below and set the variable in .env to a full
-      # JSON array — a partial list here means the hosts you omit fall back to
-      # base_url.
-      # - APP_SERVER__ADDITIONAL_BASE_URLS=${APP_SERVER__ADDITIONAL_BASE_URLS}
-      # Auth configuration
-      - APP_AUTH__JWT_SECRET=${APP_AUTH__JWT_SECRET:-change-this-in-production}
-      - APP_AUTH__BOOTSTRAP_ADMINS=${APP_AUTH__BOOTSTRAP_ADMINS:-["admin@example.com"]}
-      # Google OAuth
-      - APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID=${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID:-}
-      - APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET=${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET:-}
-      - APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI=${APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI:-}
-      # Microsoft OAuth
-      - APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_ID=${APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_ID:-}
-      - APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_SECRET=${APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_SECRET:-}
-      - APP_AUTH__PROVIDERS__MICROSOFT__REDIRECT_URI=${APP_AUTH__PROVIDERS__MICROSOFT__REDIRECT_URI:-}
-      - APP_AUTH__PROVIDERS__MICROSOFT__TENANT_ID=${APP_AUTH__PROVIDERS__MICROSOFT__TENANT_ID:-common}
-      # Apple OAuth (optional)
-      # - APP_AUTH__PROVIDERS__APPLE__CLIENT_ID=${APP_AUTH__PROVIDERS__APPLE__CLIENT_ID:-}
-      # - APP_AUTH__PROVIDERS__APPLE__CLIENT_SECRET=${APP_AUTH__PROVIDERS__APPLE__CLIENT_SECRET:-}
-      # - APP_AUTH__PROVIDERS__APPLE__REDIRECT_URI=${APP_AUTH__PROVIDERS__APPLE__REDIRECT_URI:-}
-      # - APP_AUTH__PROVIDERS__APPLE__TEAM_ID=${APP_AUTH__PROVIDERS__APPLE__TEAM_ID:-}
-      # Security
-      - APP_SECURITY__API_KEY=${APP_SECURITY__API_KEY:-change-this-in-production}
-      # CSRF & session encryption keys (base64 encoded 32-byte values)
-      # Generate example: openssl rand -base64 32
-      - APP_SECURITY__CSRF_KEY=${APP_SECURITY__CSRF_KEY:-}
-      - APP_SECURITY__SESSION_ENCRYPTION_KEY=${APP_SECURITY__SESSION_ENCRYPTION_KEY:-}
-      - APP_SECURITY__SECRET_ENCRYPTION_KEY=${APP_SECURITY__SECRET_ENCRYPTION_KEY:-}
-      # Repository
-      - APP_REPOSITORY__DATABASE_URL=postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine
+      # The two that describe the topology rather than the environment. A
+      # managed database is named in the env file instead, and what it sets is
+      # used because this default only applies when the variable is absent.
+      APP_REPOSITORY__DATABASE_URL: ${APP_REPOSITORY__DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine}
+      RUST_LOG: ${RUST_LOG:-info}
     networks:
       - aiwebengine-network
     depends_on:
@@ -123,37 +103,23 @@ services:
     # Docker to collect — the ./scripts, ./data and ./logs mounts this replaced
     # were bind mounts onto directories no code has opened since the repository
     # moved into the database.
+    # Every APP_* setting comes from one per-environment file, named by
+    # ENV_FILE. Listing keys here instead would set each one whether the
+    # environment defines it or not: `${VAR:-}` is an empty value, and an empty
+    # value overrides config.toml just as a real one does.
+    env_file:
+      # required: false so that `docker compose down`, `ps` and `logs` still
+      # work in a checkout that has no env file yet. A run without one starts
+      # from config.toml alone and stops on the first missing secret, which is
+      # a clearer failure than a compose parse error.
+      - path: ${ENV_FILE:-.env}
+        required: false
     environment:
-      - RUST_LOG=info
-      # Extra hostnames served alongside server.base_url are configured in
-      # config.production.toml (server.additional_base_urls), which the image
-      # bakes in as /app/config.toml. Deliberately NOT set here: an env value
-      # overrides the file wholesale, so a default of [] would silently drop
-      # every extra host. To override per-deployment instead of editing the
-      # file, uncomment the line below and set the variable in .env to a full
-      # JSON array — a partial list here means the hosts you omit fall back to
-      # base_url.
-      # - APP_SERVER__ADDITIONAL_BASE_URLS=${APP_SERVER__ADDITIONAL_BASE_URLS}
-      # Auth configuration
-      - APP_AUTH__JWT_SECRET=${APP_AUTH__JWT_SECRET:-change-this-in-production}
-      - APP_AUTH__BOOTSTRAP_ADMINS=${APP_AUTH__BOOTSTRAP_ADMINS:-["admin@example.com"]}
-      # Google OAuth
-      - APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID=${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID:-}
-      - APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET=${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET:-}
-      - APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI=${APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI:-}
-      # Microsoft OAuth
-      - APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_ID=${APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_ID:-}
-      - APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_SECRET=${APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_SECRET:-}
-      - APP_AUTH__PROVIDERS__MICROSOFT__REDIRECT_URI=${APP_AUTH__PROVIDERS__MICROSOFT__REDIRECT_URI:-}
-      - APP_AUTH__PROVIDERS__MICROSOFT__TENANT_ID=${APP_AUTH__PROVIDERS__MICROSOFT__TENANT_ID:-common}
-      # Security
-      - APP_SECURITY__API_KEY=${APP_SECURITY__API_KEY:-change-this-in-production}
-      # CSRF & session encryption keys (base64 encoded 32-byte values)
-      - APP_SECURITY__CSRF_KEY=${APP_SECURITY__CSRF_KEY:-}
-      - APP_SECURITY__SESSION_ENCRYPTION_KEY=${APP_SECURITY__SESSION_ENCRYPTION_KEY:-}
-      - APP_SECURITY__SECRET_ENCRYPTION_KEY=${APP_SECURITY__SECRET_ENCRYPTION_KEY:-}
-      # Repository
-      - APP_REPOSITORY__DATABASE_URL=postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine
+      # The two that describe the topology rather than the environment. A
+      # managed database is named in the env file instead, and what it sets is
+      # used because this default only applies when the variable is absent.
+      APP_REPOSITORY__DATABASE_URL: ${APP_REPOSITORY__DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine}
+      RUST_LOG: ${RUST_LOG:-info}
     networks:
       - aiwebengine-network
     depends_on:

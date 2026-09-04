@@ -41,13 +41,13 @@ aiwebengine provides three pre-configured environment templates:
 
 ```bash
 # Local Development
-cp config.local.toml config.toml
+# nothing to copy: config.toml and .env-local are both in the repository
 
 # Staging Environment
-cp config.staging.toml config.toml
+cp .env.example .env-staging
 
 # Production Deployment
-cp config.production.toml config.toml
+cp .env.example .env-production
 ```
 
 ### Environment Comparison
@@ -472,7 +472,7 @@ See [04-SECRETS-AND-SECURITY.md](04-SECRETS-AND-SECURITY.md) for the complete se
 
 ✅ **DO:**
 
-- Use `config.local.toml` as base
+- Use `.env-local`
 - Store secrets in `.env` file (add to `.gitignore`)
 - Enable verbose logging (`level = "debug"`)
 - Use `localhost` addresses
@@ -480,7 +480,7 @@ See [04-SECRETS-AND-SECURITY.md](04-SECRETS-AND-SECURITY.md) for the complete se
 - Use auto-migrations
 
 ```bash
-cp config.local.toml config.toml
+# nothing to copy: config.toml and .env-local are both in the repository
 cp .env.example .env
 # Edit .env with your credentials
 source .env && cargo run
@@ -490,7 +490,7 @@ source .env && cargo run
 
 ✅ **DO:**
 
-- Use `config.staging.toml` as base
+- Use `.env-staging`
 - Set all secrets via environment variables
 - Mirror production structure
 - Test with real OAuth providers
@@ -499,7 +499,7 @@ source .env && cargo run
 - Use moderate security settings
 
 ```bash
-cp config.staging.toml config.toml
+cp .env.example .env-staging
 export APP_AUTH__JWT_SECRET="$(openssl rand -base64 48)"
 export APP_REPOSITORY__DATABASE_URL="postgresql://user:pass@staging-db/aiwebengine"
 export APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI="https://staging.yourdomain.com/auth/callback/google"
@@ -510,7 +510,7 @@ cargo run --release
 
 ✅ **DO:**
 
-- Use `config.production.toml` as base
+- Use `.env-production`
 - **NEVER** store secrets in config files
 - Use strong, randomly generated secrets
 - Secure session cookies (`secure = true`)
@@ -523,7 +523,7 @@ cargo run --release
 - Ensure all server instances use the same encryption keys
 
 ```bash
-cp config.production.toml config.toml
+cp .env.example .env-production
 
 # Use secret management system
 export APP_AUTH__JWT_SECRET="$(aws secretsmanager get-secret-value --secret-id jwt-secret --query SecretString --output text)"

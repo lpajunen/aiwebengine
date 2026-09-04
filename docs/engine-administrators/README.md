@@ -48,7 +48,7 @@ You're an **Engine Administrator** if you:
 
 ```bash
 # 1. Copy configuration
-cp config.local.toml config.toml
+# nothing to copy: config.toml and .env-local are both in the repository
 
 # 2. Set up environment
 cp .env.example .env
@@ -65,7 +65,7 @@ make docker-local
 
 ```bash
 # 1. Use production config
-cp config.production.toml config.toml
+cp .env.example .env-production
 
 # 2. Set secrets via environment (NEVER in files!)
 export APP_AUTH__JWT_SECRET="$(openssl rand -base64 48)"
@@ -105,11 +105,11 @@ See [03-RUNNING-ENVIRONMENTS.md](03-RUNNING-ENVIRONMENTS.md) for complete guides
 
 aiwebengine supports three pre-configured environments:
 
-| Environment    | Config File              | Use Case               | Security |
-| -------------- | ------------------------ | ---------------------- | -------- |
-| **Local**      | `config.local.toml`      | Development, debugging | Relaxed  |
-| **Staging**    | `config.staging.toml`    | Testing, QA            | Moderate |
-| **Production** | `config.production.toml` | Live deployments       | Strict   |
+| Environment    | Config File       | Use Case               | Security |
+| -------------- | ----------------- | ---------------------- | -------- |
+| **Local**      | `.env-local`      | Development, debugging | Relaxed  |
+| **Staging**    | `.env-staging`    | Testing, QA            | Moderate |
+| **Production** | `.env-production` | Live deployments       | Strict   |
 
 Each environment has optimized settings for its use case. See [02-CONFIGURATION.md](02-CONFIGURATION.md) for details.
 

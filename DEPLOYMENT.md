@@ -37,8 +37,8 @@ Independent of topology:
   there is no file-backed or in-memory mode.
 - **Four secrets**, all of which must be generated per installation:
   `auth.jwt_secret`, `security.csrf_key`, `security.session_encryption_key`,
-  `security.secret_encryption_key`. The values shipped in `config.local.toml`
-  are published in this repository and are for a local install only.
+  `security.secret_encryption_key`. The values in `.env-local` are published in
+  this repository and are for a local install only.
   `secret_encryption_key` encrypts script and user secrets at rest, so **a
   database backup without that key is a backup you cannot fully restore.** Back
   the keys up with the dump, separately from it.
@@ -139,10 +139,10 @@ make postgres-local          # Postgres container only, on localhost:5432
 source .env && cargo run     # or: make dev (cargo-watch), ./dev-local.sh
 ```
 
-`config.local.toml` is the template: debug logging, short JavaScript timeouts,
-throwaway keys, internal auth fully on with `admin` as the bootstrap username,
-and CORS allowing `localhost:3000` and `localhost:5173` so a separately served
-front end can talk to it. The integration tests need this Postgres too — there
+`.env-local` carries the development values over `config.toml`'s defaults:
+debug logging, short JavaScript timeouts, throwaway keys, internal auth fully on
+with `admin` as the bootstrap username, and CORS allowing `localhost:3000` and
+`localhost:5173` so a separately served front end can talk to it. The integration tests need this Postgres too — there
 is no mocked repository, so `tests/*.rs` spin up real servers against a real
 database.
 
@@ -185,8 +185,9 @@ machine.
 load-balances, one or more engine containers, and Postgres — containerised
 alongside, or a managed instance.
 
-The shape is `docker-compose.yml` with `Caddyfile.production` and
-`config.production.toml`:
+The shape is `docker-compose.yml` with `Caddyfile.production`, the single
+`config.toml`, and a `.env-production` holding everything specific to this
+deployment:
 
 - Caddy holds `:80`/`:443` (and `:443/udp` for HTTP/3), obtains certificates
   automatically, sets `header_up X-Forwarded-For {remote_host}` so the proxy
@@ -307,11 +308,20 @@ cargo cache volumes and a watch command are a different kind of container, not
 the same container with different parameters — and that is exactly what a
 compose overlay is for. Desktop standalone has no Caddy and no compose at all.
 
-**Configuration templates** can collapse the same way: `config.production.toml`
-is already `${...}` throughout, and an unexpanded placeholder is refused at
-startup rather than used as a secret (`src/config.rs:406`), so staging and
-production can share one file. Keep `config.local.toml` as its own file — its
-value is being a readable set of development defaults, not a template.
+**Configuration is one file.** `config.toml` holds the defaults and the
+reasoning behind them; every environment supplies its differences as `APP_`
+variables in its own env file — `.env-local` (tracked, throwaway values),
+`.env-staging`, `.env-production` (copied from `.env.example`). Compose loads
+that same file twice over: `--env-file` supplies what the YAML interpolates, and
+`env_file: ${ENV_FILE}` supplies what the containers receive, so one file per
+environment drives everything.
+
+Two details make this work rather than merely look tidy. Services declare
+`env_file` instead of listing keys, because a listed `- KEY=${KEY:-}` sets the
+key whether the environment defines it or not, and an empty value overrides the
+config file exactly as a real one does — "unset" has to mean "absent from the
+env file". And the entry is `required: false`, so `docker compose down`, `ps`
+and `logs` still work in a checkout that has no env file yet.
 
 ## Operational essentials
 
@@ -334,9 +344,14 @@ Applying to every server deployment, and to the desktop build in reduced form:
   and are what keep the database from growing without bound; leave
   `prune_enabled` on.
 - **Secrets handling.** Everything sensitive comes from the environment
-  (`APP_<SECTION>__<KEY>`), never from a committed config file.
-  `config.production.toml` references `${...}` placeholders, and an unset one is
-  dropped with a warning rather than kept as a literal.
+  (`APP_<SECTION>__<KEY>`), never from a committed config file. Note that
+  nothing expands `${VAR}` inside a TOML file: the loader merges the file and
+  then the `APP_` environment over it, so a `${...}` left in a config file is
+  not substituted, it is _used_ — a literal placeholder reaching the code as a
+  redirect URI or a signing key. That is why `config.toml` contains no
+  placeholders and no secrets, and why the keys with no safe default are simply
+  absent from it, so the engine refuses to start rather than starting on a
+  string nobody chose.
 
 ## Related documentation
 
