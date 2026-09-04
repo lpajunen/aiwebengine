@@ -25,3 +25,6 @@ data/
 *.db
 *.db-shm
 *.db-wal
+
+# Extra Caddy site blocks are per-deployment; only the example is tracked.
+caddy-sites/*.caddy

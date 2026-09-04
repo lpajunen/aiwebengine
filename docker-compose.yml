@@ -19,10 +19,9 @@ services:
       - "443:443/udp"  # HTTP/3 support
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      # Optional extra site blocks. Mounted unconditionally because a compose
-      # file cannot mount conditionally; whether they are read is decided by
-      # EXTRA_SITES_FILE, which defaults to a glob matching nothing.
-      - ./Caddyfile.redirects:/etc/caddy/Caddyfile.redirects:ro
+      # Optional extra site blocks: every *.caddy file in this directory is
+      # imported. An empty or absent directory contributes nothing.
+      - ./caddy-sites:/etc/caddy/sites:ro
       - caddy-data:/data
       - caddy-config:/config
       - caddy-logs:/var/log/caddy
@@ -32,9 +31,15 @@ services:
       MANAGE_HOST: ${MANAGE_HOST:-${SITE_HOSTS}}
       ENGINE_UPSTREAMS: ${ENGINE_UPSTREAMS:-aiwebengine-1:3000}
       EXTRA_SITES_FILE: ${EXTRA_SITES_FILE:-/etc/caddy/Caddyfile.none}
+      # Read only by caddy-sites/redirects.caddy, which most deployments do not
+      # have. Empty is fine while that file is absent.
       REDIRECT_HOSTS: ${REDIRECT_HOSTS:-}
       REDIRECT_TARGET: ${REDIRECT_TARGET:-}
-      ACME_EMAIL: ${ACME_EMAIL:-}
+      # Non-empty, because compose sets every key it lists and Caddy honours a
+      # `{$VAR:default}` only for a variable that is *unset* — an empty value
+      # reaches the `email` directive as no argument at all and fails the
+      # config. The same reason the Caddyfile's defaults live here.
+      ACME_EMAIL: ${ACME_EMAIL:-lpajunen@gmail.com}
       ACME_CA: ${ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}
     networks:
       - aiwebengine-network

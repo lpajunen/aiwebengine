@@ -22,11 +22,14 @@
 # Local development is Caddyfile.local, not this file: it issues its own
 # certificates and proxies to containers that build from source.
 {
-	email {$ACME_EMAIL:lpajunen@gmail.com}
+	# ACME_EMAIL and ACME_CA are always set by the compose file, with defaults
+	# there rather than here: compose sets every key it lists, so a `{$VAR:...}`
+	# default written here would never be reached, and an empty value fails.
+	email {$ACME_EMAIL}
 	# To rehearse issuance without spending production rate limits, point this
 	# at Let's Encrypt's staging directory:
 	#   ACME_CA=https://acme-staging-v02.api.letsencrypt.org/directory
-	acme_ca {$ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
+	acme_ca {$ACME_CA}
 }
 
 # The engine cluster. One upstream or several, depending on ENGINE_UPSTREAMS.
@@ -98,8 +101,13 @@
 }
 
 # Optional extra sites — redirects and anything else a particular deployment
-# has. The default is a glob matching nothing, which Caddy reports as a warning
-# and otherwise ignores; pointing it at a missing *file* would be fatal, since a
-# bind mount whose source does not exist is created as a directory and Caddy
-# refuses to import one.
-import {$EXTRA_SITES_FILE:/etc/caddy/sites/*.caddy}
+# has. A directory rather than a variable naming a file, because the two ways
+# this can be absent are both fatal for a file and both harmless for a glob:
+# Caddy errors on an import naming a file that is not there, and Docker creates
+# a missing bind-mount source as a directory, which Caddy also refuses to
+# import. A glob matching nothing is a warning, and a bind mount whose target
+# is a directory is what a directory source wants anyway.
+#
+# Drop a .caddy file into caddy-sites/ to add site blocks; see
+# caddy-sites/redirects.caddy.example.
+import /etc/caddy/sites/*.caddy
