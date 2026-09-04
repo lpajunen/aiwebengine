@@ -197,14 +197,34 @@ docker-local-bg:
 # Start staging environment with Docker Compose
 # Each server environment is one env file: it supplies both the values compose
 # interpolates and, through ENV_FILE, the environment the containers receive.
-docker-staging:
+# Docker creates a missing bind-mount source as a directory, and mounting a
+# directory onto a file inside the image fails with a runc error that names
+# overlay2 paths and explains nothing. Catch it here, where the fix is obvious.
+check-mounts:
+	@for f in Caddyfile config.toml; do \
+		if [ -d "$$f" ]; then \
+			echo "❌ $$f is a DIRECTORY, not a file."; \
+			echo "   Docker created it when the file was missing. Remove it and restore the file:"; \
+			echo "     rmdir $$f && git checkout $$f"; \
+			exit 1; \
+		elif [ ! -f "$$f" ]; then \
+			echo "❌ $$f is missing. This checkout is not up to date:"; \
+			echo "     git pull"; \
+			exit 1; \
+		fi; \
+	done
+	@if [ ! -d caddy-sites ]; then \
+		echo "❌ caddy-sites/ is missing. Run: git pull"; exit 1; \
+	fi
+
+docker-staging: check-mounts
 	@echo "Starting staging environment..."
 	docker compose --env-file .env-staging up -d
 	@echo "✓ Staging environment started!"
 	@echo "View logs with: make docker-logs-staging"
 
 # Start production environment with Docker Compose
-docker-prod:
+docker-prod: check-mounts
 	@echo "Starting production environment..."
 	docker compose --env-file .env-production up -d
 	@echo "✓ Production environment started!"
