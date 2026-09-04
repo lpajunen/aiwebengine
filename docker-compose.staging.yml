@@ -54,7 +54,14 @@ services:
       - path: ${ENV_FILE:-.env}
         required: false
     environment:
-      APP_REPOSITORY__DATABASE_URL: ${APP_REPOSITORY__DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-staging-password}@postgres:5432/aiwebengine_staging}
+      # Named by a compose-only variable, never by APP_REPOSITORY__DATABASE_URL
+      # itself: compose interpolates from the shell first, and this project's
+      # documented workflow is `source .env && cargo run`, which exports that
+      # variable pointing at localhost. Reusing the name meant a developer who
+      # had sourced an env file got localhost baked into the container, where
+      # it cannot reach the database service. Set ENGINE_DATABASE_URL in the
+      # env file to point at a managed instance instead.
+      APP_REPOSITORY__DATABASE_URL: ${ENGINE_DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-staging-password}@postgres:5432/aiwebengine_staging}
       RUST_LOG: ${RUST_LOG:-info}
     networks:
       - aiwebengine-staging-network

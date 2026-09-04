@@ -75,7 +75,14 @@ services:
       # The two that describe the topology rather than the environment. A
       # managed database is named in the env file instead, and what it sets is
       # used because this default only applies when the variable is absent.
-      APP_REPOSITORY__DATABASE_URL: ${APP_REPOSITORY__DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine}
+      # Named by a compose-only variable, never by APP_REPOSITORY__DATABASE_URL
+      # itself: compose interpolates from the shell first, and this project's
+      # documented workflow is `source .env && cargo run`, which exports that
+      # variable pointing at localhost. Reusing the name meant a developer who
+      # had sourced an env file got localhost baked into the container, where
+      # it cannot reach the database service. Set ENGINE_DATABASE_URL in the
+      # env file to point at a managed instance instead.
+      APP_REPOSITORY__DATABASE_URL: ${ENGINE_DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine}
       RUST_LOG: ${RUST_LOG:-info}
     networks:
       - aiwebengine-network
@@ -118,7 +125,14 @@ services:
       # The two that describe the topology rather than the environment. A
       # managed database is named in the env file instead, and what it sets is
       # used because this default only applies when the variable is absent.
-      APP_REPOSITORY__DATABASE_URL: ${APP_REPOSITORY__DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine}
+      # Named by a compose-only variable, never by APP_REPOSITORY__DATABASE_URL
+      # itself: compose interpolates from the shell first, and this project's
+      # documented workflow is `source .env && cargo run`, which exports that
+      # variable pointing at localhost. Reusing the name meant a developer who
+      # had sourced an env file got localhost baked into the container, where
+      # it cannot reach the database service. Set ENGINE_DATABASE_URL in the
+      # env file to point at a managed instance instead.
+      APP_REPOSITORY__DATABASE_URL: ${ENGINE_DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine}
       RUST_LOG: ${RUST_LOG:-info}
     networks:
       - aiwebengine-network
