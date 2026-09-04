@@ -1,0 +1,10 @@
+# Hostnames that only redirect somewhere else. Imported when a deployment sets
+#   EXTRA_SITES_FILE=/etc/caddy/Caddyfile.redirects
+# and pointed by
+#   REDIRECT_HOSTS   the names to redirect, comma-separated
+#   REDIRECT_TARGET  the origin to send them to
+#
+# Each name still gets a certificate, so list only names that resolve here.
+{$REDIRECT_HOSTS} {
+	redir {$REDIRECT_TARGET}{uri} permanent
+}

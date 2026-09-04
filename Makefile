@@ -199,7 +199,7 @@ docker-local-bg:
 # interpolates and, through ENV_FILE, the environment the containers receive.
 docker-staging:
 	@echo "Starting staging environment..."
-	docker compose --env-file .env-staging -f docker-compose.staging.yml up -d
+	docker compose --env-file .env-staging up -d
 	@echo "✓ Staging environment started!"
 	@echo "View logs with: make docker-logs-staging"
 
@@ -214,8 +214,8 @@ docker-prod:
 docker-stop:
 	@echo "Stopping Docker containers..."
 	docker-compose down
-	docker-compose -f docker-compose.staging.yml down
-	docker-compose -f docker-compose.local.yml down
+	docker compose --env-file .env-staging down
+	docker compose --env-file .env-local -f docker-compose.local.yml down
 	@echo "✓ All containers stopped!"
 
 # View production logs
@@ -228,7 +228,7 @@ docker-logs-local:
 
 # View staging logs
 docker-logs-staging:
-	docker-compose -f docker-compose.staging.yml logs -f aiwebengine-staging
+	docker compose --env-file .env-staging logs -f aiwebengine-1
 
 # View all service logs
 docker-logs-all:
@@ -238,8 +238,8 @@ docker-logs-all:
 docker-clean:
 	@echo "Cleaning up Docker containers and volumes..."
 	docker-compose down -v
-	docker-compose -f docker-compose.staging.yml down -v
-	docker-compose -f docker-compose.local.yml down -v
+	docker compose --env-file .env-staging down -v
+	docker compose --env-file .env-local -f docker-compose.local.yml down -v
 	@echo "✓ Docker cleanup completed!"
 
 # Clean up Docker images
@@ -262,7 +262,7 @@ docker-shell-local:
 
 # Open shell in running staging container
 docker-shell-staging:
-	docker-compose -f docker-compose.staging.yml exec aiwebengine-staging /bin/bash
+	docker compose --env-file .env-staging exec aiwebengine-1 /bin/bash
 
 # Run tests in Docker container
 docker-test:
@@ -274,7 +274,7 @@ docker-ps:
 	@docker-compose ps
 	@echo ""
 	@echo "Staging containers:"
-	@docker-compose -f docker-compose.staging.yml ps
+	@docker compose --env-file .env-staging ps
 	@echo ""
 	@echo "Local/development containers:"
 	@docker-compose -f docker-compose.local.yml ps

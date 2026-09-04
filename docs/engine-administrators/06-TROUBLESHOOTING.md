@@ -626,7 +626,7 @@ docker-compose logs caddy | grep -i cert
 dig yourdomain.com +short
 
 # 3. Check Caddyfile configuration
-cat Caddyfile.production
+cat Caddyfile
 
 # 4. Force certificate renewal
 docker-compose restart caddy
@@ -674,7 +674,7 @@ curl -I -H "Origin: https://yourdomain.com" https://yourdomain.com/api/endpoint
 
 ```bash
 # Check Caddyfile for redirect configuration
-cat Caddyfile.production
+cat Caddyfile
 
 # Common issue: double redirect (Caddy + config)
 # Either let Caddy handle redirects OR configure in app, not both

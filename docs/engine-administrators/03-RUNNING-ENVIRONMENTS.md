@@ -344,7 +344,7 @@ cd aiwebengine
 cp .env.example .env-production
 
 # Review Caddyfile for your domain
-nano Caddyfile.production
+nano Caddyfile
 # Update with your actual domain
 ```
 
@@ -519,7 +519,7 @@ same_site = "strict"
 - **Dockerfile.staging** - Staging build
 - **docker-compose.yml** - Production services
 - **docker-compose.local.yml** - Local services
-- **docker-compose.staging.yml** - Staging services
+- **docker-compose.yml** - every server environment, selected by its env file
 
 ### Production Docker Compose
 
@@ -562,7 +562,7 @@ services:
       - "443:443"
       - "443:443/udp"
     volumes:
-      - ./Caddyfile.production:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
 ```

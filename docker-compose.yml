@@ -1,31 +1,46 @@
-name: aiwebengine
+# The project name prefixes every container, network and volume, so staging and
+# production can be the same file on the same host. COMPOSE_PROJECT_NAME in the
+# env file outranks this.
+name: ${COMPOSE_PROJECT_NAME:-aiwebengine}
 
 services:
   # Caddy reverse proxy with automatic HTTPS
   caddy:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM caddy:2-alpine
-        COPY Caddyfile.production /etc/caddy/Caddyfile
-    # image: caddy:2-alpine
-    container_name: aiwebengine-caddy
+    # Stock image with the Caddyfile mounted: the file is the same for every
+    # environment now, and what differs — hostnames, upstreams, which host
+    # carries management — arrives as environment variables, so there is
+    # nothing left to bake in.
+    image: caddy:2-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-aiwebengine}-caddy
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"  # HTTP/3 support
     volumes:
-      # - ./Caddyfile.production:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Optional extra site blocks, selected by EXTRA_SITES_FILE. Both are
+      # mounted because a compose file cannot mount one conditionally, and the
+      # Caddyfile defaults to the empty one.
+      - ./Caddyfile.none:/etc/caddy/Caddyfile.none:ro
+      - ./Caddyfile.redirects:/etc/caddy/Caddyfile.redirects:ro
       - caddy-data:/data
       - caddy-config:/config
       - caddy-logs:/var/log/caddy
+    environment:
+      # Read by the Caddyfile itself, not by the engine.
+      SITE_HOSTS: ${SITE_HOSTS:?set SITE_HOSTS in the env file}
+      MANAGE_HOST: ${MANAGE_HOST:-${SITE_HOSTS}}
+      ENGINE_UPSTREAMS: ${ENGINE_UPSTREAMS:-aiwebengine-1:3000}
+      EXTRA_SITES_FILE: ${EXTRA_SITES_FILE:-/etc/caddy/Caddyfile.none}
+      REDIRECT_HOSTS: ${REDIRECT_HOSTS:-}
+      REDIRECT_TARGET: ${REDIRECT_TARGET:-}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      ACME_CA: ${ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}
     networks:
       - aiwebengine-network
     depends_on:
       aiwebengine-1:
-        condition: service_healthy
-      aiwebengine-2:
         condition: service_healthy
     healthcheck:
       # Caddy's admin API, not a request through the proxy: every port-80 probe
@@ -45,8 +60,8 @@ services:
     # build:
     #   context: .
     #   dockerfile: Dockerfile
-    image: aiwebengine:latest
-    container_name: aiwebengine-1
+    image: ${ENGINE_IMAGE:-aiwebengine:latest}
+    container_name: ${COMPOSE_PROJECT_NAME:-aiwebengine}-1
     restart: unless-stopped
     # Expose port only to internal network (not to host)
     expose:
@@ -82,7 +97,7 @@ services:
       # had sourced an env file got localhost baked into the container, where
       # it cannot reach the database service. Set ENGINE_DATABASE_URL in the
       # env file to point at a managed instance instead.
-      APP_REPOSITORY__DATABASE_URL: ${ENGINE_DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine}
+      APP_REPOSITORY__DATABASE_URL: ${ENGINE_DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/${POSTGRES_DB:-aiwebengine}}
       RUST_LOG: ${RUST_LOG:-info}
     networks:
       - aiwebengine-network
@@ -98,8 +113,13 @@ services:
 
   # Production deployment - Instance 2
   aiwebengine-2:
-    image: aiwebengine:latest
-    container_name: aiwebengine-2
+    image: ${ENGINE_IMAGE:-aiwebengine:latest}
+    container_name: ${COMPOSE_PROJECT_NAME:-aiwebengine}-2
+    # A second instance is capacity and the ability to survive one restarting,
+    # not a requirement. COMPOSE_PROFILES=ha turns it on; ENGINE_UPSTREAMS has
+    # to name it too, since Caddy is told its upstreams rather than discovering
+    # them.
+    profiles: ["ha"]
     restart: unless-stopped
     # Expose port only to internal network (not to host)
     expose:
@@ -132,7 +152,7 @@ services:
       # had sourced an env file got localhost baked into the container, where
       # it cannot reach the database service. Set ENGINE_DATABASE_URL in the
       # env file to point at a managed instance instead.
-      APP_REPOSITORY__DATABASE_URL: ${ENGINE_DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine}
+      APP_REPOSITORY__DATABASE_URL: ${ENGINE_DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/${POSTGRES_DB:-aiwebengine}}
       RUST_LOG: ${RUST_LOG:-info}
     networks:
       - aiwebengine-network
@@ -149,10 +169,10 @@ services:
   # PostgreSQL database
   postgres:
     image: postgres:16-alpine
-    container_name: aiwebengine-postgres
+    container_name: ${COMPOSE_PROJECT_NAME:-aiwebengine}-postgres
     restart: unless-stopped
     environment:
-      - POSTGRES_DB=aiwebengine
+      - POSTGRES_DB=${POSTGRES_DB:-aiwebengine}
       - POSTGRES_USER=aiwebengine
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change-this-password}
     volumes:

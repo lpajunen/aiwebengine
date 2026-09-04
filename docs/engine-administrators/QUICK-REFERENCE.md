@@ -211,8 +211,8 @@ docker-compose -f docker-compose.local.yml up -d
 docker-compose -f docker-compose.local.yml logs -f
 
 # Staging
-docker-compose -f docker-compose.staging.yml up -d
-docker-compose -f docker-compose.staging.yml logs -f
+docker-compose -f up -d   # with --env-file .env-staging
+docker-compose -f logs -f   # with --env-file .env-staging
 
 # Production
 docker-compose up -d
@@ -395,8 +395,8 @@ Dockerfile.local            # Local/dev image
 Dockerfile.staging          # Staging image
 docker-compose.yml          # Production services
 docker-compose.local.yml    # Local services
-docker-compose.staging.yml  # Staging services
-Caddyfile.production        # Production reverse proxy config
+# staging is the same file with .env-staging
+Caddyfile                   # Reverse proxy config for every server environment
 ```
 
 ---

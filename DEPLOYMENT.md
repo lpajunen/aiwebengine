@@ -185,9 +185,9 @@ machine.
 load-balances, one or more engine containers, and Postgres — containerised
 alongside, or a managed instance.
 
-The shape is `docker-compose.yml` with `Caddyfile.production`, the single
-`config.toml`, and a `.env-production` holding everything specific to this
-deployment:
+The shape is `docker-compose.yml` with `Caddyfile`, the single `config.toml`,
+and a `.env-production` holding everything specific to this deployment —
+the same three files staging uses, with a `.env-staging` instead:
 
 - Caddy holds `:80`/`:443` (and `:443/udp` for HTTP/3), obtains certificates
   automatically, sets `header_up X-Forwarded-For {remote_host}` so the proxy
@@ -273,12 +273,11 @@ in the file is always adapted:
 - Two blocks resolving to the same host is `ambiguous site definition`, so a
   single-host deployment cannot simply point both at the same name.
 
-That matters only because `Caddyfile.production` gives the management host a
-different `X-Frame-Options` than the public hosts. The durable fix is to stop
-expressing that in the proxy: the engine already owns the CSP on
-`/engine/*` (`security/headers.rs`, `security::engine_page_policy`), and
-`frame-ancestors` supersedes `X-Frame-Options` in current browsers. Move the
-frame policy there and every host takes the same Caddy configuration.
+That mattered because the management host takes a different `X-Frame-Options`
+than the public ones. It is expressed as a matcher rather than a second site
+block — `@manage host {$MANAGE_HOST}` and `@content not host {$MANAGE_HOST}` —
+which needs no conditional and works on a single-host deployment by pointing
+`MANAGE_HOST` at that one name, where every response is then `DENY`.
 
 **One Dockerfile, two targets.** The existing multi-stage build already has the
 pieces; add a `dev` stage carrying the toolchain and `cargo-watch`, and select it

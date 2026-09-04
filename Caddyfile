@@ -1,0 +1,102 @@
+# Caddyfile for every server deployment — staging and production alike.
+#
+# One file, because the two differed only in values: how many hostnames, how
+# many engine instances behind them, and which of those hostnames carries the
+# management surface. Those are environment variables now, supplied by the same
+# per-environment env file that configures the engine:
+#
+#   SITE_HOSTS        every hostname this deployment answers on, comma-separated
+#   MANAGE_HOST       the one carrying /engine/* — see the frame note below
+#   ENGINE_UPSTREAMS  the engine containers, space-separated
+#   EXTRA_SITES_FILE  optional extra site blocks (redirects); defaults to none
+#
+# Caddy substitutes {$VAR} textually before parsing, so one variable can carry
+# several tokens: SITE_HOSTS becomes a multi-host matcher and ENGINE_UPSTREAMS
+# becomes several upstreams with the health checks intact.
+#
+# A site block cannot be made conditional — an address that expands to nothing
+# fails the whole config — so anything a deployment may or may not have lives in
+# EXTRA_SITES_FILE, and the per-host header difference is expressed with a
+# matcher rather than with separate blocks.
+#
+# Local development is Caddyfile.local, not this file: it issues its own
+# certificates and proxies to containers that build from source.
+{
+	email {$ACME_EMAIL:lpajunen@gmail.com}
+	# To rehearse issuance without spending production rate limits, point this
+	# at Let's Encrypt's staging directory:
+	#   ACME_CA=https://acme-staging-v02.api.letsencrypt.org/directory
+	acme_ca {$ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
+}
+
+# The engine cluster. One upstream or several, depending on ENGINE_UPSTREAMS.
+(engine_upstream) {
+	reverse_proxy {$ENGINE_UPSTREAMS} {
+		# Overwrite rather than append: Caddy adds the peer to whatever the
+		# client sent, so an appended chain still starts with a value the
+		# client wrote. The engine only reads this header from a proxy named
+		# in server.trusted_proxies, and reads it right-to-left, but leaving
+		# an invented chain in place serves no one.
+		header_up X-Forwarded-For {remote_host}
+		lb_policy round_robin
+
+		health_uri /health
+		health_interval 10s
+		health_timeout 5s
+		health_status 2xx
+	}
+}
+
+# Response headers shared by every host.
+(common_headers) {
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+
+		# HSTS is deliberately not enabled here. Turning it on with
+		# includeSubDomains covers every subdomain, and browsers cache it for
+		# the full max-age, so enable it only once every host is known-good
+		# over HTTPS.
+		# Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+}
+
+# Access logging shared by every host. The JSON format records request.host, so
+# one file still lets you separate traffic per hostname.
+(common_log) {
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+}
+
+# Every hostname this deployment serves.
+{$SITE_HOSTS} {
+	import engine_upstream
+	encode gzip
+	import common_headers
+	import common_log
+
+	# The management surface must never be framed, not even by itself, while
+	# ordinary content may be framed by its own origin. Expressed as a matcher
+	# because a second site block would have to name a host, and a deployment
+	# serving everything on one name has none to spare.
+	#
+	# On such a deployment set MANAGE_HOST to that one name and every response
+	# is DENY, which is the safe reading — management is genuinely served
+	# there. Point MANAGE_HOST at a name you do not serve to get SAMEORIGIN
+	# everywhere instead.
+	@manage host {$MANAGE_HOST}
+	@content not host {$MANAGE_HOST}
+	header @manage X-Frame-Options "DENY"
+	header @content X-Frame-Options "SAMEORIGIN"
+
+	# Which hosts may serve /engine/* is enforced by the engine itself, through
+	# server.management_hosts, not here: /engine/installed has to stay reachable
+	# as the landing page for `/`, and a rule duplicated in both places drifts.
+}
+
+# Optional extra sites — redirects and anything else a particular deployment
+# has. Defaults to an empty file, which is how a deployment with none says so.
+import {$EXTRA_SITES_FILE:/etc/caddy/Caddyfile.none}
