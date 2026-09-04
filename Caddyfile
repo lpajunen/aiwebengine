@@ -98,5 +98,8 @@
 }
 
 # Optional extra sites — redirects and anything else a particular deployment
-# has. Defaults to an empty file, which is how a deployment with none says so.
-import {$EXTRA_SITES_FILE:/etc/caddy/Caddyfile.none}
+# has. The default is a glob matching nothing, which Caddy reports as a warning
+# and otherwise ignores; pointing it at a missing *file* would be fatal, since a
+# bind mount whose source does not exist is created as a directory and Caddy
+# refuses to import one.
+import {$EXTRA_SITES_FILE:/etc/caddy/sites/*.caddy}

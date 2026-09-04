@@ -19,10 +19,9 @@ services:
       - "443:443/udp"  # HTTP/3 support
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      # Optional extra site blocks, selected by EXTRA_SITES_FILE. Both are
-      # mounted because a compose file cannot mount one conditionally, and the
-      # Caddyfile defaults to the empty one.
-      - ./Caddyfile.none:/etc/caddy/Caddyfile.none:ro
+      # Optional extra site blocks. Mounted unconditionally because a compose
+      # file cannot mount conditionally; whether they are read is decided by
+      # EXTRA_SITES_FILE, which defaults to a glob matching nothing.
       - ./Caddyfile.redirects:/etc/caddy/Caddyfile.redirects:ro
       - caddy-data:/data
       - caddy-config:/config
