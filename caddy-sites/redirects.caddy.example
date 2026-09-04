@@ -1,10 +1,14 @@
-# Hostnames that only redirect somewhere else. Imported when a deployment sets
-#   EXTRA_SITES_FILE=/etc/caddy/Caddyfile.redirects
-# and pointed by
-#   REDIRECT_HOSTS   the names to redirect, comma-separated
-#   REDIRECT_TARGET  the origin to send them to
+# Hostnames that only redirect somewhere else.
 #
-# Each name still gets a certificate, so list only names that resolve here.
-{$REDIRECT_HOSTS} {
-	redir {$REDIRECT_TARGET}{uri} permanent
+# Copy this to redirects.caddy and edit the names — literally, not through
+# environment variables. A file in this directory belongs to one deployment, so
+# there is nothing to parameterise, and a variable that expanded to nothing
+# would take the whole configuration down with it: an empty site address fails
+# with "server block without any key is global configuration".
+#
+# Each name listed here gets its own certificate, so list only names that
+# actually resolve to this host.
+
+www.example.com, test.example.com {
+	redir https://example.com{uri} permanent
 }

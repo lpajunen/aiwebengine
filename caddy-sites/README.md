@@ -14,5 +14,8 @@ To add the redirect example, on the deployment that wants it:
 cp caddy-sites/redirects.caddy.example caddy-sites/redirects.caddy
 ```
 
-then set `REDIRECT_HOSTS` and `REDIRECT_TARGET` in that environment's env file.
+and edit the hostnames in it. They are written literally: a site block built
+around an environment variable fails the whole configuration when the variable
+is empty, and these files belong to one deployment anyway.
+
 Only `.caddy` files are imported, so the `.example` and this README are ignored.

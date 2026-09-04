@@ -219,14 +219,14 @@ check-mounts:
 
 docker-staging: check-mounts
 	@echo "Starting staging environment..."
-	docker compose --env-file .env-staging up -d
+	docker compose --env-file .env-staging up -d --build
 	@echo "✓ Staging environment started!"
 	@echo "View logs with: make docker-logs-staging"
 
 # Start production environment with Docker Compose
 docker-prod: check-mounts
 	@echo "Starting production environment..."
-	docker compose --env-file .env-production up -d
+	docker compose --env-file .env-production up -d --build
 	@echo "✓ Production environment started!"
 	@echo "View logs with: make docker-logs"
 
