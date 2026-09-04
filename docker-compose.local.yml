@@ -182,6 +182,17 @@ services:
     depends_on:
       postgres-dev:
         condition: service_healthy
+      # Not a runtime dependency: both instances mount the same cargo-registry
+      # volume, and the image ships ~6800 files under it from `cargo install
+      # cargo-watch`. Docker copies an image path's content into a named volume
+      # only while that volume is empty, and it does so per container with no
+      # lock between them — so two instances starting together on a volume
+      # freshly wiped by `down -v` both copy, and the loser dies before it runs
+      # with "failed to mkdir .../index/.../.cache: file exists". Waiting for
+      # instance 1 to start means the volume is already populated, which is the
+      # case where the copy is skipped entirely.
+      aiwebengine-dev-1:
+        condition: service_started
     healthcheck:
       # curl is present in the development image, so this can be the real probe
       # /health rather than a TCP connect: it runs a SELECT 1 and answers 503
