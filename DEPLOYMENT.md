@@ -63,6 +63,10 @@ directory, and a database that starts and stops with the app. Bound to
 
 What it looks like in configuration:
 
+- `repository.embedded = true` and an `embedded_data_dir` under the app's data
+  directory. `database_url` is ignored; the engine starts its own PostgreSQL and
+  connects to the port it came up on. Needs a build carrying the feature — see
+  the status section below.
 - `server.host = "127.0.0.1"` — loopback only, since nothing authenticates at
   the network edge.
 - `auth.cookie.secure = false`, which the engine already handles: the `__Host-`
@@ -85,49 +89,73 @@ Backup is copying the data directory while the app is stopped. Upgrade is
 replacing the binary: migrations run at startup, under a lock, and are
 forward-only.
 
-### Status: not implemented yet
+### Status: the supervisor exists, the packaging does not
 
-There is no embedded database in the code today. `Cargo.toml` has one driver
-(`sqlx` with the `postgres` feature), and the storage layer is Postgres-shaped
-throughout, not incidentally:
+`repository.embedded = true` on a build carrying the `embedded-postgres`
+feature starts a PostgreSQL of the engine's own, initialises it on first run,
+creates the database, runs the migrations and stops it on shutdown. An engine
+built with `--features embedded-postgres-bundled` (`make build-desktop`) carries
+the platform's PostgreSQL archive inside the binary, so a first launch needs no
+network.
 
-- `src/repository.rs` is ~8.5k lines of `sqlx::query!` — compile-time-checked
-  against a live Postgres and cached in `.sqlx` for offline builds. A second
-  backend does not reuse those macros.
-- `src/notifications.rs` keeps a multi-instance cluster's caches coherent with
-  `LISTEN`/`NOTIFY`.
-- `src/revisions.rs` serialises revision numbering with
-  `pg_advisory_xact_lock`, computes content digests in the database so blob
-  bytes never cross the process, and collects orphans with
-  `FOR UPDATE SKIP LOCKED`. `src/log_retention.rs` and the pruners use the same
-  primitives.
+**It is one storage implementation, not two.** `src/embedded_db.rs` starts a
+real PostgreSQL on loopback and hands `database.rs` a connection string;
+everything downstream of `RepositoryConfig::connection_string` is byte-for-byte
+what a cluster runs — the `sqlx::query!` macros in `repository.rs`, the
+`pg_advisory_xact_lock` in `revisions.rs`, `LISTEN`/`NOTIFY`, the
+`FOR UPDATE SKIP LOCKED` in the pruners. That is what keeps the promise at the
+top of this document: a solution developed against a desktop install runs
+unchanged on a cluster, which it could not if the two ran different storage.
 
-**Two ways to get a standalone desktop build, and a recommendation.**
+Two things are worth knowing about how it behaves:
 
-_Option A — bundle PostgreSQL with the app (recommended)._ Ship the Postgres
-binaries next to the engine, `initdb` into the app data directory on first run,
-listen on a loopback port or a Unix socket, and shut it down with the app.
-Everything above keeps working verbatim: one storage implementation, one test
-matrix, and desktop and server stay behaviourally identical — which is the whole
-point of having a desktop mode. Costs: roughly 30–40 MB of platform binaries per
-target, per-OS packaging, and a supervision path for "the database did not
-start". The PostgreSQL licence permits redistribution.
+- **The cluster persists, and so does its password.** `initdb` sets a password
+  on the first run that the cluster still expects on every run after it, so the
+  engine reads it back out of `<embedded_data_dir>/.pgpass` rather than
+  generating a fresh one it would then fail to authenticate with. That file is
+  narrowed to its owner once it exists.
+- **The port moves and the address does not.** `embedded_port = 0` takes a free
+  loopback port at each start, since nothing outside the process connects to it;
+  `listen_addresses` is pinned to `127.0.0.1` on the command line rather than
+  left to the `postgresql.conf` `initdb` wrote, because a database holding every
+  secret in the install should not reach the network by inheriting a default.
 
-_Option B — a SQLite backend._ Costs a parallel implementation of the
-repository, a second set of queries (the `query!` macros are per-driver), and
-re-homing everything listed above: advisory locks become an in-process mutex,
-`NOTIFY` becomes an in-process broadcast (a single process needs no cross-
-instance coherence at all), digests move into Rust, `SKIP LOCKED` disappears. It
-is buildable, and it is permanently two backends to keep honest — every future
-schema change and every repository test doubles. Worth it only if the desktop
-build must be a single self-contained executable with no child process.
+**Why it is behind a compile-time feature.** A server deployment reaches a
+PostgreSQL it does not own and should not pay for the code that starts one. The
+cost being avoided is binary size, build time and dependency surface — not
+runtime memory, which does not move for code that is compiled and never run:
 
-Either way, one thing has to be built that does not exist yet: **first-run
-setup.** A desktop install cannot ask its user for four base64 keys. It needs to
-generate `config.toml` on first launch with fresh random values, `0600`, in the
-data directory — or keep them in the OS keychain — and then never regenerate
-them, because regenerating `secret_encryption_key` destroys every stored secret.
-`--validate-config` exists; a `--init-config`/first-run path does not.
+| Build                                                         | What it gets                                        |
+| ------------------------------------------------------------- | --------------------------------------------------- |
+| `cargo build --release` (`make build`)                        | nothing — the supervisor is not compiled            |
+| `--features embedded-postgres`                                | the supervisor; the archive is fetched on first run |
+| `--features embedded-postgres-bundled` (`make build-desktop`) | the above, plus ~40 MB of archive in the binary     |
+
+`make check` and `make ci` deliberately do not pass `--all-features`
+(`TEST_FEATURES` in the Makefile): the integration suite claims a slot database
+on the server `DATABASE_URL` names, which is the one thing an engine that starts
+its own database must not do. `make check-embedded` compile-checks the
+supervisor without staging an archive, and `cargo run --features
+embedded-postgres --example embedded_smoke -- <dir>` exercises it for real —
+install, migrate, restart, stop — which no test in the suite can.
+
+**What is still missing: first-run setup.** A desktop install cannot ask its
+user for four base64 keys. It needs to generate `config.toml` on first launch
+with fresh random values, `0600`, in the data directory — or keep them in the OS
+keychain — and then never regenerate them, because regenerating
+`secret_encryption_key` destroys every stored secret. `--validate-config`
+exists; a `--init-config`/first-run path does not. Beyond that it is packaging:
+a per-OS bundle, an app icon, and something that opens a browser at the loopback
+port.
+
+**The road not taken: a SQLite backend.** It would cost a parallel
+implementation of the repository, a second set of queries (the `query!` macros
+are per-driver, so a `#[cfg]` cannot share them), and re-homing everything
+listed above: advisory locks become an in-process mutex, `NOTIFY` an in-process
+broadcast, digests move into Rust, `SKIP LOCKED` disappears. It is buildable,
+and it is permanently two backends to keep honest — every future schema change
+and every repository test doubles. Worth it only if the desktop build must be a
+single self-contained executable with no child process.
 
 ## Developer local
 

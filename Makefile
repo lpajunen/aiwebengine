@@ -1,6 +1,6 @@
 # Makefile for aiwebengine development
 
-.PHONY: help deps upgrade-deps test dev build clean lint format coverage check ci typecheck
+.PHONY: help deps upgrade-deps test dev build clean lint format coverage check ci typecheck check-embedded build-desktop
 .PHONY: docker-build docker-local docker-staging docker-prod docker-stop docker-logs docker-clean
 .PHONY: docker-dns check-dns clean-acme-dns
 
@@ -70,11 +70,21 @@ dev-local:
 	@echo "Access at: http://localhost:3000"
 	@bash -c 'source .env && export APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI=http://localhost:3000/auth/callback/google && cargo run'
 
+# The features every gate builds with.
+#
+# Deliberately not --all-features: `embedded-postgres` starts a PostgreSQL of
+# the engine's own, which is the one thing the test harness must not do — every
+# test claims a numbered slot database on the server DATABASE_URL names
+# (tests/common/testdb.rs) — and `embedded-postgres-bundled` would stage a
+# 30-40 MB archive into every build that ran it. Compile-checked separately by
+# `make check-embedded`; add real features here as they appear.
+TEST_FEATURES ?=
+
 # Run tests with cargo-nextest (better output)
 # Sources .env (when present) so DATABASE_URL reaches the test harness; without
 # it the integration tests fall back to the default local connection string.
 test:
-	@bash -c 'if [ -f .env ]; then source .env; fi; cargo nextest run --all-features --no-fail-fast'
+	@bash -c 'if [ -f .env ]; then source .env; fi; cargo nextest run --features "$(TEST_FEATURES)" --no-fail-fast'
 
 # Run tests with standard cargo test.
 #
@@ -89,7 +99,7 @@ test:
 # nextest` gives each test its own process, which is the shape this engine is
 # built for: one runtime, one pool, for the life of the process.
 test-simple:
-	@bash -c 'if [ -f .env ]; then source .env; fi; cargo test --all-features'
+	@bash -c 'if [ -f .env ]; then source .env; fi; cargo test --features "$(TEST_FEATURES)"'
 
 # Run performance/load tests against production
 perf-test:
@@ -97,6 +107,15 @@ perf-test:
 	@echo "This will test https://softagen.com with up to 100 concurrent users"
 	@echo "Test duration: 6 minutes"
 	DOCKER_HOST='' docker run --rm -v "$(CURDIR)/scripts/perf_tests:/scripts" -w /scripts grafana/k6 run load_test.js
+
+# Keep the embedded-database supervisor compiling.
+#
+# The non-bundled variant on purpose: it type-checks every line of
+# src/embedded_db.rs while `embedded-postgres-bundled` would download a
+# platform archive to stage into the binary. That download belongs in a release
+# build of the desktop app, not in a check.
+check-embedded:
+	cargo clippy --all-targets --features embedded-postgres -- -D warnings
 
 # Run clippy linter with warnings as errors
 lint:
@@ -123,12 +142,23 @@ format-javascript:
 
 # Generate test coverage report
 coverage:
-	cargo llvm-cov --all-features --html
+	cargo llvm-cov --features "$(TEST_FEATURES)" --html
 	@echo "Coverage report generated: target/llvm-cov/html/index.html"
 
 # Build release binary
+#
+# Default features only, which is the point of the feature split: a server build
+# compiles none of the embedded-database supervisor and carries none of its
+# weight.
 build:
 	cargo build --release
+
+# Build the desktop standalone binary: a PostgreSQL of its own, with the
+# platform archive compiled in so a first launch needs no network. Adds roughly
+# 30-40 MB to the binary, and needs network access at build time to stage the
+# archive.
+build-desktop:
+	cargo build --release --features embedded-postgres-bundled
 
 # Clean build artifacts
 clean:
@@ -139,7 +169,7 @@ check: format-check lint typecheck test
 	@echo "✓ All checks passed!"
 
 # CI pipeline (format check, lint, test, coverage)
-ci: format-check lint typecheck test coverage
+ci: format-check lint typecheck test check-embedded coverage
 	@echo "✓ CI pipeline completed!"
 
 # ==================== Docker Commands ====================

@@ -143,7 +143,14 @@ async fn main() -> AppResult<()> {
                     "JavaScript timeout: {}ms",
                     config.javascript.execution_timeout_ms
                 );
-                println!("Storage: PostgreSQL");
+                if config.repository.embedded {
+                    println!(
+                        "Storage: PostgreSQL (embedded, in {})",
+                        config.repository.embedded_data_dir
+                    );
+                } else {
+                    println!("Storage: PostgreSQL");
+                }
                 return Ok(());
             }
             Err(e) => {
@@ -159,7 +166,14 @@ async fn main() -> AppResult<()> {
         let account = arguments.next().cloned().unwrap_or_default();
         let role = arguments.next().cloned().unwrap_or_default();
 
-        match aiwebengine::grant_role_command(&config, &account, &role).await {
+        let outcome = aiwebengine::grant_role_command(&config, &account, &role).await;
+        // A desktop install started a database to run this against, and
+        // `pg_ctl` leaves it running after this process exits. Stopped on both
+        // paths, or the next launch finds the port taken by its own last
+        // command. A no-op for every deployment that names its own database.
+        aiwebengine::embedded_db::stop().await;
+
+        match outcome {
             Ok(message) => {
                 println!("{}", message);
                 return Ok(());
@@ -183,7 +197,11 @@ async fn main() -> AppResult<()> {
             }
         };
 
-        match aiwebengine::set_password_command(&config, account, &password).await {
+        let outcome = aiwebengine::set_password_command(&config, account, &password).await;
+        // Beside `--grant-role`, and for the same reason.
+        aiwebengine::embedded_db::stop().await;
+
+        match outcome {
             Ok(message) => {
                 println!("{}", message);
                 return Ok(());

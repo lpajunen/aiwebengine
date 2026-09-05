@@ -18,6 +18,7 @@ pub mod database;
 pub mod db_schema_utils;
 pub mod deployments;
 pub mod dispatcher;
+pub mod embedded_db;
 pub mod engine_api;
 pub mod error;
 pub mod execution_slots;
@@ -739,12 +740,18 @@ async fn initialize_database_and_repository(config: &config::Config) -> AppResul
     info!("Initializing database connection...");
     info!("Initializing PostgreSQL repository");
 
+    // Resolve where the database actually is before saying anything about it.
+    // For every deployment that names its own PostgreSQL this hands back the
+    // configuration unchanged; for a desktop install it starts the server this
+    // process owns and answers with the port it came up on.
+    let repository_config = embedded_db::resolve(&config.repository).await?;
+
     // Log connection string (sanitized)
-    let safe_conn_str = sanitize_connection_string(&config.repository.connection_string);
+    let safe_conn_str = sanitize_connection_string(&repository_config.connection_string);
     info!("Repository config - database_url: {}", safe_conn_str);
 
     // Initialize database
-    match database::init_database(&config.repository, true).await {
+    match database::init_database(&repository_config, true).await {
         Ok(db) => {
             let db_arc = Arc::new(db);
             if database::initialize_global_database(db_arc.clone()) {
@@ -1355,7 +1362,11 @@ pub async fn grant_role_command(
         }
     };
 
-    let db = database::init_database(&config.repository, true).await?;
+    // Starts the embedded server first on a desktop install: this command runs
+    // with no server up, which is the case it exists for, so there is nothing
+    // already holding the database open.
+    let repository_config = embedded_db::resolve(&config.repository).await?;
+    let db = database::init_database(&repository_config, true).await?;
     database::initialize_global_database(Arc::new(db));
 
     // A local username first, because that is what a personal install has; an
@@ -1432,7 +1443,11 @@ pub async fn set_password_command(
             auth.internal.min_password_length
         });
 
-    let db = database::init_database(&config.repository, true).await?;
+    // Starts the embedded server first on a desktop install: this command runs
+    // with no server up, which is the case it exists for, so there is nothing
+    // already holding the database open.
+    let repository_config = embedded_db::resolve(&config.repository).await?;
+    let db = database::init_database(&repository_config, true).await?;
     database::initialize_global_database(Arc::new(db));
 
     let user_id = match auth::local::user_id_for_username(account)
@@ -1614,6 +1629,11 @@ pub async fn start_server_with_config(
         let _ = pruner_shutdown_tx.send(());
         let _ = log_pruner_shutdown_tx.send(());
         let _ = server_shutdown_tx.send(());
+
+        // Last, and a no-op unless this process started a database of its own:
+        // everything signalled above may still be finishing a write, and the
+        // database has to outlive the things writing to it.
+        embedded_db::stop().await;
     });
 
     // Clone the timeout value to avoid borrow checker issues in async closures

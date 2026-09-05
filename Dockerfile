@@ -23,7 +23,12 @@ COPY .sqlx ./.sqlx
 # Enable SQLx offline mode (no database connection required for compilation)
 ENV SQLX_OFFLINE=true
 
-# Create dummy source files to cache dependencies
+# Create dummy source files to cache dependencies.
+#
+# Cargo parses the manifest here, with no source copied yet, so Cargo.toml must
+# not declare a target by path — an explicit [[bin]], [[example]] or [[test]]
+# section asserts a file that does not exist in this layer. Auto-discovered
+# targets are fine, since they are found by globbing a directory that is absent.
 RUN mkdir -p src && \
     echo "fn main() {}" > src/lib.rs && \
     echo "fn main() {}" > src/main.rs && \

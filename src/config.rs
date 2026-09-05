@@ -273,6 +273,10 @@ fn default_idle_in_transaction_timeout_ms() -> u64 {
     300_000
 }
 
+fn default_embedded_data_dir() -> String {
+    "data/postgres".to_string()
+}
+
 /// Repository configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepositoryConfig {
@@ -280,6 +284,34 @@ pub struct RepositoryConfig {
     /// Specified as 'database_url' in config files and APP_REPOSITORY__DATABASE_URL in env
     #[serde(rename = "database_url")]
     pub connection_string: String,
+
+    /// Start a PostgreSQL server inside this process instead of connecting to
+    /// one, for a desktop install that has no database to point at.
+    ///
+    /// Requires a build carrying the `embedded-postgres` feature; without it
+    /// this is refused at startup rather than quietly falling back to
+    /// `database_url`, which would connect to whatever the placeholder names.
+    /// When it is on, `database_url` is ignored: the connection string is
+    /// whatever the server that just started is listening on.
+    #[serde(default)]
+    pub embedded: bool,
+
+    /// Where the embedded server keeps its cluster, its binaries and the
+    /// password it was initialised with. Relative paths resolve against the
+    /// working directory; a packaged desktop app sets this to its per-user
+    /// data directory.
+    ///
+    /// This is the whole of a desktop install's state — backing it up while the
+    /// app is stopped is the backup.
+    #[serde(default = "default_embedded_data_dir")]
+    pub embedded_data_dir: String,
+
+    /// The loopback port the embedded server listens on. `0` takes a free one
+    /// at startup, which is the right default: nothing outside this process
+    /// connects to it, and a fixed port is one more thing that can already be
+    /// taken.
+    #[serde(default)]
+    pub embedded_port: u16,
 
     /// Maximum script size in bytes
     pub max_script_size_bytes: usize,
@@ -547,6 +579,9 @@ impl Default for RepositoryConfig {
         Self {
             connection_string: "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
                 .to_string(),
+            embedded: false,
+            embedded_data_dir: default_embedded_data_dir(),
+            embedded_port: 0,
             max_script_size_bytes: 1024 * 1024,      // 1MB
             max_upload_size_bytes: 10 * 1024 * 1024, // 10MB
             max_connections: default_db_max_connections(),
@@ -730,6 +765,24 @@ impl AppConfig {
                     entry
                 );
             }
+        }
+
+        // A build without the feature has no embedded server to start, and
+        // falling back to `database_url` would connect to whatever the
+        // placeholder in the shipped config happens to name. Refused here so
+        // `--validate-config` reports it too.
+        if self.repository.embedded && !crate::embedded_db::SUPPORTED {
+            anyhow::bail!(
+                "repository.embedded is set, but this build has no embedded database. \
+                 Rebuild with --features embedded-postgres-bundled, or set \
+                 repository.embedded = false and point database_url at a PostgreSQL server."
+            );
+        }
+
+        if self.repository.embedded && self.repository.embedded_data_dir.trim().is_empty() {
+            anyhow::bail!(
+                "repository.embedded_data_dir cannot be empty when repository.embedded is set"
+            );
         }
 
         // Validate logging configuration

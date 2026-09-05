@@ -68,6 +68,19 @@ multer = "3.0"
 
 # Database (SQLx)
 sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "migrate", "uuid", "chrono"] }
+# The PostgreSQL server a desktop install starts for itself, behind the
+# `embedded-postgres` feature and off by default. It is not a second storage
+# backend — it starts a real Postgres on loopback and hands `database.rs` a
+# connection string — so a server build compiles none of it and carries none of
+# its weight. `tokio` makes command execution async and honour a timeout
+# (without it `pg_ctl` blocks the runtime); `theseus` names the release archives
+# to install from, and without it `Settings` carries no releases URL at all;
+# rustls, matching the rest of the crate, is what fetches one on first run.
+postgresql_embedded = { version = "0.21.0", default-features = false, features = [
+  "theseus",
+  "tokio",
+  "tls-rustls-ring",
+], optional = true }
 
 # Optimize test builds for faster compilation and execution
 [profile.test]
@@ -91,3 +104,21 @@ jsonschema = "0.49"
 # Build-time dependencies (for capturing build metadata)
 [build-dependencies]
 vergen-gix = { version = "10.0.0-beta.5", features = ["build"] }
+
+[features]
+# Nothing is on by default: a server deployment reaches a PostgreSQL it does not
+# own, and should not pay in binary size, build time or dependency surface for
+# code that starts one.
+default = []
+
+# Start and supervise a PostgreSQL server inside the engine process, from
+# `repository.embedded`. The archive is fetched once on first run and cached in
+# the engine's data directory, which keeps this variant cheap to compile and to
+# check in CI.
+embedded-postgres = ["dep:postgresql_embedded"]
+
+# The same, with the platform's PostgreSQL archive compiled into the binary —
+# roughly 30-40 MB, and what a desktop build ships, since a first launch cannot
+# depend on the network. Requires network access at *build* time to stage the
+# archive.
+embedded-postgres-bundled = ["embedded-postgres", "postgresql_embedded/bundled"]

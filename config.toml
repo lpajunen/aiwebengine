@@ -85,6 +85,29 @@ test_run_timeout_ms = 120000
 # PostgreSQL is the only storage backend, and its URL is always an environment
 # variable because it carries a password:
 #   APP_REPOSITORY__DATABASE_URL=postgresql://user:pass@host:5432/aiwebengine
+
+# Start a PostgreSQL inside this process instead of connecting to one — the
+# desktop standalone case, where there is no database to point at. It is not a
+# second storage backend: the engine starts a real PostgreSQL on loopback and
+# talks to it the way a server deployment talks to its own, so a solution
+# developed here runs unchanged on a cluster.
+#
+# Needs a build carrying the feature (`make build-desktop`); on a server build
+# this is refused at startup rather than falling back to the database_url above,
+# which would connect to whatever the placeholder happens to name. When it is
+# on, database_url is ignored — the connection string is whatever the server
+# that just started is listening on.
+embedded = false
+# The whole of a desktop install's database state: the cluster, the PostgreSQL
+# binaries, and the password it was initialised with. Relative to the working
+# directory; a packaged app points this at its per-user data directory. Copying
+# it while the app is stopped is the backup.
+embedded_data_dir = "data/postgres"
+# 0 takes a free loopback port at startup, which is the right answer when
+# nothing outside this process connects to it and a fixed port is one more thing
+# that can already be taken.
+embedded_port = 0
+
 max_script_size_bytes = 1048576
 max_upload_size_bytes = 10485760
 # Maximum PostgreSQL connections. Every JavaScript database call holds one for
