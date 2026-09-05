@@ -2,6 +2,7 @@
 
 .PHONY: help deps upgrade-deps test dev build clean lint format coverage check ci typecheck
 .PHONY: docker-build docker-local docker-staging docker-prod docker-stop docker-logs docker-clean
+.PHONY: docker-dns check-dns clean-acme-dns
 
 help:
 	@echo "Available commands:"
@@ -14,6 +15,7 @@ help:
 	@echo "  make docker-localhost - Start Docker with localhost only (no DNS setup required)"
 	@echo "  make docker-dns       - Start Docker with DNS domain (requires DIGITALOCEAN_TOKEN)"
 	@echo "  make check-dns        - Check if DNS domain configuration is available"
+	@echo "  make clean-acme-dns   - Remove stale ACME challenge records from the DNS zone"
 	@echo "  make test      - Run all tests with cargo-nextest"
 	@echo "  make test-simple - Run all tests with cargo test"
 	@echo "  make perf-test   - Run performance/load test against production server"
@@ -177,11 +179,17 @@ docker-dns:
 		echo "   Set it in .env file or export: export DIGITALOCEAN_TOKEN=your_token"; \
 		exit 1; \
 	fi
+	@bash scripts/acme-dns-cleanup.sh
 	@export SITE_HOSTS=$${DNS_DOMAIN:-local.softagen.com}; \
 	export TLS_SNIPPET=tls_acme_dns; \
 	echo "Access at: https://$$SITE_HOSTS"; \
 	echo "Note: the local names (https://localhost) are not served in this mode"; \
 	docker compose --env-file .env-local -f docker-compose.local.yml up
+
+# Remove leftover ACME challenge records by hand. `docker-dns` runs this first,
+# so this target is for clearing the zone without starting the stack.
+clean-acme-dns:
+	@bash scripts/acme-dns-cleanup.sh
 
 # Check DNS domain availability
 check-dns:

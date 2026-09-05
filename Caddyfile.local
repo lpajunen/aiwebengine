@@ -41,6 +41,23 @@
     # into the image.
     tls {
         dns digitalocean {env.DIGITALOCEAN_TOKEN}
+
+        # DigitalOcean's nameservers lag their own API by minutes: a record the
+        # API already reports is not answered by ns1/ns2/ns3 for around five,
+        # and until then each nameserver replies with a different stale subset
+        # of the RRset. The default propagation timeout is two minutes, so the
+        # challenge was abandoned every time while the answer was still on its
+        # way — `timed out waiting for record to fully propagate`, with
+        # `last error: <nil>` because nothing had actually gone wrong yet.
+        #
+        # The delay is a head start rather than a poll: there is no point
+        # asking during the window when the answer cannot be there. The timeout
+        # is well past the observed five minutes because overshooting costs one
+        # slow first startup, while undershooting costs the certificate and
+        # leaves another undeleted record behind (see
+        # scripts/acme-dns-cleanup.sh) that makes the next attempt worse.
+        propagation_delay 2m
+        propagation_timeout 15m
     }
 }
 
