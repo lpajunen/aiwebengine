@@ -9,7 +9,7 @@
 
 mod common;
 
-use aiwebengine::config::{AppConfig, RepositoryConfig};
+use aiwebengine::config::RepositoryConfig;
 use aiwebengine::database::Database;
 use aiwebengine::engine_api::lock_diagnostics;
 use common::should_skip_integration_tests;
@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 
 /// Long enough that the blocked reader is still waiting when the diagnostic
 /// runs. The point is to observe the wedge, not to survive it.
-fn patient_config() -> RepositoryConfig {
-    let mut repository = AppConfig::test_config_postgres(0).repository;
+async fn patient_config() -> RepositoryConfig {
+    let mut repository = common::require_test_config(0).await.repository;
     repository.max_connections = 4;
     repository.lock_timeout_ms = 30_000;
     repository.statement_timeout_ms = 30_000;
@@ -47,7 +47,7 @@ async fn a_wedged_table_names_both_the_waiter_and_the_holder() {
     if should_skip_integration_tests() {
         return;
     }
-    let config = patient_config();
+    let config = patient_config().await;
     let observer = Database::new(&config).await.expect("connect");
     let holder = Database::new(&config).await.expect("connect holder");
     let waiter = Database::new(&config).await.expect("connect waiter");

@@ -3,62 +3,21 @@
 # Run with: cargo nextest run
 
 [profile.default]
-# Run tests in parallel with proper isolation
-test-threads = 4
+# nextest runs each test in its own process, and `tests/common/testdb.rs` gives
+# each process its own database — so tests no longer share the state that used
+# to make them race. What forced them into single file before was the shared
+# database: `execute_startup_scripts` executes every script it finds, so a
+# server starting in one test ran the scripts another test had just written.
+# With that gone they can run alongside each other.
+test-threads = 8
 
 # Timeout for individual tests (prevents hanging)
 slow-timeout = { period = "60s", terminate-after = 3 }
 
-# Retry flaky tests
-retries = { backoff = "exponential", count = 2, delay = "1s" }
-
-# ---------------------------------------------------------------------------
-# Serial test group for every binary that starts a TestServer / TestContext.
-#
-# Root cause of flakiness: each integration-test binary is its own process, so
-# the in-process Semaphore in common/mod.rs is not enough — multiple binaries
-# can still run in parallel, races in execute_startup_scripts() reading shared
-# DB state and writing to process-global DYNAMIC_SCRIPTS / GRAPHQL_REGISTRY.
-#
-# max-threads = 1 tells nextest: at most 1 test from this group may be
-# executing at any given moment, across all binaries — effectively serialising
-# the server lifecycle globally.
-# ---------------------------------------------------------------------------
-[test-groups]
-serial-server-tests = { max-threads = 1 }
-
-#
-# This list must contain every binary that starts a server via
-# TestContext::start_server / with_test_server!. To check it, run:
-#
-#   grep -lE 'start_server|with_test_server' tests/*.rs
-#
-# A server-starting binary missing from this list races against the ones in it,
-# which is how user_admin flaked intermittently while passing in isolation.
-[[profile.default.overrides]]
-filter = '''
-  binary(api_http)
-  or binary(assets_batch)
-  or binary(cluster)
-  or binary(dispatcher)
-  or binary(openapi_validation)
-  or binary(repository)
-  or binary(script_error_detection_test)
-  or binary(scripts)
-  or binary(streaming)
-  or binary(test_utils)
-  or binary(user_admin)
-'''
-test-group = 'serial-server-tests'
-
-# Test groups that should run serially
-[[profile.default.overrides]]
-filter = 'test(test_concurrent)'
-threads-required = 1
-
-[[profile.default.overrides]]
-filter = 'test(execute_mcp_tool_handler)'
-test-group = 'serial-server-tests'
+# No retries. A test that only passes on the second attempt is a test with a
+# race in it, and re-running it hides exactly the failure worth seeing. If the
+# suite starts needing this again, that is the finding, not the fix.
+retries = 0
 
 [[profile.default.overrides]]
 filter = 'test(integration)'
@@ -67,10 +26,6 @@ slow-timeout = { period = "120s" }
 
 [profile.ci]
 # CI-specific settings
-test-threads = 2
+test-threads = 4
 slow-timeout = { period = "180s", terminate-after = 5 }
-retries = { backoff = "exponential", count = 3, delay = "1s" }
-
-[[profile.ci.overrides]]
-filter = 'test(execute_mcp_tool_handler)'
-test-group = 'serial-server-tests'
+retries = 0

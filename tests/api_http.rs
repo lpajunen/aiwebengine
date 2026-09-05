@@ -439,7 +439,7 @@ async fn test_engine_management_endpoints() {
 
     // /engine/script_owners lists owners for anyone
     let script_uri = "https://example.com/owners-endpoint-test";
-    let _ = repository::upsert_script(script_uri, "function init() {}");
+    engine.deploy_script(script_uri, "function init() {}").await;
     let response = client
         .get(format!("{}/engine/script_owners?uri={}", base, script_uri))
         .send()
@@ -497,10 +497,12 @@ async fn test_different_http_methods() {
     let engine = AdminServer::start().await.expect("server failed to start");
 
     // Dynamically load the method test script
-    let _ = repository::upsert_script(
-        "https://example.com/method_test",
-        include_str!("../scripts/test_scripts/method_test.js"),
-    );
+    engine
+        .deploy_script(
+            "https://example.com/method_test",
+            include_str!("../scripts/test_scripts/method_test.js"),
+        )
+        .await;
 
     // Start server
     let port = engine.port();
@@ -604,10 +606,12 @@ async fn test_head_request_falls_back_to_get_with_empty_body() {
     }
     let engine = AdminServer::start().await.expect("server failed to start");
 
-    let _ = repository::upsert_script(
-        "https://example.com/method_test",
-        include_str!("../scripts/test_scripts/method_test.js"),
-    );
+    engine
+        .deploy_script(
+            "https://example.com/method_test",
+            include_str!("../scripts/test_scripts/method_test.js"),
+        )
+        .await;
 
     let port = engine.port();
 
@@ -651,7 +655,7 @@ async fn test_head_request_on_asset_route_strips_body() {
     let engine = AdminServer::start().await.expect("server failed to start");
 
     let script_uri = "https://example.com/head_asset_test";
-    let _ = repository::upsert_script(script_uri, "function init() {}");
+    engine.deploy_script(script_uri, "function init() {}").await;
     repository::upsert_asset(repository::Asset {
         uri: "head-test.css".to_string(),
         mimetype: "text/css".to_string(),
@@ -669,7 +673,7 @@ async fn test_head_request_on_asset_route_strips_body() {
           return { success: true };
         }
     "#;
-    let _ = repository::upsert_script(script_uri, script);
+    engine.deploy_script(script_uri, script).await;
 
     let port = engine.port();
 
@@ -730,7 +734,9 @@ async fn test_explicit_head_handler_overrides_get_fallback() {
           return { success: true };
         }
     "#;
-    let _ = repository::upsert_script("https://example.com/explicit_head_test", script);
+    engine
+        .deploy_script("https://example.com/explicit_head_test", script)
+        .await;
 
     let port = engine.port();
 
@@ -795,10 +801,12 @@ async fn test_query_parameters() {
     let engine = AdminServer::start().await.expect("server failed to start");
 
     // Dynamically load the query test script
-    let _ = repository::upsert_script(
-        "https://example.com/query_test",
-        include_str!("../scripts/test_scripts/query_test.js"),
-    );
+    engine
+        .deploy_script(
+            "https://example.com/query_test",
+            include_str!("../scripts/test_scripts/query_test.js"),
+        )
+        .await;
 
     // Start server
     let port = engine.port();
@@ -878,10 +886,12 @@ async fn test_form_data() {
     let engine = AdminServer::start().await.expect("server failed to start");
 
     // Dynamically load the form test script
-    let _ = repository::upsert_script(
-        "https://example.com/form_test",
-        include_str!("../scripts/test_scripts/form_test.js"),
-    );
+    engine
+        .deploy_script(
+            "https://example.com/form_test",
+            include_str!("../scripts/test_scripts/form_test.js"),
+        )
+        .await;
 
     // Start server
     let port = engine.port();
@@ -987,10 +997,12 @@ async fn test_graphql_endpoints() {
 
     // Load the GraphQL test script (a script that registers its own
     // queries, mutations, and subscriptions via graphQLRegistry)
-    let _ = repository::upsert_script(
-        "https://example.com/graphql_test",
-        include_str!("../scripts/test_scripts/graphql_test.js"),
-    );
+    engine
+        .deploy_script(
+            "https://example.com/graphql_test",
+            include_str!("../scripts/test_scripts/graphql_test.js"),
+        )
+        .await;
 
     // Start server
     let port = engine.port();
@@ -1125,10 +1137,12 @@ async fn test_graphql_script_defined_mutations() {
     // Load the GraphQL test script, which registers its own mutations
     // via graphQLRegistry (script-provided GraphQL is supported; engine
     // management via GraphQL is not)
-    let _ = repository::upsert_script(
-        "https://example.com/graphql_test",
-        include_str!("../scripts/test_scripts/graphql_test.js"),
-    );
+    engine
+        .deploy_script(
+            "https://example.com/graphql_test",
+            include_str!("../scripts/test_scripts/graphql_test.js"),
+        )
+        .await;
 
     // Start server
     let port = engine.port();
@@ -1338,7 +1352,7 @@ async fn test_script_logs_correlate_with_the_request_that_emitted_them() {
           return { success: true };
         }
     "#;
-    let _ = repository::upsert_script(script_uri, script);
+    engine.deploy_script(script_uri, script).await;
 
     let port = engine.port();
 
@@ -1482,7 +1496,7 @@ async fn test_script_logs_stream_tails_entries_as_they_are_written() {
           return { success: true };
         }
     "#;
-    let _ = repository::upsert_script(script_uri, script);
+    engine.deploy_script(script_uri, script).await;
 
     let port = engine.port();
 
@@ -1700,7 +1714,7 @@ async fn test_script_logs_correlate_what_the_engine_reports_about_a_request() {
           return { success: true };
         }
     "#;
-    let _ = repository::upsert_script(script_uri, script);
+    repository::upsert_script(script_uri, script).expect("script should be stored");
     repository::upsert_asset(repository::Asset {
         uri: "server/diag.ts".to_string(),
         mimetype: "text/typescript".to_string(),
@@ -1712,6 +1726,9 @@ async fn test_script_logs_correlate_what_the_engine_reports_about_a_request() {
         updated_at: std::time::SystemTime::now(),
     })
     .expect("asset should be stored");
+    // Only now: the module the script imports has to be stored before the
+    // script can be built.
+    engine.initialize_script(script_uri).await;
 
     let port = engine.port();
 

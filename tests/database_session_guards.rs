@@ -12,7 +12,7 @@
 
 mod common;
 
-use aiwebengine::config::{AppConfig, RepositoryConfig};
+use aiwebengine::config::RepositoryConfig;
 use aiwebengine::database::Database;
 use common::should_skip_integration_tests;
 use sqlx::Row;
@@ -20,8 +20,8 @@ use std::time::{Duration, Instant};
 
 /// The guards a test wants: short enough to observe, long enough not to fire
 /// on an unloaded scratch table.
-fn guarded_config() -> RepositoryConfig {
-    let mut repository = AppConfig::test_config_postgres(0).repository;
+async fn guarded_config() -> RepositoryConfig {
+    let mut repository = common::require_test_config(0).await.repository;
     repository.max_connections = 4;
     repository.lock_timeout_ms = 750;
     repository.statement_timeout_ms = 5_000;
@@ -42,7 +42,7 @@ async fn a_pooled_connection_arrives_already_guarded() {
     if should_skip_integration_tests() {
         return;
     }
-    let config = guarded_config();
+    let config = guarded_config().await;
     let db = Database::new(&config).await.expect("connect");
 
     // Carried in the startup packet, so there is no window in which a
@@ -60,7 +60,7 @@ async fn a_blocked_statement_gives_up_instead_of_waiting_forever() {
     if should_skip_integration_tests() {
         return;
     }
-    let config = guarded_config();
+    let config = guarded_config().await;
     let db = Database::new(&config).await.expect("connect");
 
     // A second connection stands in for the handler whose transaction was
@@ -109,7 +109,7 @@ async fn migrations_run_unguarded_without_unguarding_the_pool() {
     }
     // One connection, so the pool cannot hand back a different one and hide a
     // migration connection that was returned with its guards cleared.
-    let mut config = guarded_config();
+    let mut config = guarded_config().await;
     config.max_connections = 1;
     let db = Database::new(&config).await.expect("connect");
 

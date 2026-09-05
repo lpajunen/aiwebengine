@@ -1,5 +1,7 @@
 use aiwebengine::{config, start_server_with_config};
 use std::sync::Arc;
+
+pub mod testdb;
 use std::sync::{Once, OnceLock};
 use std::time::Duration;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, oneshot};
@@ -151,7 +153,7 @@ static GLOBALS: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 /// rather than panicking: `should_skip_integration_tests` decides whether a
 /// test runs, and it should get to make that call.
 async fn open_database() -> Option<sqlx::PgPool> {
-    let config = aiwebengine::config::AppConfig::test_config_postgres(0);
+    let config = test_config(0).await?;
     let db = Arc::new(
         aiwebengine::database::Database::new(&config.repository)
             .await
@@ -164,17 +166,27 @@ async fn open_database() -> Option<sqlx::PgPool> {
 
 /// Construct the globals for a test that drives the engine in-process.
 ///
-/// No server id is registered, which is what the hand-rolled fixtures did and
-/// what the tests using them are written against — `stream_registry` skips
-/// sending a notification when there is no id, so registering one here would
-/// quietly turn on cluster chatter in tests that never expected it. The
-/// server-backed path below registers one because a real server does.
+/// The server id is registered here and handed to the repository, so that the
+/// two agree. They are what tells an instance's own writes apart from a peer's:
+/// the repository stamps every notification with the id it was built with, and
+/// the listener drops the ones carrying its own. This used to register no id at
+/// all and build the repository with a fixed `"test"`, which was harmless right
+/// up until a test called `setup_env()` and *then* started a server — the
+/// server generates an id, finds the repository already built, and leaves it
+/// stamping notifications with `"test"`. Every write the instance made then
+/// came back looking like a peer's, so a script was re-initialised a second
+/// time concurrently with the initialisation its own write had already
+/// spawned, and the two passes each cleared the script's listeners before
+/// registering their own — leaving the script listening twice. Which of the
+/// two dispatch tests saw it depended on which won the race.
 async fn build_globals() {
     let Some(pool) = open_database().await else {
         return;
     };
+    let server_id = aiwebengine::notifications::generate_server_id();
+    let _ = aiwebengine::notifications::initialize_server_id(server_id.clone());
     aiwebengine::repository::initialize_repository(
-        aiwebengine::repository::PostgresRepository::new(pool, "test".to_string()),
+        aiwebengine::repository::PostgresRepository::new(pool, server_id),
     );
 }
 
@@ -192,6 +204,84 @@ async fn build_globals() {
 pub fn test_mutex() -> &'static Mutex<()> {
     static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
     TEST_MUTEX.get_or_init(|| Mutex::new(()))
+}
+
+/// How many connections one test process may hold.
+///
+/// Sized for a suite rather than for a deployment, and the right number depends
+/// on which runner is driving: what has to stay under the server's
+/// `max_connections` is the total across every process running at once, and the
+/// two runners spread the same tests over very different numbers of processes.
+///
+/// `cargo nextest` runs each test in its own process — several at a time, each
+/// needing only what one test needs — so a small pool per process is both
+/// enough and necessary; the deployment default of 20 across eight of them asks
+/// for more connections than Postgres will hand out, and the process that loses
+/// fails on the pool rather than on anything it was checking. `cargo test` runs
+/// one binary at a time and its tests on threads inside it, so a single pool is
+/// shared by as many tests as there are cores and has to be sized for all of
+/// them.
+fn pool_size() -> u32 {
+    if std::env::var("NEXTEST").is_ok() {
+        5
+    } else {
+        24
+    }
+}
+
+/// How many ports to try before giving up on starting an authenticated server.
+const PORT_ATTEMPTS: u32 = 5;
+
+/// A port nothing is listening on, as of a moment ago.
+///
+/// Only for the servers that cannot bind port zero — an engine whose base URL
+/// has to name the port it is reachable on has to know the port before it
+/// starts. Everything else lets the operating system choose while binding,
+/// which has no window to race in.
+fn free_port() -> anyhow::Result<u16> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    Ok(listener.local_addr()?.port())
+}
+
+/// The configuration a test drives the engine with.
+///
+/// The one place the suite decides which database a test runs against, so that
+/// the harness, the engine and any test building its own `RepositoryConfig`
+/// all name the same one. Every call in this process answers with the same
+/// per-process database — see [`testdb`] for why there is one.
+///
+/// `None` when the database server will not answer; `should_skip_integration_tests`
+/// is what decides whether that should fail a test or skip it.
+#[allow(dead_code)]
+pub async fn test_config(port: u16) -> Option<config::Config> {
+    let mut config = config::Config::test_config_postgres(port);
+    config.repository.connection_string = testdb::connection_string().await?.to_string();
+    config.repository.max_connections = pool_size();
+    Some(config)
+}
+
+/// A pool on this process's test database.
+///
+/// For a test that drives a component — a session manager, a rate limiter —
+/// directly rather than through a server. It replaced a connection string
+/// written out longhand in each such test, which named the developer's own
+/// database and so ignored both `DATABASE_URL` and the isolation in
+/// [`testdb`]: those tests wrote their sessions, rate-limit buckets and audit
+/// rows into whatever database the machine had, and left them there.
+#[allow(dead_code)]
+pub async fn test_pool() -> sqlx::PgPool {
+    let url = testdb::connection_string()
+        .await
+        .expect("the test database should be reachable");
+    sqlx::PgPool::connect_lazy(url).expect("the test database URL should parse")
+}
+
+/// The same, for a test that cannot proceed without one.
+#[allow(dead_code)]
+pub async fn require_test_config(port: u16) -> config::Config {
+    test_config(port)
+        .await
+        .expect("the test database should be reachable")
 }
 
 /// Improved test server with proper shutdown support
@@ -227,7 +317,7 @@ impl TestServer {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to acquire test semaphore: {}", e))?;
 
-        let mut test_config = config::Config::test_config_postgres(0);
+        let mut test_config = require_test_config(0).await;
 
         // Disable auth for tests by default to avoid overhead
         test_config.auth = None;
@@ -274,12 +364,9 @@ impl TestServer {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to acquire test semaphore: {}", e))?;
 
-        let port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-            listener.local_addr()?.port()
-        };
+        let port = free_port()?;
 
-        let mut test_config = config::Config::test_config_postgres(port);
+        let mut test_config = require_test_config(port).await;
         test_config.server.base_url = Some(format!("http://127.0.0.1:{}", port));
         test_config.javascript.execution_timeout_ms = 5000;
 
@@ -317,14 +404,36 @@ impl TestServer {
 
         customize(&mut test_config);
 
-        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-        let port = start_server_with_config(test_config, shutdown_rx).await?;
+        // Retried on a fresh port, because choosing one and binding it are two
+        // steps: the listener above is closed before the server opens its own,
+        // and with tests running in parallel another process can take the port
+        // in between. Only the port this helper picked is moved — a test that
+        // set its own base URL keeps it, since for those the port is part of
+        // what is being tested.
+        let chose_base_url =
+            test_config.server.base_url == Some(format!("http://127.0.0.1:{}", port));
 
-        Ok(Self {
-            port,
-            shutdown_tx: Some(shutdown_tx),
-            _permit: permit,
-        })
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+            match start_server_with_config(test_config.clone(), shutdown_rx).await {
+                Ok(port) => {
+                    return Ok(Self {
+                        port,
+                        shutdown_tx: Some(shutdown_tx),
+                        _permit: permit,
+                    });
+                }
+                Err(error) if attempt < PORT_ATTEMPTS && chose_base_url => {
+                    let next = free_port()?;
+                    test_config.server.port = next;
+                    test_config.server.base_url = Some(format!("http://127.0.0.1:{}", next));
+                    eprintln!("test server: port {port} would not bind ({error}); trying {next}");
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
     }
 
     /// Get the port the server is running on
@@ -536,6 +645,50 @@ impl AdminServer {
     /// being refused.
     pub fn anonymous(&self) -> &reqwest::Client {
         &self.http
+    }
+
+    /// Store a script and initialise it, the way the engine's own write
+    /// endpoint does.
+    ///
+    /// Writing the row is not deploying. `repository::upsert_script` stores the
+    /// source and nothing else, so no route, resolver, stream or listener the
+    /// script registers exists until something calls its `init()` — the engine
+    /// does that for every script at startup, and for one script on each write
+    /// through `/engine/upsert_script`. A test that wrote the row directly
+    /// *after* starting its server did neither, and passed only because an
+    /// earlier run had left the same script in the shared database for this
+    /// run's startup to execute. On a database of its own, that test finds
+    /// nothing registered.
+    ///
+    /// Awaited rather than spawned, unlike the write endpoint's own
+    /// initialisation: a test that has to poll for its script to come up is a
+    /// test with a timing assumption in it.
+    pub async fn deploy_script(&self, uri: &str, content: &str) {
+        aiwebengine::repository::upsert_script(uri, content)
+            .unwrap_or_else(|e| panic!("storing '{uri}' should succeed: {e}"));
+        self.initialize_script(uri).await;
+    }
+
+    /// The second half of [`deploy_script`], for a script whose assets have to
+    /// be written between storing it and running it.
+    ///
+    /// An asset is keyed by the script that owns it, so the script row has to
+    /// exist first; and a script importing a module cannot be built until that
+    /// module is stored. Those two orderings leave one gap to write the assets
+    /// into, which is why this half is separate.
+    ///
+    /// [`deploy_script`]: AdminServer::deploy_script
+    pub async fn initialize_script(&self, uri: &str) {
+        let result = aiwebengine::script_init::ScriptInitializer::with_configured_timeout()
+            .initialize_script(uri, false)
+            .await
+            .unwrap_or_else(|e| panic!("initialising '{uri}' should be attempted: {e}"));
+
+        assert!(
+            result.success,
+            "initialising '{uri}' should succeed: {:?}",
+            result.error
+        );
     }
 
     pub async fn shutdown(self) {

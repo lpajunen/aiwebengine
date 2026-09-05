@@ -14,6 +14,8 @@
 // Integration tests for Phase 0.5 security modules
 // Tests session management, CSRF protection, and data encryption
 
+mod common;
+
 use aiwebengine::security::{
     CreateSessionParams, CsrfProtection, DataEncryption, FieldEncryptor, OAuthStateManager,
     SecureSessionManager, SecurityAuditor, SessionError,
@@ -31,10 +33,7 @@ const TEST_HOST: &str = "test.example.com";
 #[tokio::test]
 async fn test_session_lifecycle() {
     let key: [u8; 32] = rand::random();
-    let pool = sqlx::PgPool::connect_lazy(
-        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-    )
-    .unwrap();
+    let pool = common::test_pool().await;
     let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     let manager = SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 3, auditor).unwrap();
 
@@ -88,10 +87,7 @@ async fn test_session_lifecycle() {
 #[tokio::test]
 async fn test_session_fingerprint_user_agent_mismatch() {
     let key: [u8; 32] = rand::random();
-    let pool = sqlx::PgPool::connect_lazy(
-        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-    )
-    .unwrap();
+    let pool = common::test_pool().await;
     let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     let manager = SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 3, auditor).unwrap();
 
@@ -126,10 +122,7 @@ async fn test_session_fingerprint_user_agent_mismatch() {
 #[tokio::test]
 async fn test_session_ip_change_tolerance() {
     let key: [u8; 32] = rand::random();
-    let pool = sqlx::PgPool::connect_lazy(
-        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-    )
-    .unwrap();
+    let pool = common::test_pool().await;
     let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     let manager = SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 3, auditor).unwrap();
 
@@ -166,10 +159,7 @@ async fn test_concurrent_session_limit() {
     // Add timeout to prevent hanging
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         let key: [u8; 32] = rand::random();
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
+        let pool = common::test_pool().await;
         let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let manager = SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 3, auditor).unwrap();
         let unique_user_id = format!("user_concurrent_{}", rand::random::<u32>());
@@ -207,10 +197,7 @@ async fn test_concurrent_session_limit() {
 #[tokio::test]
 async fn test_session_encryption() {
     let key: [u8; 32] = rand::random();
-    let pool = sqlx::PgPool::connect_lazy(
-        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-    )
-    .unwrap();
+    let pool = common::test_pool().await;
     let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     let manager = SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 3, auditor).unwrap();
 
@@ -249,10 +236,7 @@ async fn test_session_encryption() {
 #[tokio::test]
 async fn test_refresh_session_extends_expiry() {
     let key: [u8; 32] = rand::random();
-    let pool = sqlx::PgPool::connect_lazy(
-        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-    )
-    .unwrap();
+    let pool = common::test_pool().await;
     let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     let manager = SecureSessionManager::new(pool, &key, 5, 86400 * 30, 3, auditor).unwrap();
 
@@ -287,10 +271,7 @@ async fn test_refresh_session_extends_expiry() {
 #[tokio::test]
 async fn test_refresh_session_rejects_after_absolute_max_age() {
     let key: [u8; 32] = rand::random();
-    let pool = sqlx::PgPool::connect_lazy(
-        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-    )
-    .unwrap();
+    let pool = common::test_pool().await;
     let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     // Long idle timeout + very short absolute max age ensures absolute age check is exercised.
     let manager = SecureSessionManager::new(pool, &key, 3600, 1, 3, auditor).unwrap();
@@ -522,10 +503,7 @@ fn test_password_based_encryption() {
 async fn test_full_auth_flow_simulation() {
     // Setup all components
     let key: [u8; 32] = rand::random();
-    let pool = sqlx::PgPool::connect_lazy(
-        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-    )
-    .unwrap();
+    let pool = common::test_pool().await;
     let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     let session_manager =
         Arc::new(SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 3, auditor).unwrap());
@@ -606,10 +584,7 @@ async fn test_full_auth_flow_simulation() {
 #[tokio::test]
 async fn test_concurrent_users_isolation() {
     let key: [u8; 32] = rand::random();
-    let pool = sqlx::PgPool::connect_lazy(
-        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-    )
-    .unwrap();
+    let pool = common::test_pool().await;
     let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     let session_manager =
         Arc::new(SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 5, auditor).unwrap());

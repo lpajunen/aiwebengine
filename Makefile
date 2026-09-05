@@ -76,7 +76,18 @@ dev-local:
 test:
 	@bash -c 'if [ -f .env ]; then source .env; fi; cargo nextest run --all-features --no-fail-fast'
 
-# Run tests with standard cargo test
+# Run tests with standard cargo test.
+#
+# Kept for the cases nextest cannot serve — a debugger attached to one test, an
+# environment where nextest is not installed — and not part of any gate, because
+# the suite does not pass under it. `cargo test` runs a binary's tests as threads
+# in one process, each with its own `#[tokio::test]` runtime, while the database
+# pool they share is driven by whichever runtime opened it; when that test ends,
+# its runtime goes with it and every later test acquiring one of those
+# connections blocks until the pool's timeout. Running one test at a time does
+# not help, because the problem is sequence rather than contention. `cargo
+# nextest` gives each test its own process, which is the shape this engine is
+# built for: one runtime, one pool, for the life of the process.
 test-simple:
 	@bash -c 'if [ -f .env ]; then source .env; fi; cargo test --all-features'
 
@@ -124,11 +135,11 @@ clean:
 	cargo clean
 
 # Pre-commit checks (format check, lint, test)
-check: format-check lint typecheck test-simple
+check: format-check lint typecheck test
 	@echo "✓ All checks passed!"
 
 # CI pipeline (format check, lint, test, coverage)
-ci: format-check lint typecheck test-simple coverage
+ci: format-check lint typecheck test coverage
 	@echo "✓ CI pipeline completed!"
 
 # ==================== Docker Commands ====================

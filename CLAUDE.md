@@ -27,7 +27,7 @@ make lint                                    # cargo clippy --all-targets -- -D 
 make format                                  # cargo fmt --all + prettier for md/js/ts
 make format-check                            # cargo fmt --all -- --check (CI-safe, no writes)
 make typecheck                               # npm run typecheck -> tsc against scripts/**/*.{js,ts,tsx} using tsconfig.typecheck.json
-make check                                   # format-check + lint + typecheck + test-simple (run before committing)
+make check                                   # format-check + lint + typecheck + test (run before committing)
 make ci                                      # check + coverage
 
 # Docker (Postgres is required; there's no in-memory fallback)
@@ -95,9 +95,11 @@ There is one configuration file, `config.toml`, holding defaults and their reaso
 
 ### Testing
 
-- Integration tests live in `tests/*.rs` (one file per concern: `dispatcher.rs`, `streaming.rs`, `security_capabilities.rs`, `security_sessions.rs`, `secrets.rs`, `openapi_validation.rs`, `http_fetch.rs`, `cluster.rs`, etc.) with shared helpers in `tests/common/mod.rs` and `tests/test_utils.rs`.
+- Integration tests live in `tests/*.rs` (one file per concern: `dispatcher.rs`, `streaming.rs`, `security_capabilities.rs`, `security_sessions.rs`, `secrets.rs`, `openapi_validation.rs`, `http_fetch.rs`, `cluster.rs`, etc.) with shared helpers in `tests/common/` — `mod.rs` for servers and fixtures, `testdb.rs` for the per-process database each test runs against.
 - These are full-stack tests that spin up real server instances against Postgres — there is no in-memory/mocked repository mode, so a running Postgres (e.g. via `make postgres-local`) is generally required to run the suite.
-- `cargo-nextest` is the preferred runner (faster, better output); the `[profile.test]` in `Cargo.toml` trades some optimization for faster incremental test builds.
+- `DATABASE_URL` names a _server_, not the database a test uses. Each test process claims one of a small number of numbered slot databases (`aiwebengine_test_slot_N`) and recreates it from a migrated template, so every test starts from the schema and nothing else and the database `cargo run` uses is never opened. `common::test_config` / `common::test_pool` are the only ways to reach it; a test that builds its own `RepositoryConfig` or connection string goes around the isolation and writes into whatever `DATABASE_URL` happens to name. Slots are claimed with a session advisory lock rather than released by cleanup code, because a test process cannot clean up after itself — Rust runs no destructor at process exit and a test killed by a timeout would skip one anyway — so the claim ends when the process's connection closes, however the process ends. `AIWEBENGINE_TEST_DB_SHARED=1` opts out, for inspecting what a failing test left behind.
+- The isolation is what makes the suite deterministic, and it replaced two things that hid the problem rather than fixing it. `execute_startup_scripts` executes _every_ script in the database, so on a shared database each new test server ran the scripts unrelated tests had left there — which is why a test's result depended on which tests had run before it, in this run and in every earlier one. `.config/nextest.toml` answered that with a `max-threads = 1` test group listing the binaries that start a server (a list that had drifted to cover 11 of the 26 that do), and with `retries = 2`. Both are gone: tests run in parallel, and a test that only passes on a retry is a race to fix rather than to re-run.
+- `cargo-nextest` is the runner the suite is written for, and `make check` / `make ci` use it. `make test-simple` (`cargo test`) does not pass and is not a gate: `cargo test` runs a binary's tests as threads in one process, each with its own `#[tokio::test]` runtime, while the pool they share is driven by whichever runtime opened it — so once that test ends, every later test acquiring one of those connections blocks until the pool times out. Running one test at a time does not help; the problem is sequence, not contention. nextest's process-per-test model gives each test one runtime and one pool for the life of the process, which is the shape the engine is built for. The `[profile.test]` in `Cargo.toml` trades some optimization for faster incremental test builds.
 
 ### Coding standards (from CONTRIBUTING.md)
 

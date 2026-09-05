@@ -272,10 +272,7 @@ async fn test_rate_limiting_blocks_excessive_requests() {
     if should_skip_integration_tests() {
         return;
     }
-    let pool = sqlx::PgPool::connect_lazy(
-        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-    )
-    .unwrap();
+    let pool = common::test_pool().await;
     let limiter = RateLimiter::new(pool.clone());
     // A key of this test's own. The bucket lives in the `rate_limits` table, so a
     // fixed key carries its drained state into the next run — and this test drains
@@ -309,10 +306,7 @@ async fn test_rate_limiting_resets_after_window() {
     if should_skip_integration_tests() {
         return;
     }
-    let pool = sqlx::PgPool::connect_lazy(
-        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-    )
-    .unwrap();
+    let pool = common::test_pool().await;
     let limiter = RateLimiter::new(pool.clone());
     let key = RateLimitKey::IpAddress(format!("test_client_reset-{}", uuid::Uuid::new_v4()));
 

@@ -443,10 +443,12 @@ async fn test_openapi_javascript_routes_included() {
     // The built-in scripts no longer register HTTP routes (engine endpoints
     // are native Rust), so load a script that registers routes via
     // routeRegistry to exercise the JavaScript path merging.
-    let _ = aiwebengine::repository::upsert_script(
-        "https://example.com/method_test",
-        include_str!("../scripts/test_scripts/method_test.js"),
-    );
+    engine
+        .deploy_script(
+            "https://example.com/method_test",
+            include_str!("../scripts/test_scripts/method_test.js"),
+        )
+        .await;
 
     let port = engine.port();
 
@@ -510,20 +512,33 @@ async fn test_openapi_asset_and_stream_default_groups() {
     // core.js no longer registers asset routes; load a script that does.
     // registerAssetRoute requires the asset to exist and be owned by the
     // registering script, so store the asset first.
+    // In this order, and the write of each is checked: an asset is keyed by the
+    // script that owns it, so the row has to exist before the asset can be
+    // stored, and the asset has to be stored before the `init()` that registers
+    // a route onto it can succeed. Both writes used to be made with their
+    // results discarded, and the asset's was failing for want of the script
+    // row — which the test could not notice, because it was reading an asset
+    // route that an earlier run had left registered.
+    let uri = "https://example.com/method_test";
+    aiwebengine::repository::upsert_script(
+        uri,
+        include_str!("../scripts/test_scripts/method_test.js"),
+    )
+    .expect("script should be stored");
+
     let now = std::time::SystemTime::now();
-    let _ = aiwebengine::repository::upsert_asset(aiwebengine::repository::Asset {
+    aiwebengine::repository::upsert_asset(aiwebengine::repository::Asset {
         uri: "method-test.css".to_string(),
         name: Some("method-test.css".to_string()),
         mimetype: "text/css".to_string(),
         content: b"body { color: black; }".to_vec(),
         created_at: now,
         updated_at: now,
-        script_uri: "https://example.com/method_test".to_string(),
-    });
-    let _ = aiwebengine::repository::upsert_script(
-        "https://example.com/method_test",
-        include_str!("../scripts/test_scripts/method_test.js"),
-    );
+        script_uri: uri.to_string(),
+    })
+    .expect("asset should be stored");
+
+    engine.initialize_script(uri).await;
 
     let port = engine.port();
 
