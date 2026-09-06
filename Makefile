@@ -1,6 +1,6 @@
 # Makefile for aiwebengine development
 
-.PHONY: help deps upgrade-deps test dev build clean lint format coverage check ci typecheck check-embedded build-desktop
+.PHONY: help deps upgrade-deps test dev build clean lint format coverage check ci typecheck check-embedded build-desktop run-desktop
 .PHONY: docker-build docker-local docker-staging docker-prod docker-stop docker-logs docker-clean
 .PHONY: docker-dns check-dns clean-acme-dns
 
@@ -76,7 +76,7 @@ dev-local:
 # the engine's own, which is the one thing the test harness must not do — every
 # test claims a numbered slot database on the server DATABASE_URL names
 # (tests/common/testdb.rs) — and `embedded-postgres-bundled` would stage a
-# 30-40 MB archive into every build that ran it. Compile-checked separately by
+# 13 MB archive into every build that ran it. Compile-checked separately by
 # `make check-embedded`; add real features here as they appear.
 TEST_FEATURES ?=
 
@@ -117,10 +117,14 @@ perf-test:
 check-embedded:
 	cargo clippy --all-targets --features embedded-postgres -- -D warnings
 
-# Run clippy linter with warnings as errors
+# Run clippy linter with warnings as errors.
+#
+# markdownlint globs the working tree rather than reading .gitignore, so the
+# ignored directories that hold third-party content are named here: data/ is
+# where a desktop install unpacks PostgreSQL, README and all.
 lint:
 	cargo clippy --all-targets -- -D warnings
-	./node_modules/.bin/markdownlint "**/*.md" --ignore node_modules && echo '✓ Markdown files linted'
+	./node_modules/.bin/markdownlint "**/*.md" --ignore node_modules --ignore data --ignore target && echo '✓ Markdown files linted'
 
 # Run TypeScript declaration checks
 typecheck:
@@ -154,11 +158,44 @@ build:
 	cargo build --release
 
 # Build the desktop standalone binary: a PostgreSQL of its own, with the
-# platform archive compiled in so a first launch needs no network. Adds roughly
-# 30-40 MB to the binary, and needs network access at build time to stage the
-# archive.
+# platform archive compiled in so a first launch needs no network. Adds about
+# 13 MB to the binary (the archive is compressed; it extracts to ~43 MB on first
+# run), and needs network access at build time to stage it.
 build-desktop:
 	cargo build --release --features embedded-postgres-bundled
+
+# Run that binary: embedded database, loopback only, internal accounts.
+#
+# Generates .env-desktop on first use, because there is nothing else to generate
+# it — the four secrets have no defaults and an install that regenerates
+# secret_encryption_key cannot read anything it stored. This is the Makefile
+# standing in for a first-run path the binary does not have yet; a packaged app
+# needs that inside the binary, since it will not ship with make.
+run-desktop: build-desktop
+	@if [ ! -f .env-desktop ]; then \
+		echo "Generating .env-desktop (keep it: it is the only copy of these keys)"; \
+		umask 077; \
+		{ \
+			echo "# Desktop standalone. Generated $$(date +%Y-%m-%d)."; \
+			echo "# The keys below and data/postgres are the whole install. Back them up together:"; \
+			echo "# a dump without secret_encryption_key is one you cannot fully restore."; \
+			echo "export APP_REPOSITORY__EMBEDDED=true"; \
+			echo "export APP_REPOSITORY__EMBEDDED_DATA_DIR=data/postgres"; \
+			echo "export APP_SERVER__HOST=127.0.0.1"; \
+			echo "export APP_SERVER__BASE_URL=http://localhost:3000"; \
+			echo "export APP_AUTH__COOKIE__SECURE=false"; \
+			echo "export APP_AUTH__INTERNAL__ENABLED=true"; \
+			echo "export APP_AUTH__INTERNAL__ALLOW_REGISTRATION=true"; \
+			echo "export APP_AUTH__INTERNAL__BOOTSTRAP_ADMIN_USERNAMES='[\"owner\"]'"; \
+			echo "export APP_AUTH__JWT_SECRET=$$(openssl rand -base64 32)"; \
+			echo "export APP_SECURITY__CSRF_KEY=$$(openssl rand -base64 32)"; \
+			echo "export APP_SECURITY__SESSION_ENCRYPTION_KEY=$$(openssl rand -base64 32)"; \
+			echo "export APP_SECURITY__SECRET_ENCRYPTION_KEY=$$(openssl rand -base64 32)"; \
+		} > .env-desktop; \
+		echo "Sign in at http://localhost:3000/auth/login — register the username 'owner'"; \
+		echo "to claim the administrator role, then set ALLOW_REGISTRATION=false."; \
+	fi
+	@bash -c 'source .env-desktop && exec ./target/release/aiwebengine'
 
 # Clean build artifacts
 clean:

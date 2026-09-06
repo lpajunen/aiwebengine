@@ -1,0 +1,6 @@
+# Prettier globs the working tree rather than reading .gitignore, so the
+# directories holding content this repository did not write are named here.
+node_modules
+target
+# Where a desktop install unpacks PostgreSQL and keeps its cluster.
+data

@@ -118,7 +118,7 @@ default = []
 embedded-postgres = ["dep:postgresql_embedded"]
 
 # The same, with the platform's PostgreSQL archive compiled into the binary —
-# roughly 30-40 MB, and what a desktop build ships, since a first launch cannot
-# depend on the network. Requires network access at *build* time to stage the
+# about 13 MB compressed, and what a desktop build ships, since a first launch
+# cannot depend on the network. Requires network access at *build* time to stage the
 # archive.
 embedded-postgres-bundled = ["embedded-postgres", "postgresql_embedded/bundled"]

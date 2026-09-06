@@ -85,6 +85,29 @@ What it looks like in configuration:
   The cluster defaults size for hundreds of concurrent callers.
 - `security.cors_allowed_origins = []`.
 
+Running it today, from a checkout:
+
+```bash
+make run-desktop             # builds if needed, then starts on http://localhost:3000
+```
+
+The first run writes `.env-desktop` (mode 600, gitignored) with four freshly
+generated secrets, because nothing else generates them and an install that
+regenerates `secret_encryption_key` cannot read anything it stored. It then
+starts a PostgreSQL in `data/postgres` — no network needed, the archive is in
+the binary — and serves on loopback.
+
+To claim the install: register the username `owner` at
+`http://localhost:3000/auth/login`. It is named in
+`bootstrap_admin_usernames`, so signing in grants it the administrator role;
+set `ALLOW_REGISTRATION=false` in `.env-desktop` afterwards, since a desktop
+install has one account. `Ctrl-C` or SIGTERM stops the engine and its database
+together.
+
+`.env-desktop` and `data/postgres` are the whole install. Back them up
+together: a dump taken without `secret_encryption_key` is one you cannot fully
+restore.
+
 Backup is copying the data directory while the app is stopped. Upgrade is
 replacing the binary: migrations run at startup, under a lock, and are
 forward-only.
@@ -129,7 +152,7 @@ runtime memory, which does not move for code that is compiled and never run:
 | ------------------------------------------------------------- | --------------------------------------------------- |
 | `cargo build --release` (`make build`)                        | nothing — the supervisor is not compiled            |
 | `--features embedded-postgres`                                | the supervisor; the archive is fetched on first run |
-| `--features embedded-postgres-bundled` (`make build-desktop`) | the above, plus ~40 MB of archive in the binary     |
+| `--features embedded-postgres-bundled` (`make build-desktop`) | the above, plus ~13 MB of archive in the binary     |
 
 `make check` and `make ci` deliberately do not pass `--all-features`
 (`TEST_FEATURES` in the Makefile): the integration suite claims a slot database
