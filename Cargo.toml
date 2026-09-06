@@ -45,17 +45,17 @@ sha2 = "0.11"
 # Unified diffs between revisions of a script's files. Hand-rolling the hunk
 # grouping around an LCS is a well-known source of off-by-one context bugs, and
 # this output is read by people deciding whether to revert.
-similar = "2"
+similar = "3.2.0"
 rand = "0.10.0"
 pulldown-cmark = "0.13.0"
 handlebars = "6.0"
 
 # TypeScript/JSX transpilation
-oxc = { version = "0.142.0", features = ["full"] }
+oxc = { version = "0.148.0", features = ["full"] }
 
 # Security and encryption (Phase 0.5)
 aes-gcm = "0.11"
-argon2 = "0.5"
+argon2 = "0.6.0"
 subtle = "2.5"
 
 # OAuth2 and JWT (Phase 2)
@@ -99,7 +99,7 @@ lto = "thin"
 [dev-dependencies]
 tokio-test = "0.4"
 mockall = "0.15.0"
-jsonschema = "0.49"
+jsonschema = "0.54.0"
 
 # Build-time dependencies (for capturing build metadata)
 [build-dependencies]

@@ -24,10 +24,7 @@
 
 use crate::auth::error::AuthError;
 use crate::database::get_global_database;
-use argon2::Argon2;
-use argon2::password_hash::{
-    PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng,
-};
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use sqlx::{PgPool, Row};
 
 /// Provider name recorded on accounts holding an engine-issued credential.
@@ -124,13 +121,13 @@ pub fn validate_password(password: &str, min_length: usize) -> Result<(), AuthEr
 /// Hash a password for storage, as an Argon2id PHC string.
 ///
 /// The parameters and salt travel inside the string, so raising the cost later
-/// is a change to this function and not a migration.
+/// is a change to this function and not a migration. The salt is drawn from the
+/// system RNG by `hash_password` itself, which is why none is passed in.
 pub fn hash_password(password: &str) -> Result<String, AuthError> {
-    let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map(|hash| hash.to_string())
-        .map_err(|e| AuthError::Internal(format!("password hashing failed: {}", e)))
+    let hash: PasswordHash = Argon2::default()
+        .hash_password(password.as_bytes())
+        .map_err(|e| AuthError::Internal(format!("password hashing failed: {}", e)))?;
+    Ok(hash.to_string())
 }
 
 /// Verify a password against a stored PHC string.
