@@ -270,8 +270,8 @@ async fn main() -> AppResult<()> {
         }
     });
 
-    // Wait for Ctrl-C in the main task
-    tokio::signal::ctrl_c().await?;
+    // Wait for a shutdown signal in the main task.
+    wait_for_shutdown_signal().await?;
     tracing::info!("Shutdown signal received, stopping server...");
 
     // Signal the server to start graceful shutdown. Ignore send errors if the
@@ -290,7 +290,38 @@ async fn main() -> AppResult<()> {
         tracing::info!("Server stopped");
     }
 
+    // Stopped here, on the awaited path, and last. `pg_ctl` daemonises the
+    // server it starts, so it does not die with this process the way a child
+    // would: a stop that is skipped strands a PostgreSQL holding the port and
+    // the data directory, and the next launch meets it. A no-op for every
+    // deployment that connects to a database it does not own.
+    aiwebengine::embedded_db::stop().await;
+
     Ok(())
+}
+
+/// Wait for the signal that means "stop".
+///
+/// SIGTERM as well as Ctrl-C, because nothing that supervises a process sends
+/// SIGINT: `docker stop`, systemd and a desktop launcher all send SIGTERM, and
+/// a SIGTERM nobody handles kills the process outright. That was survivable
+/// while the database was somebody else's; with an embedded one it means a
+/// stranded server and WAL recovery on the next start.
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() -> std::io::Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut terminate = signal(SignalKind::terminate())?;
+
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result,
+        _ = terminate.recv() => Ok(()),
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal() -> std::io::Result<()> {
+    tokio::signal::ctrl_c().await
 }
 
 /// Read the password `--set-password` will store, from standard input.

@@ -1629,12 +1629,13 @@ pub async fn start_server_with_config(
         let _ = pruner_shutdown_tx.send(());
         let _ = log_pruner_shutdown_tx.send(());
         let _ = server_shutdown_tx.send(());
-
-        // Last, and a no-op unless this process started a database of its own:
-        // everything signalled above may still be finishing a write, and the
-        // database has to outlive the things writing to it.
-        embedded_db::stop().await;
     });
+    // An embedded database is *not* stopped here. This task is detached and
+    // `start_server_with_config` returns as soon as the server is spawned, so
+    // the process can exit out from under anything spawned here — and a stop
+    // that runs only when the timing is kind is not a stop. `main` awaits
+    // `embedded_db::stop()` after the shutdown wait instead; an embedder
+    // driving the server itself owns the same call.
 
     // Clone the timeout value to avoid borrow checker issues in async closures
     let script_timeout_ms = config.javascript.execution_timeout_ms;
