@@ -17,6 +17,7 @@ pub mod conversion;
 pub mod database;
 pub mod db_schema_utils;
 pub mod deployments;
+pub mod desktop;
 pub mod dispatcher;
 pub mod embedded_db;
 pub mod engine_api;

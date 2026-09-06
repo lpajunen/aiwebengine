@@ -50,10 +50,74 @@ async fn main() -> AppResult<()> {
                 )
                 .action(clap::ArgAction::Set),
         )
+        .arg(
+            Arg::new("desktop")
+                .long("desktop")
+                .conflicts_with("config")
+                .help(
+                    "Run as a desktop install: a PostgreSQL of the engine's own, on loopback, \
+                     with internal accounts. Creates the configuration and its four keys in the \
+                     platform's application-data directory on first launch, and never \
+                     regenerates them afterwards.",
+                )
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("init-config")
+                .long("init-config")
+                .help(
+                    "Create the desktop configuration and exit, printing where it went. Does \
+                     nothing when one already exists, because regenerating the keys would make \
+                     every stored secret unreadable.",
+                )
+                .action(clap::ArgAction::SetTrue),
+        )
         .get_matches();
 
+    // First run of a desktop install, before anything reads configuration:
+    // there is nothing to read until this has written it.
+    //
+    // Both flags go through the same call, so `--init-config` cannot produce a
+    // file that `--desktop` would have produced differently. It is idempotent
+    // by construction — an existing configuration is used as it stands.
+    let desktop_config = if matches.get_flag("desktop") || matches.get_flag("init-config") {
+        let (path, created) = aiwebengine::desktop::ensure_config()?;
+        if created {
+            println!("Created {}", path.display());
+            println!();
+            println!("It holds the only copy of this install's four keys. Back it up together");
+            println!("with the database directory beside it: a copy of the database without");
+            println!("secret_encryption_key is one whose secrets cannot be read.");
+            println!();
+            println!("Sign in at http://localhost:3000/auth/login and register the username");
+            println!("'owner' to claim the administrator role, then set");
+            println!("auth.internal.allow_registration = false — a desktop install has one user.");
+        } else {
+            println!("Using {}", path.display());
+        }
+        Some(path)
+    } else {
+        None
+    };
+
+    if matches.get_flag("init-config") {
+        return Ok(());
+    }
+
+    if matches.get_flag("desktop") && !aiwebengine::embedded_db::SUPPORTED {
+        return Err(aiwebengine::AppError::config(
+            "This build has no embedded database, so --desktop has nothing to start. \
+             Rebuild with --features embedded-postgres-bundled (make build-desktop), or run \
+             against a PostgreSQL server without --desktop.",
+        ));
+    }
+
     // Load configuration first to get logging preferences
-    let config = if let Some(config_path) = matches.get_one::<String>("config") {
+    let config = if let Some(desktop_path) = &desktop_config {
+        AppConfig::load_from_file(desktop_path).map_err(|e| {
+            aiwebengine::AppError::config(format!("Failed to load configuration from file: {}", e))
+        })?
+    } else if let Some(config_path) = matches.get_one::<String>("config") {
         AppConfig::load_from_file(config_path).map_err(|e| {
             aiwebengine::AppError::config(format!("Failed to load configuration from file: {}", e))
         })?
