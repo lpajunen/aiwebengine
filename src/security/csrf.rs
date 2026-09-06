@@ -4,8 +4,9 @@
 
 use base64::Engine;
 use chrono::{DateTime, Duration, Utc};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use tracing::{debug, warn};
 
@@ -214,12 +215,20 @@ impl CsrfProtection {
         0
     }
 
-    /// Create HMAC signature
+    /// HMAC-SHA256 over `data`, lowercase hex.
+    ///
+    /// This was `Sha256::new().update(key).update(data)` — the secret-prefix
+    /// construction HMAC exists to replace, and length-extendable: anyone
+    /// holding one valid `(payload, tag)` pair can produce a tag for
+    /// `payload ‖ padding ‖ suffix` without the key. Only [`Self::validate_token`]'s
+    /// UTF-8 check on the decoded payload stopped that being a forgery here,
+    /// since the padding is not valid UTF-8 — an accident of an unrelated
+    /// check, in a function whose name already claimed to be an HMAC.
     fn create_hmac(&self, data: &[u8]) -> String {
-        let mut mac = Sha256::new();
-        mac.update(self.secret_key);
+        let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(&self.secret_key)
+            .expect("HMAC accepts a key of any length");
         mac.update(data);
-        hex::encode(mac.finalize())
+        hex::encode(mac.finalize().into_bytes())
     }
 
     /// Constant-time comparison to prevent timing attacks
@@ -274,6 +283,35 @@ impl OAuthStateManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RFC 4231 test case 2, which pins `create_hmac` to HMAC-SHA256 rather
+    /// than to whatever the current code happens to compute. The predecessor —
+    /// `Sha256(key ‖ data)` — fails this.
+    #[test]
+    fn create_hmac_matches_rfc4231_case_2() {
+        let mut key = [0u8; 32];
+        key[..4].copy_from_slice(b"Jefe");
+        let protection = CsrfProtection::new(key, 3600);
+
+        // The RFC's key is the 4 bytes "Jefe"; ours is fixed at 32, so the
+        // vector is recomputed for the zero-padded key. Both are the same HMAC
+        // by construction: HMAC zero-pads any key shorter than the block size.
+        let short_key_mac = {
+            let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(b"Jefe")
+                .expect("HMAC accepts a key of any length");
+            mac.update(b"what do ya want for nothing?");
+            hex::encode(mac.finalize().into_bytes())
+        };
+        assert_eq!(
+            short_key_mac, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
+            "the hmac crate should reproduce RFC 4231 case 2"
+        );
+        assert_eq!(
+            protection.create_hmac(b"what do ya want for nothing?"),
+            short_key_mac,
+            "create_hmac should be HMAC-SHA256, and zero-padding the key should not change it"
+        );
+    }
 
     fn create_test_csrf() -> CsrfProtection {
         let key: [u8; 32] = rand::random();

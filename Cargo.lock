@@ -92,6 +92,7 @@ dependencies = [
  "futures-util",
  "handlebars",
  "hex",
+ "hmac 0.13.0",
  "html-escape",
  "indexmap",
  "ipnet",

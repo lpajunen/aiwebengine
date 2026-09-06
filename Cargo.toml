@@ -39,6 +39,10 @@ async-stream = "0.3.6"
 html-escape = "0.2"
 hex = "0.4"
 sha2 = "0.11"
+# Keyed MAC for the stateless CSRF tokens. `Sha256(key ‖ data)` is not an
+# HMAC and is length-extendable; the construction belongs to a crate that
+# gets it right. Version tracks sha2/digest 0.11.
+hmac = "0.13"
 # Unified diffs between revisions of a script's files. Hand-rolling the hunk
 # grouping around an LCS is a well-known source of off-by-one context bugs, and
 # this output is read by people deciding whether to revert.
