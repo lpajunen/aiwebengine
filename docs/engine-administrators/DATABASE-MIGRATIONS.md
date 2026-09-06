@@ -83,7 +83,7 @@ sqlx --version
 
 ```bash
 # For local development
-docker-compose -f docker-compose.local.yml up -d postgres-dev
+make postgres-local
 
 # For production
 docker-compose up -d postgres

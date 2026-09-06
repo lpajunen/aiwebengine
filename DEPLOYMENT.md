@@ -85,34 +85,48 @@ What it looks like in configuration:
   The cluster defaults size for hundreds of concurrent callers.
 - `security.cors_allowed_origins = []`.
 
-Running it today, from a checkout:
+Running it:
 
 ```bash
 make run-desktop             # builds if needed, then starts on http://localhost:3000
+aiwebengine --desktop        # what that runs, once the binary exists
 ```
 
-The first run writes `.env-desktop` (mode 600, gitignored) with four freshly
-generated secrets, because nothing else generates them and an install that
-regenerates `secret_encryption_key` cannot read anything it stored. It then
-starts a PostgreSQL in `data/postgres` — no network needed, the archive is in
-the binary — and serves on loopback.
+The first launch creates everything it needs. `--desktop` resolves the
+platform's application-data directory — `~/Library/Application Support/aiwebengine`
+on macOS, `%APPDATA%\aiwebengine` on Windows, `$XDG_DATA_HOME/aiwebengine` or
+`~/.local/share/aiwebengine` elsewhere, or whatever `AIWEBENGINE_DATA_DIR`
+names — writes a `config.toml` there at mode 600 with four freshly generated
+keys, and starts a PostgreSQL in `postgres/` beside it. No network is needed:
+the archive is in the binary.
+
+`aiwebengine --init-config` does the creating without starting anything, and
+prints where it went.
+
+**It never regenerates.** An existing configuration is used exactly as it
+stands, whatever else has changed, because `secret_encryption_key` is what
+every script and user secret in the database is encrypted with — a second set
+of keys would not reset the install, it would make the install unreadable while
+leaving it looking healthy.
+
+What it writes is an ordinary configuration file, loaded by the same
+`AppConfig::load_from_file` every other deployment uses, and `APP_*` variables
+still override it. There is no desktop-only code path downstream of that.
 
 To claim the install: register the username `owner` at
-`http://localhost:3000/auth/login`. It is named in
-`bootstrap_admin_usernames`, so signing in grants it the administrator role;
-set `ALLOW_REGISTRATION=false` in `.env-desktop` afterwards, since a desktop
-install has one account. `Ctrl-C` or SIGTERM stops the engine and its database
-together.
+`http://localhost:3000/auth/login`. It is named in the generated
+`auth.internal.bootstrap_admin_usernames`, so signing in grants it the
+administrator role; set `allow_registration = false` afterwards, since a
+desktop install has one account. `Ctrl-C` or SIGTERM stops the engine and its
+database together.
 
-`.env-desktop` and `data/postgres` are the whole install. Back them up
-together: a dump taken without `secret_encryption_key` is one you cannot fully
-restore.
+`config.toml` and `postgres/` in that directory are the whole install. Back
+them up together, with the app stopped: a copy of a running PostgreSQL's data
+directory may not start, and the directory without `config.toml` restores an
+engine whose secrets are unreadable. Upgrade is replacing the binary:
+migrations run at startup, under a lock, and are forward-only.
 
-Backup is copying the data directory while the app is stopped. Upgrade is
-replacing the binary: migrations run at startup, under a lock, and are
-forward-only.
-
-### Status: the supervisor exists, the packaging does not
+### Status: the supervisor and first run exist, the packaging does not
 
 `repository.embedded = true` on a build carrying the `embedded-postgres`
 feature starts a PostgreSQL of the engine's own, initialises it on first run,
@@ -162,14 +176,18 @@ supervisor without staging an archive, and `cargo run --features
 embedded-postgres --example embedded_smoke -- <dir>` exercises it for real —
 install, migrate, restart, stop — which no test in the suite can.
 
-**What is still missing: first-run setup.** A desktop install cannot ask its
-user for four base64 keys. It needs to generate `config.toml` on first launch
-with fresh random values, `0600`, in the data directory — or keep them in the OS
-keychain — and then never regenerate them, because regenerating
-`secret_encryption_key` destroys every stored secret. `--validate-config`
-exists; a `--init-config`/first-run path does not. Beyond that it is packaging:
-a per-OS bundle, an app icon, and something that opens a browser at the loopback
-port.
+**First-run setup exists now** (`src/desktop.rs`, `--desktop` /
+`--init-config`), and it had to move into the binary for the reason above: the
+Makefile's `.env-desktop` generation worked for somebody with a checkout, a
+toolchain and `make`, which is exactly the population that does not need a
+desktop build.
+
+**What is still missing is packaging.** A per-OS bundle, an app icon, something
+that opens a browser at the loopback port, code signing and notarization on
+macOS, and a release workflow that builds
+`--features embedded-postgres-bundled` for each platform. None of that is
+engine work; all of it is between the binary and a user who does not have a
+terminal.
 
 **The road not taken: a SQLite backend.** It would cost a parallel
 implementation of the repository, a second set of queries (the `query!` macros
@@ -203,12 +221,31 @@ containers for the engine itself.
 
 ## Developer local, containerised
 
-**The same machine, but the full server topology.** Two engine containers behind
-Caddy, plus Postgres — `docker-compose.local.yml` with `Caddyfile.local`. This
-is what to use when the thing being tested is the deployment rather than the
-code: TLS behaviour, the `X-Forwarded-For` chain and `trusted_proxies`, cookie
-`Secure`/`__Host-` behaviour, multi-host routing and `management_hosts`, and
-cross-instance cache invalidation over `LISTEN`/`NOTIFY`.
+**The same machine, running the server stack.** Not a stack of its own:
+`docker-compose.local.yml` is an _overlay_ over `docker-compose.yml`, and the
+Caddyfile is the same `Caddyfile` production runs. This is what to use when the
+thing being tested is the deployment rather than the code: TLS behaviour, the
+`X-Forwarded-For` chain and `trusted_proxies`, cookie `Secure`/`__Host-`
+behaviour, multi-host routing and `management_hosts`, and cross-instance cache
+invalidation over `LISTEN`/`NOTIFY`.
+
+The overlay is deliberately thin, and what it contains is the one thing that
+genuinely differs: these engine containers carry a toolchain and compile the
+crate, which is a different kind of container rather than the same container
+with different parameters. Everything else — the site block, the health checks,
+the retry policy, the `ha` profile, the number of instances — comes from the
+server file, and is therefore the same thing being rehearsed. It had been a
+parallel stack with its own service names, its own Caddyfile and its own
+hardcoded instance count, which is a rehearsal of something other than what
+ships.
+
+Two engine instances by default, since cross-instance invalidation is one of
+the things only a second instance exercises. For the single-node shape, the
+same shape a small deployment runs:
+
+```bash
+make docker-local DEV_PROFILES= DEV_UPSTREAMS=aiwebengine-1:3000
+```
 
 Two ways to reach it:
 
@@ -216,6 +253,14 @@ Two ways to reach it:
 make docker-localhost   # https://localhost, Caddy's internal CA, no DNS needed
 make docker-dns         # https://local.softagen.com, real Let's Encrypt cert
 ```
+
+Which certificate a stack gets is `TLS_SNIPPET`, naming one of three issuers
+defined in the shared `Caddyfile`: `tls_public` (public ACME — what staging and
+production use), `tls_internal` (Caddy's own CA) and `tls_acme_dns` (DNS-01).
+A snippet rather than a conditional because a Caddyfile is adapted whole and a
+site block cannot be made conditional; an unimported snippet is not adapted at
+all, which is what lets `tls_acme_dns` name a plugin that only the development
+Caddy image carries.
 
 `make docker-dns` uses a DNS-01 challenge through DigitalOcean
 (`DIGITALOCEAN_TOKEN`), which is what makes a publicly trusted certificate
@@ -225,8 +270,8 @@ redirect URIs the provider will accept, MCP clients that refuse self-signed
 certificates, and anything testing the `__Host-` cookie prefix, which requires
 `Secure`. `make check-dns` verifies the name resolves.
 
-Note that the local compose file publishes Postgres on `5432` to the host, with
-a known password. That is convenient — `psql` and the test suite reach the same
+Note that the overlay publishes Postgres on `5432` to the host, with a known
+password. That is convenient — `psql` and the test suite reach the same
 database — and it is a reason not to run this stack on a shared or exposed
 machine.
 
@@ -297,9 +342,9 @@ _same digest_, promoted, not two builds of the same commit.
 
 ## One set of files, or several?
 
-Almost all of it can be one set of files driven by a per-environment `.env`.
-The claims below were checked with `caddy adapt` and `docker compose config`
-rather than assumed.
+It is one set of files driven by a per-environment `.env`, and the claims below
+were checked with `caddy adapt` and `docker compose config` rather than
+assumed.
 
 **One Caddyfile covers localhost, DNS-01 development, staging and production.**
 Caddy substitutes `{$VAR}` textually before parsing, so a variable can carry
@@ -311,9 +356,12 @@ more than one token:
   adapts to two upstreams — active health checks and `lb_policy` intact — and to
   one upstream when the variable names one. Instance count therefore lives in
   the env file, not in the Caddyfile.
-- `import {$TLS_SNIPPET}` selects the issuer: a snippet holding `tls internal`
-  for localhost, one holding the DNS-01 block for a development hostname, and an
-  empty snippet for public ACME in staging and production.
+- `import {$TLS_SNIPPET}` selects the issuer: `tls_internal` holding
+  `tls internal` for localhost, `tls_acme_dns` holding the DNS-01 block for a
+  development hostname, and an empty `tls_public` for public ACME in staging and
+  production. It must always name one of them — `import` with an empty argument
+  is a parse error that takes the whole proxy down rather than falling back —
+  which is why the compose file supplies the default rather than the Caddyfile.
 
 **Two things a single Caddyfile cannot express**, both because every site block
 in the file is always adapted:
@@ -330,20 +378,33 @@ block — `@manage host {$MANAGE_HOST}` and `@content not host {$MANAGE_HOST}` �
 which needs no conditional and works on a single-host deployment by pointing
 `MANAGE_HOST` at that one name, where every response is then `DENY`.
 
-**One Dockerfile, two targets.** The existing multi-stage build already has the
-pieces; add a `dev` stage carrying the toolchain and `cargo-watch`, and select it
-with `build: { target: "${ENGINE_BUILD_TARGET:-runtime}" }`. Use one Caddy image
-too, built with the DigitalOcean DNS plugin — the plugin is inert unless a `tls`
-block names it, and stock `caddy:2-alpine` fails only when that directive is
-actually reached.
+**Two Caddy images, one Caddyfile.** The alternative — one image carrying the
+DigitalOcean DNS plugin everywhere — would put an `xcaddy` build in front of
+every production deployment for a feature only local development uses. What
+makes two images cost nothing is that an unimported Caddyfile snippet is never
+adapted: the server image is stock `caddy:2-alpine` and simply never imports
+`tls_acme_dns`, while the development overlay builds the plugin in. Both copy
+the same `Caddyfile` and the same `caddy-sites/`, so the configuration being
+rehearsed is the configuration that ships.
+
+**One Dockerfile per kind of container.** `Dockerfile` builds the runtime image;
+`Dockerfile.local` carries the toolchain and `cargo-watch`. This could be one
+multi-stage build selected with `build: { target: ... }` and is not yet.
 
 **One compose file, plus overlays for what is structurally different.**
 
-- A YAML anchor (`x-engine: &engine`, then `<<: *engine`) removes the
-  copy-pasted second instance; the two engine services in `docker-compose.yml`
-  are duplicated env blocks today, which is how they drift.
+- A top-level YAML anchor (`x-engine: &engine`, then `<<: *engine`) defines an
+  engine instance once. The two services were duplicated twenty-line blocks,
+  which is how they drift: every change has to be made twice, and one made in
+  only one place is invisible until the instance behaving differently is the one
+  serving the request. The anchor has to be top-level rather than inside
+  `services:` — compose reads `x-engine` there as a service and tries to start
+  it.
 - The second instance goes behind `profiles: ["ha"]`, so single-node and
-  clustered are the same file with `COMPOSE_PROFILES` set or not.
+  clustered are the same file with `COMPOSE_PROFILES` set or not. The scheduled
+  `backup` service is behind `profiles: ["backup"]` for the same reason;
+  `COMPOSE_PROFILES` is one variable, so a deployment wanting both writes
+  `ha,backup`.
 - A bundled Postgres cannot be a profile: `depends_on` naming a service whose
   profile is inactive fails the whole project
   (`depends on undefined service "postgres"`). It has to be a small overlay file
@@ -353,10 +414,23 @@ actually reached.
   list, the instance count and every value come from one place:
   `docker compose --env-file .env.staging up -d`.
 
-**What stays genuinely separate:** the development overlay. Source bind-mounts,
-cargo cache volumes and a watch command are a different kind of container, not
-the same container with different parameters — and that is exactly what a
-compose overlay is for. Desktop standalone has no Caddy and no compose at all.
+**What stays genuinely separate:** the development overlay, and it is now an
+overlay rather than a parallel stack. Source bind-mounts, cargo cache volumes
+and a watch command are a different kind of container, not the same container
+with different parameters — and that is exactly what a compose overlay is for.
+It holds nothing else: the service names, the Caddyfile, the health checks, the
+profiles and the instance count all come from the server file. Desktop
+standalone has no Caddy and no compose at all.
+
+**One trap this arrangement has, worth knowing.** Compose reads a variable from
+the shell in preference to its `--env-file`. This project's documented workflow
+is `source .env-local && cargo run`, so a shell that has done that used to
+carry `ENV_FILE`, `SITE_HOSTS` and friends into every later compose command —
+including one deploying production, which would then load `.env-local`'s
+throwaway keys and serve `SITE_HOSTS=localhost`. Two things answer it: nothing
+compose interpolates lives in `.env-local` any more (the Makefile supplies those
+per invocation, where they cannot leak into a shell), and every server target
+refuses to run while such a variable is set, naming it.
 
 **Configuration is one file.** `config.toml` holds the defaults and the
 reasoning behind them; every environment supplies its differences as `APP_`
@@ -377,15 +451,34 @@ and `logs` still work in a checkout that has no env file yet.
 
 Applying to every server deployment, and to the desktop build in reduced form:
 
-- **Backups.** `pg_dump` on a schedule, restore rehearsed at least once, and the
-  four secrets stored alongside — see the note under "What every deployment
-  needs". Neither compose file schedules a dump today.
-- **Upgrades.** Migrations run automatically at startup under a lock, so two
-  instances starting together are safe. What is not automatic is compatibility:
-  during a rolling restart the old and new binaries both run against the _new_
-  schema, so a migration must be backward compatible for one release, or both
-  instances must be stopped for the upgrade. Migrations are forward-only; there
-  is no down path.
+- **Backups.** The `backup` profile runs `pg_dump -Fc` on an interval into a
+  named volume, keeping the newest `BACKUP_KEEP`; turn it on with
+  `COMPOSE_PROFILES=backup` (or `ha,backup`). `make docker-backup`,
+  `docker-backup-list`, `docker-backup-fetch` and `docker-restore` are the
+  by-hand half. Two things the mechanism cannot do for you: the dumps sit on the
+  machine running the daemon until `docker-backup-fetch` takes them off it, and
+  the env file has to travel with them — a dump restored without
+  `secret_encryption_key` comes back with every secret unreadable. Rehearse a
+  restore, including a secret read, since the first three steps of one pass with
+  the wrong key. See
+  [05 - Monitoring and Maintenance](docs/engine-administrators/05-MONITORING-AND-MAINTENANCE.md#backup-and-restore).
+- **Upgrades.** `make docker-pull ENV=<env>` then `make docker-deploy ENV=<env>`:
+  the roll replaces one instance at a time and waits on its health check before
+  touching the next, so a clustered deployment is never without an instance that
+  has finished starting. Three things have to hold together for that to be
+  seamless, and all three are now set: `stop_grace_period: 40s` on the engine
+  services, longer than the engine's own `shutdown_timeout_secs` so a drain is
+  not interrupted by SIGKILL; `lb_try_duration` in the Caddyfile, which retries
+  on the other upstream the dial that a stopping instance refuses, instead of
+  answering 502; and the `ha` profile, since a single-instance deployment has
+  nowhere to send the requests and the target says so.
+
+  Migrations run automatically at startup under a lock, so two instances
+  starting together are safe. What is not automatic is compatibility: during a
+  roll the old and new binaries both run against the _new_ schema, so a
+  migration must be backward compatible for one release, or both instances must
+  be stopped for the upgrade. Migrations are forward-only; there is no down
+  path.
 - **Monitoring.** `/health` per instance, `/engine/health/cluster` for the
   cluster, JSON-structured logs (`logging.format = "json"`) for aggregation, and
   Caddy's JSON access log. There is no metrics endpoint — the Prometheus and

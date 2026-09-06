@@ -207,8 +207,8 @@ make docker-setup        # First-time setup (env + build)
 
 ```bash
 # Local
-docker-compose -f docker-compose.local.yml up -d
-docker-compose -f docker-compose.local.yml logs -f
+make docker-local-bg
+make docker-logs-local
 
 # Staging
 docker-compose -f up -d   # with --env-file .env-staging

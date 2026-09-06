@@ -432,56 +432,10 @@ retry the revocation.
 
 ### Database Backups
 
-#### Docker PostgreSQL Backup
-
-```bash
-# Create backup
-docker-compose exec postgres pg_dump -U aiwebengine aiwebengine | \
-  gzip > backup-$(date +%Y%m%d-%H%M%S).sql.gz
-
-# List backups
-ls -lh backup-*.sql.gz
-```
-
-#### Automated Backup Script
-
-```bash
-#!/bin/bash
-# backup-database.sh
-
-BACKUP_DIR="/var/backups/aiwebengine"
-RETENTION_DAYS=30
-
-# Create backup directory
-mkdir -p "$BACKUP_DIR"
-
-# Create backup
-docker-compose exec -T postgres pg_dump -U aiwebengine aiwebengine | \
-  gzip > "$BACKUP_DIR/backup-$(date +%Y%m%d-%H%M%S).sql.gz"
-
-# Remove old backups
-find "$BACKUP_DIR" -name "backup-*.sql.gz" -mtime +$RETENTION_DAYS -delete
-
-echo "Backup completed: $(date)"
-```
-
-**Schedule with cron** (daily at 2 AM):
-
-```bash
-0 2 * * * /path/to/backup-database.sh >> /var/log/backup.log 2>&1
-```
-
-### Database Restore
-
-```bash
-# Restore from backup
-gunzip < backup-20251024-120000.sql.gz | \
-  docker-compose exec -T postgres psql -U aiwebengine -d aiwebengine
-
-# Or restore to a specific point
-gunzip < backup-20251024-120000.sql.gz | \
-  docker-compose exec -T postgres psql -U aiwebengine -d aiwebengine_restore
-```
+Backups have one home in this document: [Backup and Restore](#backup-and-restore)
+below. The short version is that the stack takes them for you once
+`COMPOSE_PROFILES` names the `backup` profile, and `make docker-backup` takes
+one now.
 
 ### Database Maintenance Tasks
 
@@ -535,115 +489,137 @@ cargo run --bin migrate -- down
 
 ## Backup and Restore
 
-### Complete System Backup
+### What a backup consists of
 
-Backup all critical data:
+Three things, and the first two are both required:
 
-```bash
-#!/bin/bash
-# backup-system.sh
+1. **A dump of the database.** Scripts, assets, users, sessions, secrets, logs,
+   revisions and deployment pins all live there. There is no other storage.
+2. **The environment file** (`.env-production`, `.env-staging`). It holds
+   `APP_SECURITY__SECRET_ENCRYPTION_KEY`, and every script and user secret in
+   the dump is ciphertext without it. **A dump restored without that key comes
+   back with its secrets unreadable** — the rest of the engine works, and every
+   `getSecret` fails. Keep the file with the dumps and store the pair somewhere
+   other than the host they came from.
+3. **Caddy's data volume**, optionally. It holds the issued certificates. Losing
+   it costs a re-issuance rather than data, so it is worth copying only if the
+   deployment is near Let's Encrypt's rate limits.
 
-BACKUP_DIR="/var/backups/aiwebengine-full"
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+Not on the list: `logs/`, `scripts/`, `data/`. No engine deployment writes to
+any of them — the repository moved into Postgres, and logs go to stdout for
+Docker to collect.
 
-mkdir -p "$BACKUP_DIR/$TIMESTAMP"
+### Taking them
 
-# 1. Database
-docker-compose exec -T postgres pg_dump -U aiwebengine aiwebengine | \
-  gzip > "$BACKUP_DIR/$TIMESTAMP/database.sql.gz"
-
-# 2. Configuration
-cp config.toml "$BACKUP_DIR/$TIMESTAMP/"
-cp .env "$BACKUP_DIR/$TIMESTAMP/" 2>/dev/null || true
-
-# 3. Docker volumes
-docker run --rm \
-  -v aiwebengine_caddy-data:/data \
-  -v "$BACKUP_DIR/$TIMESTAMP":/backup \
-  alpine tar czf /backup/caddy-data.tar.gz /data
-
-# 4. Logs (last 7 days)
-tar czf "$BACKUP_DIR/$TIMESTAMP/logs.tar.gz" \
-  --mtime=-7 logs/
-
-# 5. Scripts
-tar czf "$BACKUP_DIR/$TIMESTAMP/scripts.tar.gz" scripts/
-
-echo "Backup completed: $BACKUP_DIR/$TIMESTAMP"
-```
-
-### Restore from Backup
+Scheduled, inside the stack:
 
 ```bash
-#!/bin/bash
-# restore-system.sh
-
-BACKUP_PATH="/var/backups/aiwebengine-full/20251024-120000"
-
-# 1. Stop services
-docker-compose down
-
-# 2. Restore database
-gunzip < "$BACKUP_PATH/database.sql.gz" | \
-  docker-compose exec -T postgres psql -U aiwebengine -d aiwebengine
-
-# 3. Restore configurations
-cp "$BACKUP_PATH/config.toml" .
-cp "$BACKUP_PATH/.env" . 2>/dev/null || true
-
-# 4. Restore Caddy certificates
-docker run --rm \
-  -v aiwebengine_caddy-data:/data \
-  -v "$BACKUP_PATH":/backup \
-  alpine tar xzf /backup/caddy-data.tar.gz -C /
-
-# 5. Restore logs
-tar xzf "$BACKUP_PATH/logs.tar.gz"
-
-# 6. Restore scripts
-tar xzf "$BACKUP_PATH/scripts.tar.gz"
-
-# 7. Restart services
-docker-compose up -d
-
-echo "Restore completed"
+# In the env file:
+export COMPOSE_PROFILES=backup          # or ha,backup for a clustered deployment
+export BACKUP_INTERVAL_SECONDS=86400    # daily
+export BACKUP_KEEP=14
 ```
 
-### Backup to Cloud Storage
+The `backup` service runs `pg_dump -Fc` on that interval into the `backup-data`
+volume, keeping the newest `BACKUP_KEEP`. It runs the same image as the database
+so the client and server versions cannot drift apart, and it is handed the same
+`DATABASE_URL` expression as the engine containers, so it cannot end up dumping
+a database nobody is using. Each dump is written under a temporary name and
+renamed only once `pg_dump` has succeeded — a half-written file carrying the
+final name is the one a restore would reach for.
 
-#### AWS S3
+By hand:
 
 ```bash
-# Upload backup
-aws s3 cp backup-20251024-120000.sql.gz \
-  s3://my-bucket/aiwebengine-backups/
-
-# Download backup
-aws s3 cp s3://my-bucket/aiwebengine-backups/backup-20251024-120000.sql.gz .
+make docker-backup       ENV=production   # take one now
+make docker-backup-list  ENV=production   # what the volume holds, newest first
+make docker-backup-fetch ENV=production   # copy the newest to ./backups
 ```
 
-#### Automated S3 Backup
+**The dumps live on the machine running the Docker daemon.** They survive
+`docker compose down`, and they are not a backup until they have left that
+machine — `docker-backup-fetch` is the step that makes them one.
+
+A deployment on a **managed database** should use the provider's backups
+instead, and still keep the env file: the key is not in the provider's snapshot
+either.
+
+### Restoring
 
 ```bash
-#!/bin/bash
-# backup-to-s3.sh
-
-BUCKET="s3://my-bucket/aiwebengine-backups"
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-
-# Create backup
-docker-compose exec -T postgres pg_dump -U aiwebengine aiwebengine | \
-  gzip | aws s3 cp - "$BUCKET/backup-$TIMESTAMP.sql.gz"
-
-# Cleanup old backups (keep last 30 days)
-aws s3 ls "$BUCKET/" | while read -r line; do
-    file=$(echo $line | awk '{print $4}')
-    file_date=$(echo $file | grep -oP '\d{8}')
-    if [ $(($(date +%s) - $(date -d $file_date +%s))) -gt 2592000 ]; then
-        aws s3 rm "$BUCKET/$file"
-    fi
-done
+make docker-backup-list ENV=production
+make docker-restore ENV=production FILE=aiwebengine-20260906T020000Z.dump CONFIRM=yes
 ```
+
+The target stops the engine containers, restores, and starts them again. The
+stop is not politeness: a restore drops and recreates every table, and doing
+that under instances executing scripts against them leaves neither the dump nor
+what was there before.
+
+`pg_restore` runs with `--clean --if-exists`, so restoring over a populated
+database replaces it rather than failing on every unique constraint, and with
+`--exit-on-error`, because a restore that reports success having skipped half
+the objects is the worst outcome available.
+
+Restore the env file with it if the key has been lost. If the key differs from
+the one the dump was taken under, the restore itself succeeds and every stored
+secret is unreadable — check with something small before deciding the restore
+worked.
+
+### Rehearsing a restore
+
+A backup nobody has restored is a hypothesis. Rehearse it somewhere that is not
+production, at least once, and again after any change to the stack:
+
+```bash
+# 1. A throwaway environment: a copy of the production env file with a
+#    different project name, and no hostnames anyone points at.
+cp .env-production .env-rehearsal
+sed -i.bak 's/^export COMPOSE_PROJECT_NAME=.*/export COMPOSE_PROJECT_NAME=aiwebengine-rehearsal/' .env-rehearsal
+sed -i.bak 's/^export ENV_FILE=.*/export ENV_FILE=.env-rehearsal/' .env-rehearsal
+
+# 2. Bring up just its database, and put the dump into it.
+docker compose --env-file .env-rehearsal up -d postgres
+make docker-restore ENV=rehearsal FILE=<the dump> CONFIRM=yes
+
+# 3. Check what actually came back.
+docker compose --env-file .env-rehearsal exec -T postgres \
+  psql -U aiwebengine -d aiwebengine -c \
+  "SELECT (SELECT count(*) FROM scripts) AS scripts,
+          (SELECT count(*) FROM users)   AS users,
+          (SELECT count(*) FROM assets)  AS assets;"
+
+# 4. And that the secrets decrypt, which is the half a dump does not carry.
+#    Start the engine against it and read one back through /engine.
+
+# 5. Tear it down.
+docker compose --env-file .env-rehearsal down -v
+rm .env-rehearsal .env-rehearsal.bak
+```
+
+Step 4 is the one worth not skipping. Steps 1–3 pass with the wrong encryption
+key.
+
+### Desktop standalone
+
+`.env-desktop` and the embedded data directory (`data/postgres` by default) are
+the whole install. Back them up together, with the app stopped — copying a
+running PostgreSQL's data directory produces a copy that may not start. The same
+key caveat applies: the data directory without `.env-desktop` restores an engine
+whose secrets are unreadable.
+
+### Keeping them off the host
+
+Any object store will do; the dumps are ordinary files. With `docker-backup-fetch`
+having put one in `./backups`:
+
+```bash
+aws s3 cp backups/aiwebengine-20260906T020000Z.dump \
+  s3://my-bucket/aiwebengine/production/
+```
+
+Store the env file separately from the dumps, not beside them. Together in one
+bucket, a single credential leak is the whole engine — every secret, decrypted.
 
 ---
 

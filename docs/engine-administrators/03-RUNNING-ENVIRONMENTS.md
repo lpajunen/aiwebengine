@@ -5,6 +5,7 @@ Complete guide for deploying aiwebengine in local, staging, and production envir
 ## Quick Navigation
 
 - [Environment Overview](#environment-overview)
+- [Desktop Standalone](#desktop-standalone)
 - [Local Development](#local-development)
 - [Staging Environment](#staging-environment)
 - [Production Deployment](#production-deployment)
@@ -30,9 +31,73 @@ Complete guide for deploying aiwebengine in local, staging, and production envir
 
 ### Choosing Your Environment
 
+- **Desktop:** One user, one machine, no external dependencies
 - **Local:** Daily development, testing features, debugging
 - **Staging:** QA testing, integration tests, pre-production validation
 - **Production:** Live system serving real users
+
+[DEPLOYMENT.md](../../DEPLOYMENT.md) is the map of how these differ and why;
+this page is the step-by-step.
+
+---
+
+## Desktop Standalone
+
+One user, one machine, no PostgreSQL to install and nothing to configure. The
+engine starts and stops a database of its own, on loopback, over plain HTTP.
+
+### Running it
+
+```bash
+make run-desktop            # from a checkout: builds, then starts
+aiwebengine --desktop       # what that runs, once the binary exists
+```
+
+The build needs the feature that carries the database
+(`--features embedded-postgres-bundled`, which `make build-desktop` passes);
+a default build refuses `--desktop` and says so.
+
+### What the first launch creates
+
+`--desktop` resolves the platform's application-data directory:
+
+| Platform | Directory                                                    |
+| -------- | ------------------------------------------------------------ |
+| macOS    | `~/Library/Application Support/aiwebengine`                  |
+| Windows  | `%APPDATA%\aiwebengine`                                      |
+| Linux    | `$XDG_DATA_HOME/aiwebengine` or `~/.local/share/aiwebengine` |
+
+`AIWEBENGINE_DATA_DIR` names somewhere else — for a second install, or a
+throwaway one.
+
+In it, `config.toml` at mode 600 with four freshly generated keys, and
+`postgres/` holding the database. `aiwebengine --init-config` does the creating
+without starting anything and prints the path.
+
+**It never regenerates.** An existing configuration is used exactly as it
+stands. `security.secret_encryption_key` is what every script and user secret in
+the database is encrypted with, so a second set of keys would not reset the
+install — it would make the install unreadable while leaving it looking healthy.
+
+### Claiming the install
+
+Register the username `owner` at `http://localhost:3000/auth/login`. The
+generated configuration names it in `auth.internal.bootstrap_admin_usernames`,
+so signing in grants it the administrator role. Then set
+`allow_registration = false` in `config.toml`: a desktop install has one
+account.
+
+If you lose that password, `aiwebengine --set-password owner` resets it from the
+machine holding the database; `aiwebengine --grant-role owner administrator` is
+the equivalent for the role.
+
+### Backing it up
+
+`config.toml` and `postgres/` together, with the app stopped. Copying a running
+PostgreSQL's data directory produces a copy that may not start, and the
+directory without `config.toml` restores an engine whose secrets are unreadable.
+
+`Ctrl-C` or SIGTERM stops the engine and its database together.
 
 ---
 
@@ -203,11 +268,11 @@ make docker-stop
 make docker-shell-local
 
 # Rebuild
-docker-compose -f docker-compose.local.yml build --no-cache
-docker-compose -f docker-compose.local.yml up -d
+make docker-build-local
+make docker-local-bg
 
 # Database access
-docker-compose -f docker-compose.local.yml exec postgres \
+docker exec -i aiwebengine-local-postgres \
   psql -U aiwebengine -d aiwebengine
 ```
 

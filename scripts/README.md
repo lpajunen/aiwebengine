@@ -90,7 +90,7 @@ The script automatically determines which Docker Compose file to use:
 
 - **Default (local development):**
   - File: `docker-compose.local.yml`
-  - Container: `aiwebengine-postgres-dev`
+  - Container: `aiwebengine-local-postgres`
   - User: `aiwebengine`
   - Password: `devpassword`
   - Database: `aiwebengine`
@@ -140,7 +140,7 @@ Options:
 ./scripts/setup-database.sh
 
 # Or manual steps
-docker-compose -f docker-compose.local.yml up -d postgres-dev
+make postgres-local
 ./scripts/db.sh migrate-run
 ./scripts/db.sh psql -c "\dt"
 ```
@@ -149,7 +149,7 @@ docker-compose -f docker-compose.local.yml up -d postgres-dev
 
 ```bash
 # Start your day
-docker-compose -f docker-compose.local.yml up -d postgres-dev
+make postgres-local
 
 # Create new migration
 sqlx migrate add add_user_preferences
@@ -204,7 +204,7 @@ docker ps | grep postgres
 # $ psql -U aiwebengine -d aiwebengine
 
 # Restart container
-docker-compose -f docker-compose.local.yml restart postgres-dev
+make postgres-local-stop && make postgres-local
 
 # Reset database (⚠️ destroys all data)
 ./scripts/db.sh dropdb
@@ -235,9 +235,9 @@ docker-compose -f docker-compose.local.yml restart postgres-dev
 Defined in `docker-compose.local.yml`:
 
 ```yaml
-postgres-dev:
+postgres:
   image: postgres:16-alpine
-  container_name: aiwebengine-postgres-dev
+  container_name: aiwebengine-local-postgres
   environment:
     POSTGRES_DB: aiwebengine
     POSTGRES_USER: aiwebengine
@@ -285,7 +285,7 @@ postgres:
    ```bash
    ./scripts/db.sh logs
    # Or follow logs:
-   docker-compose -f docker-compose.local.yml logs -f postgres-dev
+   make postgres-local-logs
    ```
 
 4. **Connect from engine running locally:**
@@ -303,7 +303,7 @@ postgres:
 **Script reports container not running:**
 
 ```bash
-docker-compose -f docker-compose.local.yml up -d postgres-dev
+make postgres-local
 ```
 
 **Permission denied:**
@@ -323,11 +323,11 @@ cargo install sqlx-cli --no-default-features --features postgres
 
 ```bash
 # Check container health
-docker inspect aiwebengine-postgres-dev | grep Health
+docker inspect aiwebengine-local-postgres | grep Health
 
 # Check logs
 ./scripts/db.sh logs
 
 # Restart container
-docker-compose -f docker-compose.local.yml restart postgres-dev
+make postgres-local-stop && make postgres-local
 ```

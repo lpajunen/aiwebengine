@@ -30,7 +30,7 @@ cargo install sqlx-cli --no-default-features --features postgres
 
 ```bash
 # Start PostgreSQL in Docker (local development)
-docker-compose -f docker-compose.local.yml up -d postgres-dev
+make postgres-local
 
 # Or for production
 docker-compose up -d postgres
@@ -254,7 +254,7 @@ PostgreSQL is already configured in the Docker Compose files:
 
 **Local Development** (`docker-compose.local.yml`):
 
-- Container: `aiwebengine-postgres-dev`
+- Container: `aiwebengine-local-postgres`
 - Database: `aiwebengine`
 - User: `aiwebengine`
 - Password: `devpassword`
@@ -272,13 +272,13 @@ PostgreSQL is already configured in the Docker Compose files:
 
 ```bash
 # Local development
-docker-compose -f docker-compose.local.yml up -d
+make docker-local-bg
 
 # Production
 docker-compose up -d
 
 # Start only PostgreSQL
-docker-compose -f docker-compose.local.yml up -d postgres-dev
+make postgres-local
 ```
 
 ### Accessing PostgreSQL
@@ -288,7 +288,7 @@ docker-compose -f docker-compose.local.yml up -d postgres-dev
 ./scripts/db.sh psql
 
 # Or directly
-docker exec -it aiwebengine-postgres-dev psql -U aiwebengine -d aiwebengine
+docker exec -it aiwebengine-local-postgres psql -U aiwebengine -d aiwebengine
 ```
 
 ---
@@ -304,21 +304,21 @@ docker exec -it aiwebengine-postgres-dev psql -U aiwebengine -d aiwebengine
 docker ps -a | grep postgres
 
 # Start the container
-docker-compose -f docker-compose.local.yml up -d postgres-dev
+make postgres-local
 
 # View logs
 ./scripts/db.sh logs
-# Or: docker-compose -f docker-compose.local.yml logs postgres-dev
+# Or: make postgres-local-logs
 ```
 
 **Connection refused:**
 
 ```bash
 # Check if container is healthy
-docker inspect aiwebengine-postgres-dev | grep Health
+docker inspect aiwebengine-local-postgres | grep Health
 
 # Restart container
-docker-compose -f docker-compose.local.yml restart postgres-dev
+make postgres-local-stop && make postgres-local
 
 # Check port is exposed
 docker ps | grep postgres
@@ -364,7 +364,7 @@ When running the engine locally (not in Docker) but using containerized PostgreS
 
 ```bash
 # 1. Start only PostgreSQL
-docker-compose -f docker-compose.local.yml up -d postgres-dev
+make postgres-local
 
 # 2. Set connection string (localhost instead of container name)
 export APP_REPOSITORY__DATABASE_URL="postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
