@@ -1,4 +1,12 @@
-name: Docker Build and Push
+# The gate every change passes before an image is published.
+#
+# The cargo jobs below are the same commands `make check` runs on a developer's
+# machine, invoked through the same Makefile targets on purpose: a gate that
+# restates its commands in YAML is a second definition to keep in step with the
+# first, and the two drift silently because only one of them is ever run by
+# hand. `build-and-test` needs all of them, so a failing test stops the image
+# rather than being published beside it.
+name: CI
 
 on:
   push:
@@ -11,21 +19,45 @@ on:
     branches:
       - main
 
+# A newer push to the same branch supersedes this run. Tags and main are
+# excluded: those runs publish, and an image half-built is worse than one built
+# twice.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  # Verify the sqlx::query! macros against ./.sqlx rather than against the
+  # service container. A compile-time connection would be checked against a
+  # database that has not been migrated yet — the test harness migrates its own
+  # template at runtime — so offline mode is both the working choice and a gate
+  # on .sqlx being up to date.
+  SQLX_OFFLINE: 'true'
 
 jobs:
-  build-and-test:
+  # Formatting, clippy, the TypeScript declarations, and the embedded-database
+  # supervisor. One job because they share a build: `check-embedded` is the same
+  # crate with one more feature, and a second job would mean a second multi-
+  # gigabyte cache for a few minutes of saved wall time.
+  lint:
+    name: Format, clippy and typecheck
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      security-events: write
-
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -36,8 +68,92 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Check formatting
+        run: make format-check
+
+      - name: Run clippy
+        run: make lint
+
       - name: Run TypeScript declaration checks
-        run: npm run typecheck
+        run: make typecheck
+
+      # Compile-checks src/embedded_db.rs, which no other job builds: the
+      # feature is off by default, and the test harness must not enable it —
+      # an engine that starts its own PostgreSQL is the one thing a suite
+      # claiming slot databases on DATABASE_URL cannot have. Non-bundled, so
+      # this type-checks every line without staging a platform archive.
+      - name: Compile-check the embedded database supervisor
+        run: make check-embedded
+
+  test:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    # DATABASE_URL names a *server*: every test process claims a numbered slot
+    # database on it and recreates that slot from a migrated template
+    # (tests/common/testdb.rs), so the database named here is only ever the
+    # maintenance connection. That is also why the service user is the
+    # container's superuser — the harness runs CREATE DATABASE.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: aiwebengine
+          POSTGRES_USER: aiwebengine
+          POSTGRES_PASSWORD: devpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aiwebengine"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      # Fail loudly here rather than passing quietly later. A test whose
+      # database will not answer leaves the globals unset and returns without
+      # asserting anything (tests/common/mod.rs), so an unreachable server is a
+      # green run over a suite that tested nothing. The service container's
+      # health check covers the usual case; this covers the rest.
+      - name: Verify the database server answers
+        run: |
+          pg_isready -h localhost -p 5432 -U aiwebengine
+          psql "$DATABASE_URL" -c 'SELECT 1' >/dev/null
+          echo "database reachable"
+
+      - name: Run tests
+        run: make test
+
+  build-and-test:
+    name: Build and push image
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
