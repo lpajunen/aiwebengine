@@ -28,3 +28,8 @@ data/
 
 # Extra Caddy site blocks are per-deployment; only the example is tracked.
 caddy-sites/*.caddy
+
+# Dumps fetched off a deployment by `make docker-backup-fetch`. Never commit
+# one: it holds every user, session and script in that environment, and the key
+# that decrypts its secrets is one directory away in the env file.
+backups/

@@ -8,6 +8,7 @@
 #   SITE_HOSTS        every hostname this deployment answers on, comma-separated
 #   MANAGE_HOST       the one carrying /engine/* — see the frame note below
 #   ENGINE_UPSTREAMS  the engine containers, space-separated
+#   TLS_SNIPPET       which issuer: tls_public, tls_internal or tls_acme_dns
 #   EXTRA_SITES_FILE  optional extra site blocks (redirects); defaults to none
 #
 # Caddy substitutes {$VAR} textually before parsing, so one variable can carry
@@ -19,8 +20,11 @@
 # EXTRA_SITES_FILE, and the per-host header difference is expressed with a
 # matcher rather than with separate blocks.
 #
-# Local development is Caddyfile.local, not this file: it issues its own
-# certificates and proxies to containers that build from source.
+# Local development is this file too, through docker-compose.local.yml: an
+# overlay that replaces the engine containers with ones that build from source
+# and points TLS_SNIPPET at an issuer that works without DNS. A development
+# stack rehearsing a *different* proxy configuration than the one it is
+# rehearsing for is the failure this removes.
 {
 	# ACME_EMAIL and ACME_CA are always set by the compose file, with defaults
 	# there rather than here: compose sets every key it lists, so a `{$VAR:...}`
@@ -30,6 +34,55 @@
 	# at Let's Encrypt's staging directory:
 	#   ACME_CA=https://acme-staging-v02.api.letsencrypt.org/directory
 	acme_ca {$ACME_CA}
+}
+
+# How this deployment gets its certificate. TLS_SNIPPET names one of these, and
+# they are mutually exclusive because a site block has one issuer.
+#
+# A snippet rather than a conditional because there is no conditional to write:
+# a Caddyfile is adapted whole, and a site block whose address expands to
+# nothing fails the entire configuration. An unimported snippet is not adapted
+# at all, which is what lets tls_acme_dns name a plugin that only the
+# development image carries.
+(tls_public) {
+	# Public ACME, which is Caddy's default for a real hostname. Empty on
+	# purpose: staging and production name this so that TLS_SNIPPET always
+	# names something, rather than being a variable that is sometimes an
+	# import and sometimes nothing.
+}
+
+(tls_internal) {
+	# Caddy's own CA. No network, no DNS, one browser warning to accept — the
+	# way to run the full topology on a laptop.
+	tls internal
+}
+
+(tls_acme_dns) {
+	# A publicly trusted certificate for a name that resolves to a private
+	# address: the DNS-01 challenge is answered by writing a TXT record, so it
+	# needs no inbound connection — only a token that can edit the zone. Needs
+	# the caddy-dns/digitalocean plugin, which docker-compose.local.yml builds
+	# into its Caddy image; the server image is stock, and never imports this.
+	tls {
+		dns digitalocean {env.DIGITALOCEAN_TOKEN}
+
+		# DigitalOcean's nameservers lag their own API by minutes: a record the
+		# API already reports is not answered by ns1/ns2/ns3 for around five,
+		# and until then each nameserver replies with a different stale subset
+		# of the RRset. The default propagation timeout is two minutes, so the
+		# challenge was abandoned every time while the answer was still on its
+		# way — `timed out waiting for record to fully propagate`, with
+		# `last error: <nil>` because nothing had actually gone wrong yet.
+		#
+		# The delay is a head start rather than a poll: there is no point
+		# asking during the window when the answer cannot be there. The timeout
+		# is well past the observed five minutes because overshooting costs one
+		# slow first startup, while undershooting costs the certificate and
+		# leaves another undeleted record behind (see
+		# scripts/acme-dns-cleanup.sh) that makes the next attempt worse.
+		propagation_delay 2m
+		propagation_timeout 15m
+	}
 }
 
 # The engine cluster. One upstream or several, depending on ENGINE_UPSTREAMS.
@@ -47,6 +100,20 @@
 		health_interval 10s
 		health_timeout 5s
 		health_status 2xx
+
+		# What makes a rolling restart survivable. An instance told to stop
+		# closes its listener and then drains, so requests arriving in the
+		# window before the active health check notices are refused at the
+		# connection — and a refused dial is exactly the case it is safe to
+		# retry, since nothing was sent. Without lb_try_duration those become
+		# 502s: correct behaviour, reported to the caller.
+		#
+		# fail_duration is the passive half. After one such failure the
+		# upstream is skipped outright for 30s, so the rest of the restart
+		# costs no retries at all rather than one per request.
+		lb_try_duration 10s
+		lb_try_interval 250ms
+		fail_duration 30s
 	}
 }
 
@@ -76,6 +143,7 @@
 
 # Every hostname this deployment serves.
 {$SITE_HOSTS} {
+	import {$TLS_SNIPPET}
 	import engine_upstream
 	encode gzip
 	import common_headers

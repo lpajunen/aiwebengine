@@ -1,186 +1,121 @@
+# The development overlay: the server stack, with the engine containers
+# replaced by ones that build from source.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml ...
+#
+# and never on its own — every service it names is defined in
+# docker-compose.yml. The Makefile's DEV_COMPOSE is what assembles the pair,
+# along with the handful of values Caddy reads; use `make docker-local`,
+# `make docker-localhost` or `make docker-dns` rather than writing it out.
+#
+# Why an overlay rather than a second stack. This is the option whose whole
+# purpose is rehearsing the deployment — TLS, the X-Forwarded-For chain, cookie
+# Secure/__Host- behaviour, multi-host routing, cross-instance invalidation over
+# LISTEN/NOTIFY — and a rehearsal against a different compose file, different
+# service names, a different Caddyfile and a different instance count rehearses
+# something else. What is genuinely different here is one thing: these
+# containers carry a toolchain and compile the crate, which is a different kind
+# of container rather than the same container with different parameters. That
+# difference is what an overlay is for, and it is all this file contains.
+#
+# Everything else — the Caddyfile, the site block, the health checks, the
+# X-Forwarded-For handling, the profiles, the number of instances — comes from
+# the server file and is therefore the same thing being tested.
+
+# The engine containers, once. Both instances take the same treatment; only
+# instance 2's extra ordering constraint differs.
+x-engine-dev: &engine-dev
+  build:
+    context: .
+    dockerfile: Dockerfile.local
+  volumes:
+    # The crate is compiled inside the container, so its inputs are mounted:
+    # include_str!/include_bytes! resolve assets/ at build time and
+    # sqlx::migrate! embeds migrations/. Nothing here is read at runtime.
+    - ./src:/app/src:ro
+    - ./tests:/app/tests:ro
+    - ./Cargo.toml:/app/Cargo.toml:ro
+    - ./Cargo.lock:/app/Cargo.lock:ro
+    - ./migrations:/app/migrations:ro
+    - ./assets:/app/assets:ro
+    - ./build.rs:/app/build.rs:ro
+    # Offline query metadata for the sqlx::query! macros. Without it the build
+    # has no way to verify them: the container compiles before it runs, so on a
+    # fresh volume the schema they are checked against does not exist yet.
+    # Regenerate on the host with `cargo sqlx prepare` after changing one.
+    - ./.sqlx:/app/.sqlx:ro
+    # The one configuration file; per-environment values arrive through
+    # env_file, which the server compose file already declares.
+    - ./config.toml:/app/config.toml:ro
+    - cargo-registry:/usr/local/cargo/registry
+    - cargo-git:/usr/local/cargo/git
+    # One target directory for both instances, deliberately. They compile
+    # byte-identical code, and cargo takes a lock on the directory — so the
+    # second instance waits for the first and then finds its build fresh,
+    # instead of spending a second full compile and a second copy of the
+    # artifacts to reach the same binary. Two caches is what made a cold start
+    # of this stack take twice as long as it needed to.
+    - target-cache:/app/target
+  environment:
+    APP_SERVER__HOST: 0.0.0.0
+    APP_SERVER__PORT: "3000"
+    RUST_BACKTRACE: "1"
+    # Verify the query! macros against ./.sqlx rather than a live database.
+    SQLX_OFFLINE: "true"
+  healthcheck:
+    # curl exists in the development image, so this can be the real probe
+    # /health — it runs a SELECT 1 and answers 503 when Postgres is
+    # unreachable — rather than the TCP connect the slim runtime image is
+    # limited to. The long start_period is the compile: a cold container builds
+    # the whole crate before it listens, and until that finishes the container
+    # reports "starting" rather than unhealthy.
+    test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+    interval: 15s
+    timeout: 5s
+    retries: 3
+    start_period: 900s
+  stdin_open: true
+  tty: true
+
 services:
-  # Caddy reverse proxy with DigitalOcean DNS plugin for Let's Encrypt
-  caddy-dev:
+  caddy:
     build:
       context: .
+      # Same configuration as the server image — the Caddyfile and the site
+      # directory are copied identically — with the DNS plugin added, which is
+      # the one thing a development certificate needs and a server one does
+      # not. The plugin is inert unless a `tls` block names it, so this image
+      # is a superset rather than a variant: TLS_SNIPPET=tls_internal behaves
+      # here exactly as it would on the stock image.
       dockerfile_inline: |
         FROM caddy:2-builder AS builder
         RUN xcaddy build --with github.com/caddy-dns/digitalocean
-        
+
         FROM caddy:2-alpine
         COPY --from=builder /usr/bin/caddy /usr/bin/caddy
-    container_name: aiwebengine-caddy-dev
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
+        COPY Caddyfile /etc/caddy/Caddyfile
+        COPY caddy-sites /etc/caddy/sites
+    image: aiwebengine-caddy:dev
     environment:
       # Only read by the tls_acme_dns snippet, so an empty value is fine in
-      # localhost mode.
-      - DIGITALOCEAN_TOKEN=${DIGITALOCEAN_TOKEN:-}
-      # The Caddyfile's defaults live here, not there: Caddy honours
-      # `{$VAR:default}` only for a variable that is *unset*, and compose always
-      # sets every key it lists. An empty SITE_HOSTS leaves the site block with
-      # no address, which fails to adapt and takes the whole proxy down with it.
-      # `make docker-dns` overrides both.
-      - SITE_HOSTS=${SITE_HOSTS:-localhost, 127.0.0.1, local.test}
-      - TLS_SNIPPET=${TLS_SNIPPET:-tls_internal}
-    networks:
-      - aiwebengine-dev-network
+      # every other mode.
+      DIGITALOCEAN_TOKEN: ${DIGITALOCEAN_TOKEN:-}
     depends_on:
-      - aiwebengine-dev-1
-      - aiwebengine-dev-2
-    healthcheck:
-      # Caddy's admin API rather than a request through the proxy — a port-80
-      # probe gets the automatic HTTP->HTTPS redirect and then fails the TLS
-      # handshake for a name held by no certificate. 127.0.0.1 because the
-      # admin endpoint binds IPv4 only while localhost resolves to ::1 first.
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:2019/config/"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-      start_period: 10s
+      aiwebengine-1:
+        # service_started, not service_healthy as the server file has it: a
+        # cold engine container compiles the crate before it listens, and
+        # waiting a quarter of an hour for the proxy to come up hides whether
+        # the proxy itself is working. It answers 502 until the engine is
+        # there, which is the honest report.
+        condition: service_started
 
-  # Development server with hot-reload - Instance 1
-  aiwebengine-dev-1:
-    build:
-      context: .
-      dockerfile: Dockerfile.local
-    container_name: aiwebengine-dev-1
-    restart: unless-stopped
-    # Expose port only to internal network
-    expose:
-      - "3000"
-    # Uncomment for direct access (bypassing Caddy)
-    # ports:
-    #   - "3000:3000"
-    volumes:
-      # Mount source code for hot-reload
-      - ./src:/app/src:ro
-      - ./tests:/app/tests:ro
-      - ./Cargo.toml:/app/Cargo.toml:ro
-      - ./Cargo.lock:/app/Cargo.lock:ro
-      # Mount migrations (required for sqlx::migrate! macro)
-      - ./migrations:/app/migrations:ro
-      # Offline query metadata for the two sqlx::query! macros in the code.
-      # Without it the build has no way to verify them: the container has no
-      # DATABASE_URL at compile time, and could not usefully have one — it
-      # compiles before it runs, so on a fresh volume the schema those macros
-      # are checked against does not exist yet. Regenerate on the host with
-      # `cargo sqlx prepare` after changing one of them.
-      - ./.sqlx:/app/.sqlx:ro
-      # The one configuration file; per-environment values come from
-      # .env-local, which this stack loads via env_file.
-      - ./config.toml:/app/config.toml:ro
-      # Mount scripts for testing
-      - ./scripts:/app/scripts:ro
-      # Mount assets
-      - ./assets:/app/assets:ro
-      # Mount docs for development
-      - ./docs:/app/docs:ro
-      # No ./logs or ./data: logging goes to stdout and the repository lives in
-      # Postgres. The source, migrations and assets above are mounted because
-      # this container compiles the crate — include_str! resolves them at build
-      # time — not because anything reads them at runtime.
-      # Cache cargo registry and target to speed up builds
-      - cargo-registry:/usr/local/cargo/registry
-      - cargo-git:/usr/local/cargo/git
-      - target-cache:/app/target
-    env_file:
-      - path: ${ENV_FILE:-.env-local}
-        required: false
-    environment:
-      # Topology, not environment: inside this network the database is
-      # postgres-dev, whereas .env-local names localhost for host-side
-      # `cargo run` and the test suite.
-      APP_REPOSITORY__DATABASE_URL: postgresql://aiwebengine:devpassword@postgres-dev:5432/aiwebengine
-      APP_SERVER__HOST: 0.0.0.0
-      APP_SERVER__PORT: "3000"
-      RUST_BACKTRACE: "1"
-      # Verify the query! macros against ./.sqlx rather than a live database.
-      SQLX_OFFLINE: "true"
-    networks:
-      - aiwebengine-dev-network
-    depends_on:
-      postgres-dev:
-        condition: service_healthy
-    healthcheck:
-      # curl is present in the development image, so this can be the real probe
-      # /health rather than a TCP connect: it runs a SELECT 1 and answers 503
-      # when Postgres is unreachable. The long start_period is the compile — a
-      # cold container builds the whole crate before it listens, and until that
-      # finishes the container reports "starting" rather than unhealthy.
-      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 900s
-    stdin_open: true
-    tty: true
+  aiwebengine-1:
+    <<: *engine-dev
 
-  # Development server with hot-reload - Instance 2
-  aiwebengine-dev-2:
-    build:
-      context: .
-      dockerfile: Dockerfile.local
-    container_name: aiwebengine-dev-2
-    restart: unless-stopped
-    # Expose port only to internal network
-    expose:
-      - "3000"
-    volumes:
-      # Mount source code for hot-reload
-      - ./src:/app/src:ro
-      - ./tests:/app/tests:ro
-      - ./Cargo.toml:/app/Cargo.toml:ro
-      - ./Cargo.lock:/app/Cargo.lock:ro
-      # Mount migrations (required for sqlx::migrate! macro)
-      - ./migrations:/app/migrations:ro
-      # Offline query metadata for the two sqlx::query! macros in the code.
-      # Without it the build has no way to verify them: the container has no
-      # DATABASE_URL at compile time, and could not usefully have one — it
-      # compiles before it runs, so on a fresh volume the schema those macros
-      # are checked against does not exist yet. Regenerate on the host with
-      # `cargo sqlx prepare` after changing one of them.
-      - ./.sqlx:/app/.sqlx:ro
-      # The one configuration file; per-environment values come from
-      # .env-local, which this stack loads via env_file.
-      - ./config.toml:/app/config.toml:ro
-      # Mount scripts for testing
-      - ./scripts:/app/scripts:ro
-      # Mount assets
-      - ./assets:/app/assets:ro
-      # Mount docs for development
-      - ./docs:/app/docs:ro
-      # No ./logs or ./data: logging goes to stdout and the repository lives in
-      # Postgres. The source, migrations and assets above are mounted because
-      # this container compiles the crate — include_str! resolves them at build
-      # time — not because anything reads them at runtime.
-      # Cache cargo registry and target to speed up builds
-      - cargo-registry:/usr/local/cargo/registry
-      - cargo-git:/usr/local/cargo/git
-      - target-cache-2:/app/target
-    env_file:
-      - path: ${ENV_FILE:-.env-local}
-        required: false
-    environment:
-      # Topology, not environment: inside this network the database is
-      # postgres-dev, whereas .env-local names localhost for host-side
-      # `cargo run` and the test suite.
-      APP_REPOSITORY__DATABASE_URL: postgresql://aiwebengine:devpassword@postgres-dev:5432/aiwebengine
-      APP_SERVER__HOST: 0.0.0.0
-      APP_SERVER__PORT: "3000"
-      RUST_BACKTRACE: "1"
-      # Verify the query! macros against ./.sqlx rather than a live database.
-      SQLX_OFFLINE: "true"
-    networks:
-      - aiwebengine-dev-network
+  aiwebengine-2:
+    <<: *engine-dev
     depends_on:
-      postgres-dev:
+      postgres:
         condition: service_healthy
       # Not a runtime dependency: both instances mount the same cargo-registry
       # volume, and the image ships ~6800 files under it from `cargo install
@@ -191,52 +126,18 @@ services:
       # with "failed to mkdir .../index/.../.cache: file exists". Waiting for
       # instance 1 to start means the volume is already populated, which is the
       # case where the copy is skipped entirely.
-      aiwebengine-dev-1:
+      aiwebengine-1:
         condition: service_started
-    healthcheck:
-      # curl is present in the development image, so this can be the real probe
-      # /health rather than a TCP connect: it runs a SELECT 1 and answers 503
-      # when Postgres is unreachable. The long start_period is the compile — a
-      # cold container builds the whole crate before it listens, and until that
-      # finishes the container reports "starting" rather than unhealthy.
-      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 900s
-    stdin_open: true
-    tty: true
 
-  # Development PostgreSQL
-  postgres-dev:
-    image: postgres:16-alpine
-    container_name: aiwebengine-postgres-dev
-    restart: unless-stopped
-    environment:
-      - POSTGRES_DB=aiwebengine
-      - POSTGRES_USER=aiwebengine
-      - POSTGRES_PASSWORD=devpassword
-    volumes:
-      - postgres-dev-data:/var/lib/postgresql/data
-    networks:
-      - aiwebengine-dev-network
+  postgres:
+    # Published to the host, which the server stack deliberately does not do.
+    # This is what `source .env-local && cargo run` and the integration suite
+    # connect to, and it is the reason not to run this stack on a shared or
+    # exposed machine: the password is in a tracked file.
     ports:
       - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aiwebengine"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-networks:
-  aiwebengine-dev-network:
-    driver: bridge
 
 volumes:
   cargo-registry:
   cargo-git:
   target-cache:
-  target-cache-2:
-  postgres-dev-data:
-  caddy-data:
-  caddy-config:

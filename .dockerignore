@@ -77,6 +77,11 @@ config.*.yaml
 # Test fixtures. Only cfg(test) code includes these now, and the image builds
 # neither the tests nor anything that reads them at runtime.
 scripts/
+# ...except the backup image's entrypoint. An exclusion is a property of the
+# build *context*, not of a Dockerfile, and docker-compose.yml's `backup`
+# service builds from this same context — so the one file it copies has to be
+# named back in. Nothing in the engine image reads it.
+!scripts/pg-backup.sh
 
 # Makefile
 Makefile

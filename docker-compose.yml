@@ -3,6 +3,75 @@
 # env file outranks this.
 name: ${COMPOSE_PROJECT_NAME:-aiwebengine}
 
+# An engine instance, once.
+#
+# The two services below were duplicated blocks — the same twenty lines of
+# environment, volumes, health check and dependencies written out twice — and
+# that is how they drift: every change has to be made in both places, and a
+# change made in one is invisible until the instance behaving differently is
+# the one serving the request.
+x-engine: &engine
+  image: ${ENGINE_IMAGE:-aiwebengine:latest}
+  restart: unless-stopped
+  # Only to the internal network, never to the host. A Host header arriving
+  # here has therefore already been matched by one of Caddy's site blocks.
+  expose:
+    - "3000"
+  # No volumes: this service reads nothing from disk but its configuration,
+  # which the image carries. Scripts and assets live in Postgres, migrations
+  # are embedded in the binary by sqlx::migrate!, and logs go to stdout for
+  # Docker to collect — the ./scripts, ./data and ./logs mounts this replaced
+  # were bind mounts onto directories no code has opened since the repository
+  # moved into the database.
+  #
+  # Every APP_* setting comes from one per-environment file, named by
+  # ENV_FILE. Listing keys here instead would set each one whether the
+  # environment defines it or not: `${VAR:-}` is an empty value, and an empty
+  # value overrides config.toml just as a real one does.
+  env_file:
+    # required: false so that `docker compose down`, `ps` and `logs` still
+    # work in a checkout that has no env file yet. A run without one starts
+    # from config.toml alone and stops on the first missing secret, which is
+    # a clearer failure than a compose parse error.
+    - path: ${ENV_FILE:-.env}
+      required: false
+  environment:
+    # The two that describe the topology rather than the environment. A
+    # managed database is named in the env file instead, and what it sets is
+    # used because this default only applies when the variable is absent.
+    # Named by a compose-only variable, never by APP_REPOSITORY__DATABASE_URL
+    # itself: compose interpolates from the shell first, and this project's
+    # documented workflow is `source .env && cargo run`, which exports that
+    # variable pointing at localhost. Reusing the name meant a developer who
+    # had sourced an env file got localhost baked into the container, where
+    # it cannot reach the database service. Set ENGINE_DATABASE_URL in the
+    # env file to point at a managed instance instead.
+    APP_REPOSITORY__DATABASE_URL: ${ENGINE_DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/${POSTGRES_DB:-aiwebengine}}
+    RUST_LOG: ${RUST_LOG:-info}
+  networks:
+    - aiwebengine-network
+  depends_on:
+    postgres:
+      condition: service_healthy
+  healthcheck:
+    # A TCP connect rather than a request to /health: the runtime image
+    # installs ca-certificates and libssl3 only, so neither curl nor wget
+    # exists in it. The database-aware probe lives at the proxy, in Caddy's
+    # active health checks.
+    test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/3000' || exit 1"]
+    interval: 10s
+    timeout: 3s
+    retries: 3
+    start_period: 30s
+  # Longer than server.shutdown_timeout_secs (30s in config.toml), because
+  # this is the budget the *container* gets and that one is the budget the
+  # engine gets inside it. At the 10s compose default, SIGKILL lands while
+  # in-flight requests are still being drained — the graceful shutdown the
+  # engine implements would be reached and then interrupted, which is worse
+  # than not having it, since callers see a connection reset rather than a
+  # response. Raise both together if either moves.
+  stop_grace_period: 40s
+
 services:
   # Caddy reverse proxy with automatic HTTPS
   caddy:
@@ -43,6 +112,12 @@ services:
       SITE_HOSTS: ${SITE_HOSTS:?set SITE_HOSTS in the env file}
       MANAGE_HOST: ${MANAGE_HOST:-${SITE_HOSTS}}
       ENGINE_UPSTREAMS: ${ENGINE_UPSTREAMS:-aiwebengine-1:3000}
+      # Which issuer the site block imports. tls_public — public ACME, Caddy's
+      # default for a real hostname — is what a server deployment wants; the
+      # development overlay points it at tls_internal or tls_acme_dns. It must
+      # always name something: `import` with an empty argument is a parse
+      # error, which takes the whole proxy down rather than falling back.
+      TLS_SNIPPET: ${TLS_SNIPPET:-tls_public}
       # Non-empty, because compose sets every key it lists and Caddy honours a
       # `{$VAR:default}` only for a variable that is *unset* — an empty value
       # reaches the `email` directive as no argument at all and fails the
@@ -67,116 +142,18 @@ services:
       retries: 3
       start_period: 10s
 
-  # Production deployment - Instance 1
   aiwebengine-1:
-    # build:
-    #   context: .
-    #   dockerfile: Dockerfile
-    image: ${ENGINE_IMAGE:-aiwebengine:latest}
+    <<: *engine
     container_name: ${COMPOSE_PROJECT_NAME:-aiwebengine}-1
-    restart: unless-stopped
-    # Expose port only to internal network (not to host)
-    expose:
-      - "3000"
-    # Use this if you want direct access for debugging (not recommended in production)
-    # ports:
-    #   - "127.0.0.1:3000:3000"
-    # No volumes: this service reads nothing from disk but its configuration,
-    # which the image carries. Scripts and assets live in Postgres, migrations
-    # are embedded in the binary by sqlx::migrate!, and logs go to stdout for
-    # Docker to collect — the ./scripts, ./data and ./logs mounts this replaced
-    # were bind mounts onto directories no code has opened since the repository
-    # moved into the database.
-    # Every APP_* setting comes from one per-environment file, named by
-    # ENV_FILE. Listing keys here instead would set each one whether the
-    # environment defines it or not: `${VAR:-}` is an empty value, and an empty
-    # value overrides config.toml just as a real one does.
-    env_file:
-      # required: false so that `docker compose down`, `ps` and `logs` still
-      # work in a checkout that has no env file yet. A run without one starts
-      # from config.toml alone and stops on the first missing secret, which is
-      # a clearer failure than a compose parse error.
-      - path: ${ENV_FILE:-.env}
-        required: false
-    environment:
-      # The two that describe the topology rather than the environment. A
-      # managed database is named in the env file instead, and what it sets is
-      # used because this default only applies when the variable is absent.
-      # Named by a compose-only variable, never by APP_REPOSITORY__DATABASE_URL
-      # itself: compose interpolates from the shell first, and this project's
-      # documented workflow is `source .env && cargo run`, which exports that
-      # variable pointing at localhost. Reusing the name meant a developer who
-      # had sourced an env file got localhost baked into the container, where
-      # it cannot reach the database service. Set ENGINE_DATABASE_URL in the
-      # env file to point at a managed instance instead.
-      APP_REPOSITORY__DATABASE_URL: ${ENGINE_DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/${POSTGRES_DB:-aiwebengine}}
-      RUST_LOG: ${RUST_LOG:-info}
-    networks:
-      - aiwebengine-network
-    depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/3000' || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 30s
 
-  # Production deployment - Instance 2
   aiwebengine-2:
-    image: ${ENGINE_IMAGE:-aiwebengine:latest}
+    <<: *engine
     container_name: ${COMPOSE_PROJECT_NAME:-aiwebengine}-2
     # A second instance is capacity and the ability to survive one restarting,
     # not a requirement. COMPOSE_PROFILES=ha turns it on; ENGINE_UPSTREAMS has
     # to name it too, since Caddy is told its upstreams rather than discovering
     # them.
     profiles: ["ha"]
-    restart: unless-stopped
-    # Expose port only to internal network (not to host)
-    expose:
-      - "3000"
-    # No volumes: this service reads nothing from disk but its configuration,
-    # which the image carries. Scripts and assets live in Postgres, migrations
-    # are embedded in the binary by sqlx::migrate!, and logs go to stdout for
-    # Docker to collect — the ./scripts, ./data and ./logs mounts this replaced
-    # were bind mounts onto directories no code has opened since the repository
-    # moved into the database.
-    # Every APP_* setting comes from one per-environment file, named by
-    # ENV_FILE. Listing keys here instead would set each one whether the
-    # environment defines it or not: `${VAR:-}` is an empty value, and an empty
-    # value overrides config.toml just as a real one does.
-    env_file:
-      # required: false so that `docker compose down`, `ps` and `logs` still
-      # work in a checkout that has no env file yet. A run without one starts
-      # from config.toml alone and stops on the first missing secret, which is
-      # a clearer failure than a compose parse error.
-      - path: ${ENV_FILE:-.env}
-        required: false
-    environment:
-      # The two that describe the topology rather than the environment. A
-      # managed database is named in the env file instead, and what it sets is
-      # used because this default only applies when the variable is absent.
-      # Named by a compose-only variable, never by APP_REPOSITORY__DATABASE_URL
-      # itself: compose interpolates from the shell first, and this project's
-      # documented workflow is `source .env && cargo run`, which exports that
-      # variable pointing at localhost. Reusing the name meant a developer who
-      # had sourced an env file got localhost baked into the container, where
-      # it cannot reach the database service. Set ENGINE_DATABASE_URL in the
-      # env file to point at a managed instance instead.
-      APP_REPOSITORY__DATABASE_URL: ${ENGINE_DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/${POSTGRES_DB:-aiwebengine}}
-      RUST_LOG: ${RUST_LOG:-info}
-    networks:
-      - aiwebengine-network
-    depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/3000' || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 30s
 
   # PostgreSQL database
   postgres:
@@ -199,6 +176,51 @@ services:
     # Uncomment to expose PostgreSQL port
     # ports:
     #   - "5432:5432"
+
+  # Scheduled dumps of the engine's database.
+  #
+  # Behind a profile, like the second engine instance, because a deployment
+  # whose database is managed elsewhere already has backups and should not run
+  # a second set. Turn it on with COMPOSE_PROFILES=backup in the env file.
+  #
+  # It is the same image as the database on purpose: pg_dump refuses to dump a
+  # server newer than itself, so pairing the two by hand is a failure waiting
+  # for the next major version. And it is given the *same* DATABASE_URL
+  # expression as the engine services, so it cannot end up dumping a database
+  # nobody is using.
+  #
+  # What it does not hold is the four keys in the env file. A dump taken
+  # without security.secret_encryption_key cannot be fully restored — every
+  # script and user secret in it stays ciphertext — so back that file up with
+  # the dumps, and keep it somewhere else.
+  backup:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM postgres:16-alpine
+        COPY scripts/pg-backup.sh /usr/local/bin/pg-backup
+        RUN chmod +x /usr/local/bin/pg-backup
+        ENTRYPOINT ["/usr/local/bin/pg-backup"]
+    image: ${BACKUP_IMAGE:-aiwebengine-backup:latest}
+    container_name: ${COMPOSE_PROJECT_NAME:-aiwebengine}-backup
+    profiles: ["backup"]
+    restart: unless-stopped
+    command: ["loop"]
+    environment:
+      DATABASE_URL: ${ENGINE_DATABASE_URL:-postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/${POSTGRES_DB:-aiwebengine}}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-14}
+    volumes:
+      # A named volume, so the dumps outlive `docker compose down` — which is
+      # the case they exist for. They live on the machine running the daemon;
+      # `make docker-backup-fetch` is what copies one off it, and a backup that
+      # has never left the host it is a backup of is not one yet.
+      - backup-data:/backups
+    networks:
+      - aiwebengine-network
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # Optional: Prometheus for metrics (future enhancement)
   # prometheus:
@@ -246,5 +268,6 @@ volumes:
   caddy-config:    # Caddy configuration
   caddy-logs:      # Caddy access logs
   postgres-data:
+  backup-data:     # pg_dump output, kept across `down`
   # prometheus-data:
   # grafana-data:
