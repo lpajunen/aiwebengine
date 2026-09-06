@@ -1117,19 +1117,13 @@ mod tests {
     }
 
     fn create_test_auditor() -> Arc<SecurityAuditor> {
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
+        let pool = crate::test_db::pool();
         Arc::new(SecurityAuditor::new(Some(pool)))
     }
 
     fn create_test_manager() -> SecureSessionManager {
         let key: [u8; 32] = rand::random();
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
+        let pool = crate::test_db::pool();
         SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 3, create_test_auditor()).unwrap()
     }
 
@@ -1250,10 +1244,7 @@ mod tests {
             let user_id = "user_concurrent";
 
             // Clean up any existing sessions for this user to ensure clean state
-            let pool = sqlx::PgPool::connect_lazy(
-                "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-            )
-            .unwrap();
+            let pool = crate::test_db::pool();
             let _ = sqlx::query("DELETE FROM sessions WHERE user_id = $1")
                 .bind(user_id)
                 .execute(&pool)

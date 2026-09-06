@@ -4031,16 +4031,12 @@ mod tests {
 
     fn setup_db() {
         INIT.call_once(|| {
-            // Skip if running in offline mode (CI/CD)
-            if std::env::var("DATABASE_URL").is_err() {
-                // For offline mode, we can't run tests that need database
+            // Skip when the database server will not answer.
+            if crate::test_db::connection_string_blocking().is_none() {
                 return;
             }
 
-            let pool = sqlx::PgPool::connect_lazy(
-                "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-            )
-            .unwrap();
+            let pool = crate::test_db::pool();
             let db = Arc::new(crate::database::Database::from_pool(pool.clone()));
             crate::database::initialize_global_database(db);
 
@@ -4108,7 +4104,7 @@ mod tests {
 
     // Check if we should skip database-dependent tests
     fn should_skip_db_tests() -> bool {
-        std::env::var("DATABASE_URL").is_err()
+        crate::test_db::connection_string_blocking().is_none()
     }
 
     // Shadow the super::execute_script with one that ensures setup
@@ -4118,7 +4114,7 @@ mod tests {
             return ScriptExecutionResult {
                 registrations: HashMap::new(),
                 success: false,
-                error: Some("Test skipped: DATABASE_URL not set".to_string()),
+                error: Some("Test skipped: no test database".to_string()),
                 execution_time_ms: 0,
             };
         }
@@ -4138,7 +4134,7 @@ mod tests {
             return ScriptExecutionResult {
                 registrations: HashMap::new(),
                 success: false,
-                error: Some("Test skipped: DATABASE_URL not set".to_string()),
+                error: Some("Test skipped: no test database".to_string()),
                 execution_time_ms: 0,
             };
         }
@@ -4153,7 +4149,7 @@ mod tests {
         params: RequestExecutionParams,
     ) -> Result<JsHttpResponse, String> {
         if should_skip_db_tests() {
-            return Err("Test skipped: DATABASE_URL not set".to_string());
+            return Err("Test skipped: no test database".to_string());
         }
         let rt = get_runtime();
         let _guard = rt.enter();
@@ -4164,7 +4160,7 @@ mod tests {
     // Shadow execute_graphql_resolver
     fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Result<String, String> {
         if should_skip_db_tests() {
-            return Err("Test skipped: DATABASE_URL not set".to_string());
+            return Err("Test skipped: no test database".to_string());
         }
         let rt = get_runtime();
         let _guard = rt.enter();
@@ -4181,7 +4177,7 @@ mod tests {
         user_context: crate::security::UserContext,
     ) -> Result<String, String> {
         if should_skip_db_tests() {
-            return Err("Test skipped: DATABASE_URL not set".to_string());
+            return Err("Test skipped: no test database".to_string());
         }
         let rt = get_runtime();
         let _guard = rt.enter();

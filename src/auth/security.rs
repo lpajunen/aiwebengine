@@ -250,10 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_security_context() {
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
+        let pool = crate::test_db::pool();
         let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let rate_limiter =
             Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
@@ -268,10 +265,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_csrf_protection() {
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
+        let pool = crate::test_db::pool();
         let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let rate_limiter =
             Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
@@ -292,10 +286,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_state_validation() {
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
+        let pool = crate::test_db::pool();
         let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let rate_limiter =
             Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
@@ -336,10 +327,7 @@ mod tests {
     /// the address it arrives from.
     #[tokio::test]
     async fn an_account_runs_out_of_wrong_guesses() {
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
+        let pool = crate::test_db::pool();
         let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let rate_limiter =
             Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
@@ -380,10 +368,7 @@ mod tests {
     /// attacker must not be able to lock someone out of their own account.
     #[tokio::test]
     async fn a_successful_sign_in_costs_an_account_nothing() {
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
+        let pool = crate::test_db::pool();
         let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let rate_limiter =
             Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
@@ -402,10 +387,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiting() {
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
+        let pool = crate::test_db::pool();
         let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let rate_limiter =
             Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));

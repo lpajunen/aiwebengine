@@ -911,12 +911,10 @@ mod tests {
     /// A repository config pointed at the test database, or `None` when there
     /// is none to point at.
     fn test_repository_config() -> Option<RepositoryConfig> {
-        std::env::var("DATABASE_URL")
-            .ok()
-            .map(|connection_string| RepositoryConfig {
-                connection_string,
-                ..RepositoryConfig::default()
-            })
+        crate::test_db::connection_string_blocking().map(|connection_string| RepositoryConfig {
+            connection_string: connection_string.to_string(),
+            ..RepositoryConfig::default()
+        })
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1014,7 +1012,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_transaction_budget_lasts_exactly_as_long_as_the_transaction() {
         let Some(config) = test_repository_config() else {
-            eprintln!("Skipping transaction budget test - DATABASE_URL not set");
+            eprintln!("Skipping transaction budget test - no test database");
             return;
         };
         let Ok(db) = Database::new(&config).await else {
@@ -1053,7 +1051,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn beginning_a_transaction_with_a_budget_hands_it_to_postgres() {
         let Some(config) = test_repository_config() else {
-            eprintln!("Skipping begin_transaction budget test - DATABASE_URL not set");
+            eprintln!("Skipping begin_transaction budget test - no test database");
             return;
         };
         let Ok(db) = Database::new(&config).await else {
@@ -1113,18 +1111,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_database_connection() {
-        // This test requires a running PostgreSQL instance
-        // Skip if DATABASE_URL is not set
-        let database_url = match std::env::var("DATABASE_URL") {
-            Ok(url) => url,
-            Err(_) => {
-                eprintln!("Skipping database test - DATABASE_URL not set");
-                return;
-            }
+        // This test requires a running PostgreSQL server.
+        let Some(database_url) = crate::test_db::connection_string_blocking() else {
+            eprintln!("Skipping database test - no test database");
+            return;
         };
 
         let config = RepositoryConfig {
-            connection_string: database_url,
+            connection_string: database_url.to_string(),
             ..RepositoryConfig::default()
         };
 
@@ -1152,7 +1146,7 @@ mod tests {
                     "Skipping database test - Failed to connect to database: {}",
                     e
                 );
-                eprintln!("Make sure PostgreSQL is running and DATABASE_URL is correct");
+                eprintln!("Make sure the test PostgreSQL server is running");
                 return;
             }
             Err(_) => {
@@ -1166,12 +1160,9 @@ mod tests {
     #[test]
     fn test_transaction_state_creation() {
         // Test that transaction state is properly initialized
-        let database_url = match std::env::var("DATABASE_URL") {
-            Ok(url) => url,
-            Err(_) => {
-                eprintln!("Skipping transaction test - DATABASE_URL not set");
-                return;
-            }
+        let Some(database_url) = crate::test_db::connection_string_blocking() else {
+            eprintln!("Skipping transaction test - no test database");
+            return;
         };
 
         // Create a temporary runtime for this test
@@ -1179,7 +1170,7 @@ mod tests {
         rt.block_on(async {
             let pool = PgPoolOptions::new()
                 .max_connections(1)
-                .connect(&database_url)
+                .connect(database_url)
                 .await;
 
             if pool.is_err() {
@@ -1202,19 +1193,16 @@ mod tests {
 
     #[test]
     fn test_transaction_state_timeout_check() {
-        let database_url = match std::env::var("DATABASE_URL") {
-            Ok(url) => url,
-            Err(_) => {
-                eprintln!("Skipping transaction test - DATABASE_URL not set");
-                return;
-            }
+        let Some(database_url) = crate::test_db::connection_string_blocking() else {
+            eprintln!("Skipping transaction test - no test database");
+            return;
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let pool = PgPoolOptions::new()
                 .max_connections(1)
-                .connect(&database_url)
+                .connect(database_url)
                 .await;
 
             if pool.is_err() {
@@ -1323,19 +1311,16 @@ mod tests {
     #[tokio::test]
     async fn test_full_transaction_lifecycle() {
         // Integration test for complete transaction lifecycle
-        let database_url = match std::env::var("DATABASE_URL") {
-            Ok(url) => url,
-            Err(_) => {
-                eprintln!("Skipping transaction lifecycle test - DATABASE_URL not set");
-                return;
-            }
+        let Some(database_url) = crate::test_db::connection_string_blocking() else {
+            eprintln!("Skipping transaction lifecycle test - no test database");
+            return;
         };
 
         // Create database with larger pool for testing
         let pool = PgPoolOptions::new()
             .max_connections(10)
             .acquire_timeout(Duration::from_secs(5))
-            .connect(&database_url)
+            .connect(database_url)
             .await;
 
         match pool {
@@ -1417,18 +1402,15 @@ mod tests {
     #[tokio::test]
     async fn test_transaction_rollback_lifecycle() {
         // Test rollback instead of commit
-        let database_url = match std::env::var("DATABASE_URL") {
-            Ok(url) => url,
-            Err(_) => {
-                eprintln!("Skipping transaction rollback test - DATABASE_URL not set");
-                return;
-            }
+        let Some(database_url) = crate::test_db::connection_string_blocking() else {
+            eprintln!("Skipping transaction rollback test - no test database");
+            return;
         };
 
         let pool = PgPoolOptions::new()
             .max_connections(10)
             .acquire_timeout(Duration::from_secs(5))
-            .connect(&database_url)
+            .connect(database_url)
             .await;
 
         match pool {
@@ -1488,18 +1470,15 @@ mod tests {
     #[tokio::test]
     async fn test_nested_savepoints() {
         // Test multiple savepoints in a transaction
-        let database_url = match std::env::var("DATABASE_URL") {
-            Ok(url) => url,
-            Err(_) => {
-                eprintln!("Skipping nested savepoints test - DATABASE_URL not set");
-                return;
-            }
+        let Some(database_url) = crate::test_db::connection_string_blocking() else {
+            eprintln!("Skipping nested savepoints test - no test database");
+            return;
         };
 
         let pool = PgPoolOptions::new()
             .max_connections(10)
             .acquire_timeout(Duration::from_secs(5))
-            .connect(&database_url)
+            .connect(database_url)
             .await;
 
         match pool {

@@ -581,11 +581,7 @@ mod tests {
     #[tokio::test]
     async fn test_threat_detector_creation() {
         let _lock = THREAT_TEST_LOCK.lock().await;
-        let pool = sqlx::PgPool::connect(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .await
-        .unwrap();
+        let pool = crate::test_db::pool();
 
         let detector = ThreatDetector::with_default_config(Some(pool.clone()));
         let before = detector.get_threat_statistics().await;
@@ -624,10 +620,7 @@ mod tests {
     #[tokio::test]
     async fn test_brute_force_detection() {
         let _lock = THREAT_TEST_LOCK.lock().await;
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
+        let pool = crate::test_db::pool();
         let detector = ThreatDetector::with_default_config(Some(pool));
 
         // Simulate multiple failed auth attempts
@@ -656,10 +649,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sql_injection_detection() {
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
+        let pool = crate::test_db::pool();
         let detector = ThreatDetector::with_default_config(Some(pool));
 
         let event = SecurityEvent::new(
@@ -682,10 +672,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_threat_level_calculation() {
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
+        let pool = crate::test_db::pool();
         let detector = ThreatDetector::with_default_config(Some(pool));
 
         // Test different confidence scores

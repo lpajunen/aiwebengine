@@ -38,6 +38,16 @@
 //! Set `AIWEBENGINE_TEST_DB_SHARED=1` to opt out and run against the database
 //! `DATABASE_URL` names directly, for the rare case of wanting to inspect what
 //! a failing test left behind.
+//!
+//! Two suites reach this, which is why it lives in `src` rather than beside the
+//! integration tests: the `#[cfg(test)]` modules in this crate cannot see
+//! anything under `tests/`, and while they could not, they went on reaching a
+//! database the way the integration tests used to — `DATABASE_URL` directly, or
+//! a connection string written out longhand — and so assumed a schema somebody
+//! had migrated by hand. On a developer's machine that is true, because `cargo
+//! run` migrated it; on a freshly created database it is not, which is what CI
+//! is. `tests/common/mod.rs` compiles this same file into each integration test
+//! binary with `#[path]`.
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -80,6 +90,26 @@ const ATTEMPTS: u32 = 6;
 /// the process ends, however it ends.
 static CLAIM: OnceLock<tokio::sync::Mutex<sqlx::postgres::PgConnection>> = OnceLock::new();
 
+/// What this process resolved its database to, once.
+static PROVISIONED: OnceCell<Option<String>> = OnceCell::const_new();
+
+/// The runtime the slot is claimed on.
+///
+/// Static and never dropped, and that is the whole point: the claim ends when
+/// the connection holding it closes, so a connection left on a runtime that
+/// goes out of scope at the end of one test is a slot handed back while the
+/// process is still using it.
+fn harness_runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("test database: cannot build the harness runtime")
+    })
+}
+
 /// The connection string every test in this process should use.
 ///
 /// `None` when the database server will not answer — callers leave the globals
@@ -89,8 +119,49 @@ static CLAIM: OnceLock<tokio::sync::Mutex<sqlx::postgres::PgConnection>> = OnceL
 /// that is a database per test; under `cargo test` it is one per test binary,
 /// and the in-process mutexes in `common` still serialise the tests inside one.
 pub async fn connection_string() -> Option<&'static str> {
-    static URL: OnceCell<Option<String>> = OnceCell::const_new();
-    URL.get_or_init(provision).await.as_deref()
+    if let Some(resolved) = PROVISIONED.get() {
+        return resolved.as_deref();
+    }
+    tokio::task::spawn_blocking(connection_string_blocking)
+        .await
+        .expect("test database: the provisioning thread panicked")
+}
+
+/// The same, for a caller with no runtime to await on.
+///
+/// The unit tests in this crate need both shapes: a plain `#[test]` has no
+/// runtime at all, and a `#[tokio::test]` has one already entered on its thread
+/// — and `Runtime::block_on` panics in the second case. A thread of the
+/// harness's own answers both, and is where the slot claim then lives.
+pub fn connection_string_blocking() -> Option<&'static str> {
+    if let Some(resolved) = PROVISIONED.get() {
+        return resolved.as_deref();
+    }
+    std::thread::spawn(|| {
+        harness_runtime().block_on(async { PROVISIONED.get_or_init(provision).await.as_deref() })
+    })
+    .join()
+    .expect("test database: the provisioning thread panicked")
+}
+
+/// This process's test database, for a test that cannot proceed without one.
+pub fn require_connection_string() -> &'static str {
+    connection_string_blocking().expect("test database: the server should be reachable")
+}
+
+/// A lazy pool on this process's test database.
+///
+/// For a unit test that drives a component — a session manager, a rate limiter,
+/// an auditor — directly. It replaced a connection string written out longhand
+/// in twenty-odd of them, which named the developer's own database and so
+/// ignored both `DATABASE_URL` and the isolation this module exists for.
+///
+/// Built in the caller's context rather than on the harness runtime, because
+/// `connect_lazy` registers the pool's maintenance tasks with whatever runtime
+/// is current and every caller goes on to use the pool from that same one.
+pub fn pool() -> sqlx::PgPool {
+    sqlx::PgPool::connect_lazy(require_connection_string())
+        .expect("test database: the connection string should parse")
 }
 
 /// The database server the suite works on, as configured.

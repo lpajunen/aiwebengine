@@ -218,18 +218,18 @@ mod tests {
     }
 
     fn should_skip_db_tests() -> bool {
-        std::env::var("DATABASE_URL").is_err()
+        crate::test_db::connection_string_blocking().is_none()
     }
 
     fn setup_db() {
         DB_INIT.call_once(|| {
-            let Ok(url) = std::env::var("DATABASE_URL") else {
+            let Some(url) = crate::test_db::connection_string_blocking() else {
                 return;
             };
             // connect_lazy requires a tokio context; use a global runtime that outlives each test.
             let pool = get_test_runtime().block_on(async {
-                sqlx::PgPool::connect_lazy(&url)
-                    .expect("Failed to create lazy connection pool from DATABASE_URL")
+                sqlx::PgPool::connect_lazy(url)
+                    .expect("Failed to create a lazy pool on the test database")
             });
             let db = Arc::new(crate::database::Database::from_pool(pool.clone()));
             let _ = crate::database::initialize_global_database(db);

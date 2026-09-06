@@ -476,8 +476,7 @@ mod tests {
     /// Registration writes to Postgres, so these exercise the real insert the
     /// same way the rest of the suite does.
     fn test_pool() -> PgPool {
-        PgPool::connect_lazy("postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine")
-            .expect("lazy pool should be constructible")
+        crate::test_db::pool()
     }
 
     #[tokio::test]

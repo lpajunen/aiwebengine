@@ -1216,10 +1216,7 @@ mod tests {
 
     async fn create_test_manager() -> AuthManager {
         let config = AuthManagerConfig::default();
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
+        let pool = crate::test_db::pool();
 
         // Create security infrastructure
         let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));

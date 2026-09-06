@@ -7572,15 +7572,12 @@ mod tests {
 
     fn setup_db() {
         INIT.call_once(|| {
-            // Skip if running in offline mode (CI/CD)
-            if std::env::var("DATABASE_URL").is_err() {
+            // Skip when the database server will not answer.
+            let Some(url) = crate::test_db::connection_string_blocking() else {
                 return;
-            }
+            };
 
-            let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-                "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine".to_string()
-            });
-            let pool = sqlx::PgPool::connect_lazy(&url).unwrap();
+            let pool = sqlx::PgPool::connect_lazy(url).unwrap();
             let db = Arc::new(crate::database::Database::from_pool(pool.clone()));
             crate::database::initialize_global_database(db);
 
@@ -7600,7 +7597,7 @@ mod tests {
 
     // Helper to check if we should skip database-dependent tests
     fn should_skip_db_tests() -> bool {
-        std::env::var("DATABASE_URL").is_err()
+        crate::test_db::connection_string_blocking().is_none()
     }
 
     fn initialized_metadata_with_route(uri: &str, content: &str) -> ScriptMetadata {

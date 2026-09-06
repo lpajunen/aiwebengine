@@ -626,21 +626,18 @@ mod tests {
     use std::time::Instant;
     use tokio::time::{Duration as TokioDuration, sleep};
 
-    const TEST_DB_URL: &str = "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine";
-
     /// Every DB-backed test gets its own bucket key.
     ///
-    /// The `rate_limits` table is global state shared by every test process, and
-    /// nextest runs each test in its own process — so an in-process mutex cannot
-    /// serialise these. A key nobody else uses is what actually isolates them.
+    /// Redundant now that each test process holds a database of its own
+    /// (`crate::test_db`), and kept because it costs nothing and the `logs` of
+    /// a run under `cargo test` — one process for the whole binary — is the one
+    /// place where these tests still share a `rate_limits` table.
     fn unique_key() -> RateLimitKey {
         RateLimitKey::IpAddress(format!("test-{}", uuid::Uuid::new_v4()))
     }
 
-    async fn test_pool() -> PgPool {
-        PgPool::connect(TEST_DB_URL)
-            .await
-            .expect("test Postgres must be running (make postgres-local)")
+    fn test_pool() -> PgPool {
+        crate::test_db::pool()
     }
 
     async fn drop_bucket(pool: &PgPool, key: &RateLimitKey) {
@@ -710,7 +707,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_basic() {
-        let pool = test_pool().await;
+        let pool = test_pool();
         let limiter = RateLimiter::new(pool.clone());
         let key = unique_key();
 
@@ -723,7 +720,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_exceed_limit() {
-        let pool = test_pool().await;
+        let pool = test_pool();
         let limiter = RateLimiter::new(pool.clone());
         let key = unique_key();
 
@@ -744,7 +741,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_rate_limits() {
-        let pool = test_pool().await;
+        let pool = test_pool();
         let limiter = RateLimiter::new(pool.clone());
         let ip_key = unique_key();
         let user_key = RateLimitKey::UserId(format!("test-{}", uuid::Uuid::new_v4()));
@@ -762,7 +759,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_statistics() {
-        let pool = test_pool().await;
+        let pool = test_pool();
         let limiter = RateLimiter::new(pool.clone());
         let key = unique_key();
 
@@ -787,10 +784,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_disabled_rate_limiting() {
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
+        let pool = crate::test_db::pool();
         let mut limiter = RateLimiter::new(pool);
 
         // Disable IP rate limiting

@@ -1,6 +1,11 @@
 use aiwebengine::{config, start_server_with_config};
 use std::sync::Arc;
 
+// The same file the crate's own unit tests use, compiled into each test binary
+// rather than copied: the slot-and-template mechanism is subtle enough that two
+// copies of it would be two things to keep in step.
+#[path = "../../src/test_db.rs"]
+#[allow(dead_code)]
 pub mod testdb;
 use std::sync::{Once, OnceLock};
 use std::time::Duration;

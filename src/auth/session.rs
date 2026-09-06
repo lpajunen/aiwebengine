@@ -247,10 +247,7 @@ mod tests {
     use crate::security::SecurityAuditor;
 
     async fn create_test_manager() -> AuthSessionManager {
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
+        let pool = crate::test_db::pool();
         let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
         let session_manager = SecureSessionManager::new(
@@ -345,11 +342,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_count() {
         // Clean up first
-        let pool = sqlx::PgPool::connect(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .await
-        .unwrap();
+        let pool = crate::test_db::pool();
         sqlx::query("DELETE FROM sessions WHERE user_id = 'user_count'")
             .execute(&pool)
             .await

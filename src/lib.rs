@@ -10,6 +10,12 @@ use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::{debug, error, info, warn};
 
+// So that `aiwebengine::` names this crate from inside it. `src/test_db.rs` is
+// compiled both here and — through `#[path]` — into every integration test
+// binary, where the crate is an ordinary dependency; one spelling of the paths
+// it uses is what lets the two suites share the file rather than a copy.
+extern crate self as aiwebengine;
+
 pub mod asset_registry;
 pub mod bytecode;
 pub mod config;
@@ -57,6 +63,12 @@ pub mod worker_census;
 
 // Authentication module (Phase 1 - Core Infrastructure)
 pub mod auth;
+
+// The per-process test database. Not compiled into a build that is not a test,
+// and shared with the integration tests by path — see the module's own notes.
+#[cfg(test)]
+#[allow(dead_code)]
+mod test_db;
 
 use repository::Repository;
 use security::UserContext;
@@ -3634,7 +3646,7 @@ mod tests {
     }
 
     fn should_skip_db_tests() -> bool {
-        std::env::var("DATABASE_URL").is_err()
+        crate::test_db::connection_string_blocking().is_none()
     }
 
     fn do_db_init(url: String) {
@@ -3651,12 +3663,10 @@ mod tests {
 
     fn setup_db() {
         INIT_DB.call_once(|| {
-            if std::env::var("DATABASE_URL").is_err() {
+            let Some(url) = crate::test_db::connection_string_blocking() else {
                 return;
-            }
-            let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-                "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine".to_string()
-            });
+            };
+            let url = url.to_string();
             match tokio::runtime::Handle::try_current() {
                 Ok(_) => {
                     // Called from within an active async context (#[tokio::test]).

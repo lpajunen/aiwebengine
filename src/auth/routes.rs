@@ -4781,8 +4781,7 @@ mod tests {
     use crate::hosts::HostConfig;
 
     fn test_pool() -> PgPool {
-        PgPool::connect_lazy("postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine")
-            .expect("lazy pool should be constructible")
+        crate::test_db::pool()
     }
 
     /// Register a public client with one redirect URI, the way an MCP client

@@ -1249,12 +1249,12 @@ mod tests {
     }
 
     fn setup_db() {
-        let Ok(url) = std::env::var("DATABASE_URL") else {
+        let Some(url) = crate::test_db::connection_string_blocking() else {
             return;
         };
         DB_INIT.call_once(|| {
             get_runtime().block_on(async {
-                let pool = sqlx::PgPool::connect_lazy(&url).expect("Failed to create pool");
+                let pool = sqlx::PgPool::connect_lazy(url).expect("Failed to create pool");
                 let db = std::sync::Arc::new(crate::database::Database::from_pool(pool.clone()));
                 let _ = crate::database::initialize_global_database(db);
                 let server_id = crate::notifications::generate_server_id();
@@ -1266,7 +1266,7 @@ mod tests {
     }
 
     fn should_skip_db_tests() -> bool {
-        std::env::var("DATABASE_URL").is_err()
+        crate::test_db::connection_string_blocking().is_none()
     }
 
     #[test]
