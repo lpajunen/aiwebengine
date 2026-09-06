@@ -20,22 +20,43 @@
 //! `JS_WriteObject` borrows its value; `JS_EvalFunction` consumes it; the
 //! buffer returned by `JS_WriteObject` is freed with `js_free`.
 
+use moka::sync::Cache;
 use rquickjs::{Ctx, qjs};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use tracing::debug;
 
 #[derive(Clone)]
 struct CachedBytecode {
     source_hash: String,
-    bytecode: Vec<u8>,
+    /// Shared rather than owned: a hit hands the bytes straight to
+    /// [`eval_bytecode`], and this runs on every request that executes a
+    /// script. Cloning a `Vec<u8>` out of the cache copied the whole program's
+    /// bytecode to read it once.
+    bytecode: Arc<[u8]>,
 }
 
-static BYTECODE_CACHE: OnceLock<Mutex<HashMap<String, CachedBytecode>>> = OnceLock::new();
+/// Ceiling on the compiled bytecode held at once, in bytes.
+///
+/// Keys are script URIs and test-module paths, so the map this replaced grew
+/// with the content of the database rather than without limit — but nothing
+/// bounded it, and an engine hosting many scripts kept every program it had
+/// ever run. Bytes rather than entries, because entries differ by two orders
+/// of magnitude between a small handler and a bundled application.
+const MAX_BYTECODE_BYTES: u64 = 32 * 1024 * 1024;
 
-fn cache() -> &'static Mutex<HashMap<String, CachedBytecode>> {
-    BYTECODE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+static BYTECODE_CACHE: OnceLock<Cache<String, CachedBytecode>> = OnceLock::new();
+
+fn cache() -> &'static Cache<String, CachedBytecode> {
+    BYTECODE_CACHE.get_or_init(|| {
+        Cache::builder()
+            .name("bytecode")
+            .max_capacity(MAX_BYTECODE_BYTES)
+            .weigher(|_key: &String, cached: &CachedBytecode| {
+                cached.bytecode.len().try_into().unwrap_or(u32::MAX)
+            })
+            .build()
+    })
 }
 
 fn hash_source(code: &str) -> String {
@@ -46,15 +67,18 @@ fn hash_source(code: &str) -> String {
 
 /// Remove any cached bytecode for a script (call when its source changes).
 pub fn invalidate(uri: &str) {
-    if let Ok(mut guard) = cache().lock() {
-        guard.remove(uri);
-    }
+    cache().invalidate(uri);
 }
 
 /// Clear the entire bytecode cache.
+///
+/// Key by key rather than `invalidate_all`, which is applied lazily against
+/// the time it was called: an entry stored in the same instant would be
+/// ambiguous, and every caller here expects the cache to be cold on return.
 pub fn clear() {
-    if let Ok(mut guard) = cache().lock() {
-        guard.clear();
+    let cache = cache();
+    for (key, _) in cache.iter() {
+        cache.invalidate(key.as_str());
     }
 }
 
@@ -69,9 +93,7 @@ pub fn eval_program(ctx: &Ctx<'_>, cache_key: &str, code: &str) -> Result<(), rq
     let source_hash = hash_source(code);
 
     let cached = cache()
-        .lock()
-        .ok()
-        .and_then(|guard| guard.get(cache_key).cloned())
+        .get(cache_key)
         .filter(|entry| entry.source_hash == source_hash);
 
     if let Some(entry) = cached {
@@ -80,17 +102,15 @@ pub fn eval_program(ctx: &Ctx<'_>, cache_key: &str, code: &str) -> Result<(), rq
     }
 
     debug!(uri = cache_key, "Bytecode cache miss; compiling");
-    let bytecode = compile_to_bytecode(ctx, code, cache_key)?;
+    let bytecode: Arc<[u8]> = Arc::from(compile_to_bytecode(ctx, code, cache_key)?);
 
-    if let Ok(mut guard) = cache().lock() {
-        guard.insert(
-            cache_key.to_string(),
-            CachedBytecode {
-                source_hash,
-                bytecode: bytecode.clone(),
-            },
-        );
-    }
+    cache().insert(
+        cache_key.to_string(),
+        CachedBytecode {
+            source_hash,
+            bytecode: Arc::clone(&bytecode),
+        },
+    );
 
     eval_bytecode(ctx, &bytecode)
 }

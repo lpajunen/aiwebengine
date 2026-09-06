@@ -1,5 +1,6 @@
 use crate::error::AppResult;
 use crate::repository::insert_log_message;
+use moka::sync::Cache;
 use oxc::allocator::Allocator;
 use oxc::codegen::{Codegen, CodegenOptions};
 use oxc::parser::Parser;
@@ -7,8 +8,7 @@ use oxc::semantic::SemanticBuilder;
 use oxc::span::SourceType;
 use oxc::transformer::{JsxOptions, JsxRuntime, TransformOptions, Transformer};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use tracing::{debug, error};
 
 /// Cached transpilation result
@@ -20,8 +20,31 @@ struct CachedTranspilation {
     content_hash: String,
 }
 
+/// Ceiling on the transpiled output held at once, in bytes.
+///
+/// Entries are keyed by asset URI, so the map this replaced was bounded by how
+/// many TypeScript modules the database happened to hold — never by anything
+/// anyone chose — and nothing but an explicit invalidation ever took one out.
+/// Output carries an inline source map and so runs several times its input;
+/// bytes are therefore the bound that means something, and this one sits far
+/// above what a deployment reaches while still being a number rather than
+/// "however much there is".
+const MAX_TRANSPILED_BYTES: u64 = 32 * 1024 * 1024;
+
 /// Global in-memory cache for transpiled scripts
-static TRANSPILED_CACHE: OnceLock<Mutex<HashMap<String, CachedTranspilation>>> = OnceLock::new();
+static TRANSPILED_CACHE: OnceLock<Cache<String, CachedTranspilation>> = OnceLock::new();
+
+fn transpiled_cache() -> &'static Cache<String, CachedTranspilation> {
+    TRANSPILED_CACHE.get_or_init(|| {
+        Cache::builder()
+            .name("transpiled")
+            .max_capacity(MAX_TRANSPILED_BYTES)
+            .weigher(|_uri: &String, cached: &CachedTranspilation| {
+                cached.code.len().try_into().unwrap_or(u32::MAX)
+            })
+            .build()
+    })
+}
 
 /// Check if a script needs transpilation based on file extension
 fn needs_transpilation(uri: &str) -> bool {
@@ -51,34 +74,24 @@ fn calculate_content_hash(content: &str) -> String {
 
 /// Get transpiled script from cache
 fn get_cached_transpilation(uri: &str, content_hash: &str) -> Option<String> {
-    let cache = TRANSPILED_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(guard) = cache.lock()
-        && let Some(cached) = guard.get(uri)
-    {
-        if cached.content_hash == content_hash {
-            debug!(uri = uri, "Transpilation cache hit");
-            return Some(cached.code.clone());
-        } else {
-            debug!(uri = uri, "Transpilation cache miss (content changed)");
-        }
+    let cached = transpiled_cache().get(uri)?;
+    if cached.content_hash == content_hash {
+        debug!(uri = uri, "Transpilation cache hit");
+        Some(cached.code)
+    } else {
+        debug!(uri = uri, "Transpilation cache miss (content changed)");
+        None
     }
-    None
 }
 
 /// Store transpiled script in cache
 fn cache_transpilation(uri: &str, code: String, content_hash: String) {
-    let cache = TRANSPILED_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(mut guard) = cache.lock() {
-        guard.insert(uri.to_string(), CachedTranspilation { code, content_hash });
-    }
+    transpiled_cache().insert(uri.to_string(), CachedTranspilation { code, content_hash });
 }
 
 /// Invalidate cached transpilation for a script
 pub fn invalidate_transpilation_cache(uri: &str) {
-    let cache = TRANSPILED_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(mut guard) = cache.lock()
-        && guard.remove(uri).is_some()
-    {
+    if transpiled_cache().remove(uri).is_some() {
         debug!(uri = uri, "Invalidated transpilation cache");
     }
 }

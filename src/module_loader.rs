@@ -1,10 +1,11 @@
 use crate::source_view::SourceView;
 use crate::transpiler;
+use moka::sync::Cache;
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Component, Path};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use tracing::debug;
 
 const MAX_MODULE_SPECIFIER_LENGTH: usize = 255;
@@ -23,13 +24,10 @@ const MAX_MODULE_SPECIFIER_LENGTH: usize = 255;
 /// the script *or its assets* — see `repository::upsert_asset`/`delete_asset`
 /// and the notification handlers, which are the only inputs the content hash
 /// cannot see.
+#[derive(Clone)]
 struct CachedPrepared {
     root_hash: String,
     code: Arc<str>,
-    /// When this entry was stored, relative to the others. Only derived
-    /// entries are evicted by age — see [`MAX_DERIVED_PROGRAMS`] — so the
-    /// request-serving programs never lose their slot to a burst of checks.
-    stored: u64,
 }
 
 /// How many programs built from something other than the deployed files are
@@ -39,14 +37,46 @@ struct CachedPrepared {
 /// each of those entries is a whole transpiled bundle. Without a ceiling the
 /// map grows for as long as anyone keeps exercising versions — slowly, and
 /// with nothing to make it stop.
-const MAX_DERIVED_PROGRAMS: usize = 64;
+const MAX_DERIVED_PROGRAMS: u64 = 64;
 
-static PREPARED_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// How many request-serving programs are kept at once.
+///
+/// One per script, so this is a ceiling on scripts rather than on builds. It
+/// exists because "one entry per row in a table anyone can insert into" is not
+/// a bound; a deployment reaching it is one where a rebuilt program costs a
+/// bundle, not one where anything is wrong.
+const MAX_LIVE_PROGRAMS: u64 = 4096;
 
-static PREPARED_CACHE: OnceLock<Mutex<HashMap<String, CachedPrepared>>> = OnceLock::new();
+static LIVE_PROGRAMS: OnceLock<Cache<String, CachedPrepared>> = OnceLock::new();
+static DERIVED_PROGRAMS: OnceLock<Cache<String, CachedPrepared>> = OnceLock::new();
 
-fn prepared_cache() -> &'static Mutex<HashMap<String, CachedPrepared>> {
-    PREPARED_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+fn build_program_cache(name: &'static str, capacity: u64) -> Cache<String, CachedPrepared> {
+    Cache::builder().name(name).max_capacity(capacity).build()
+}
+
+/// Programs that serve requests, keyed by the bare script URI.
+fn live_programs() -> &'static Cache<String, CachedPrepared> {
+    LIVE_PROGRAMS.get_or_init(|| build_program_cache("live-programs", MAX_LIVE_PROGRAMS))
+}
+
+/// Programs built from something other than the deployed files.
+fn derived_programs() -> &'static Cache<String, CachedPrepared> {
+    DERIVED_PROGRAMS.get_or_init(|| build_program_cache("derived-programs", MAX_DERIVED_PROGRAMS))
+}
+
+/// Which of the two program caches `key` belongs in.
+///
+/// The separation is what makes "a burst of checks must not cost a script the
+/// program that serves it" structural. It used to be a policy inside one map's
+/// eviction pass — collect the derived keys, sort by insertion order, drop the
+/// oldest — which was correct but had to be re-read to be believed. Two caches
+/// cannot evict across each other at all.
+fn program_cache(key: &str) -> &'static Cache<String, CachedPrepared> {
+    if key.contains('\u{1}') {
+        derived_programs()
+    } else {
+        live_programs()
+    }
 }
 
 /// Which of a script's independently built programs a cache entry holds.
@@ -94,31 +124,6 @@ impl ProgramKind {
     }
 }
 
-/// Drop the oldest derived programs once there are more than the ceiling
-/// allows.
-///
-/// Oldest rather than all of them: a test run bundles a program per module,
-/// and clearing the map wholesale in the middle of one would make every
-/// remaining module rebuild what it just built. Request-serving programs are
-/// keyed by the bare URI and are never candidates — they are the hot path, and
-/// nothing about a check should be able to evict them.
-fn evict_derived_over_ceiling(cache: &mut HashMap<String, CachedPrepared>) {
-    let mut derived: Vec<(u64, String)> = cache
-        .iter()
-        .filter(|(key, _)| key.contains('\u{1}'))
-        .map(|(key, entry)| (entry.stored, key.clone()))
-        .collect();
-
-    if derived.len() <= MAX_DERIVED_PROGRAMS {
-        return;
-    }
-
-    derived.sort_unstable();
-    for (_, key) in derived.iter().take(derived.len() - MAX_DERIVED_PROGRAMS) {
-        cache.remove(key);
-    }
-}
-
 /// Prefix shared by every cached program of `script_uri` other than the
 /// request-serving one. The separator is a control character, which no script
 /// URI contains, so one script's derived keys can never collide with another
@@ -146,11 +151,25 @@ fn hash_root(content: &str) -> String {
 /// `(script_uri, logical_path)` identifying one script's imported module.
 type ModuleKey = (String, String);
 
-static MODULE_SOURCE_CACHE: OnceLock<Mutex<HashMap<ModuleKey, Arc<ModuleSource>>>> =
-    OnceLock::new();
+/// Ceiling on the module sources held at once, in bytes.
+///
+/// Only imported modules land here, so this tracks the size of the bundles
+/// themselves rather than of the asset tree; the bound is what stops an engine
+/// hosting many scripts from keeping every module any of them ever imported.
+const MAX_MODULE_SOURCE_BYTES: u64 = 32 * 1024 * 1024;
 
-fn module_source_cache() -> &'static Mutex<HashMap<ModuleKey, Arc<ModuleSource>>> {
-    MODULE_SOURCE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+static MODULE_SOURCE_CACHE: OnceLock<Cache<ModuleKey, Arc<ModuleSource>>> = OnceLock::new();
+
+fn module_source_cache() -> &'static Cache<ModuleKey, Arc<ModuleSource>> {
+    MODULE_SOURCE_CACHE.get_or_init(|| {
+        Cache::builder()
+            .name("module-sources")
+            .max_capacity(MAX_MODULE_SOURCE_BYTES)
+            .weigher(|_key: &ModuleKey, source: &Arc<ModuleSource>| {
+                source.content.len().try_into().unwrap_or(u32::MAX)
+            })
+            .build()
+    })
 }
 
 /// Drop the prepared program for `script_uri` *and* every module source cached
@@ -158,8 +177,11 @@ fn module_source_cache() -> &'static Mutex<HashMap<ModuleKey, Arc<ModuleSource>>
 /// upsert that happened on another instance and reached us as a notification.
 pub fn invalidate(script_uri: &str) {
     invalidate_program(script_uri);
-    if let Ok(mut guard) = module_source_cache().lock() {
-        guard.retain(|(cached_script, _), _| cached_script != script_uri);
+    let sources = module_source_cache();
+    for (key, _) in sources.iter() {
+        if key.0 == script_uri {
+            sources.invalidate(key.as_ref());
+        }
     }
 }
 
@@ -167,15 +189,19 @@ pub fn invalidate(script_uri: &str) {
 /// and every cached test program — keeping its module sources. Use when the
 /// root script changed but its assets did not.
 pub fn invalidate_program(script_uri: &str) {
-    if let Ok(mut guard) = prepared_cache().lock() {
-        guard.remove(script_uri);
-        // Every derived program of this script goes too: its test programs,
-        // and the ones built from a revision or a candidate. Those cannot have
-        // become *wrong* — the content behind them is immutable — but they are
-        // the only entries nothing else ever drops, and a script being edited
-        // is the moment its accumulated builds stop being worth keeping.
-        let derived = derived_key_prefix(script_uri);
-        guard.retain(|key, _| !key.starts_with(&derived));
+    live_programs().invalidate(script_uri);
+
+    // Every derived program of this script goes too: its test programs, and
+    // the ones built from a revision or a candidate. Those cannot have become
+    // *wrong* — the content behind them is immutable — but they are the only
+    // entries nothing else ever drops, and a script being edited is the moment
+    // its accumulated builds stop being worth keeping.
+    let derived = derived_key_prefix(script_uri);
+    let programs = derived_programs();
+    for (key, _) in programs.iter() {
+        if key.starts_with(&derived) {
+            programs.invalidate(key.as_str());
+        }
     }
 }
 
@@ -184,18 +210,22 @@ pub fn invalidate_program(script_uri: &str) {
 /// then re-reads that module only.
 pub fn invalidate_asset(script_uri: &str, asset_path: &str) {
     invalidate_program(script_uri);
-    if let Ok(mut guard) = module_source_cache().lock() {
-        guard.remove(&(script_uri.to_string(), asset_path.to_string()));
-    }
+    module_source_cache().invalidate(&(script_uri.to_string(), asset_path.to_string()));
 }
 
 /// Clear the prepared-program and module-source caches.
+/// Key by key rather than `invalidate_all`, which is applied lazily against
+/// the time it was called: an entry stored in the same instant would be
+/// ambiguous, and every caller here expects the caches to be cold on return.
 pub fn clear() {
-    if let Ok(mut guard) = prepared_cache().lock() {
-        guard.clear();
+    for cache in [live_programs(), derived_programs()] {
+        for (key, _) in cache.iter() {
+            cache.invalidate(key.as_str());
+        }
     }
-    if let Ok(mut guard) = module_source_cache().lock() {
-        guard.clear();
+    let sources = module_source_cache();
+    for (key, _) in sources.iter() {
+        sources.invalidate(key.as_ref());
     }
 }
 
@@ -275,8 +305,8 @@ fn prepare_program(
     // Fast path: return the cached prepared program when the root content is
     // unchanged. Asset edits (which the hash cannot see) drop the entry via
     // `invalidate`, so a present entry with a matching hash is safe to serve.
-    if let Ok(guard) = prepared_cache().lock()
-        && let Some(entry) = guard.get(&cache_key)
+    let cache = program_cache(&cache_key);
+    if let Some(entry) = cache.get(&cache_key)
         && entry.root_hash == root_hash
     {
         debug!(uri = script_uri, "Prepared-program cache hit");
@@ -288,17 +318,13 @@ fn prepare_program(
     debug!(uri = script_uri, "Prepared-program cache miss; bundling");
     let prepared = build_executable_program(script_uri, root_content, view)?;
 
-    if let Ok(mut guard) = prepared_cache().lock() {
-        guard.insert(
-            cache_key,
-            CachedPrepared {
-                root_hash,
-                code: Arc::from(prepared.code.as_str()),
-                stored: PREPARED_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            },
-        );
-        evict_derived_over_ceiling(&mut guard);
-    }
+    cache.insert(
+        cache_key,
+        CachedPrepared {
+            root_hash,
+            code: Arc::from(prepared.code.as_str()),
+        },
+    );
 
     Ok(prepared)
 }
@@ -964,10 +990,9 @@ fn load_owned_asset_module_by_path(
     // of the same revision from re-reading anything.
     let cache_key = (root_script_uri.to_string(), logical_path.to_string());
     if view.is_live()
-        && let Ok(guard) = module_source_cache().lock()
-        && let Some(source) = guard.get(&cache_key)
+        && let Some(source) = module_source_cache().get(&cache_key)
     {
-        return Ok(Arc::clone(source));
+        return Ok(source);
     }
 
     let file = view.fetch(root_script_uri, logical_path).ok_or_else(|| {
@@ -997,10 +1022,8 @@ fn load_owned_asset_module_by_path(
         mimetype: file.mimetype,
     });
 
-    if view.is_live()
-        && let Ok(mut guard) = module_source_cache().lock()
-    {
-        guard.insert(cache_key, Arc::clone(&source));
+    if view.is_live() {
+        module_source_cache().insert(cache_key, Arc::clone(&source));
     }
 
     Ok(source)
@@ -1633,42 +1656,47 @@ export const WORLD_TYPE_FOREST: WorldType = "forest";
     }
 
     #[test]
-    fn the_derived_cache_evicts_its_oldest_and_never_the_served_program() {
-        let mut cache: HashMap<String, CachedPrepared> = HashMap::new();
-        let entry = |stored| CachedPrepared {
+    fn a_burst_of_derived_programs_cannot_evict_the_served_one() {
+        // Local instances rather than the process-wide caches: what is under
+        // test is the configuration, and a test that reaches for a global
+        // depends on which other tests shared its process.
+        let live = build_program_cache("live-under-test", MAX_LIVE_PROGRAMS);
+        let derived = build_program_cache("derived-under-test", MAX_DERIVED_PROGRAMS);
+        let entry = || CachedPrepared {
             root_hash: "hash".to_string(),
             code: Arc::from("code"),
-            stored,
         };
 
-        // The request-serving program of a script, keyed by the bare URI.
-        cache.insert("apps/main.ts".to_string(), entry(0));
-        for index in 0..(MAX_DERIVED_PROGRAMS as u64 + 10) {
-            cache.insert(
-                ProgramKind::Runtime.cache_key(
-                    "apps/main.ts",
-                    "abc",
-                    &SourceView::Revision(index as i32),
-                ),
-                entry(index + 1),
+        let served = "apps/main.ts";
+        live.insert(served.to_string(), entry());
+
+        // Far more checked revisions than the derived ceiling allows.
+        for revision in 0..(MAX_DERIVED_PROGRAMS as i32 + 10) {
+            let key =
+                ProgramKind::Runtime.cache_key(served, "abc", &SourceView::Revision(revision));
+            assert!(
+                std::ptr::eq(program_cache(&key), derived_programs()),
+                "a revision's program belongs in the derived cache"
             );
+            derived.insert(key, entry());
         }
 
-        evict_derived_over_ceiling(&mut cache);
+        live.run_pending_tasks();
+        derived.run_pending_tasks();
 
-        let derived = cache.keys().filter(|key| key.contains('\u{1}')).count();
-        assert_eq!(derived, MAX_DERIVED_PROGRAMS);
         assert!(
-            cache.contains_key("apps/main.ts"),
+            derived.entry_count() <= MAX_DERIVED_PROGRAMS,
+            "the derived cache should hold at most {} programs, held {}",
+            MAX_DERIVED_PROGRAMS,
+            derived.entry_count()
+        );
+        assert!(
+            live.get(served).is_some(),
             "a burst of checks must not cost a script the program that serves it"
         );
         assert!(
-            !cache.contains_key(&ProgramKind::Runtime.cache_key(
-                "apps/main.ts",
-                "abc",
-                &SourceView::Revision(0)
-            )),
-            "the oldest derived programs are the ones that go"
+            std::ptr::eq(program_cache(served), live_programs()),
+            "the served program's bare key routes to the live cache"
         );
     }
 
