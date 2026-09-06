@@ -209,9 +209,7 @@ impl SecureString {
 impl Drop for SecureString {
     fn drop(&mut self) {
         // Zero out memory when dropped
-        for byte in &mut self.data {
-            *byte = 0;
-        }
+        self.data.fill(0);
     }
 }
 

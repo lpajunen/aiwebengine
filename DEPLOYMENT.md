@@ -479,6 +479,7 @@ Applying to every server deployment, and to the desktop build in reduced form:
   migration must be backward compatible for one release, or both instances must
   be stopped for the upgrade. Migrations are forward-only; there is no down
   path.
+
 - **Monitoring.** `/health` per instance, `/engine/health/cluster` for the
   cluster, JSON-structured logs (`logging.format = "json"`) for aggregation, and
   Caddy's JSON access log. There is no metrics endpoint — the Prometheus and

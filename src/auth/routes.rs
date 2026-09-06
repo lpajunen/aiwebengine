@@ -3985,6 +3985,10 @@ fn oauth_error(status: StatusCode, error: &str, message: &str) -> Response {
 /// holds no secret to prove anything with — PKCE stands in for that on the
 /// authorization-code grant, and on the refresh grant what stands in is the
 /// token being single-use and bound to the client it was issued to.
+// The error is an already-rendered HTTP response, returned straight to the
+// caller's caller; boxing it would allocate on a path that immediately unwraps
+// it back into a response.
+#[allow(clippy::result_large_err)]
 async fn authenticate_client(
     pool: &PgPool,
     headers: &HeaderMap,

@@ -434,6 +434,10 @@ pub struct ClientRegistrationState {
         (status = 429, description = "Too many registrations from this address"),
     )
 )]
+// The error is an already-rendered HTTP response, which is what an axum handler
+// has to hand back; boxing it would only break the `IntoResponse` impl the
+// return type relies on.
+#[allow(clippy::result_large_err)]
 pub async fn register_client_handler(
     State(state): State<ClientRegistrationState>,
     headers: HeaderMap,
