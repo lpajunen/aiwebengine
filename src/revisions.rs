@@ -35,6 +35,13 @@ pub enum Origin {
     Revert,
     /// Written by the engine at startup rather than by a caller.
     Bootstrap,
+    /// Replayed from a git repository the script is synced with.
+    ///
+    /// Worth distinguishing from `Batch` even though a pull writes through the
+    /// same path: a revision whose content came from somewhere outside this
+    /// engine is the one a person needs to recognise when they are working out
+    /// why their own edit is no longer there.
+    GitPull,
 }
 
 impl Origin {
@@ -47,6 +54,7 @@ impl Origin {
             Origin::Script => "script",
             Origin::Revert => "revert",
             Origin::Bootstrap => "bootstrap",
+            Origin::GitPull => "git_pull",
         }
     }
 }

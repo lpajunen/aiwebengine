@@ -29,6 +29,8 @@ pub mod embedded_db;
 pub mod engine_api;
 pub mod error;
 pub mod execution_slots;
+pub mod git_github;
+pub mod git_sync;
 pub mod graphql;
 pub mod graphql_schema_gen;
 pub mod graphql_ws;
@@ -101,6 +103,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::deploy_route,
         engine_api::undeploy_route,
         engine_api::deployment_route,
+        engine_api::git_pull_route,
         engine_api::run_tests_route,
         engine_api::check_route,
         engine_api::eval_route,
@@ -2725,6 +2728,10 @@ async fn setup_routes(
             axum::routing::post(engine_api::deploy_route)
                 .delete(engine_api::undeploy_route)
                 .get(engine_api::deployment_route),
+        )
+        .route(
+            "/engine/git/pull",
+            axum::routing::post(engine_api::git_pull_route),
         )
         .route(
             "/engine/revisions/label",

@@ -147,28 +147,96 @@ impl HttpClient {
 
         debug!("Fetching URL: {} with method: {}", url, options.method);
 
+        let response = self.send_request(method, &url, headers, options.body, timeout)?;
+        self.convert_response(response)
+    }
+
+    /// Fetch a URL and return its body as bytes.
+    ///
+    /// [`HttpClient::fetch`] decodes to `String` and fails on anything that is
+    /// not UTF-8, which is right for the JavaScript `fetch` it backs and wrong
+    /// for an archive. Everything ahead of that decode is shared: the same URL
+    /// checks, the same DNS checks, the same manually validated redirect loop.
+    /// That sharing is the point — routing git traffic through this client
+    /// rather than a reqwest of its own is worth nothing if the validation
+    /// differs between the two entry points.
+    ///
+    /// `max_bytes` is the caller's ceiling rather than this client's: the 10MB
+    /// bounding a script's `fetch` is not the right bound for a repository
+    /// archive, and the caller is the only one that knows what it is reading.
+    pub fn fetch_bytes(
+        &self,
+        url: &str,
+        headers: Option<HashMap<String, String>>,
+        max_bytes: usize,
+    ) -> Result<BytesResponse, HttpError> {
+        let headers = self.process_headers(headers, url, None, None)?;
+
+        debug!("Fetching URL as bytes: {}", url);
+
+        let response = self.send_request(Method::GET, url, headers, None, self.default_timeout)?;
+
+        let status = response.status().as_u16();
+        let ok = response.status().is_success();
+
+        if let Some(content_length) = response.content_length()
+            && content_length > max_bytes as u64
+        {
+            return Err(HttpError::ResponseTooLarge(content_length));
+        }
+
+        // Same hard cap as the text path, for the same reason: a response
+        // without a Content-Length must not be able to buffer unbounded.
+        use std::io::Read;
+        let mut body = Vec::new();
+        response
+            .take(max_bytes as u64 + 1)
+            .read_to_end(&mut body)
+            .map_err(|e| HttpError::ResponseReadFailed(e.to_string()))?;
+
+        if body.len() > max_bytes {
+            return Err(HttpError::ResponseTooLarge(body.len() as u64));
+        }
+
+        Ok(BytesResponse { status, body, ok })
+    }
+
+    /// Send a request, validating every redirect hop, and hand back the
+    /// response undecoded.
+    ///
+    /// Shared by [`HttpClient::fetch`] and [`HttpClient::fetch_bytes`]. What
+    /// separates those two is only how the final body is read; keeping one
+    /// implementation of everything before that is what stops the binary path
+    /// from quietly acquiring weaker validation than the text path.
+    fn send_request(
+        &self,
+        method: Method,
+        url: &str,
+        headers: HeaderMap,
+        body: Option<String>,
+        timeout: Duration,
+    ) -> Result<reqwest::blocking::Response, HttpError> {
         if !self.manual_redirects {
             // Test mode: single request through the redirect-following client
-            let parsed_url = self.validate(&url)?;
+            let parsed_url = self.validate(url)?;
             let mut request = shared_test_client()?
                 .request(method, parsed_url.as_str())
                 .headers(headers)
                 .timeout(crate::database::within_host_budget(timeout));
-            if let Some(body) = options.body {
+            if let Some(body) = body {
                 request = request.body(body);
             }
-            let response = request
+            return request
                 .send()
-                .map_err(|e| HttpError::RequestFailed(e.to_string()))?;
-            return self.convert_response(response);
+                .map_err(|e| HttpError::RequestFailed(e.to_string()));
         }
 
         // Follow redirects manually so every hop is validated (URL scheme,
         // host, and DNS resolution). The shared client has redirects disabled.
         let client = shared_client()?;
-        let mut current_url = self.validate(&url)?;
+        let mut current_url = self.validate(url)?;
         let mut current_method = method;
-        let mut current_body = options.body;
+        let mut current_body = body;
         let mut current_headers = headers;
 
         for _ in 0..=MAX_REDIRECTS {
@@ -190,7 +258,7 @@ impl HttpClient {
             let status = response.status();
             let is_redirect = matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308);
             if !is_redirect {
-                return self.convert_response(response);
+                return Ok(response);
             }
 
             let Some(location) = response
@@ -199,7 +267,7 @@ impl HttpClient {
                 .and_then(|v| v.to_str().ok())
             else {
                 // Redirect status without a Location header: return as-is
-                return self.convert_response(response);
+                return Ok(response);
             };
 
             // Resolve relative redirects against the current URL, then apply
@@ -511,6 +579,17 @@ impl FetchResponse {
     pub fn text(&self) -> &str {
         &self.body
     }
+}
+
+/// An undecoded response body, for callers reading something that is not text.
+#[derive(Debug, Clone)]
+pub struct BytesResponse {
+    /// HTTP status code
+    pub status: u16,
+    /// Response body, exactly as it arrived
+    pub body: Vec<u8>,
+    /// Whether the request was successful (2xx status)
+    pub ok: bool,
 }
 
 /// HTTP client errors

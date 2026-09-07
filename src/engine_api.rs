@@ -341,7 +341,7 @@ async fn resolve_view(
 /// the program that is running. Re-initialising anyway would clear and rebuild
 /// the registrations of a working deployment on the strength of an edit it is
 /// not serving — the disturbance pinning exists to prevent.
-async fn reinitialize_after_write(script_uri: &str) -> Value {
+pub async fn reinitialize_after_write(script_uri: &str) -> Value {
     if let Some(revision) = crate::deployments::pinned(script_uri) {
         return json!({
             "ran": false,
@@ -383,17 +383,19 @@ impl UpsertAction {
 /// Create or update a script: WriteScripts capability required, and existing
 /// scripts can only be modified by an admin or an owner.
 /// Broadcasts the update and re-initializes the script on success.
-pub fn upsert_script_authorized(
-    user: &UserContext,
-    uri: &str,
-    content: &str,
-    via: Option<&str>,
-) -> Result<(UpsertAction, Option<i32>), String> {
+/// Whether `user` may write `uri`, and whether it already exists.
+///
+/// Extracted so that every path writing a script's root — a caller's own write,
+/// and a sync replaying somebody's repository into it — asks the same question.
+/// The rule it encodes is the engine's rule everywhere: `WriteScripts` to write
+/// at all, and ownership or `AdministerEngine` to write over something that is
+/// already there.
+fn authorize_script_write(user: &UserContext, uri: &str) -> Result<bool, String> {
     if let Err(e) = user.require_capability(&Capability::WriteScripts) {
         return Err(format!("Error: {}", e));
     }
-    if uri.is_empty() || content.is_empty() {
-        return Err("Error: Script name and content cannot be empty".to_string());
+    if uri.is_empty() {
+        return Err("Error: Script name cannot be empty".to_string());
     }
 
     let exists = repository::fetch_script(uri).is_some();
@@ -411,6 +413,60 @@ pub fn upsert_script_authorized(
             ));
         }
     }
+    Ok(exists)
+}
+
+/// Whether `user` could write `uri` right now.
+///
+/// A pull checks every script it is about to write before writing any of them.
+/// A repository is one change, and half-applying it because the fourth script
+/// happens to belong to somebody else leaves the engine holding a state the
+/// repository never described.
+pub fn can_write_script(user: &UserContext, uri: &str) -> bool {
+    authorize_script_write(user, uri).is_ok()
+}
+
+/// Write a script's root source as one part of a larger change.
+///
+/// [`upsert_script_authorized`] records a revision and re-initializes the
+/// script, which is right when writing the root *is* the change and wrong when
+/// it is the first step of one. A sync writes the root, then the assets, then
+/// removes what the source no longer has — and wants one revision describing
+/// the result and one `init()` afterwards, not one of each per file.
+///
+/// The authorization is shared with [`upsert_script_authorized`]; only the
+/// bookkeeping the caller takes over is left out.
+pub fn upsert_script_for_sync(
+    user: &UserContext,
+    uri: &str,
+    content: &str,
+) -> Result<UpsertAction, String> {
+    if content.is_empty() {
+        return Err(format!("Error: Script '{}' has no content", uri));
+    }
+    let exists = authorize_script_write(user, uri)?;
+
+    if let Err(e) = repository::upsert_script_with_owner(uri, content, user.user_id.as_deref()) {
+        return Err(format!("Error storing script: {}", e));
+    }
+
+    Ok(if exists {
+        UpsertAction::Updated
+    } else {
+        UpsertAction::Inserted
+    })
+}
+
+pub fn upsert_script_authorized(
+    user: &UserContext,
+    uri: &str,
+    content: &str,
+    via: Option<&str>,
+) -> Result<(UpsertAction, Option<i32>), String> {
+    if content.is_empty() {
+        return Err("Error: Script name and content cannot be empty".to_string());
+    }
+    let exists = authorize_script_write(user, uri)?;
 
     if let Err(e) = repository::upsert_script_with_owner(uri, content, user.user_id.as_deref()) {
         return Err(format!("Error storing script: {}", e));
@@ -1520,6 +1576,51 @@ pub struct BatchWriteOutcome {
     /// the content it was sent with, which is also when re-initializing the
     /// script afterwards would be pure cost.
     pub written: usize,
+    /// How many of the requested removals actually removed something. A sync
+    /// naming a file the script no longer has is not an error; it is a sync
+    /// that has already happened.
+    pub deleted: usize,
+}
+
+/// What a sync wants from the asset write that a plain batch does not.
+pub struct AssetSyncOptions<'a> {
+    /// Asset paths that must not survive this write.
+    ///
+    /// A pull is a *sync* rather than an append: a module deleted upstream has
+    /// to go here too, or the script keeps building against a file its source
+    /// of truth no longer holds.
+    pub delete: &'a [String],
+    /// How the resulting revision describes where it came from.
+    pub origin: revisions::Origin,
+    /// Ceiling on this write's total content.
+    ///
+    /// A parameter because [`MAX_BATCH_BYTES`] bounds an HTTP *request body*,
+    /// and a sync the engine started on its own has no request body to bound.
+    pub max_total_bytes: usize,
+    /// Ceiling on how many files this write may carry, for the same reason.
+    pub max_files: usize,
+    /// Whether this write records a revision of its own.
+    ///
+    /// False for a caller whose write is one part of a larger change. A pull
+    /// writes a script's root and then its assets, and both belong to one
+    /// revision: letting the asset write record its own would describe the
+    /// change as two, and would miss a pull that only altered the root — a
+    /// script consisting of nothing but `main.ts` writes no assets at all.
+    pub record_revision: bool,
+}
+
+impl Default for AssetSyncOptions<'_> {
+    /// What an HTTP batch write asks for: no removals, and the ceilings that
+    /// bound a request.
+    fn default() -> Self {
+        Self {
+            delete: &[],
+            origin: revisions::Origin::Batch,
+            max_total_bytes: MAX_BATCH_BYTES,
+            max_files: MAX_BATCH_FILES,
+            record_revision: true,
+        }
+    }
 }
 
 /// Write several of a script's assets as one unit.
@@ -1537,19 +1638,36 @@ pub fn upsert_assets_authorized(
     script_uri: &str,
     files: &[AssetWrite],
 ) -> Result<BatchWriteOutcome, AssetWriteError> {
+    upsert_assets_synced(user, script_uri, files, AssetSyncOptions::default())
+}
+
+/// [`upsert_assets_authorized`], for a caller replacing a script's tree rather
+/// than adding to it.
+///
+/// One implementation rather than two, because the difference between a batch
+/// write and a sync is three parameters and not a different set of rules. A
+/// second write path would have to reimplement the ownership check, the digest
+/// comparison that drops unchanged files, and the audit event — and one arm of
+/// that would drift.
+pub fn upsert_assets_synced(
+    user: &UserContext,
+    script_uri: &str,
+    files: &[AssetWrite],
+    options: AssetSyncOptions<'_>,
+) -> Result<BatchWriteOutcome, AssetWriteError> {
     if !can_access_assets(user, script_uri, &Capability::WriteAssets) {
         return Err(AssetWriteError::AccessDenied);
     }
-    if files.is_empty() {
+    if files.is_empty() && options.delete.is_empty() {
         return Err(AssetWriteError::Validation(
             "No files to write: 'files' must contain at least one entry".to_string(),
         ));
     }
-    if files.len() > MAX_BATCH_FILES {
+    if files.len() > options.max_files {
         return Err(AssetWriteError::Validation(format!(
             "Too many files in one batch: {} (max {})",
             files.len(),
-            MAX_BATCH_FILES
+            options.max_files
         )));
     }
 
@@ -1582,10 +1700,10 @@ pub fn upsert_assets_authorized(
             )));
         }
         total_bytes = total_bytes.saturating_add(content.len());
-        if total_bytes > MAX_BATCH_BYTES {
+        if total_bytes > options.max_total_bytes {
             return Err(AssetWriteError::Validation(format!(
                 "Batch too large: over {} bytes of content in one request",
-                MAX_BATCH_BYTES
+                options.max_total_bytes
             )));
         }
 
@@ -1676,22 +1794,34 @@ pub fn upsert_assets_authorized(
             .await;
     });
 
-    // A batch that wrote nothing left the script exactly as the previous
+    // Removals come after the writes and before the revision, so the single
+    // revision recorded below describes the tree as it finally stands rather
+    // than an intermediate state holding files the caller asked to drop.
+    //
+    // Not yet inside the write's transaction: `repository::upsert_assets` opens
+    // its own, and giving the two a shared one is a repository change this does
+    // not need to make yet. The window is small and self-correcting — a process
+    // that dies between the two leaves files the next sync removes again — but
+    // it is a window, and closing it is what a `Deleted` variant on the batch
+    // write is for.
+    let mut deleted = 0usize;
+    for name in options.delete {
+        if repository::delete_asset(script_uri, name) {
+            deleted += 1;
+        }
+    }
+
+    // A write that changed nothing left the script exactly as the previous
     // revision already describes, so there is no new state to record.
-    let revision = (written > 0)
-        .then(|| {
-            revisions::record_blocking(
-                script_uri,
-                revisions::Origin::Batch,
-                user.user_id.as_deref(),
-            )
-        })
+    let revision = (options.record_revision && (written > 0 || deleted > 0))
+        .then(|| revisions::record_blocking(script_uri, options.origin, user.user_id.as_deref()))
         .flatten();
 
     Ok(BatchWriteOutcome {
         results,
         revision,
         written,
+        deleted,
     })
 }
 
@@ -4689,6 +4819,138 @@ fn can_read_history(user: &UserContext, script_uri: &str) -> bool {
 ///
 /// A revert writes the root as readily as it writes a module, so it takes what
 /// writing either takes.
+// ============================================================================
+// Git sync
+// ============================================================================
+
+#[derive(Deserialize, Default)]
+pub struct GitPullBody {
+    repo: Option<String>,
+    branch: Option<String>,
+    prefix: Option<String>,
+}
+
+/// Turn a sync failure into the status a caller can act on.
+///
+/// The distinctions worth keeping: a repository that is missing or private is
+/// the caller's problem to fix (404), a repository this caller may not write
+/// over is an authorization answer (403), and GitHub refusing or failing is
+/// neither — it is an upstream fault (502), which matters because retrying is
+/// sensible for one and pointless for the others.
+fn git_sync_status(error: &crate::git_sync::SyncError) -> StatusCode {
+    use crate::git_github::GitHubError;
+    use crate::git_sync::SyncError;
+    match error {
+        SyncError::AccessDenied(_) => StatusCode::FORBIDDEN,
+        SyncError::Archive(_) | SyncError::Layout(_) => StatusCode::BAD_REQUEST,
+        SyncError::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+        SyncError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        SyncError::Remote(remote) => match remote {
+            GitHubError::InvalidRepo(_) | GitHubError::InvalidRef(_) => StatusCode::BAD_REQUEST,
+            GitHubError::NotFound(_) => StatusCode::NOT_FOUND,
+            GitHubError::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+            GitHubError::Forbidden(_)
+            | GitHubError::Transport(_)
+            | GitHubError::UnexpectedResponse(_) => StatusCode::BAD_GATEWAY,
+        },
+    }
+}
+
+fn pull_report_json(report: &crate::git_sync::PullReport) -> Value {
+    json!({
+        "success": true,
+        "repo": report.repo,
+        "branch": report.branch,
+        "commit": report.commit,
+        "upToDate": report.up_to_date,
+        "scripts": report.scripts.iter().map(|script| json!({
+            "script": script.script_uri,
+            "source": script.source,
+            "action": script.action,
+            "changed": script.changed,
+            "written": script.written,
+            "deleted": script.deleted,
+            "unchanged": script.unchanged,
+            "revision": script.revision,
+            "init": script.init,
+        })).collect::<Vec<Value>>(),
+        "timestamp": iso_timestamp(),
+    })
+}
+
+/// Pull a public GitHub repository into this engine as scripts.
+///
+/// The mapping is read from the repository's directory structure rather than
+/// from a manifest: a script is a directory holding `main.ts` (or `.js`,
+/// `.tsx`, `.jsx`), every other file under it becomes one of its assets at the
+/// same relative path, and a repository with `main.ts` at its root is itself
+/// one script. Nothing about the mapping is stored in the repository, because
+/// the two things a manifest would carry — the local URI and the ownership —
+/// are exactly the two that must not travel between installs.
+#[utoipa::path(
+    post,
+    path = "/engine/git/pull",
+    tags = ["Git"],
+    request_body(content_type = "application/json",
+        description = "JSON fields: repo (required, 'owner/repo' or a GitHub URL), \
+                       branch (defaults to the repository's default branch), \
+                       prefix (URI prefix the scripts land under, defaults to the repository name)"),
+    responses(
+        (status = 200, description = "What each script's pull did, and the init() that followed"),
+        (status = 400, description = "Unusable repository, branch, or layout; nothing was written"),
+        (status = 403, description = "The pull would write a script the caller does not own"),
+        (status = 404, description = "No such repository or branch, or it is private"),
+        (status = 413, description = "The repository is larger than this engine will read"),
+        (status = 502, description = "GitHub refused or could not be reached"),
+    )
+)]
+pub async fn git_pull_route(
+    auth_user: Option<Extension<AuthUser>>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+
+    let parsed: GitPullBody = match serde_json::from_slice(&body) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return error_response(StatusCode::BAD_REQUEST, format!("Invalid JSON body: {}", e));
+        }
+    };
+
+    let Some(repo) = parsed.repo else {
+        return missing_param_response("repo");
+    };
+
+    let request = crate::git_sync::PullRequest {
+        repo,
+        branch: parsed.branch,
+        prefix: parsed.prefix,
+    };
+
+    match crate::git_sync::pull(&user, request).await {
+        Ok(report) => json_response(StatusCode::OK, pull_report_json(&report)),
+        Err(e) => error_response(git_sync_status(&e), e.to_string()),
+    }
+}
+
+fn tool_pull_from_git(args: &Value, user: &UserContext) -> Value {
+    let Some(repo) = arg_str(args, "repo") else {
+        return missing_arg("repo");
+    };
+
+    let request = crate::git_sync::PullRequest {
+        repo: repo.to_string(),
+        branch: arg_str(args, "branch").map(str::to_string),
+        prefix: arg_str(args, "prefix").map(str::to_string),
+    };
+
+    let user = user.clone();
+    match crate::database::run_blocking(crate::git_sync::pull(&user, request)) {
+        Ok(report) => pull_report_json(&report),
+        Err(e) => json!({ "error": e.to_string() }),
+    }
+}
+
 fn can_write_history(user: &UserContext, script_uri: &str) -> bool {
     can_access_assets(user, script_uri, &Capability::WriteAssets)
         && can_access_assets(user, script_uri, &Capability::WriteScripts)
@@ -7448,6 +7710,27 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 })
             },
             tool_deploy_script,
+        ),
+        (
+            "pull_from_git",
+            "Pull a public GitHub repository into this engine as scripts. The layout is read \
+            from the repository itself: a directory holding main.ts (or .js/.tsx/.jsx) is one \
+            script, every other file under it becomes an asset at the same relative path, and a \
+            repository with main.ts at its root is itself one script. Files removed upstream are \
+            removed here. Nothing about the mapping lives in the repository, so the same repo \
+            pulls onto any install.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "repo": { "type": "string", "description": "'owner/repo', or any GitHub URL naming it" },
+                        "branch": { "type": "string", "description": "Branch to read. Defaults to the repository's default branch." },
+                        "prefix": { "type": "string", "description": "URI prefix the scripts land under. Defaults to the repository name; set it to avoid colliding with a script somebody else already pulled." }
+                    },
+                    "required": ["repo"]
+                })
+            },
+            tool_pull_from_git,
         ),
         (
             "get_deployment",

@@ -55,6 +55,13 @@ similar = "3.2.0"
 rand = "0.10.0"
 pulldown-cmark = "0.13.0"
 handlebars = "6.0"
+# Reading a repository's tree out of the archive GitHub serves for a ref.
+# `git_github` fetches one gzipped tar over HTTPS rather than speaking the git
+# protocol: the engine wants a tree at a ref and never wants history, and a
+# real git client would want an on-disk object store the engine has nowhere to
+# put.
+tar = { version = "0.4", default-features = false }
+flate2 = "1"
 
 # TypeScript/JSX transpilation
 oxc = { version = "0.148.0", features = ["full"] }
