@@ -29,6 +29,7 @@ pub mod embedded_db;
 pub mod engine_api;
 pub mod error;
 pub mod execution_slots;
+pub mod git_credentials;
 pub mod git_github;
 pub mod git_sync;
 pub mod graphql;
@@ -104,6 +105,9 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::undeploy_route,
         engine_api::deployment_route,
         engine_api::git_pull_route,
+        engine_api::git_credentials_get_route,
+        engine_api::git_credentials_post_route,
+        engine_api::git_credentials_delete_route,
         engine_api::run_tests_route,
         engine_api::check_route,
         engine_api::eval_route,
@@ -1607,6 +1611,13 @@ pub async fn start_server_with_config(
     );
     hosts::init(host_config);
 
+    // Which git hosts a pull may reach, fixed before anything can serve a
+    // request that would ask.
+    if !config.git.allowed_remotes.is_empty() {
+        info!("Git sync restricted to: {:?}", config.git.allowed_remotes);
+    }
+    config::initialize_git_config(config.git.clone());
+
     // Scope the management APIs to their hosts before the server can serve a
     // request. Logged either way: which hosts answer /engine/* is exactly the
     // kind of thing that should be visible in the startup output.
@@ -2728,6 +2739,12 @@ async fn setup_routes(
             axum::routing::post(engine_api::deploy_route)
                 .delete(engine_api::undeploy_route)
                 .get(engine_api::deployment_route),
+        )
+        .route(
+            "/engine/git/credentials",
+            axum::routing::get(engine_api::git_credentials_get_route)
+                .post(engine_api::git_credentials_post_route)
+                .delete(engine_api::git_credentials_delete_route),
         )
         .route(
             "/engine/git/pull",

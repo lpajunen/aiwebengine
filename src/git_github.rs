@@ -37,6 +37,9 @@ const USER_AGENT: &str = "aiwebengine";
 /// Pinned so a future default does not change what this code receives.
 const API_VERSION: &str = "2022-11-28";
 
+/// The host this client speaks to, and the key a credential is stored under.
+pub const HOST: &str = "github.com";
+
 /// Ceiling on a repository archive, compressed.
 ///
 /// Generous next to what the tree is allowed to expand to, because this bounds
@@ -173,6 +176,13 @@ struct GitRefObject {
 pub struct GitHubClient {
     http: HttpClient,
     api_base: String,
+    /// The caller's personal access token, when they have one stored.
+    ///
+    /// Held rather than passed per call because every request this client makes
+    /// on a caller's behalf should carry it: a token that reaches the archive
+    /// but not the ref lookup produces a 404 on a private repository that reads
+    /// exactly like "no such repository".
+    token: Option<String>,
 }
 
 impl GitHubClient {
@@ -182,7 +192,20 @@ impl GitHubClient {
             http: HttpClient::new()
                 .map_err(|e| GitHubError::Transport(format!("Could not build a client: {}", e)))?,
             api_base: API_BASE.to_string(),
+            token: None,
         })
+    }
+
+    /// The same client, authenticating as whoever owns `token`.
+    pub fn with_token(mut self, token: Option<String>) -> Self {
+        self.token = token;
+        self
+    }
+
+    /// Whether this client is carrying a credential, which decides how honestly
+    /// it can explain a 404.
+    pub fn is_authenticated(&self) -> bool {
+        self.token.is_some()
     }
 
     /// A client pointed at a stand-in on loopback.
@@ -196,6 +219,7 @@ impl GitHubClient {
             http: HttpClient::new_for_tests()
                 .map_err(|e| GitHubError::Transport(format!("Could not build a client: {}", e)))?,
             api_base: api_base.into(),
+            token: None,
         })
     }
 
@@ -264,10 +288,16 @@ impl GitHubClient {
 
         let response = self
             .http
-            .fetch_bytes(&url, Some(api_headers()), MAX_ARCHIVE_BYTES)
+            .fetch_bytes(&url, Some(self.headers()), MAX_ARCHIVE_BYTES)
             .map_err(|e| classify(e, repo))?;
 
-        check_status(response.status, response.ok, repo, &url)?;
+        check_status(
+            response.status,
+            response.ok,
+            repo,
+            &url,
+            self.is_authenticated(),
+        )?;
         Ok(response.body)
     }
 
@@ -278,10 +308,16 @@ impl GitHubClient {
     ) -> Result<T, GitHubError> {
         let response = self
             .http
-            .fetch_bytes(url, Some(api_headers()), MAX_JSON_BYTES)
+            .fetch_bytes(url, Some(self.headers()), MAX_JSON_BYTES)
             .map_err(|e| classify(e, repo))?;
 
-        check_status(response.status, response.ok, repo, url)?;
+        check_status(
+            response.status,
+            response.ok,
+            repo,
+            url,
+            self.is_authenticated(),
+        )?;
 
         serde_json::from_slice(&response.body).map_err(|e| {
             GitHubError::UnexpectedResponse(format!(
@@ -292,15 +328,58 @@ impl GitHubClient {
     }
 }
 
-fn api_headers() -> HashMap<String, String> {
-    HashMap::from([
-        ("User-Agent".to_string(), USER_AGENT.to_string()),
-        (
-            "Accept".to_string(),
-            "application/vnd.github+json".to_string(),
-        ),
-        ("X-GitHub-Api-Version".to_string(), API_VERSION.to_string()),
-    ])
+impl GitHubClient {
+    fn headers(&self) -> HashMap<String, String> {
+        let mut headers = HashMap::from([
+            ("User-Agent".to_string(), USER_AGENT.to_string()),
+            (
+                "Accept".to_string(),
+                "application/vnd.github+json".to_string(),
+            ),
+            ("X-GitHub-Api-Version".to_string(), API_VERSION.to_string()),
+        ]);
+        if let Some(token) = &self.token {
+            headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+        }
+        headers
+    }
+
+    /// Who this token belongs to, and whether the host still accepts it.
+    ///
+    /// Checked before a credential is stored, so a token that was mistyped or
+    /// has already been revoked is refused at the point somebody can do
+    /// something about it rather than at the next pull.
+    pub fn verify_token(&self) -> Result<String, GitHubError> {
+        #[derive(Deserialize)]
+        struct Account {
+            login: String,
+        }
+
+        let url = format!("{}/user", self.api_base);
+        let response = self
+            .http
+            .fetch_bytes(&url, Some(self.headers()), MAX_JSON_BYTES)
+            .map_err(|e| GitHubError::Transport(e.to_string()))?;
+
+        if response.status == 401 || response.status == 403 {
+            return Err(GitHubError::Forbidden(
+                "GitHub did not accept this token. Check that it is correct and has not \
+                 expired or been revoked."
+                    .to_string(),
+            ));
+        }
+        if !response.ok {
+            return Err(GitHubError::UnexpectedResponse(format!(
+                "GitHub answered {} when asked whose token this is",
+                response.status
+            )));
+        }
+
+        let account: Account = serde_json::from_slice(&response.body).map_err(|e| {
+            GitHubError::UnexpectedResponse(format!("Could not read GitHub's answer: {}", e))
+        })?;
+        Ok(account.login)
+    }
 }
 
 /// A JSON response bounded well below the archive ceiling — these endpoints
@@ -314,14 +393,32 @@ const MAX_JSON_BYTES: usize = 1024 * 1024;
 /// repository, a 404 is as likely to mean "this repository is private" as "no
 /// such repository", and until credentials exist those are the same problem
 /// wearing different words.
-fn check_status(status: u16, ok: bool, repo: &RepoRef, url: &str) -> Result<(), GitHubError> {
+fn check_status(
+    status: u16,
+    ok: bool,
+    repo: &RepoRef,
+    url: &str,
+    authenticated: bool,
+) -> Result<(), GitHubError> {
     if ok {
         return Ok(());
     }
     match status {
+        // GitHub answers 404 rather than 403 for a repository the caller may
+        // not see, so what this can honestly say depends on whether a
+        // credential was presented at all.
+        404 if authenticated => Err(GitHubError::NotFound(format!(
+            "{} was not found. It does not exist, or the token in use cannot see it.",
+            repo
+        ))),
         404 => Err(GitHubError::NotFound(format!(
-            "{} was not found. It may not exist, or it may be private — this engine can \
-             only read public repositories.",
+            "{} was not found. It may not exist, or it may be private — no credential was \
+             used for this pull. Store a token for github.com and try again.",
+            repo
+        ))),
+        401 | 403 if authenticated => Err(GitHubError::Forbidden(format!(
+            "GitHub refused the request for {}. The token may have expired, been revoked, \
+             or lack access to this repository.",
             repo
         ))),
         401 | 403 => Err(GitHubError::Forbidden(format!(

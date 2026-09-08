@@ -649,7 +649,40 @@ struct WrittenScripts {
 /// thread. Re-initialising the scripts afterwards is async and runs here, once
 /// per script rather than once per file.
 pub async fn pull(user: &UserContext, request: PullRequest) -> Result<PullReport, SyncError> {
-    pull_with(crate::git_github::GitHubClient::new()?, user, request).await
+    let host = crate::git_github::HOST;
+
+    // Asked before anything is fetched, so a deployment that has turned git
+    // sync off answers with the reason rather than with a network error.
+    if !crate::config::git_config().allows(host) {
+        return Err(SyncError::AccessDenied(format!(
+            "This engine is not configured to read from {}",
+            host
+        )));
+    }
+
+    // The caller's own token, never anybody else's: the account that reaches
+    // GitHub is the account that asked, which is what keeps the attribution on
+    // the far side matching the attribution here.
+    let token = match &user.user_id {
+        Some(user_id) => crate::git_credentials::token_for(user_id, host).await,
+        None => None,
+    };
+    let authenticated = token.is_some();
+
+    let client = crate::git_github::GitHubClient::new()?.with_token(token);
+    let report = pull_with(client, user, request).await;
+
+    // Recorded only when the pull got somewhere, so "last used" answers about
+    // the credential working rather than about somebody having typed a
+    // repository name.
+    if authenticated
+        && report.is_ok()
+        && let Some(user_id) = &user.user_id
+    {
+        crate::git_credentials::mark_used(user_id, host).await;
+    }
+
+    report
 }
 
 /// [`pull`], against a GitHub client the caller supplies.

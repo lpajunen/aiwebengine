@@ -1221,6 +1221,17 @@ pub fn delete_user(user_id: &str) -> AppResult<bool> {
                 );
             }
 
+            // And the git tokens with them, for the same reason: a
+            // credential that reaches GitHub as this person should not outlive
+            // the person. Logged rather than fatal — a token left behind is
+            // worth knowing about, and is not a reason to leave the account.
+            if let Err(e) = crate::git_credentials::forget_all(user_id).await {
+                error!(
+                    "Could not remove git credentials for {} before deletion: {}",
+                    user_id, e
+                );
+            }
+
             db_delete_user(db.pool(), user_id).await
         })
     })?;

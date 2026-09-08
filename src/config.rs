@@ -43,6 +43,60 @@ pub struct AppConfig {
     /// one would.
     #[serde(default)]
     pub logs: LogsConfig,
+
+    /// Which git hosts this engine will read from.
+    ///
+    /// Defaulted for the same reason `revisions` and `logs` are: a
+    /// configuration written before git sync existed keeps loading.
+    #[serde(default)]
+    pub git: GitConfig,
+}
+
+/// Which git hosts a pull may reach.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GitConfig {
+    /// Hosts a pull may read from. Empty allows every host the engine
+    /// supports, which is the default and what a personal install wants.
+    ///
+    /// It is enforced rather than advisory, and that is what makes it useful
+    /// on a deployment that wants git sync off entirely: only `github.com` is
+    /// supported today, so a list that does not name it refuses every pull.
+    /// Matched against the host after the repository reference is parsed, so a
+    /// caller cannot dress one host up as another in the URL.
+    #[serde(default)]
+    pub allowed_remotes: Vec<String>,
+}
+
+/// The git configuration this process is running with.
+///
+/// A process-wide accessor rather than a parameter because the pull is reached
+/// from an HTTP handler and an MCP tool that share no state, and the answer is
+/// fixed for the life of the process.
+static GIT_CONFIG: std::sync::OnceLock<GitConfig> = std::sync::OnceLock::new();
+
+/// Set at startup. Later calls are ignored, as elsewhere in the engine.
+pub fn initialize_git_config(config: GitConfig) -> bool {
+    GIT_CONFIG.set(config).is_ok()
+}
+
+/// The configured policy, or the permissive default before startup has set one
+/// — which is what a unit test sees, and matches an engine whose configuration
+/// predates the section.
+pub fn git_config() -> &'static GitConfig {
+    GIT_CONFIG.get_or_init(GitConfig::default)
+}
+
+impl GitConfig {
+    /// Whether `host` may be reached.
+    pub fn allows(&self, host: &str) -> bool {
+        if self.allowed_remotes.is_empty() {
+            return true;
+        }
+        let host = host.trim().trim_end_matches('/').to_ascii_lowercase();
+        self.allowed_remotes
+            .iter()
+            .any(|allowed| allowed.trim().trim_end_matches('/').to_ascii_lowercase() == host)
+    }
 }
 
 /// How much of a script's history to keep.

@@ -157,6 +157,13 @@ retention_days = 30
 keep_per_script = 50
 prune_interval_secs = 3600
 
+[git]
+# Which git hosts a pull may read from. Empty allows every host the engine
+# supports, which is what a personal install wants. Only github.com is
+# supported today, so naming anything else — or naming nothing but another
+# host — is how a deployment turns git sync off.
+allowed_remotes = []
+
 [logs]
 # Both dials are enforced and either alone is enough to remove a line: the count
 # bounds a script that logs in a loop, the age bounds dormant scripts that would

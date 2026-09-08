@@ -7533,6 +7533,15 @@ pub fn initialize_secret_encryption(enc: Arc<crate::security::encryption::DataEn
     GLOBAL_SECRET_ENCRYPTION.set(enc).is_ok()
 }
 
+/// The at-rest encryption this engine was configured with, if any.
+///
+/// Exposed so that a caller storing something more sensitive than a script's
+/// own secret can refuse when there is no key, rather than quietly writing it
+/// in the clear the way the secret tables do.
+pub fn secret_encryption() -> Option<Arc<crate::security::encryption::DataEncryption>> {
+    GLOBAL_SECRET_ENCRYPTION.get().cloned()
+}
+
 /// Global repository instance
 static GLOBAL_REPOSITORY: OnceLock<PostgresRepository> = OnceLock::new();
 

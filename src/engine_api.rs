@@ -4937,6 +4937,302 @@ pub async fn git_pull_route(
     }
 }
 
+#[derive(Deserialize, Default)]
+pub struct GitCredentialBody {
+    token: Option<String>,
+    host: Option<String>,
+}
+
+/// Who may hold a git credential, and whose.
+///
+/// Editor-tier, because pulling is editor-tier and a credential is only useful
+/// for pulling. Always the caller's own: there is no shape of this request that
+/// names another user, so no path by which one person stores or reads a
+/// credential for another.
+fn credential_owner(user: &UserContext) -> Result<String, Box<Response>> {
+    if !user.has_capability(&Capability::WriteScripts) {
+        return Err(Box::new(error_response(
+            StatusCode::FORBIDDEN,
+            "Error: Access denied".to_string(),
+        )));
+    }
+    user.user_id.clone().ok_or_else(|| {
+        Box::new(error_response(
+            StatusCode::FORBIDDEN,
+            "Error: A git credential belongs to an account, and this request has none".to_string(),
+        ))
+    })
+}
+
+fn credential_host(requested: Option<String>) -> Result<String, Box<Response>> {
+    let host = requested.unwrap_or_else(|| crate::git_github::HOST.to_string());
+    if host != crate::git_github::HOST {
+        return Err(Box::new(error_response(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Only {} is supported; '{}' is not a host this engine can read from",
+                crate::git_github::HOST,
+                host
+            ),
+        )));
+    }
+    if !crate::config::git_config().allows(&host) {
+        return Err(Box::new(error_response(
+            StatusCode::FORBIDDEN,
+            format!("This engine is not configured to read from {}", host),
+        )));
+    }
+    Ok(host)
+}
+
+fn credential_json(summary: &crate::git_credentials::CredentialSummary) -> Value {
+    json!({
+        "host": summary.remote_host,
+        "account": summary.account,
+        "createdAt": summary.created_at.to_rfc3339(),
+        "updatedAt": summary.updated_at.to_rfc3339(),
+        "lastUsedAt": summary.last_used_at.map(|t| t.to_rfc3339()),
+    })
+}
+
+/// Store the caller's personal access token for a git host.
+///
+/// The token is encrypted at rest, is never returned by this or any other
+/// endpoint, and is not reachable from JavaScript. It is checked against the
+/// host before it is stored, so a token that was mistyped or has already been
+/// revoked is refused where somebody can still do something about it.
+#[utoipa::path(
+    post,
+    path = "/engine/git/credentials",
+    tags = ["Git"],
+    request_body(content_type = "application/json",
+        description = "JSON fields: token (required), host (defaults to github.com)"),
+    responses(
+        (status = 200, description = "Stored, with the account the host reported"),
+        (status = 400, description = "Missing token, or an unsupported host"),
+        (status = 401, description = "The host did not accept the token; nothing was stored"),
+        (status = 403, description = "Access denied, or this engine stores no git credentials"),
+    )
+)]
+pub async fn git_credentials_post_route(
+    auth_user: Option<Extension<AuthUser>>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let user_id = match credential_owner(&user) {
+        Ok(user_id) => user_id,
+        Err(response) => return *response,
+    };
+
+    let parsed: GitCredentialBody = match serde_json::from_slice(&body) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return error_response(StatusCode::BAD_REQUEST, format!("Invalid JSON body: {}", e));
+        }
+    };
+
+    let host = match credential_host(parsed.host) {
+        Ok(host) => host,
+        Err(response) => return *response,
+    };
+
+    let Some(token) = parsed.token.filter(|token| !token.trim().is_empty()) else {
+        return missing_param_response("token");
+    };
+
+    // Verified before storage, on a blocking thread because the HTTP client is
+    // blocking.
+    let probe_token = token.clone();
+    let account = match tokio::task::spawn_blocking(move || {
+        crate::git_github::GitHubClient::new()
+            .map(|client| client.with_token(Some(probe_token)))
+            .and_then(|client| client.verify_token())
+    })
+    .await
+    {
+        Ok(Ok(account)) => account,
+        Ok(Err(e)) => {
+            let status = match e {
+                crate::git_github::GitHubError::Forbidden(_) => StatusCode::UNAUTHORIZED,
+                _ => StatusCode::BAD_GATEWAY,
+            };
+            return error_response(status, e.to_string());
+        }
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Could not check the token: {}", e),
+            );
+        }
+    };
+
+    match crate::git_credentials::store(&user_id, &host, &token, Some(&account)).await {
+        Ok(()) => json_response(
+            StatusCode::OK,
+            json!({
+                "success": true,
+                "host": host,
+                "account": account,
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(crate::git_credentials::CredentialError::NotConfigured(message)) => {
+            error_response(StatusCode::FORBIDDEN, message)
+        }
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// What the caller has stored — metadata only, never a token.
+#[utoipa::path(
+    get,
+    path = "/engine/git/credentials",
+    tags = ["Git"],
+    responses(
+        (status = 200, description = "Host, account, and when each credential was added and last used"),
+        (status = 403, description = "Access denied"),
+    )
+)]
+pub async fn git_credentials_get_route(auth_user: Option<Extension<AuthUser>>) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let user_id = match credential_owner(&user) {
+        Ok(user_id) => user_id,
+        Err(response) => return *response,
+    };
+
+    match crate::git_credentials::list(&user_id).await {
+        Ok(credentials) => json_response(
+            StatusCode::OK,
+            json!({
+                "credentials": credentials.iter().map(credential_json).collect::<Vec<Value>>(),
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// Remove the caller's credential for a host.
+#[utoipa::path(
+    delete,
+    path = "/engine/git/credentials",
+    tags = ["Git"],
+    params(("host" = Option<String>, Query, description = "Host to forget; defaults to github.com")),
+    responses(
+        (status = 200, description = "Whether there was a credential to remove"),
+        (status = 403, description = "Access denied"),
+    )
+)]
+pub async fn git_credentials_delete_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<GitHostQuery>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let user_id = match credential_owner(&user) {
+        Ok(user_id) => user_id,
+        Err(response) => return *response,
+    };
+    let host = match credential_host(query.host) {
+        Ok(host) => host,
+        Err(response) => return *response,
+    };
+
+    match crate::git_credentials::forget(&user_id, &host).await {
+        Ok(removed) => json_response(
+            StatusCode::OK,
+            json!({
+                "success": true,
+                "host": host,
+                "removed": removed,
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct GitHostQuery {
+    host: Option<String>,
+}
+
+fn tool_set_git_credential(args: &Value, user: &UserContext) -> Value {
+    let Some(token) = arg_str(args, "token") else {
+        return missing_arg("token");
+    };
+    if !user.has_capability(&Capability::WriteScripts) {
+        return json!({ "error": "Access denied" });
+    }
+    let Some(user_id) = user.user_id.clone() else {
+        return json!({ "error": "A git credential belongs to an account, and this request has none" });
+    };
+    let host = arg_str(args, "host").unwrap_or(crate::git_github::HOST);
+    if host != crate::git_github::HOST {
+        return json!({ "error": format!("Only {} is supported", crate::git_github::HOST) });
+    }
+    if !crate::config::git_config().allows(host) {
+        return json!({ "error": format!("This engine is not configured to read from {}", host) });
+    }
+
+    let account = match crate::git_github::GitHubClient::new()
+        .map(|client| client.with_token(Some(token.to_string())))
+        .and_then(|client| client.verify_token())
+    {
+        Ok(account) => account,
+        Err(e) => return json!({ "error": e.to_string() }),
+    };
+
+    match crate::database::run_blocking(crate::git_credentials::store(
+        &user_id,
+        host,
+        token,
+        Some(&account),
+    )) {
+        Ok(()) => json!({
+            "success": true,
+            "host": host,
+            "account": account,
+            "timestamp": iso_timestamp(),
+        }),
+        Err(e) => json!({ "error": e.to_string() }),
+    }
+}
+
+fn tool_list_git_credentials(_args: &Value, user: &UserContext) -> Value {
+    if !user.has_capability(&Capability::WriteScripts) {
+        return json!({ "error": "Access denied" });
+    }
+    let Some(user_id) = user.user_id.clone() else {
+        return json!({ "credentials": [] });
+    };
+    match crate::database::run_blocking(crate::git_credentials::list(&user_id)) {
+        Ok(credentials) => json!({
+            "credentials": credentials.iter().map(credential_json).collect::<Vec<Value>>(),
+            "timestamp": iso_timestamp(),
+        }),
+        Err(e) => json!({ "error": e.to_string() }),
+    }
+}
+
+fn tool_delete_git_credential(args: &Value, user: &UserContext) -> Value {
+    if !user.has_capability(&Capability::WriteScripts) {
+        return json!({ "error": "Access denied" });
+    }
+    let Some(user_id) = user.user_id.clone() else {
+        return json!({ "error": "A git credential belongs to an account, and this request has none" });
+    };
+    let host = arg_str(args, "host").unwrap_or(crate::git_github::HOST);
+    match crate::database::run_blocking(crate::git_credentials::forget(&user_id, host)) {
+        Ok(removed) => json!({
+            "success": true,
+            "host": host,
+            "removed": removed,
+            "timestamp": iso_timestamp(),
+        }),
+        Err(e) => json!({ "error": e.to_string() }),
+    }
+}
+
 fn tool_pull_from_git(args: &Value, user: &UserContext) -> Value {
     let Some(repo) = arg_str(args, "repo") else {
         return missing_arg("repo");
@@ -7715,6 +8011,47 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 })
             },
             tool_deploy_script,
+        ),
+        (
+            "set_git_credential",
+            "Store your personal access token for a git host, so pulls can read private \
+            repositories. The token is encrypted at rest, is never returned by any endpoint or \
+            tool, and is not reachable from JavaScript. It is checked against the host before \
+            being stored, so a mistyped or revoked token is refused now rather than at the next \
+            pull. Always your own credential — there is no way to store or read one for anybody \
+            else.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "token": { "type": "string", "description": "Personal access token. A fine-grained token scoped to the repositories you want is enough; it needs no more than read access to their contents." },
+                        "host": { "type": "string", "description": "Git host. Defaults to github.com, the only host supported.", "default": "github.com" }
+                    },
+                    "required": ["token"]
+                })
+            },
+            tool_set_git_credential,
+        ),
+        (
+            "list_git_credentials",
+            "The git credentials you have stored: host, the account each belongs to, and when it \
+            was added and last used. Never the token itself.",
+            || json!({ "type": "object", "properties": {} }),
+            tool_list_git_credentials,
+        ),
+        (
+            "delete_git_credential",
+            "Remove your stored credential for a git host. Pulls of private repositories stop \
+            working; public ones carry on.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "host": { "type": "string", "description": "Git host to forget. Defaults to github.com.", "default": "github.com" }
+                    }
+                })
+            },
+            tool_delete_git_credential,
         ),
         (
             "pull_from_git",
