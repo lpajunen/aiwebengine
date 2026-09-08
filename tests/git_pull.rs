@@ -226,7 +226,7 @@ async fn a_repository_with_a_root_entry_becomes_one_script() {
     .await
     .expect("fixture should start");
 
-    let uri = &script_uri("git-one/main.ts");
+    let uri = &script_uri("git-one.ts");
     clear(uri);
 
     let report = pull_with(github.client(), &puller(), request("git-one"))
@@ -282,8 +282,8 @@ async fn each_top_level_directory_becomes_its_own_script() {
     .await
     .expect("fixture should start");
 
-    clear(&script_uri("git-many/shop/main.ts"));
-    clear(&script_uri("git-many/admin/main.ts"));
+    clear(&script_uri("git-many/shop.ts"));
+    clear(&script_uri("git-many/admin.ts"));
 
     let report = pull_with(github.client(), &puller(), request("git-many"))
         .await
@@ -298,13 +298,13 @@ async fn each_top_level_directory_becomes_its_own_script() {
     assert_eq!(
         uris,
         vec![
-            script_uri("git-many/admin/main.ts"),
-            script_uri("git-many/shop/main.ts")
+            script_uri("git-many/admin.ts"),
+            script_uri("git-many/shop.ts")
         ]
     );
 
     assert_eq!(
-        asset_text(&script_uri("git-many/shop/main.ts"), "lib/cart.ts").as_deref(),
+        asset_text(&script_uri("git-many/shop.ts"), "lib/cart.ts").as_deref(),
         Some("export const cart = [];"),
         "asset paths are relative to their own script, not to the repository"
     );
@@ -319,7 +319,7 @@ async fn pulling_an_unchanged_commit_does_no_work() {
         .await
         .expect("fixture should start");
 
-    clear(&script_uri("git-idempotent/main.ts"));
+    clear(&script_uri("git-idempotent.ts"));
 
     let first = pull_with(github.client(), &puller(), request("git-idempotent"))
         .await
@@ -349,7 +349,7 @@ async fn a_file_removed_upstream_is_removed_here() {
     .await
     .expect("fixture should start");
 
-    let uri = &script_uri("git-sync/main.ts");
+    let uri = &script_uri("git-sync.ts");
     clear(uri);
 
     pull_with(github.client(), &puller(), request("git-sync"))
@@ -398,7 +398,7 @@ async fn a_pull_records_one_revision_for_the_whole_script() {
     .await
     .expect("fixture should start");
 
-    let uri = &script_uri("git-revision/main.ts");
+    let uri = &script_uri("git-revision.ts");
     clear(uri);
 
     let before = aiwebengine::revisions::current(uri).unwrap_or(0);
@@ -482,7 +482,7 @@ async fn a_pull_completes_when_driven_from_a_blocking_context() {
     .await
     .expect("fixture should start");
 
-    let uri = &script_uri("git-blocking/main.ts");
+    let uri = &script_uri("git-blocking.ts");
     clear(uri);
 
     let client = github.client();
@@ -535,7 +535,7 @@ async fn the_repository_says_what_not_to_take() {
     .await
     .expect("fixture should start");
 
-    let uri = &script_uri("git-ignore/main.ts");
+    let uri = &script_uri("git-ignore.ts");
     clear(uri);
 
     pull_with(github.client(), &puller(), request("git-ignore"))
@@ -576,7 +576,7 @@ async fn force_re_applies_a_repository_that_has_not_moved() {
         .await
         .expect("fixture should start");
 
-    let uri = &script_uri("git-force/main.ts");
+    let uri = &script_uri("git-force.ts");
     clear(uri);
 
     pull_with(github.client(), &puller(), request("git-force"))
@@ -625,8 +625,8 @@ async fn the_same_commit_landing_elsewhere_is_not_up_to_date() {
         .await
         .expect("fixture should start");
 
-    clear(&script_uri("git-base-a/main.ts"));
-    clear(&script_uri("git-base-b/main.ts"));
+    clear(&script_uri("git-base-a.ts"));
+    clear(&script_uri("git-base-b.ts"));
 
     pull_with(github.client(), &puller(), request("git-base-a"))
         .await
@@ -640,8 +640,67 @@ async fn the_same_commit_landing_elsewhere_is_not_up_to_date() {
         !elsewhere.up_to_date,
         "the same commit landing somewhere else is work, not a no-op"
     );
+    assert_eq!(elsewhere.scripts[0].script_uri, script_uri("git-base-b.ts"));
+}
+
+/// A pulled script is named after where it came from, not after its entry file.
+/// Naming every one of them `main.js` is accurate and useless: the point of a
+/// URI is to say which script it is.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_is_named_after_its_source() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[
+        ("shop/main.ts", "function init() {}"),
+        ("admin/main.js", "function init() {}"),
+    ])
+    .await
+    .expect("fixture should start");
+
+    clear(&script_uri("git-named/shop.ts"));
+    clear(&script_uri("git-named/admin.js"));
+
+    let report = pull_with(github.client(), &puller(), request("git-named"))
+        .await
+        .expect("pull should succeed");
+
+    let mut uris: Vec<String> = report
+        .scripts
+        .iter()
+        .map(|script| script.script_uri.clone())
+        .collect();
+    uris.sort();
+
     assert_eq!(
-        elsewhere.scripts[0].script_uri,
-        script_uri("git-base-b/main.ts")
+        uris,
+        vec![
+            // The extension follows the entry, because the transpiler reads it
+            // and nothing else about the name.
+            script_uri("git-named/admin.js"),
+            script_uri("git-named/shop.ts"),
+        ]
     );
+}
+
+/// A repository that is itself one script takes the repository's name, rather
+/// than repeating it as `.../shop/shop.js`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_single_script_repository_is_named_after_the_repository() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[("main.js", "function init() {}")])
+        .await
+        .expect("fixture should start");
+
+    let uri = &script_uri("git-solo.js");
+    clear(uri);
+
+    let report = pull_with(github.client(), &puller(), request("git-solo"))
+        .await
+        .expect("pull should succeed");
+
+    assert_eq!(&report.scripts[0].script_uri, uri);
+    assert!(repository::fetch_script(uri).is_some());
 }

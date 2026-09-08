@@ -4815,21 +4815,36 @@ fn can_read_history(user: &UserContext, script_uri: &str) -> bool {
         && can_access_assets(user, script_uri, &Capability::ReadScripts)
 }
 
-/// Whether `user` may change a script's history or restore from it.
-///
-/// A revert writes the root as readily as it writes a module, so it takes what
-/// writing either takes.
 // ============================================================================
 // Git sync
 // ============================================================================
 
-#[derive(Deserialize, Default)]
+/// What to pull, and from where.
+#[derive(Deserialize, Default, utoipa::ToSchema)]
+#[schema(example = json!({ "repo": "octocat/hello-world" }))]
 pub struct GitPullBody {
-    repo: Option<String>,
-    branch: Option<String>,
-    prefix: Option<String>,
+    /// The repository, as `owner/repo` or as any GitHub URL naming it —
+    /// `octocat/hello-world`, `https://github.com/octocat/hello-world`, or the
+    /// `.git` clone URL. Required.
+    #[schema(example = "octocat/hello-world")]
+    pub repo: Option<String>,
+
+    /// Branch to read. Omit to use whichever branch the repository calls its
+    /// default.
+    #[schema(example = "main")]
+    pub branch: Option<String>,
+
+    /// URI prefix the pulled scripts land under, appended to this engine's own
+    /// origin. Defaults to the repository name. Set it when two repositories
+    /// would otherwise collide, or to place a solution somewhere specific.
+    #[schema(example = "examples")]
+    pub prefix: Option<String>,
+
+    /// Download and re-apply even when the repository has not moved since the
+    /// last pull. Off by default, because an unchanged repository is normally
+    /// nothing to do.
     #[serde(default)]
-    force: bool,
+    pub force: bool,
 }
 
 /// Turn a sync failure into the status a caller can act on.
@@ -4893,11 +4908,8 @@ fn pull_report_json(report: &crate::git_sync::PullReport) -> Value {
     post,
     path = "/engine/git/pull",
     tags = ["Git"],
-    request_body(content_type = "application/json",
-        description = "JSON fields: repo (required, 'owner/repo' or a GitHub URL), \
-                       branch (defaults to the repository's default branch), \
-                       prefix (URI prefix the scripts land under, defaults to the repository name), \
-                       force (download and re-apply even when nothing appears to have moved)"),
+    request_body(content = GitPullBody, content_type = "application/json",
+        description = "Which repository to read, and where its scripts should land"),
     responses(
         (status = 200, description = "What each script's pull did, and the init() that followed"),
         (status = 400, description = "Unusable repository, branch, or layout; nothing was written"),
@@ -4937,10 +4949,21 @@ pub async fn git_pull_route(
     }
 }
 
-#[derive(Deserialize, Default)]
+/// A personal access token to store for a git host.
+#[derive(Deserialize, Default, utoipa::ToSchema)]
+#[schema(example = json!({ "token": "github_pat_11ABCDEFG..." }))]
 pub struct GitCredentialBody {
-    token: Option<String>,
-    host: Option<String>,
+    /// The token. A fine-grained token scoped to the repositories you want is
+    /// enough; it needs no more than read access to their contents. Required.
+    ///
+    /// It is encrypted at rest and is never returned by this or any other
+    /// endpoint.
+    pub token: Option<String>,
+
+    /// Git host the token authenticates against. Defaults to `github.com`,
+    /// which is the only host supported.
+    #[schema(example = "github.com")]
+    pub host: Option<String>,
 }
 
 /// Who may hold a git credential, and whose.
@@ -5005,8 +5028,8 @@ fn credential_json(summary: &crate::git_credentials::CredentialSummary) -> Value
     post,
     path = "/engine/git/credentials",
     tags = ["Git"],
-    request_body(content_type = "application/json",
-        description = "JSON fields: token (required), host (defaults to github.com)"),
+    request_body(content = GitCredentialBody, content_type = "application/json",
+        description = "The token to store. It is checked against the host before being kept."),
     responses(
         (status = 200, description = "Stored, with the account the host reported"),
         (status = 400, description = "Missing token, or an unsupported host"),
@@ -5117,7 +5140,7 @@ pub async fn git_credentials_get_route(auth_user: Option<Extension<AuthUser>>) -
     delete,
     path = "/engine/git/credentials",
     tags = ["Git"],
-    params(("host" = Option<String>, Query, description = "Host to forget; defaults to github.com")),
+    params(GitHostQuery),
     responses(
         (status = 200, description = "Whether there was a credential to remove"),
         (status = 403, description = "Access denied"),
@@ -5151,9 +5174,10 @@ pub async fn git_credentials_delete_route(
     }
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, utoipa::IntoParams)]
 pub struct GitHostQuery {
-    host: Option<String>,
+    /// Git host to act on. Defaults to `github.com`.
+    pub host: Option<String>,
 }
 
 fn tool_set_git_credential(args: &Value, user: &UserContext) -> Value {
@@ -5252,6 +5276,10 @@ fn tool_pull_from_git(args: &Value, user: &UserContext) -> Value {
     }
 }
 
+/// Whether `user` may change a script's history or restore from it.
+///
+/// A revert writes the root as readily as it writes a module, so it takes what
+/// writing either takes.
 fn can_write_history(user: &UserContext, script_uri: &str) -> bool {
     can_access_assets(user, script_uri, &Capability::WriteAssets)
         && can_access_assets(user, script_uri, &Capability::WriteScripts)

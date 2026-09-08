@@ -53,6 +53,18 @@ pub const MAX_TREE_FILES: usize = 4096;
 /// what a future push writes, so both directions agree without negotiation.
 const ENTRY_NAMES: [&str; 4] = ["main.ts", "main.js", "main.tsx", "main.jsx"];
 
+/// Version of the rules that turn a repository into script URIs.
+///
+/// Recorded on every sync row so that a pull can tell whether the row in front
+/// of it was written by the same rules it is about to apply. Bump it whenever
+/// [`compose_script_uri`] changes: an unmoved commit under unchanged rules is
+/// genuinely nothing to do, and under changed rules it is everything to do.
+///
+/// 1. `{base}/{entry file name}` — every script called `main.js`.
+/// 2. `{base}/{directory}{ext}`, or `{base}{ext}` for a repository that is one
+///    script, so a script is named after where it came from.
+pub const MAPPING_VERSION: i32 = 2;
+
 /// Files skipped at a script's top level.
 ///
 /// Only at the top level: a `README.md` beside the entry is repository
@@ -264,17 +276,27 @@ pub struct ScriptLayout {
 }
 
 impl ScriptLayout {
-    /// The entry's file name, which a local URI has to end with.
-    ///
-    /// [`crate::module_loader::root_module_path`] resolves a script's imports
-    /// against the basename of its URI, so a URI ending in a different name
-    /// than the entry file would resolve relative imports differently in the
-    /// engine than they resolved in the repository.
+    /// The entry's file name within the repository.
     pub fn entry_file_name(&self) -> &str {
         self.entry_path
             .rsplit('/')
             .next()
             .unwrap_or(&self.entry_path)
+    }
+
+    /// The entry's extension, including the dot, or empty when it has none.
+    ///
+    /// This is the part of the file name a URI actually has to keep.
+    /// [`crate::transpiler::transpile_if_needed`] decides whether a module is
+    /// TypeScript or JSX from the extension alone and never reads the name in
+    /// front of it, so a `.ts` entry served under a URI ending `.js` would be
+    /// handed to the runtime untranspiled.
+    pub fn entry_extension(&self) -> &str {
+        let name = self.entry_file_name();
+        match name.rfind('.') {
+            Some(dot) => &name[dot..],
+            None => "",
+        }
     }
 }
 
@@ -766,7 +788,9 @@ fn fetch_and_write(
             .unwrap_or_default();
         let settled = !known.is_empty()
             && known.iter().all(|row| {
-                row.commit == resolved.commit && row.uri_base.as_deref() == Some(uri_base.as_str())
+                row.commit == resolved.commit
+                    && row.uri_base.as_deref() == Some(uri_base.as_str())
+                    && row.mapping_version == Some(MAPPING_VERSION)
             });
         if settled {
             return Ok(WrittenScripts {
@@ -863,16 +887,25 @@ fn is_absolute(prefix: &str) -> bool {
 
 /// Put the pieces together, given a resolved base.
 ///
-/// The URI ends with the entry's own file name because
-/// [`crate::module_loader::root_module_path`] resolves a script's imports
-/// against the basename of its URI. A URI ending in anything else would resolve
-/// the entry's relative imports differently here than they resolved in the
-/// repository — the one part of this mapping that is not free to choose.
+/// A script is named after where it came from — the directory that held it, or
+/// the repository when the repository is itself one script. Naming every script
+/// `main.js` after its entry file is accurate and useless: a list of them in an
+/// editor is a column of identical names, and the one thing a person needs to
+/// read off a script URI is which script it is.
+///
+/// The extension is carried over from the entry and is the part that is *not*
+/// free. [`crate::transpiler`] decides whether to transpile from the extension
+/// alone — the stem is never read — so a `.ts` entry under a URI ending `.js`
+/// would reach the runtime as TypeScript nobody transpiled.
 fn compose_script_uri(base: &str, layout: &ScriptLayout) -> String {
     let base = base.trim_end_matches('/');
+    let extension = layout.entry_extension();
     match &layout.name {
-        Some(name) => format!("{}/{}/{}", base, name, layout.entry_file_name()),
-        None => format!("{}/{}", base, layout.entry_file_name()),
+        Some(name) => format!("{}/{}{}", base, name, extension),
+        // The base already ends with the repository's own name, so appending it
+        // again would read `.../shop/shop.js` for a repository holding one
+        // script.
+        None => format!("{}{}", base, extension),
     }
 }
 
@@ -1033,6 +1066,8 @@ pub struct SyncedScript {
     /// The base the pull composed this script's URI against, or `None` for a
     /// row written before that was recorded.
     pub uri_base: Option<String>,
+    /// Which composition rules wrote it, or `None` for a row predating them.
+    pub mapping_version: Option<i32>,
 }
 
 /// The scripts this remote and branch have written here.
@@ -1043,7 +1078,7 @@ pub struct SyncedScript {
 pub async fn last_synced(remote: &str, branch: &str) -> crate::error::AppResult<Vec<SyncedScript>> {
     use sqlx::Row;
     let rows = sqlx::query(
-        "SELECT script_uri, last_commit, uri_base FROM script_git_sync \
+        "SELECT script_uri, last_commit, uri_base, mapping_version FROM script_git_sync \
          WHERE remote = $1 AND branch = $2",
     )
     .bind(remote)
@@ -1061,6 +1096,7 @@ pub async fn last_synced(remote: &str, branch: &str) -> crate::error::AppResult<
             script_uri: row.get::<String, _>(0),
             commit: row.get::<String, _>(1),
             uri_base: row.get::<Option<String>, _>(2),
+            mapping_version: row.get::<Option<i32>, _>(3),
         })
         .collect())
 }
@@ -1079,14 +1115,15 @@ pub async fn record_sync(
     sqlx::query(
         r#"
         INSERT INTO script_git_sync
-            (script_uri, remote, branch, last_commit, uri_base,
+            (script_uri, remote, branch, last_commit, uri_base, mapping_version,
              revision_at_sync, synced_at, synced_by)
-        VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)
         ON CONFLICT (script_uri) DO UPDATE SET
             remote = EXCLUDED.remote,
             branch = EXCLUDED.branch,
             last_commit = EXCLUDED.last_commit,
             uri_base = EXCLUDED.uri_base,
+            mapping_version = EXCLUDED.mapping_version,
             revision_at_sync = COALESCE(EXCLUDED.revision_at_sync, script_git_sync.revision_at_sync),
             synced_at = EXCLUDED.synced_at,
             synced_by = EXCLUDED.synced_by
@@ -1097,6 +1134,7 @@ pub async fn record_sync(
     .bind(branch)
     .bind(commit)
     .bind(uri_base)
+    .bind(MAPPING_VERSION)
     .bind(revision)
     .bind(user_id)
     .execute(&pool()?)
@@ -1324,27 +1362,47 @@ mod tests {
     }
 
     #[test]
-    fn a_uri_ends_with_the_entry_file_name() {
-        // `module_loader::root_module_path` resolves a script's imports against
-        // the basename of its URI, so this is the part that is not free.
+    fn a_uri_is_named_after_its_source_and_keeps_the_entry_extension() {
+        // A repository that is one script takes the repository's name, which
+        // the base already ends with — appending it again would read
+        // `.../examples/examples.ts`.
         let single = layout(None, "main.ts");
         assert_eq!(
             compose_script_uri("https://engine.example/examples", &single),
-            "https://engine.example/examples/main.ts"
+            "https://engine.example/examples.ts"
         );
 
+        // One inside a directory takes the directory's name.
         let named = layout(Some("shop"), "shop/main.js");
         assert_eq!(
             compose_script_uri("https://engine.example/examples", &named),
-            "https://engine.example/examples/shop/main.js"
+            "https://engine.example/examples/shop.js"
         );
+    }
+
+    /// The extension is the part of the entry's name a URI has to keep:
+    /// `transpiler::needs_transpilation` reads it and never reads the stem, so
+    /// a `.ts` entry under a `.js` URI would reach the runtime untranspiled.
+    #[test]
+    fn the_extension_follows_the_entry() {
+        assert_eq!(layout(Some("a"), "a/main.ts").entry_extension(), ".ts");
+        assert_eq!(layout(Some("a"), "a/main.tsx").entry_extension(), ".tsx");
+        assert_eq!(layout(None, "main.js").entry_extension(), ".js");
+        assert_eq!(layout(None, "Makefile").entry_extension(), "");
     }
 
     #[test]
     fn a_trailing_slash_on_the_base_does_not_double_up() {
         assert_eq!(
-            compose_script_uri("https://engine.example/", &layout(None, "main.ts")),
-            "https://engine.example/main.ts"
+            compose_script_uri(
+                "https://engine.example/examples/",
+                &layout(Some("shop"), "shop/main.ts")
+            ),
+            "https://engine.example/examples/shop.ts"
+        );
+        assert_eq!(
+            compose_script_uri("https://engine.example/examples/", &layout(None, "main.ts")),
+            "https://engine.example/examples.ts"
         );
     }
 

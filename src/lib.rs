@@ -179,6 +179,8 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
             openapi_schemas::ErrorResponse,
             openapi_schemas::ValidationErrorResponse,
             openapi_schemas::UnauthorizedErrorResponse,
+            engine_api::GitPullBody,
+            engine_api::GitCredentialBody,
             auth::routes::AuthorizeParams,
             auth::routes::TokenParams,
             auth::metadata::AuthorizationServerMetadata,
