@@ -107,6 +107,8 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::git_pull_route,
         engine_api::git_push_route,
         engine_api::git_status_route,
+        engine_api::git_bindings_route,
+        engine_api::git_unbind_route,
         engine_api::git_credentials_get_route,
         engine_api::git_credentials_post_route,
         engine_api::git_credentials_delete_route,
@@ -989,6 +991,10 @@ async fn initialize_auth_manager(
 
     // Create rate limiter
     let rate_limiter = Arc::new(RateLimiter::new(pool.clone()));
+    // Shared with the surfaces that have no `AppState` to carry it — the git
+    // endpoints and their MCP tools, which must draw on one budget rather than
+    // one each.
+    security::rate_limiting::initialize_shared(rate_limiter.clone());
 
     // Load CSRF key from configuration (base64 encoded 32 bytes)
     let csrf_key = match &security_config.csrf_key {
@@ -2762,6 +2768,14 @@ async fn setup_routes(
         .route(
             "/engine/git/status",
             axum::routing::get(engine_api::git_status_route),
+        )
+        .route(
+            "/engine/git/bindings",
+            axum::routing::get(engine_api::git_bindings_route),
+        )
+        .route(
+            "/engine/git/binding",
+            axum::routing::delete(engine_api::git_unbind_route),
         )
         .route(
             "/engine/revisions/label",

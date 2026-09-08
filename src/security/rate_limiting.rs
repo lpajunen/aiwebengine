@@ -132,6 +132,15 @@ pub enum RateLimitKey {
     /// onboards — so the only thing bounding how many rows a caller can write
     /// into `oauth_clients` is this.
     ClientRegistration(String),
+    /// Git pulls and pushes by one account.
+    ///
+    /// Every other operation of this weight in the engine is bounded and this
+    /// was not: one pull downloads an archive, expands it and rewrites a
+    /// script's whole tree, and nothing stopped an editor from asking for that
+    /// in a loop. Keyed by account rather than address because it is an
+    /// authenticated operation, and the account is what the budget should
+    /// follow across whatever network the caller is on.
+    GitSync(String),
     /// Rate limit by endpoint/resource
     Endpoint(String),
     /// Rate limit by user and endpoint combination
@@ -149,6 +158,7 @@ impl RateLimitKey {
             RateLimitKey::UserId(user_id) => format!("user:{}", user_id),
             RateLimitKey::LoginFailure(account) => format!("login_failure:{}", account),
             RateLimitKey::ClientRegistration(ip) => format!("client_registration:{}", ip),
+            RateLimitKey::GitSync(user) => format!("git_sync:{}", user),
             RateLimitKey::Endpoint(endpoint) => format!("endpoint:{}", endpoint),
             RateLimitKey::UserEndpoint(user_id, endpoint) => {
                 format!("user_endpoint:{}:{}", user_id, endpoint)
@@ -190,6 +200,28 @@ pub struct RateLimiter {
     threat_detector: Option<Arc<ThreatDetector>>,
     /// Security auditor for logging
     security_auditor: Option<Arc<SecurityAuditor>>,
+}
+
+/// The limiter this process shares, for callers reached from more than one
+/// entry point.
+///
+/// The auth surface takes its limiter through `AppState`, which works because
+/// every one of those handlers has that state. A git pull is reached from an
+/// HTTP handler and an MCP tool that share none, so the budget has to be
+/// findable without it — and it has to be *one* budget, or the two entry points
+/// would each hand out a full allowance.
+static SHARED: std::sync::OnceLock<std::sync::Arc<RateLimiter>> = std::sync::OnceLock::new();
+
+/// Set at startup. Later calls are ignored, as elsewhere in the engine.
+pub fn initialize_shared(limiter: std::sync::Arc<RateLimiter>) -> bool {
+    SHARED.set(limiter).is_ok()
+}
+
+/// The shared limiter, or `None` before startup has set one — which is what a
+/// unit test sees, and where the caller carries on rather than refusing work it
+/// has no budget to check against.
+pub fn shared() -> Option<std::sync::Arc<RateLimiter>> {
+    SHARED.get().cloned()
 }
 
 impl RateLimiter {
@@ -244,6 +276,22 @@ impl RateLimiter {
             RateLimitConfig {
                 max_tokens: 10,
                 refill_rate: 1.0 / 600.0,
+                window_duration: Duration::hours(1),
+                burst_allowance: 0,
+                enabled: true,
+            },
+        );
+
+        // Git sync. Generous enough that a person iterating on a solution —
+        // pull, edit, push, check — never notices, and small enough that a
+        // caller looping over pulls stops after the first minute. Each one is
+        // an archive download and a tree rewrite, so the cost being bounded is
+        // real rather than nominal.
+        configs.insert(
+            "git_sync".to_string(),
+            RateLimitConfig {
+                max_tokens: 60,
+                refill_rate: 1.0 / 10.0,
                 window_duration: Duration::hours(1),
                 burst_allowance: 0,
                 enabled: true,
@@ -446,6 +494,7 @@ impl RateLimiter {
             RateLimitKey::UserId(_) => "user",
             RateLimitKey::LoginFailure(_) => "login_failure",
             RateLimitKey::ClientRegistration(_) => "client_registration",
+            RateLimitKey::GitSync(_) => "git_sync",
             RateLimitKey::Endpoint(_) => "endpoint",
             RateLimitKey::UserEndpoint(_, _) => "user",
             RateLimitKey::IpEndpoint(_, _) => "ip",

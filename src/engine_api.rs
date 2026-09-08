@@ -1396,6 +1396,7 @@ pub fn read_asset_authorized(
     })
 }
 
+#[derive(Debug)]
 pub enum AssetWriteError {
     AccessDenied,
     Validation(String),
@@ -1759,11 +1760,17 @@ pub fn upsert_assets_synced(
         }
     }
 
+    // Writes and removals in one transaction, so the tree either becomes what
+    // the caller described or stays exactly as it was. Doing the two in
+    // sequence left a window where a process dying between them kept files the
+    // caller had asked to drop.
     let written = to_write.len();
-    if written > 0 {
-        repository::upsert_assets(script_uri, to_write)
-            .map_err(|e| AssetWriteError::Storage(format!("Error upserting assets: {}", e)))?;
-    }
+    let deleted = if written > 0 || !options.delete.is_empty() {
+        repository::sync_assets(script_uri, to_write, options.delete.to_vec())
+            .map_err(|e| AssetWriteError::Storage(format!("Error writing assets: {}", e)))?
+    } else {
+        0
+    };
 
     // One audit event for the batch, not one per file: the batch is the act.
     let auditor = auditor();
@@ -1793,23 +1800,6 @@ pub fn upsert_assets_synced(
             )
             .await;
     });
-
-    // Removals come after the writes and before the revision, so the single
-    // revision recorded below describes the tree as it finally stands rather
-    // than an intermediate state holding files the caller asked to drop.
-    //
-    // Not yet inside the write's transaction: `repository::upsert_assets` opens
-    // its own, and giving the two a shared one is a repository change this does
-    // not need to make yet. The window is small and self-correcting — a process
-    // that dies between the two leaves files the next sync removes again — but
-    // it is a window, and closing it is what a `Deleted` variant on the batch
-    // write is for.
-    let mut deleted = 0usize;
-    for name in options.delete {
-        if repository::delete_asset(script_uri, name) {
-            deleted += 1;
-        }
-    }
 
     // A write that changed nothing left the script exactly as the previous
     // revision already describes, so there is no new state to record.
@@ -4862,6 +4852,10 @@ fn git_sync_status(error: &crate::git_sync::SyncError) -> StatusCode {
         // Both sides moved. Not a fault on either end — a decision the caller
         // has to make, which is what 409 says.
         SyncError::Diverged(_) => StatusCode::CONFLICT,
+        // The target is occupied by something this repository did not write —
+        // a conflict in the same sense, and resolvable the same way.
+        SyncError::WouldOverwrite(_) => StatusCode::CONFLICT,
+        SyncError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
         SyncError::Archive(_) | SyncError::Layout(_) => StatusCode::BAD_REQUEST,
         SyncError::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
         SyncError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -5459,6 +5453,124 @@ fn tool_get_git_status(args: &Value, user: &UserContext) -> Value {
         async move { crate::git_sync::status(&user, &script).await },
     ) {
         Ok(status) => status_json(&status),
+        Err(e) => json!({ "error": e.to_string() }),
+    }
+}
+
+fn binding_json(binding: &crate::git_sync::Binding) -> Value {
+    json!({
+        "script": binding.script_uri,
+        "repo": binding.remote,
+        "branch": binding.branch,
+        "commitAtSync": binding.last_commit,
+        "syncedAt": binding.synced_at.to_rfc3339(),
+        "syncedBy": binding.synced_by,
+    })
+}
+
+/// Every git binding the caller may see.
+///
+/// Which repository each script tracks, and where the two last agreed. Filtered
+/// to the scripts the caller can read, so a listing never reveals that a script
+/// exists to somebody who could not otherwise tell.
+#[utoipa::path(
+    get,
+    path = "/engine/git/bindings",
+    tags = ["Git"],
+    responses(
+        (status = 200, description = "Script, repository, branch and last agreed commit"),
+        (status = 403, description = "Access denied"),
+    )
+)]
+pub async fn git_bindings_route(auth_user: Option<Extension<AuthUser>>) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+
+    match crate::git_sync::bindings().await {
+        Ok(bindings) => {
+            let visible: Vec<Value> = bindings
+                .iter()
+                .filter(|binding| can_read_history(&user, &binding.script_uri))
+                .map(binding_json)
+                .collect();
+            json_response(
+                StatusCode::OK,
+                json!({ "bindings": visible, "timestamp": iso_timestamp() }),
+            )
+        }
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// Stop a script tracking a repository.
+///
+/// The script and its files stay as they are; what goes is the record of where
+/// they came from. Takes what changing the script takes, because a binding
+/// decides what a later pull is allowed to replace.
+#[utoipa::path(
+    delete,
+    path = "/engine/git/binding",
+    tags = ["Git"],
+    params(GitStatusQuery),
+    responses(
+        (status = 200, description = "Whether the script was tracking anything"),
+        (status = 403, description = "Access denied"),
+    )
+)]
+pub async fn git_unbind_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<GitStatusQuery>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+
+    let Some(script) = query.script else {
+        return missing_param_response("script");
+    };
+    if !can_write_script(&user, &script) {
+        return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+    }
+
+    match crate::git_sync::unbind(&script).await {
+        Ok(removed) => json_response(
+            StatusCode::OK,
+            json!({
+                "success": true,
+                "script": script,
+                "removed": removed,
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+fn tool_list_git_bindings(_args: &Value, user: &UserContext) -> Value {
+    match crate::database::run_blocking(crate::git_sync::bindings()) {
+        Ok(bindings) => json!({
+            "bindings": bindings
+                .iter()
+                .filter(|binding| can_read_history(user, &binding.script_uri))
+                .map(binding_json)
+                .collect::<Vec<Value>>(),
+            "timestamp": iso_timestamp(),
+        }),
+        Err(e) => json!({ "error": e.to_string() }),
+    }
+}
+
+fn tool_clear_git_remote(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    if !can_write_script(user, script) {
+        return json!({ "error": "Access denied" });
+    }
+    match crate::database::run_blocking(crate::git_sync::unbind(script)) {
+        Ok(removed) => json!({
+            "success": true,
+            "script": script,
+            "removed": removed,
+            "timestamp": iso_timestamp(),
+        }),
         Err(e) => json!({ "error": e.to_string() }),
     }
 }
@@ -8286,6 +8398,29 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 })
             },
             tool_delete_git_credential,
+        ),
+        (
+            "list_git_bindings",
+            "Which repository each script tracks, and where the two last agreed. Shows only \
+            scripts you can read.",
+            || json!({ "type": "object", "properties": {} }),
+            tool_list_git_bindings,
+        ),
+        (
+            "clear_git_remote",
+            "Stop a script tracking a repository. The script and its files stay exactly as they \
+            are; what goes is the record of where they came from, so later pulls no longer treat \
+            it as that repository's to replace.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script to unbind" }
+                    },
+                    "required": ["script"]
+                })
+            },
+            tool_clear_git_remote,
         ),
         (
             "get_git_status",

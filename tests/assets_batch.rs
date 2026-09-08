@@ -652,3 +652,64 @@ async fn a_batch_over_the_management_body_limit_is_still_accepted() {
 
     engine.shutdown().await;
 }
+
+/// Writes and removals are one transaction, so a sync's tree either becomes
+/// what the caller described or stays as it was. Asserted through the batch
+/// path because that is where both halves meet.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sync_writes_and_removes_as_one_act() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://assets-batch/sync";
+    deploy(uri, "function init() {}");
+
+    let user = UserContext::admin("batcher".to_string());
+    let keep = "assets_batch_sync/keep.ts";
+    let drop = "assets_batch_sync/drop.ts";
+
+    aiwebengine::engine_api::upsert_assets_authorized(
+        &user,
+        uri,
+        &[
+            aiwebengine::engine_api::AssetWrite {
+                name: keep.to_string(),
+                mimetype: None,
+                content_base64: b64("export const keep = 1;"),
+                expected_sha256: None,
+            },
+            aiwebengine::engine_api::AssetWrite {
+                name: drop.to_string(),
+                mimetype: None,
+                content_base64: b64("export const drop = 2;"),
+                expected_sha256: None,
+            },
+        ],
+    )
+    .expect("initial write should succeed");
+
+    let outcome = aiwebengine::engine_api::upsert_assets_synced(
+        &user,
+        uri,
+        &[aiwebengine::engine_api::AssetWrite {
+            name: keep.to_string(),
+            mimetype: None,
+            content_base64: b64("export const keep = 3;"),
+            expected_sha256: None,
+        }],
+        aiwebengine::engine_api::AssetSyncOptions {
+            delete: &[drop.to_string()],
+            ..Default::default()
+        },
+    )
+    .expect("sync should succeed");
+
+    assert_eq!(outcome.written, 1);
+    assert_eq!(outcome.deleted, 1);
+    assert_eq!(stored_text(uri, keep), "export const keep = 3;");
+    assert!(stored(uri, drop).is_none(), "the removal landed too");
+    assert!(
+        outcome.revision.is_some(),
+        "and the whole change is one revision"
+    );
+}

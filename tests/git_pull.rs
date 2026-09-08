@@ -704,3 +704,136 @@ async fn a_single_script_repository_is_named_after_the_repository() {
     assert_eq!(&report.scripts[0].script_uri, uri);
     assert!(repository::fetch_script(uri).is_some());
 }
+
+/// Owning a script is not the same as having agreed that a repository may
+/// replace it. The prefix defaults to the repository's name, so a repository
+/// named like an existing script's prefix is all it takes to overwrite work
+/// written here and never pulled.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pull_will_not_overwrite_a_script_it_did_not_write() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[("main.js", "function init() { /* theirs */ }")])
+        .await
+        .expect("fixture should start");
+
+    let uri = &script_uri("git-occupied.js");
+    clear(uri);
+    aiwebengine::engine_api::upsert_script_authorized(
+        &puller(),
+        uri,
+        "function init() { /* mine, written here */ }",
+        Some("test"),
+    )
+    .expect("script should store");
+
+    let error = pull_with(github.client(), &puller(), request("git-occupied"))
+        .await
+        .expect_err("should refuse to clobber");
+
+    assert!(
+        error.to_string().contains("would overwrite"),
+        "unexpected: {}",
+        error
+    );
+    assert_eq!(
+        aiwebengine::repository::fetch_script(uri).as_deref(),
+        Some("function init() { /* mine, written here */ }"),
+        "and left it alone"
+    );
+
+    // Force is how a caller says they meant it.
+    let forced = PullRequest {
+        force: true,
+        ..request("git-occupied")
+    };
+    pull_with(github.client(), &puller(), forced)
+        .await
+        .expect("forced pull should succeed");
+    assert_eq!(
+        aiwebengine::repository::fetch_script(uri).as_deref(),
+        Some("function init() { /* theirs */ }")
+    );
+}
+
+/// A second pull of the same repository is not a clobber — replacing what it
+/// wrote is the entire point of pulling again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repeat_pull_is_not_treated_as_an_overwrite() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[("main.js", "function init() {}")])
+        .await
+        .expect("fixture should start");
+
+    let uri = &script_uri("git-repeat.js");
+    clear(uri);
+
+    pull_with(github.client(), &puller(), request("git-repeat"))
+        .await
+        .expect("first pull should succeed");
+
+    github.push(
+        "3333333333333333333333333333333333333333",
+        &[("main.js", "function init() { /* v2 */ }")],
+    );
+
+    pull_with(github.client(), &puller(), request("git-repeat"))
+        .await
+        .expect("second pull should succeed without force");
+
+    assert_eq!(
+        aiwebengine::repository::fetch_script(uri).as_deref(),
+        Some("function init() { /* v2 */ }")
+    );
+}
+
+/// A binding is what tells a later pull the script is that repository's to
+/// replace, so clearing it puts the script back under the clobber protection.
+#[tokio::test(flavor = "multi_thread")]
+async fn clearing_a_binding_leaves_the_script_and_restores_its_protection() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[("main.js", "function init() {}")])
+        .await
+        .expect("fixture should start");
+
+    let uri = &script_uri("git-unbind.js");
+    clear(uri);
+
+    pull_with(github.client(), &puller(), request("git-unbind"))
+        .await
+        .expect("pull should succeed");
+
+    let listed = aiwebengine::git_sync::bindings()
+        .await
+        .expect("should list");
+    assert!(
+        listed.iter().any(|b| &b.script_uri == uri),
+        "the pull recorded a binding"
+    );
+
+    assert!(
+        aiwebengine::git_sync::unbind(uri)
+            .await
+            .expect("should clear"),
+        "there was one to clear"
+    );
+
+    assert!(
+        aiwebengine::repository::fetch_script(uri).is_some(),
+        "the script itself stays"
+    );
+
+    github.push(
+        "4444444444444444444444444444444444444444",
+        &[("main.js", "function init() { /* v2 */ }")],
+    );
+    let error = pull_with(github.client(), &puller(), request("git-unbind"))
+        .await
+        .expect_err("unbound, so no longer theirs to replace");
+    assert!(error.to_string().contains("would overwrite"), "{}", error);
+}

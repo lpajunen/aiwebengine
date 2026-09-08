@@ -595,6 +595,83 @@ pub fn infer_scripts(files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<ScriptLayo
 }
 
 // ============================================================================
+// What a sync costs, and what it records
+// ============================================================================
+
+/// Spend one unit of this account's git budget.
+///
+/// A pull downloads an archive, expands it and rewrites a script's whole tree;
+/// a push uploads blobs and moves a ref. Every other operation of that weight
+/// in the engine is bounded and these were not. Keyed by account rather than
+/// address because both are authenticated, and the budget should follow the
+/// account across whatever network it is on.
+async fn spend_budget(user: &UserContext) -> Result<(), SyncError> {
+    let Some(user_id) = &user.user_id else {
+        return Ok(());
+    };
+    let Some(limiter) = crate::security::rate_limiting::shared() else {
+        // Startup has not built one — a unit test. Carrying on is right:
+        // refusing work for want of a budget to check would fail closed on
+        // something that is not a security decision.
+        return Ok(());
+    };
+
+    let allowed = limiter
+        .check_rate_limit(
+            crate::security::rate_limiting::RateLimitKey::GitSync(user_id.clone()),
+            1,
+        )
+        .await
+        .allowed;
+
+    if allowed {
+        Ok(())
+    } else {
+        Err(SyncError::RateLimited(
+            "Too many git operations. This account's budget refills over the next few minutes."
+                .to_string(),
+        ))
+    }
+}
+
+/// Record that content crossed the boundary between this engine and a git host.
+///
+/// A push publishes a script's contents to a third party, and a pull replaces a
+/// script's contents from one. Both are worth a line in the audit log for the
+/// same reason the asset write already keeps one: somebody asking later what
+/// happened to a script needs to see that the answer was "somewhere else".
+fn audit_sync(
+    user: &UserContext,
+    action: &'static str,
+    severity: crate::security::audit::SecuritySeverity,
+    script: &str,
+    remote: &str,
+    detail: String,
+) {
+    use crate::security::audit::{SecurityEvent, SecurityEventType};
+
+    let auditor = crate::security::audit::SecurityAuditor::new(
+        crate::database::get_global_database().map(|db| db.pool().clone()),
+    );
+    let user_id = user.user_id.clone();
+    let script = script.to_string();
+    let remote = remote.to_string();
+
+    tokio::task::spawn(async move {
+        let _ = auditor
+            .log_event(
+                SecurityEvent::new(SecurityEventType::SystemSecurityEvent, severity, user_id)
+                    .with_resource("git".to_string())
+                    .with_action(action.to_string())
+                    .with_detail("script_uri", &script)
+                    .with_detail("remote", &remote)
+                    .with_detail("outcome", &detail),
+            )
+            .await;
+    });
+}
+
+// ============================================================================
 // Pulling
 // ============================================================================
 
@@ -691,8 +768,35 @@ pub async fn pull(user: &UserContext, request: PullRequest) -> Result<PullReport
     };
     let authenticated = token.is_some();
 
+    spend_budget(user).await?;
+
+    let repo_label = request.repo.clone();
     let client = crate::git_github::GitHubClient::new()?.with_token(token);
     let report = pull_with(client, user, request).await;
+
+    match &report {
+        Ok(done) => audit_sync(
+            user,
+            "pull",
+            crate::security::audit::SecuritySeverity::Medium,
+            &done
+                .scripts
+                .iter()
+                .map(|script| script.script_uri.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            &done.repo,
+            format!("commit={} scripts={}", done.commit, done.scripts.len()),
+        ),
+        Err(e) => audit_sync(
+            user,
+            "pull_refused",
+            crate::security::audit::SecuritySeverity::Low,
+            "",
+            &repo_label,
+            e.to_string(),
+        ),
+    }
 
     // Recorded only when the pull got somewhere, so "last used" answers about
     // the credential working rather than about somebody having typed a
@@ -825,6 +929,36 @@ fn fetch_and_write(
              Pull under a different prefix, or ask an administrator.",
             refused.join(", ")
         )));
+    }
+
+    // Owning a script is not the same as having agreed that a repository may
+    // replace it. The prefix defaults to the repository's name, so a repository
+    // named like an existing script's prefix is all it takes to overwrite work
+    // that was written here and never pulled from anywhere.
+    if !request.force {
+        let occupied: Vec<String> = planned
+            .iter()
+            .filter(|(uri, _)| crate::repository::fetch_script(uri).is_some())
+            .filter(|(uri, _)| {
+                match crate::database::run_blocking(sync_row(uri)).unwrap_or_default() {
+                    // Already this repository's script: replacing it is the
+                    // whole point of a pull.
+                    Some(row) => row.remote != repo.to_string(),
+                    // Written here and bound to nothing.
+                    None => true,
+                }
+            })
+            .map(|(uri, _)| uri.clone())
+            .collect();
+
+        if !occupied.is_empty() {
+            return Err(SyncError::WouldOverwrite(format!(
+                "This pull would overwrite {}, which {} did not put there. Pull under a \
+                 different prefix, or pass force to replace it.",
+                occupied.join(", "),
+                repo
+            )));
+        }
     }
 
     let mut scripts = Vec::with_capacity(planned.len());
@@ -1118,8 +1252,42 @@ pub async fn push(user: &UserContext, request: PushRequest) -> Result<PushReport
         ));
     }
 
+    spend_budget(user).await?;
+
+    let script_label = request.script_uri.clone();
     let client = crate::git_github::GitHubClient::new()?.with_token(token);
-    let report = push_with(client, user, request).await?;
+    let report = match push_with(client, user, request).await {
+        Ok(report) => report,
+        Err(e) => {
+            // A refused push is worth recording too: a divergence somebody hit
+            // is the beginning of a story, and the log is where it starts.
+            audit_sync(
+                user,
+                "push_refused",
+                crate::security::audit::SecuritySeverity::Low,
+                &script_label,
+                "",
+                e.to_string(),
+            );
+            return Err(e);
+        }
+    };
+
+    // High, unlike a pull: this is content leaving the deployment for a third
+    // party, which is the direction that cannot be undone from here.
+    audit_sync(
+        user,
+        "push",
+        crate::security::audit::SecuritySeverity::High,
+        &report.script_uri,
+        &report.repo,
+        format!(
+            "commit={} written={} removed={}",
+            report.commit,
+            report.written.len(),
+            report.removed.len()
+        ),
+    );
 
     if let Some(user_id) = &user.user_id {
         crate::git_credentials::mark_used(user_id, host).await;
@@ -1479,6 +1647,67 @@ pub struct SyncRow {
     pub revision_at_sync: Option<i32>,
 }
 
+/// One script's binding, for a listing.
+#[derive(Debug, Clone)]
+pub struct Binding {
+    pub script_uri: String,
+    pub remote: String,
+    pub branch: String,
+    pub last_commit: String,
+    pub synced_at: chrono::DateTime<chrono::Utc>,
+    pub synced_by: Option<String>,
+}
+
+/// Every binding this engine holds.
+///
+/// Filtered by the caller afterwards rather than here, because who may see a
+/// script is a question about capabilities and ownership that this module has
+/// no business answering.
+pub async fn bindings() -> crate::error::AppResult<Vec<Binding>> {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT script_uri, remote, branch, last_commit, synced_at, synced_by \
+         FROM script_git_sync ORDER BY remote, script_uri",
+    )
+    .fetch_all(&pool()?)
+    .await
+    .map_err(|e| crate::error::AppError::Database {
+        message: format!("Database error listing git bindings: {}", e),
+        source: None,
+    })?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| Binding {
+            script_uri: row.get::<String, _>(0),
+            remote: row.get::<String, _>(1),
+            branch: row.get::<String, _>(2),
+            last_commit: row.get::<String, _>(3),
+            synced_at: row.get::<chrono::DateTime<chrono::Utc>, _>(4),
+            synced_by: row.get::<Option<String>, _>(5),
+        })
+        .collect())
+}
+
+/// Stop a script tracking a repository. Returns whether it was tracking one.
+///
+/// The script and its files stay exactly as they are; what goes is the record
+/// of where they came from. There is deliberately no counterpart that sets a
+/// binding without writing anything: a push names its repository and records
+/// the binding when it lands, and a binding that has never been either pushed
+/// or pulled describes an agreement neither side has made.
+pub async fn unbind(script_uri: &str) -> crate::error::AppResult<bool> {
+    let result = sqlx::query("DELETE FROM script_git_sync WHERE script_uri = $1")
+        .bind(script_uri)
+        .execute(&pool()?)
+        .await
+        .map_err(|e| crate::error::AppError::Database {
+            message: format!("Database error clearing a git binding: {}", e),
+            source: None,
+        })?;
+    Ok(result.rows_affected() > 0)
+}
+
 pub async fn sync_row(script_uri: &str) -> crate::error::AppResult<Option<SyncRow>> {
     use sqlx::Row;
     let row = sqlx::query(
@@ -1792,6 +2021,14 @@ pub enum SyncError {
     /// Both sides moved. The engine does not merge; it says so and stops.
     #[error("{0}")]
     Diverged(String),
+
+    /// The target already holds a script this repository did not write.
+    #[error("{0}")]
+    WouldOverwrite(String),
+
+    /// This account has spent its git budget.
+    #[error("{0}")]
+    RateLimited(String),
 }
 
 #[cfg(test)]

@@ -5883,6 +5883,37 @@ pub async fn upsert_assets_async(script_uri: &str, assets: Vec<Asset>) -> AppRes
 }
 
 /// Delete asset with error handling  
+/// Write some of a script's assets and remove others in one transaction.
+///
+/// Returns how many of the named removals actually removed something. A sync
+/// naming a file the script no longer has is not an error; it is a sync that
+/// has already happened.
+pub fn sync_assets(script_uri: &str, assets: Vec<Asset>, delete: Vec<String>) -> AppResult<usize> {
+    run_blocking(sync_assets_async(script_uri, assets, delete))
+}
+
+/// Async variant of [`sync_assets`].
+pub async fn sync_assets_async(
+    script_uri: &str,
+    assets: Vec<Asset>,
+    delete: Vec<String>,
+) -> AppResult<usize> {
+    for asset in &assets {
+        validate_asset(asset)?;
+        if asset.script_uri != script_uri {
+            return Err(RepositoryError::InvalidData(format!(
+                "Asset '{}' belongs to script '{}', not '{}'",
+                asset.uri, asset.script_uri, script_uri
+            ))
+            .into());
+        }
+    }
+
+    get_repository()
+        .sync_assets(script_uri, assets, delete)
+        .await
+}
+
 pub fn delete_asset(script_uri: &str, uri: &str) -> bool {
     let repo = get_repository();
     let result = run_bounded(async { repo.delete_asset(script_uri, uri).await });
@@ -6292,6 +6323,12 @@ pub trait Repository: Send + Sync {
     /// Write several of one script's assets as a unit: one transaction, one
     /// cache invalidation pass, one change notification.
     async fn upsert_assets(&self, script_uri: &str, assets: Vec<Asset>) -> AppResult<()>;
+    async fn sync_assets(
+        &self,
+        script_uri: &str,
+        assets: Vec<Asset>,
+        delete: Vec<String>,
+    ) -> AppResult<usize>;
     async fn delete_asset(&self, script_uri: &str, uri: &str) -> AppResult<bool>;
 
     // Log operations
@@ -6829,6 +6866,93 @@ impl Repository for PostgresRepository {
         }
         send_script_notification(&self.pool, script_uri, "upserted", &self.server_id).await?;
         Ok(())
+    }
+
+    /// Write some of a script's assets and remove others, as one act.
+    ///
+    /// [`upsert_assets`](Self::upsert_assets) and
+    /// [`delete_asset`](Self::delete_asset) each hold their own transaction, so
+    /// a caller replacing a tree had to do the two in sequence and a process
+    /// dying between them left files the source of truth no longer has. Here
+    /// both halves share one transaction: the tree either becomes what the
+    /// caller described or stays exactly as it was.
+    ///
+    /// Removals run after the writes so that a path being written and named for
+    /// removal in the same call ends up removed, which is the reading that
+    /// matches the caller saying "these files, and not those".
+    async fn sync_assets(
+        &self,
+        script_uri: &str,
+        assets: Vec<Asset>,
+        delete: Vec<String>,
+    ) -> AppResult<usize> {
+        if assets.is_empty() && delete.is_empty() {
+            return Ok(0);
+        }
+
+        let mut deleted = 0usize;
+
+        if crate::database::get_current_transaction_active() {
+            // The caller already owns a transaction; joining it is what every
+            // other repository method does, and committing our own would end
+            // theirs early.
+            for asset in &assets {
+                let executor = crate::database::get_current_executor(&self.pool);
+                db_upsert_asset(executor, asset).await?;
+            }
+            for uri in &delete {
+                let executor = crate::database::get_current_executor(&self.pool);
+                let removed = match executor {
+                    crate::database::TransactionExecutor::Transaction(tx) => {
+                        db_delete_asset(&mut **tx, script_uri, uri).await?
+                    }
+                    crate::database::TransactionExecutor::Pool(pool) => {
+                        db_delete_asset(pool, script_uri, uri).await?
+                    }
+                };
+                if removed {
+                    deleted += 1;
+                }
+            }
+        } else {
+            let mut tx = self.pool.begin().await.map_err(|e| {
+                error!("Database error opening asset sync transaction: {}", e);
+                AppError::Database {
+                    message: format!("Database error: {}", e),
+                    source: None,
+                }
+            })?;
+            for asset in &assets {
+                db_upsert_asset(
+                    crate::database::TransactionExecutor::Transaction(&mut tx),
+                    asset,
+                )
+                .await?;
+            }
+            for uri in &delete {
+                if db_delete_asset(&mut *tx, script_uri, uri).await? {
+                    deleted += 1;
+                }
+            }
+            tx.commit().await.map_err(|e| {
+                error!("Database error committing asset sync: {}", e);
+                AppError::Database {
+                    message: format!("Database error: {}", e),
+                    source: None,
+                }
+            })?;
+        }
+
+        // Caches and peers are told only once the transaction has landed, so
+        // nothing is invalidated on behalf of a write that rolled back.
+        for asset in &assets {
+            invalidate_script_asset_caches(script_uri, &asset.uri);
+        }
+        for uri in &delete {
+            invalidate_script_asset_caches(script_uri, uri);
+        }
+        send_script_notification(&self.pool, script_uri, "upserted", &self.server_id).await?;
+        Ok(deleted)
     }
 
     async fn delete_asset(&self, script_uri: &str, uri: &str) -> AppResult<bool> {
