@@ -175,6 +175,7 @@ fn request(prefix: &str) -> PullRequest {
         repo: "lpajunen/solution".to_string(),
         branch: None,
         prefix: Some(prefix.to_string()),
+        force: false,
     }
 }
 
@@ -451,6 +452,7 @@ async fn a_missing_branch_is_reported_as_missing() {
             repo: "lpajunen/solution".to_string(),
             branch: Some("no-such-branch".to_string()),
             prefix: Some("git-branch".to_string()),
+            force: false,
         },
     )
     .await
@@ -560,5 +562,86 @@ async fn the_repository_says_what_not_to_take() {
     assert!(
         asset_text(uri, ".aiwebengineignore").is_none(),
         "the rules are not themselves content"
+    );
+}
+
+/// `force` exists because the up-to-date check can only answer the questions
+/// the engine knows to ask, and clearing it should not mean deleting rows.
+#[tokio::test(flavor = "multi_thread")]
+async fn force_re_applies_a_repository_that_has_not_moved() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[("main.ts", "function init() {}")])
+        .await
+        .expect("fixture should start");
+
+    let uri = &script_uri("git-force/main.ts");
+    clear(uri);
+
+    pull_with(github.client(), &puller(), request("git-force"))
+        .await
+        .expect("first pull should succeed");
+
+    let skipped = pull_with(github.client(), &puller(), request("git-force"))
+        .await
+        .expect("second pull should succeed");
+    assert!(skipped.up_to_date, "unchanged, so the shortcut applies");
+
+    let forced = pull_with(
+        github.client(),
+        &puller(),
+        PullRequest {
+            repo: "lpajunen/solution".to_string(),
+            branch: None,
+            prefix: Some("git-force".to_string()),
+            force: true,
+        },
+    )
+    .await
+    .expect("forced pull should succeed");
+
+    assert!(!forced.up_to_date, "force does the work regardless");
+    assert_eq!(forced.scripts.len(), 1);
+    // The content is identical, so re-applying it writes nothing and records no
+    // revision — forcing the work is not the same as inventing a change.
+    assert!(
+        !forced.scripts[0].changed,
+        "identical content changes nothing"
+    );
+    assert_eq!(forced.scripts[0].revision, None);
+}
+
+/// The shortcut has to be about this end as well as the remote. A pull that
+/// would compose different URIs than the recorded ones is not up to date,
+/// however still the repository has been — which is exactly the case that made
+/// a pull silently do nothing after the URI composition changed underneath it.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_same_commit_landing_elsewhere_is_not_up_to_date() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[("main.ts", "function init() {}")])
+        .await
+        .expect("fixture should start");
+
+    clear(&script_uri("git-base-a/main.ts"));
+    clear(&script_uri("git-base-b/main.ts"));
+
+    pull_with(github.client(), &puller(), request("git-base-a"))
+        .await
+        .expect("first pull should succeed");
+
+    let elsewhere = pull_with(github.client(), &puller(), request("git-base-b"))
+        .await
+        .expect("second pull should succeed");
+
+    assert!(
+        !elsewhere.up_to_date,
+        "the same commit landing somewhere else is work, not a no-op"
+    );
+    assert_eq!(
+        elsewhere.scripts[0].script_uri,
+        script_uri("git-base-b/main.ts")
     );
 }

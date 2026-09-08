@@ -4828,6 +4828,8 @@ pub struct GitPullBody {
     repo: Option<String>,
     branch: Option<String>,
     prefix: Option<String>,
+    #[serde(default)]
+    force: bool,
 }
 
 /// Turn a sync failure into the status a caller can act on.
@@ -4894,7 +4896,8 @@ fn pull_report_json(report: &crate::git_sync::PullReport) -> Value {
     request_body(content_type = "application/json",
         description = "JSON fields: repo (required, 'owner/repo' or a GitHub URL), \
                        branch (defaults to the repository's default branch), \
-                       prefix (URI prefix the scripts land under, defaults to the repository name)"),
+                       prefix (URI prefix the scripts land under, defaults to the repository name), \
+                       force (download and re-apply even when nothing appears to have moved)"),
     responses(
         (status = 200, description = "What each script's pull did, and the init() that followed"),
         (status = 400, description = "Unusable repository, branch, or layout; nothing was written"),
@@ -4925,6 +4928,7 @@ pub async fn git_pull_route(
         repo,
         branch: parsed.branch,
         prefix: parsed.prefix,
+        force: parsed.force,
     };
 
     match crate::git_sync::pull(&user, request).await {
@@ -4942,6 +4946,7 @@ fn tool_pull_from_git(args: &Value, user: &UserContext) -> Value {
         repo: repo.to_string(),
         branch: arg_str(args, "branch").map(str::to_string),
         prefix: arg_str(args, "prefix").map(str::to_string),
+        force: args.get("force").and_then(Value::as_bool).unwrap_or(false),
     };
 
     let user = user.clone();
@@ -7725,7 +7730,12 @@ fn native_tools() -> &'static [NativeToolEntry] {
                     "properties": {
                         "repo": { "type": "string", "description": "'owner/repo', or any GitHub URL naming it" },
                         "branch": { "type": "string", "description": "Branch to read. Defaults to the repository's default branch." },
-                        "prefix": { "type": "string", "description": "URI prefix the scripts land under. Defaults to the repository name; set it to avoid colliding with a script somebody else already pulled." }
+                        "prefix": { "type": "string", "description": "URI prefix the scripts land under. Defaults to the repository name; set it to avoid colliding with a script somebody else already pulled." },
+                        "force": {
+                            "type": "boolean",
+                            "description": "Download and re-apply even when the repository has not moved since the last pull. Use it when the engine's answer looks stale for a reason the commit cannot show.",
+                            "default": false
+                        }
                     },
                     "required": ["repo"]
                 })

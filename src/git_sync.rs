@@ -591,6 +591,15 @@ pub struct PullRequest {
     /// a decision belonging to whoever is deploying the solution rather than to
     /// whoever named the repository.
     pub prefix: Option<String>,
+    /// Download and re-apply even when nothing appears to have moved.
+    ///
+    /// The up-to-date check is an optimization over the questions this engine
+    /// knows to ask. It cannot cover the ones it does not — a repository
+    /// rewritten to the same commit, a script edited here since the pull, a
+    /// mapping this version composes differently in a way the recorded base
+    /// does not capture — so there has to be a way to say "do it anyway" that
+    /// does not involve deleting rows to clear a cache.
+    pub force: bool,
 }
 
 /// What one script's pull did.
@@ -699,23 +708,6 @@ fn fetch_and_write(
     };
     let resolved = client.resolve_branch(repo, &branch)?;
 
-    // Ask before downloading: a repository that has not moved since the last
-    // pull costs two small API calls rather than an archive.
-    let known =
-        crate::database::run_blocking(last_synced(&repo.to_string(), &branch)).unwrap_or_default();
-    if !known.is_empty() && known.iter().all(|(_, commit)| commit == &resolved.commit) {
-        return Ok(WrittenScripts {
-            branch,
-            commit: resolved.commit,
-            scripts: Vec::new(),
-            up_to_date: true,
-        });
-    }
-
-    let archive = client.fetch_archive(repo, &resolved.commit)?;
-    let files = extract_tree(&archive)?;
-    let layouts = infer_scripts(&files)?;
-
     let prefix = request.prefix.clone().unwrap_or_else(|| repo.repo.clone());
     let prefix = prefix.trim_matches('/').to_string();
     if prefix.is_empty() || prefix.contains("..") || prefix.contains('\\') {
@@ -724,13 +716,45 @@ fn fetch_and_write(
             prefix
         )));
     }
+    let uri_base = resolve_uri_base(&prefix);
+
+    // Ask before downloading: a repository that has not moved since the last
+    // pull costs two small API calls rather than an archive.
+    //
+    // Two things have to hold, not one. That the remote has not moved is what
+    // this check is usually about — but the base on record has to be the one
+    // this pull would compose too, or the shortcut is answering about a mapping
+    // that no longer applies. That is not hypothetical: it is what made a pull
+    // silently do nothing after the URI composition changed underneath it. A
+    // row predating the column carries `None`, which matches nothing, so the
+    // first pull after that migration always does the work.
+    if !request.force {
+        let known = crate::database::run_blocking(last_synced(&repo.to_string(), &branch))
+            .unwrap_or_default();
+        let settled = !known.is_empty()
+            && known.iter().all(|row| {
+                row.commit == resolved.commit && row.uri_base.as_deref() == Some(uri_base.as_str())
+            });
+        if settled {
+            return Ok(WrittenScripts {
+                branch,
+                commit: resolved.commit,
+                scripts: Vec::new(),
+                up_to_date: true,
+            });
+        }
+    }
+
+    let archive = client.fetch_archive(repo, &resolved.commit)?;
+    let files = extract_tree(&archive)?;
+    let layouts = infer_scripts(&files)?;
 
     // Compose every URI and check every one of them before writing any, so a
     // repository whose fourth script belongs to somebody else is refused whole
     // rather than applied in part.
     let planned: Vec<(String, ScriptLayout)> = layouts
         .into_iter()
-        .map(|layout| (script_uri_for(&prefix, &layout), layout))
+        .map(|layout| (compose_script_uri(&uri_base, &layout), layout))
         .collect();
 
     let refused: Vec<&str> = planned
@@ -753,6 +777,7 @@ fn fetch_and_write(
             repo,
             &branch,
             &resolved.commit,
+            &uri_base,
             &script_uri,
             &layout,
         )?);
@@ -782,8 +807,8 @@ fn fetch_and_write(
 ///
 /// A `prefix` that is already absolute is left alone, which is how a caller
 /// aims a pull at one host of a multi-host deployment.
-fn script_uri_for(prefix: &str, layout: &ScriptLayout) -> String {
-    let base = if is_absolute(prefix) {
+fn resolve_uri_base(prefix: &str) -> String {
+    if is_absolute(prefix) {
         prefix.to_string()
     } else if crate::hosts::is_configured() {
         format!(
@@ -796,8 +821,7 @@ fn script_uri_for(prefix: &str, layout: &ScriptLayout) -> String {
         // deployment with no usable base URL. A relative URI is the honest
         // answer there; inventing a host would be worse than not having one.
         prefix.to_string()
-    };
-    compose_script_uri(&base, layout)
+    }
 }
 
 fn is_absolute(prefix: &str) -> bool {
@@ -819,11 +843,13 @@ fn compose_script_uri(base: &str, layout: &ScriptLayout) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_script(
     user: &UserContext,
     repo: &crate::git_github::RepoRef,
     branch: &str,
     commit: &str,
+    uri_base: &str,
     script_uri: &str,
     layout: &ScriptLayout,
 ) -> Result<PulledScript, SyncError> {
@@ -931,6 +957,7 @@ fn write_script(
         &repo.to_string(),
         branch,
         commit,
+        uri_base,
         revision,
         user.user_id.as_deref(),
     ))
@@ -965,19 +992,26 @@ fn pool() -> crate::error::AppResult<sqlx::PgPool> {
         })
 }
 
-/// The scripts this remote and branch have written here, with the commit each
-/// last stood at.
+/// One script's standing relative to the repository it came from.
+#[derive(Debug, Clone)]
+pub struct SyncedScript {
+    pub script_uri: String,
+    pub commit: String,
+    /// The base the pull composed this script's URI against, or `None` for a
+    /// row written before that was recorded.
+    pub uri_base: Option<String>,
+}
+
+/// The scripts this remote and branch have written here.
 ///
-/// Phase 1 uses this for one question — has anything moved since last time —
-/// but it is the same row a push and a divergence check will read, which is why
-/// it records the revision alongside the commit rather than the commit alone.
-pub async fn last_synced(
-    remote: &str,
-    branch: &str,
-) -> crate::error::AppResult<Vec<(String, String)>> {
+/// Read for one question today — is there anything to do — but it is the same
+/// row a push and a divergence check will read, which is why it carries the
+/// revision alongside the commit rather than the commit alone.
+pub async fn last_synced(remote: &str, branch: &str) -> crate::error::AppResult<Vec<SyncedScript>> {
     use sqlx::Row;
     let rows = sqlx::query(
-        "SELECT script_uri, last_commit FROM script_git_sync WHERE remote = $1 AND branch = $2",
+        "SELECT script_uri, last_commit, uri_base FROM script_git_sync \
+         WHERE remote = $1 AND branch = $2",
     )
     .bind(remote)
     .bind(branch)
@@ -990,28 +1024,36 @@ pub async fn last_synced(
 
     Ok(rows
         .into_iter()
-        .map(|row| (row.get::<String, _>(0), row.get::<String, _>(1)))
+        .map(|row| SyncedScript {
+            script_uri: row.get::<String, _>(0),
+            commit: row.get::<String, _>(1),
+            uri_base: row.get::<Option<String>, _>(2),
+        })
         .collect())
 }
 
 /// Record where a script now stands relative to its repository.
+#[allow(clippy::too_many_arguments)]
 pub async fn record_sync(
     script_uri: &str,
     remote: &str,
     branch: &str,
     commit: &str,
+    uri_base: &str,
     revision: Option<i32>,
     user_id: Option<&str>,
 ) -> crate::error::AppResult<()> {
     sqlx::query(
         r#"
         INSERT INTO script_git_sync
-            (script_uri, remote, branch, last_commit, revision_at_sync, synced_at, synced_by)
-        VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+            (script_uri, remote, branch, last_commit, uri_base,
+             revision_at_sync, synced_at, synced_by)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)
         ON CONFLICT (script_uri) DO UPDATE SET
             remote = EXCLUDED.remote,
             branch = EXCLUDED.branch,
             last_commit = EXCLUDED.last_commit,
+            uri_base = EXCLUDED.uri_base,
             revision_at_sync = COALESCE(EXCLUDED.revision_at_sync, script_git_sync.revision_at_sync),
             synced_at = EXCLUDED.synced_at,
             synced_by = EXCLUDED.synced_by
@@ -1021,6 +1063,7 @@ pub async fn record_sync(
     .bind(remote)
     .bind(branch)
     .bind(commit)
+    .bind(uri_base)
     .bind(revision)
     .bind(user_id)
     .execute(&pool()?)
