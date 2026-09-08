@@ -178,6 +178,21 @@ fn request(prefix: &str) -> PullRequest {
     }
 }
 
+/// The URI a pull composes for `suffix`, against whatever origin this test
+/// server came up on. The mapping decides the suffix; the engine decides the
+/// origin, and a test that hard-coded either would be testing the wrong one.
+fn script_uri(suffix: &str) -> String {
+    if aiwebengine::hosts::is_configured() {
+        format!(
+            "{}/{}",
+            aiwebengine::hosts::origin(&aiwebengine::hosts::default_host()),
+            suffix
+        )
+    } else {
+        suffix.to_string()
+    }
+}
+
 fn asset_text(script_uri: &str, asset_uri: &str) -> Option<String> {
     repository::fetch_asset(script_uri, asset_uri)
         .and_then(|asset| String::from_utf8(asset.content).ok())
@@ -210,7 +225,7 @@ async fn a_repository_with_a_root_entry_becomes_one_script() {
     .await
     .expect("fixture should start");
 
-    let uri = "git-one/main.ts";
+    let uri = &script_uri("git-one/main.ts");
     clear(uri);
 
     let report = pull_with(github.client(), &puller(), request("git-one"))
@@ -219,7 +234,7 @@ async fn a_repository_with_a_root_entry_becomes_one_script() {
 
     assert_eq!(report.branch, "main");
     assert_eq!(report.scripts.len(), 1, "one script expected");
-    assert_eq!(report.scripts[0].script_uri, uri);
+    assert_eq!(&report.scripts[0].script_uri, uri);
 
     // The URI ends with the entry's own file name, because a script's imports
     // resolve against the basename of its URI.
@@ -266,26 +281,29 @@ async fn each_top_level_directory_becomes_its_own_script() {
     .await
     .expect("fixture should start");
 
-    clear("git-many/shop/main.ts");
-    clear("git-many/admin/main.ts");
+    clear(&script_uri("git-many/shop/main.ts"));
+    clear(&script_uri("git-many/admin/main.ts"));
 
     let report = pull_with(github.client(), &puller(), request("git-many"))
         .await
         .expect("pull should succeed");
 
-    let mut uris: Vec<&str> = report
+    let mut uris: Vec<String> = report
         .scripts
         .iter()
-        .map(|script| script.script_uri.as_str())
+        .map(|script| script.script_uri.clone())
         .collect();
     uris.sort();
     assert_eq!(
         uris,
-        vec!["git-many/admin/main.ts", "git-many/shop/main.ts"]
+        vec![
+            script_uri("git-many/admin/main.ts"),
+            script_uri("git-many/shop/main.ts")
+        ]
     );
 
     assert_eq!(
-        asset_text("git-many/shop/main.ts", "lib/cart.ts").as_deref(),
+        asset_text(&script_uri("git-many/shop/main.ts"), "lib/cart.ts").as_deref(),
         Some("export const cart = [];"),
         "asset paths are relative to their own script, not to the repository"
     );
@@ -300,7 +318,7 @@ async fn pulling_an_unchanged_commit_does_no_work() {
         .await
         .expect("fixture should start");
 
-    clear("git-idempotent/main.ts");
+    clear(&script_uri("git-idempotent/main.ts"));
 
     let first = pull_with(github.client(), &puller(), request("git-idempotent"))
         .await
@@ -330,7 +348,7 @@ async fn a_file_removed_upstream_is_removed_here() {
     .await
     .expect("fixture should start");
 
-    let uri = "git-sync/main.ts";
+    let uri = &script_uri("git-sync/main.ts");
     clear(uri);
 
     pull_with(github.client(), &puller(), request("git-sync"))
@@ -379,7 +397,7 @@ async fn a_pull_records_one_revision_for_the_whole_script() {
     .await
     .expect("fixture should start");
 
-    let uri = "git-revision/main.ts";
+    let uri = &script_uri("git-revision/main.ts");
     clear(uri);
 
     let before = aiwebengine::revisions::current(uri).unwrap_or(0);
@@ -462,7 +480,7 @@ async fn a_pull_completes_when_driven_from_a_blocking_context() {
     .await
     .expect("fixture should start");
 
-    let uri = "git-blocking/main.ts";
+    let uri = &script_uri("git-blocking/main.ts");
     clear(uri);
 
     let client = github.client();
@@ -483,7 +501,7 @@ async fn a_pull_completes_when_driven_from_a_blocking_context() {
     .expect("pull should succeed");
 
     assert_eq!(report.scripts.len(), 1);
-    assert_eq!(report.scripts[0].script_uri, uri);
+    assert_eq!(&report.scripts[0].script_uri, uri);
     assert!(
         asset_text(uri, "lib/util.ts").is_some(),
         "the pull ran to completion rather than stalling"
@@ -515,7 +533,7 @@ async fn the_repository_says_what_not_to_take() {
     .await
     .expect("fixture should start");
 
-    let uri = "git-ignore/main.ts";
+    let uri = &script_uri("git-ignore/main.ts");
     clear(uri);
 
     pull_with(github.client(), &puller(), request("git-ignore"))

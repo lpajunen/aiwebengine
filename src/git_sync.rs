@@ -770,15 +770,52 @@ fn fetch_and_write(
 /// repository no longer holds.
 /// The local URI a pulled script lands on.
 ///
-/// It ends with the entry's own file name because
+/// Absolute, against this engine's own origin. A script URI in this engine is
+/// an absolute URL — every script written through the editor or the MCP tools
+/// has one — and things that consume a URI resolve it as such: the editor
+/// builds its `read_script` link straight from it, so a relative URI silently
+/// resolves against whatever origin the browser happens to be on and 404s.
+///
+/// That the URI is machine-specific is the point rather than a cost. It is
+/// exactly why a repository cannot carry one: the engine composes its own at
+/// pull time, and the same repository lands correctly on every install.
+///
+/// A `prefix` that is already absolute is left alone, which is how a caller
+/// aims a pull at one host of a multi-host deployment.
+fn script_uri_for(prefix: &str, layout: &ScriptLayout) -> String {
+    let base = if is_absolute(prefix) {
+        prefix.to_string()
+    } else if crate::hosts::is_configured() {
+        format!(
+            "{}/{}",
+            crate::hosts::origin(&crate::hosts::default_host()),
+            prefix
+        )
+    } else {
+        // Nothing has told this process what it is serving — a unit test, or a
+        // deployment with no usable base URL. A relative URI is the honest
+        // answer there; inventing a host would be worse than not having one.
+        prefix.to_string()
+    };
+    compose_script_uri(&base, layout)
+}
+
+fn is_absolute(prefix: &str) -> bool {
+    prefix.starts_with("http://") || prefix.starts_with("https://")
+}
+
+/// Put the pieces together, given a resolved base.
+///
+/// The URI ends with the entry's own file name because
 /// [`crate::module_loader::root_module_path`] resolves a script's imports
 /// against the basename of its URI. A URI ending in anything else would resolve
 /// the entry's relative imports differently here than they resolved in the
 /// repository — the one part of this mapping that is not free to choose.
-fn script_uri_for(prefix: &str, layout: &ScriptLayout) -> String {
+fn compose_script_uri(base: &str, layout: &ScriptLayout) -> String {
+    let base = base.trim_end_matches('/');
     match &layout.name {
-        Some(name) => format!("{}/{}/{}", prefix, name, layout.entry_file_name()),
-        None => format!("{}/{}", prefix, layout.entry_file_name()),
+        Some(name) => format!("{}/{}/{}", base, name, layout.entry_file_name()),
+        None => format!("{}/{}", base, layout.entry_file_name()),
     }
 }
 
@@ -1197,6 +1234,52 @@ mod tests {
         let scripts = infer_scripts(&files).expect("should infer");
         assert_eq!(scripts.len(), 1, "the ignored directory is not a script");
         assert_eq!(scripts[0].name.as_deref(), Some("shop"));
+    }
+
+    // ------------------------------------------------------------------ uri
+
+    fn layout(name: Option<&str>, entry: &str) -> ScriptLayout {
+        ScriptLayout {
+            name: name.map(str::to_string),
+            entry_path: entry.to_string(),
+            entry: Vec::new(),
+            assets: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn a_uri_ends_with_the_entry_file_name() {
+        // `module_loader::root_module_path` resolves a script's imports against
+        // the basename of its URI, so this is the part that is not free.
+        let single = layout(None, "main.ts");
+        assert_eq!(
+            compose_script_uri("https://engine.example/examples", &single),
+            "https://engine.example/examples/main.ts"
+        );
+
+        let named = layout(Some("shop"), "shop/main.js");
+        assert_eq!(
+            compose_script_uri("https://engine.example/examples", &named),
+            "https://engine.example/examples/shop/main.js"
+        );
+    }
+
+    #[test]
+    fn a_trailing_slash_on_the_base_does_not_double_up() {
+        assert_eq!(
+            compose_script_uri("https://engine.example/", &layout(None, "main.ts")),
+            "https://engine.example/main.ts"
+        );
+    }
+
+    /// A prefix that already names an origin is left alone, which is how a
+    /// caller aims a pull at one host of a multi-host deployment.
+    #[test]
+    fn an_absolute_prefix_is_taken_as_given() {
+        assert!(is_absolute("https://shop.example.com/solutions"));
+        assert!(is_absolute("http://localhost:3000/x"));
+        assert!(!is_absolute("examples"));
+        assert!(!is_absolute("/examples"));
     }
 
     #[test]
