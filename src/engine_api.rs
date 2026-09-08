@@ -4859,6 +4859,9 @@ fn git_sync_status(error: &crate::git_sync::SyncError) -> StatusCode {
     use crate::git_sync::SyncError;
     match error {
         SyncError::AccessDenied(_) => StatusCode::FORBIDDEN,
+        // Both sides moved. Not a fault on either end — a decision the caller
+        // has to make, which is what 409 says.
+        SyncError::Diverged(_) => StatusCode::CONFLICT,
         SyncError::Archive(_) | SyncError::Layout(_) => StatusCode::BAD_REQUEST,
         SyncError::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
         SyncError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -4866,6 +4869,9 @@ fn git_sync_status(error: &crate::git_sync::SyncError) -> StatusCode {
             GitHubError::InvalidRepo(_) | GitHubError::InvalidRef(_) => StatusCode::BAD_REQUEST,
             GitHubError::NotFound(_) => StatusCode::NOT_FOUND,
             GitHubError::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+            // The host declined the write itself, which is neither our fault
+            // nor a transport failure — a moved ref or a protected branch.
+            GitHubError::Conflict(_) => StatusCode::CONFLICT,
             GitHubError::Forbidden(_)
             | GitHubError::Transport(_)
             | GitHubError::UnexpectedResponse(_) => StatusCode::BAD_GATEWAY,
@@ -5253,6 +5259,125 @@ fn tool_delete_git_credential(args: &Value, user: &UserContext) -> Value {
             "removed": removed,
             "timestamp": iso_timestamp(),
         }),
+        Err(e) => json!({ "error": e.to_string() }),
+    }
+}
+
+/// What to publish, and where.
+#[derive(Deserialize, Default, utoipa::ToSchema)]
+#[schema(example = json!({ "script": "https://example.com/shop.js" }))]
+pub struct GitPushBody {
+    /// URI of the script to publish. Required.
+    #[schema(example = "https://example.com/shop.js")]
+    pub script: Option<String>,
+
+    /// Repository to publish to, as `owner/repo` or any GitHub URL naming it.
+    /// Optional once the script has been pulled, since it already knows where
+    /// it came from.
+    #[schema(example = "octocat/hello-world")]
+    pub repo: Option<String>,
+
+    /// Branch to write. Defaults to the branch the script was pulled from, or
+    /// the repository's default branch on a first publish.
+    #[schema(example = "main")]
+    pub branch: Option<String>,
+
+    /// Commit message. Defaulted to one naming the script.
+    #[schema(example = "Fix the cart total")]
+    pub message: Option<String>,
+
+    /// Publish even when this engine believes the repository has moved. GitHub
+    /// still refuses a non-fast-forward update, so this cannot overwrite work
+    /// it has not seen.
+    #[serde(default)]
+    pub force: bool,
+}
+
+fn push_report_json(report: &crate::git_sync::PushReport) -> Value {
+    json!({
+        "success": true,
+        "script": report.script_uri,
+        "repo": report.repo,
+        "branch": report.branch,
+        "commit": report.commit,
+        "upToDate": report.up_to_date,
+        "written": report.written,
+        "removed": report.removed,
+        "timestamp": iso_timestamp(),
+    })
+}
+
+/// Publish a script's files to a GitHub repository as one commit.
+///
+/// The script's root becomes `main.{ext}` and its assets keep their paths, laid
+/// out the way a pull reads them back — so a repository written by this endpoint
+/// pulls onto any other engine. Files the script does not own, including
+/// everything its `.aiwebengineignore` excludes, are preserved untouched.
+///
+/// Refuses when both sides have moved since the last sync. The engine does not
+/// merge; it reports the divergence and leaves the decision to the caller.
+#[utoipa::path(
+    post,
+    path = "/engine/git/push",
+    tags = ["Git"],
+    request_body(content = GitPushBody, content_type = "application/json",
+        description = "Which script to publish, and where"),
+    responses(
+        (status = 200, description = "The commit that was created, and what it wrote and removed"),
+        (status = 400, description = "Unusable script, repository or branch; nothing was written"),
+        (status = 403, description = "Access denied, or no credential is stored"),
+        (status = 404, description = "No such repository, or the token cannot write to it"),
+        (status = 409, description = "Both sides have moved, or GitHub declined the write; nothing was written"),
+        (status = 502, description = "GitHub could not be reached"),
+    )
+)]
+pub async fn git_push_route(
+    auth_user: Option<Extension<AuthUser>>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+
+    let parsed: GitPushBody = match serde_json::from_slice(&body) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return error_response(StatusCode::BAD_REQUEST, format!("Invalid JSON body: {}", e));
+        }
+    };
+
+    let Some(script) = parsed.script else {
+        return missing_param_response("script");
+    };
+
+    let request = crate::git_sync::PushRequest {
+        script_uri: script,
+        repo: parsed.repo,
+        branch: parsed.branch,
+        message: parsed.message,
+        force: parsed.force,
+    };
+
+    match crate::git_sync::push(&user, request).await {
+        Ok(report) => json_response(StatusCode::OK, push_report_json(&report)),
+        Err(e) => error_response(git_sync_status(&e), e.to_string()),
+    }
+}
+
+fn tool_push_to_git(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+
+    let request = crate::git_sync::PushRequest {
+        script_uri: script.to_string(),
+        repo: arg_str(args, "repo").map(str::to_string),
+        branch: arg_str(args, "branch").map(str::to_string),
+        message: arg_str(args, "message").map(str::to_string),
+        force: args.get("force").and_then(Value::as_bool).unwrap_or(false),
+    };
+
+    let user = user.clone();
+    match crate::database::run_blocking(crate::git_sync::push(&user, request)) {
+        Ok(report) => push_report_json(&report),
         Err(e) => json!({ "error": e.to_string() }),
     }
 }
@@ -8080,6 +8205,34 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 })
             },
             tool_delete_git_credential,
+        ),
+        (
+            "push_to_git",
+            "Publish a script's files to a GitHub repository as one commit. The root becomes \
+            main.{ext} and assets keep their paths, laid out the way a pull reads them back, so \
+            what this writes pulls onto any other engine. Files the script does not own — the \
+            README, CI configuration, anything .aiwebengineignore excludes — are left untouched. \
+            Refuses when both the repository and the script have changed since the last sync: \
+            the engine does not merge, it reports the divergence and leaves the reconciling to \
+            you. Needs a stored credential with write access.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script to publish" },
+                        "repo": { "type": "string", "description": "'owner/repo' or a GitHub URL. Optional once the script has been pulled, since it already knows where it came from." },
+                        "branch": { "type": "string", "description": "Branch to write. Defaults to the one it was pulled from, or the repository's default branch." },
+                        "message": { "type": "string", "description": "Commit message. Defaults to one naming the script." },
+                        "force": {
+                            "type": "boolean",
+                            "description": "Publish even when this engine believes the repository has moved. GitHub still refuses a non-fast-forward update, so this cannot overwrite work it has not seen.",
+                            "default": false
+                        }
+                    },
+                    "required": ["script"]
+                })
+            },
+            tool_push_to_git,
         ),
         (
             "pull_from_git",

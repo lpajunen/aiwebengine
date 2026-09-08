@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::http_client::{HttpClient, HttpError};
@@ -447,6 +447,318 @@ fn classify(error: HttpError, repo: &RepoRef) -> GitHubError {
     }
 }
 
+// ============================================================================
+// Writing
+// ============================================================================
+
+/// One entry of a git tree, as GitHub reports and accepts it.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TreeEntry {
+    pub path: String,
+    /// `100644` for a file, `100755` executable, `120000` symlink, `160000`
+    /// submodule, `040000` a directory. Preserved verbatim for anything this
+    /// engine did not write, so a push does not quietly change a file's mode.
+    pub mode: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub sha: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TreeResponse {
+    sha: String,
+    #[serde(default)]
+    tree: Vec<TreeEntry>,
+    /// GitHub sets this when the tree was too large to return whole.
+    #[serde(default)]
+    truncated: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ShaResponse {
+    sha: String,
+}
+
+/// A commit's own sha and the sha of the tree it points at.
+#[derive(Debug, Clone)]
+pub struct CommitTree {
+    pub commit: String,
+    pub tree: String,
+    pub entries: Vec<TreeEntry>,
+}
+
+impl GitHubClient {
+    /// Every file a commit's tree holds, flattened.
+    ///
+    /// Refuses a truncated answer rather than working with part of one. A push
+    /// builds the next tree out of this, so a tree missing entries GitHub did
+    /// not send would delete every file it could not see.
+    pub fn tree_at(&self, repo: &RepoRef, commit: &str) -> Result<CommitTree, GitHubError> {
+        if !is_safe_segment(commit) {
+            return Err(GitHubError::InvalidRef(format!(
+                "'{}' is not a usable commit reference",
+                commit
+            )));
+        }
+        let url = format!(
+            "{}/repos/{}/{}/git/trees/{}?recursive=1",
+            self.api_base, repo.owner, repo.repo, commit
+        );
+        let tree: TreeResponse = self.get_json(&url, repo)?;
+
+        if tree.truncated {
+            return Err(GitHubError::TooLarge(format!(
+                "{} has more files than GitHub will list in one response, so this engine \
+                 cannot safely rebuild its tree",
+                repo
+            )));
+        }
+
+        Ok(CommitTree {
+            commit: commit.to_string(),
+            tree: tree.sha,
+            entries: tree.tree,
+        })
+    }
+
+    /// Upload one file's content and get the blob sha back.
+    pub fn create_blob(&self, repo: &RepoRef, content: &[u8]) -> Result<String, GitHubError> {
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, content);
+        let url = format!(
+            "{}/repos/{}/{}/git/blobs",
+            self.api_base, repo.owner, repo.repo
+        );
+        let response: ShaResponse = self.send_json(
+            "POST",
+            &url,
+            repo,
+            &serde_json::json!({ "content": encoded, "encoding": "base64" }),
+        )?;
+        Ok(response.sha)
+    }
+
+    /// Assemble a tree from a complete list of entries.
+    ///
+    /// The whole tree rather than a delta against `base_tree`: a delta
+    /// expresses a removal as an explicit null, and getting that wrong leaves
+    /// a file behind rather than failing, which is the kind of mistake nobody
+    /// notices. Directories are inferred from the paths, so only leaves are
+    /// sent.
+    pub fn create_tree(
+        &self,
+        repo: &RepoRef,
+        entries: &[TreeEntry],
+    ) -> Result<String, GitHubError> {
+        let url = format!(
+            "{}/repos/{}/{}/git/trees",
+            self.api_base, repo.owner, repo.repo
+        );
+        let response: ShaResponse =
+            self.send_json("POST", &url, repo, &serde_json::json!({ "tree": entries }))?;
+        Ok(response.sha)
+    }
+
+    /// Commit a tree.
+    ///
+    /// `parents` empty makes a root commit, which is what a push into an empty
+    /// repository needs.
+    pub fn create_commit(
+        &self,
+        repo: &RepoRef,
+        message: &str,
+        tree: &str,
+        parents: &[String],
+    ) -> Result<String, GitHubError> {
+        let url = format!(
+            "{}/repos/{}/{}/git/commits",
+            self.api_base, repo.owner, repo.repo
+        );
+        let response: ShaResponse = self.send_json(
+            "POST",
+            &url,
+            repo,
+            &serde_json::json!({ "message": message, "tree": tree, "parents": parents }),
+        )?;
+        Ok(response.sha)
+    }
+
+    /// Move a branch to `commit`.
+    ///
+    /// Never forced. GitHub refuses a non-fast-forward update without `force`,
+    /// which is a second wall behind this engine's own divergence check — and
+    /// the right one to keep, because it is the only check that sees a push
+    /// somebody else landed between our check and our write.
+    pub fn update_ref(
+        &self,
+        repo: &RepoRef,
+        branch: &str,
+        commit: &str,
+    ) -> Result<(), GitHubError> {
+        if !is_safe_segment(branch) {
+            return Err(GitHubError::InvalidRef(format!(
+                "'{}' is not a usable branch name",
+                branch
+            )));
+        }
+        let url = format!(
+            "{}/repos/{}/{}/git/refs/heads/{}",
+            self.api_base, repo.owner, repo.repo, branch
+        );
+        let _: serde_json::Value = self.send_json(
+            "PATCH",
+            &url,
+            repo,
+            &serde_json::json!({ "sha": commit, "force": false }),
+        )?;
+        Ok(())
+    }
+
+    /// Create a branch pointing at `commit`, for a repository that has none.
+    pub fn create_ref(
+        &self,
+        repo: &RepoRef,
+        branch: &str,
+        commit: &str,
+    ) -> Result<(), GitHubError> {
+        if !is_safe_segment(branch) {
+            return Err(GitHubError::InvalidRef(format!(
+                "'{}' is not a usable branch name",
+                branch
+            )));
+        }
+        let url = format!(
+            "{}/repos/{}/{}/git/refs",
+            self.api_base, repo.owner, repo.repo
+        );
+        let _: serde_json::Value = self.send_json(
+            "POST",
+            &url,
+            repo,
+            &serde_json::json!({ "ref": format!("refs/heads/{}", branch), "sha": commit }),
+        )?;
+        Ok(())
+    }
+
+    /// One blob's bytes, by sha.
+    ///
+    /// Used to read a repository's ignore file out of the commit a push is
+    /// landing on, so the rules applied are the ones that repository ships
+    /// rather than whatever this engine last saw.
+    pub fn blob(&self, repo: &RepoRef, sha: &str) -> Result<Vec<u8>, GitHubError> {
+        if !is_safe_segment(sha) {
+            return Err(GitHubError::InvalidRef(format!(
+                "'{}' is not a blob id",
+                sha
+            )));
+        }
+        let url = format!(
+            "{}/repos/{}/{}/git/blobs/{}",
+            self.api_base, repo.owner, repo.repo, sha
+        );
+
+        #[derive(Deserialize)]
+        struct Blob {
+            content: String,
+            encoding: String,
+        }
+
+        let blob: Blob = self.get_json(&url, repo)?;
+        if blob.encoding != "base64" {
+            return Err(GitHubError::UnexpectedResponse(format!(
+                "GitHub returned a blob encoded as '{}', which this engine cannot read",
+                blob.encoding
+            )));
+        }
+        // GitHub wraps base64 blob content at 60 columns.
+        let cleaned: String = blob
+            .content
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, cleaned)
+            .map_err(|e| GitHubError::UnexpectedResponse(format!("Unreadable blob: {}", e)))
+    }
+
+    fn send_json<T: for<'de> Deserialize<'de>>(
+        &self,
+        method: &str,
+        url: &str,
+        repo: &RepoRef,
+        body: &serde_json::Value,
+    ) -> Result<T, GitHubError> {
+        let mut headers = self.headers();
+        // GitHub infers this, and a stricter server does not — a JSON body
+        // deserves to say what it is either way.
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+
+        let options = crate::http_client::FetchOptions {
+            method: method.to_string(),
+            headers: Some(headers),
+            body: Some(body.to_string()),
+            timeout_ms: None,
+        };
+
+        let response = self
+            .http
+            .fetch(url.to_string(), options, None, None)
+            .map_err(|e| classify(e, repo))?;
+
+        check_write_status(response.status, response.ok, repo, url, &response.body)?;
+
+        serde_json::from_str(&response.body).map_err(|e| {
+            GitHubError::UnexpectedResponse(format!("Could not read GitHub's answer: {}", e))
+        })
+    }
+}
+
+/// A write refused is worth reporting in GitHub's own words.
+///
+/// The read path can say what a status means because there are only a few ways
+/// to fail a read. A write fails for reasons that are specific and actionable —
+/// a protected branch, a missing scope, a ref that moved — and GitHub says
+/// which in the body, where paraphrasing it would lose the part that helps.
+fn check_write_status(
+    status: u16,
+    ok: bool,
+    repo: &RepoRef,
+    url: &str,
+    body: &str,
+) -> Result<(), GitHubError> {
+    if ok {
+        return Ok(());
+    }
+
+    let detail = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|parsed| {
+            parsed
+                .get("message")
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| format!("HTTP {}", status));
+
+    match status {
+        401 | 403 => Err(GitHubError::Forbidden(format!(
+            "GitHub refused to write to {}: {}. The token needs write access to this \
+             repository's contents.",
+            repo, detail
+        ))),
+        404 => Err(GitHubError::NotFound(format!(
+            "{} was not found, or the token cannot write to it: {}",
+            repo, detail
+        ))),
+        409 | 422 => Err(GitHubError::Conflict(format!(
+            "GitHub would not apply the change to {}: {}",
+            repo, detail
+        ))),
+        _ => Err(GitHubError::UnexpectedResponse(format!(
+            "GitHub answered {} for {}: {}",
+            status, url, detail
+        ))),
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum GitHubError {
     #[error("{0}")]
@@ -463,6 +775,11 @@ pub enum GitHubError {
 
     #[error("{0}")]
     TooLarge(String),
+
+    /// The host would not apply the change — a ref that moved under us, a
+    /// protected branch, a tree it rejected.
+    #[error("{0}")]
+    Conflict(String),
 
     #[error("Could not reach GitHub: {0}")]
     Transport(String),

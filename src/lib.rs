@@ -105,6 +105,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::undeploy_route,
         engine_api::deployment_route,
         engine_api::git_pull_route,
+        engine_api::git_push_route,
         engine_api::git_credentials_get_route,
         engine_api::git_credentials_post_route,
         engine_api::git_credentials_delete_route,
@@ -180,6 +181,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
             openapi_schemas::ValidationErrorResponse,
             openapi_schemas::UnauthorizedErrorResponse,
             engine_api::GitPullBody,
+            engine_api::GitPushBody,
             engine_api::GitCredentialBody,
             auth::routes::AuthorizeParams,
             auth::routes::TokenParams,
@@ -2751,6 +2753,10 @@ async fn setup_routes(
         .route(
             "/engine/git/pull",
             axum::routing::post(engine_api::git_pull_route),
+        )
+        .route(
+            "/engine/git/push",
+            axum::routing::post(engine_api::git_push_route),
         )
         .route(
             "/engine/revisions/label",

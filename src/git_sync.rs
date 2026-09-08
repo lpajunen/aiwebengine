@@ -1046,6 +1046,463 @@ fn write_script(
 }
 
 // ============================================================================
+// Pushing
+// ============================================================================
+
+/// What a caller asks for when pushing.
+#[derive(Debug, Clone)]
+pub struct PushRequest {
+    /// The script to publish.
+    pub script_uri: String,
+    /// Where to publish it. Optional once the script has been pulled, since the
+    /// sync row already names the repository it belongs to.
+    pub repo: Option<String>,
+    pub branch: Option<String>,
+    /// Commit message. Defaulted to something that says what happened and
+    /// where it came from.
+    pub message: Option<String>,
+    /// Push even when the engine believes the remote has moved.
+    ///
+    /// The check this skips is this engine's; GitHub's own refusal to
+    /// fast-forward a ref stands regardless, which is what stops `force` from
+    /// meaning "overwrite whatever is there".
+    pub force: bool,
+}
+
+/// What a push did.
+#[derive(Debug, Clone)]
+pub struct PushReport {
+    pub script_uri: String,
+    pub repo: String,
+    pub branch: String,
+    /// The commit this push created, or the one already there when there was
+    /// nothing to do.
+    pub commit: String,
+    /// Repository paths written and removed by this push.
+    pub written: Vec<String>,
+    pub removed: Vec<String>,
+    /// True when the repository already held exactly these files.
+    pub up_to_date: bool,
+}
+
+/// Publish a script's files to its repository.
+pub async fn push(user: &UserContext, request: PushRequest) -> Result<PushReport, SyncError> {
+    let host = crate::git_github::HOST;
+    if !crate::config::git_config().allows(host) {
+        return Err(SyncError::AccessDenied(format!(
+            "This engine is not configured to write to {}",
+            host
+        )));
+    }
+
+    // Pushing publishes a script's content outward, so it takes what changing
+    // the script takes. An editor who does not own it could already read it and
+    // copy it out by hand — but making this ownership-gated keeps the sync row
+    // coherent and leaves a record of content leaving the deployment.
+    if !crate::engine_api::can_write_script(user, &request.script_uri) {
+        return Err(SyncError::AccessDenied(format!(
+            "Access denied. You must own '{}' or be an administrator to publish it.",
+            request.script_uri
+        )));
+    }
+
+    let token = match &user.user_id {
+        Some(user_id) => crate::git_credentials::token_for(user_id, host).await,
+        None => None,
+    };
+    if token.is_none() {
+        return Err(SyncError::AccessDenied(
+            "Pushing needs a credential. Store a token for github.com first — a public \
+             repository can be read without one, but nothing can be written."
+                .to_string(),
+        ));
+    }
+
+    let client = crate::git_github::GitHubClient::new()?.with_token(token);
+    let report = push_with(client, user, request).await?;
+
+    if let Some(user_id) = &user.user_id {
+        crate::git_credentials::mark_used(user_id, host).await;
+    }
+
+    Ok(report)
+}
+
+/// [`push`], against a GitHub client the caller supplies.
+///
+/// The credential lookup and the allowlist stay in [`push`]: what this takes is
+/// an already-authenticated client, which is what lets the suite drive a whole
+/// publish against a stand-in for GitHub.
+pub async fn push_with(
+    client: crate::git_github::GitHubClient,
+    user: &UserContext,
+    request: PushRequest,
+) -> Result<PushReport, SyncError> {
+    if !crate::engine_api::can_write_script(user, &request.script_uri) {
+        return Err(SyncError::AccessDenied(format!(
+            "Access denied. You must own '{}' or be an administrator to publish it.",
+            request.script_uri
+        )));
+    }
+
+    let known = crate::database::run_blocking(sync_row(&request.script_uri)).unwrap_or_default();
+    let repo_spec = request
+        .repo
+        .clone()
+        .or_else(|| known.as_ref().map(|row| row.remote.clone()))
+        .ok_or_else(|| {
+            SyncError::Layout(format!(
+                "'{}' has not been pulled from anywhere, so there is nowhere to push it. \
+                 Name a repository.",
+                request.script_uri
+            ))
+        })?;
+    let repo = crate::git_github::RepoRef::parse(&repo_spec)?;
+
+    let acting = user.clone();
+    tokio::task::spawn_blocking(move || {
+        gather_and_push(&client, &acting, &repo, &request, known.as_ref())
+    })
+    .await
+    .map_err(|e| SyncError::Storage(format!("Push did not finish: {}", e)))?
+}
+
+/// The blocking half of [`push`].
+fn gather_and_push(
+    client: &crate::git_github::GitHubClient,
+    user: &UserContext,
+    repo: &crate::git_github::RepoRef,
+    request: &PushRequest,
+    known: Option<&SyncRow>,
+) -> Result<PushReport, SyncError> {
+    let branch = match &request.branch {
+        Some(branch) => branch.clone(),
+        None => match known {
+            Some(row) => row.branch.clone(),
+            None => client.default_branch(repo)?,
+        },
+    };
+
+    // A repository with no commits on this branch yet is a first publish rather
+    // than an error: there is simply no parent and no tree to preserve.
+    let head = match client.resolve_branch(repo, &branch) {
+        Ok(resolved) => Some(client.tree_at(repo, &resolved.commit)?),
+        Err(crate::git_github::GitHubError::NotFound(_)) => None,
+        Err(e) => return Err(SyncError::Remote(e)),
+    };
+
+    if let Some(row) = known {
+        check_divergence(row, head.as_ref(), &request.script_uri, request.force)?;
+    }
+
+    let files = engine_files(&request.script_uri, known)?;
+    let ignore = head
+        .as_ref()
+        .and_then(|tree| ignore_rules_from(client, repo, tree))
+        .unwrap_or_default();
+
+    let entry_prefix = script_prefix(&request.script_uri, known);
+    let existing = head
+        .as_ref()
+        .map(|tree| tree.entries.clone())
+        .unwrap_or_default();
+
+    // Everything the script does not own passes through untouched. That is what
+    // keeps a push from deleting the repository's README, its CI configuration
+    // and everything its ignore file kept out — files this engine never held
+    // and which, from here, are indistinguishable from files deleted upstream.
+    let mut next: Vec<crate::git_github::TreeEntry> = Vec::new();
+    let mut removed = Vec::new();
+    for entry in existing {
+        if entry.kind == "tree" {
+            // Directories are inferred from the paths of their contents.
+            continue;
+        }
+        if owns_path(&entry.path, &entry_prefix, &ignore) && !files.contains_key(&entry.path) {
+            removed.push(entry.path.clone());
+            continue;
+        }
+        if files.contains_key(&entry.path) {
+            continue;
+        }
+        next.push(entry);
+    }
+
+    let mut written = Vec::new();
+    let mut unchanged = 0usize;
+    let by_path: std::collections::HashMap<&str, &crate::git_github::TreeEntry> = head
+        .as_ref()
+        .map(|tree| {
+            tree.entries
+                .iter()
+                .map(|entry| (entry.path.as_str(), entry))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    for (path, content) in &files {
+        // Both stores address content by digest, so a file whose blob is
+        // already there needs no upload — only its sha repeated.
+        let existing_sha = by_path.get(path.as_str()).map(|entry| entry.sha.as_str());
+        let sha = match existing_sha {
+            Some(sha) if git_blob_sha(content) == sha => {
+                unchanged += 1;
+                sha.to_string()
+            }
+            _ => {
+                written.push(path.clone());
+                client.create_blob(repo, content)?
+            }
+        };
+        next.push(crate::git_github::TreeEntry {
+            path: path.clone(),
+            mode: "100644".to_string(),
+            kind: "blob".to_string(),
+            sha,
+        });
+    }
+
+    if written.is_empty() && removed.is_empty() {
+        return Ok(PushReport {
+            script_uri: request.script_uri.clone(),
+            repo: repo.to_string(),
+            branch,
+            commit: head.map(|tree| tree.commit).unwrap_or_default(),
+            written,
+            removed,
+            up_to_date: true,
+        });
+    }
+    let _ = unchanged;
+
+    let tree = client.create_tree(repo, &next)?;
+    let parents: Vec<String> = head.iter().map(|tree| tree.commit.clone()).collect();
+    let message = request.message.clone().unwrap_or_else(|| {
+        format!(
+            "Update {} from aiwebengine",
+            entry_prefix.as_deref().unwrap_or("the solution")
+        )
+    });
+    let commit = client.create_commit(repo, &message, &tree, &parents)?;
+
+    if parents.is_empty() {
+        client.create_ref(repo, &branch, &commit)?;
+    } else {
+        client.update_ref(repo, &branch, &commit)?;
+    }
+
+    // The script now agrees with the commit that carries it.
+    let revision = crate::revisions::current(&request.script_uri);
+    let uri_base = known
+        .and_then(|row| row.uri_base.clone())
+        .unwrap_or_else(|| default_base_for(&request.script_uri));
+    crate::database::run_blocking(record_sync(
+        &request.script_uri,
+        &repo.to_string(),
+        &branch,
+        &commit,
+        &uri_base,
+        revision,
+        user.user_id.as_deref(),
+    ))
+    .map_err(|e| SyncError::Storage(format!("Could not record the sync: {}", e)))?;
+
+    Ok(PushReport {
+        script_uri: request.script_uri.clone(),
+        repo: repo.to_string(),
+        branch,
+        commit,
+        written,
+        removed,
+        up_to_date: false,
+    })
+}
+
+/// Refuse a push whose two sides have both moved.
+///
+/// The engine implements no merge. When the repository has changed since this
+/// script was last synced *and* the script has changed here, reconciling the
+/// two is a judgement about code — which is what the agent asking for this push
+/// is for, and what `/engine/revisions/diff` exists to feed it.
+fn check_divergence(
+    row: &SyncRow,
+    head: Option<&crate::git_github::CommitTree>,
+    script_uri: &str,
+    force: bool,
+) -> Result<(), SyncError> {
+    if force {
+        return Ok(());
+    }
+    let Some(head) = head else {
+        return Ok(());
+    };
+    if head.commit == row.last_commit {
+        return Ok(());
+    }
+
+    let local = crate::revisions::current(script_uri);
+    if local == row.revision_at_sync {
+        return Err(SyncError::Diverged(format!(
+            "{} has moved since '{}' was last synced, and this engine has not. Pull first.",
+            row.remote, script_uri
+        )));
+    }
+
+    Err(SyncError::Diverged(format!(
+        "Both sides have moved: {} is at {} rather than {}, and '{}' is at revision {} rather \
+         than {}. Nothing was pushed. Reconcile the two — /engine/revisions/diff shows what \
+         changed here — then push again, or pass force to publish this engine's copy over the \
+         repository's.",
+        row.remote,
+        &head.commit[..7.min(head.commit.len())],
+        &row.last_commit[..7.min(row.last_commit.len())],
+        script_uri,
+        local
+            .map(|r| r.to_string())
+            .unwrap_or_else(|| "none".into()),
+        row.revision_at_sync
+            .map(|r| r.to_string())
+            .unwrap_or_else(|| "none".into()),
+    )))
+}
+
+/// The repository paths a script's files occupy, with their content.
+fn engine_files(
+    script_uri: &str,
+    known: Option<&SyncRow>,
+) -> Result<BTreeMap<String, Vec<u8>>, SyncError> {
+    let Some(root) = crate::repository::fetch_script(script_uri) else {
+        return Err(SyncError::Layout(format!(
+            "No script '{}' to push",
+            script_uri
+        )));
+    };
+
+    let prefix = script_prefix(script_uri, known);
+    let extension = script_uri
+        .rfind('.')
+        .map(|dot| &script_uri[dot..])
+        .filter(|ext| !ext.contains('/'))
+        .unwrap_or(".js");
+
+    let mut files = BTreeMap::new();
+    let entry = match &prefix {
+        Some(dir) => format!("{}/main{}", dir, extension),
+        None => format!("main{}", extension),
+    };
+    files.insert(entry, root.into_bytes());
+
+    for (name, asset) in crate::repository::fetch_assets(script_uri) {
+        let path = match &prefix {
+            Some(dir) => format!("{}/{}", dir, name),
+            None => name,
+        };
+        files.insert(path, asset.content);
+    }
+
+    Ok(files)
+}
+
+/// The repository directory a script came from, or `None` when the repository
+/// is itself that one script.
+///
+/// The mapping a pull applies is invertible, which is why nothing has to be
+/// stored for this: a URI is the base plus either `/{directory}{ext}` or just
+/// `{ext}`, so what follows the base says which shape it is.
+fn script_prefix(script_uri: &str, known: Option<&SyncRow>) -> Option<String> {
+    let base = known.and_then(|row| row.uri_base.clone())?;
+    let rest = script_uri.strip_prefix(&base)?;
+    let rest = rest.strip_prefix('/')?;
+    let stem = rest.rfind('.').map(|dot| &rest[..dot]).unwrap_or(rest);
+    (!stem.is_empty()).then(|| stem.to_string())
+}
+
+/// Whether `path` is one this script is responsible for.
+///
+/// Owned means "a pull would have taken it": inside the script's directory, and
+/// not excluded. Everything else belongs to the repository and is preserved.
+fn owns_path(path: &str, prefix: &Option<String>, ignore: &IgnoreRules) -> bool {
+    let relative = match prefix {
+        Some(dir) => match path.strip_prefix(&format!("{}/", dir)) {
+            Some(relative) => relative,
+            None => return false,
+        },
+        None => path,
+    };
+    !is_excluded(path, relative, ignore)
+}
+
+/// The repository's ignore rules, read from the commit being pushed onto.
+fn ignore_rules_from(
+    client: &crate::git_github::GitHubClient,
+    repo: &crate::git_github::RepoRef,
+    tree: &crate::git_github::CommitTree,
+) -> Option<IgnoreRules> {
+    let entry = tree
+        .entries
+        .iter()
+        .find(|entry| entry.path == IGNORE_FILE)?;
+    let content = client.blob(repo, &entry.sha).ok()?;
+    Some(IgnoreRules::parse(&String::from_utf8_lossy(&content)))
+}
+
+/// A base for a script that has never been synced, so a first push can record
+/// one.
+fn default_base_for(script_uri: &str) -> String {
+    match script_uri.rfind('/') {
+        Some(slash) => script_uri[..slash].to_string(),
+        None => script_uri.to_string(),
+    }
+}
+
+/// Git's own object id for a blob: `sha1("blob {len}\0" + content)`.
+///
+/// Computed here so a file whose content the repository already holds is
+/// recognised without uploading it. GitHub would deduplicate the blob anyway,
+/// but the request is the cost worth avoiding, and this is also what makes a
+/// push of an unchanged script report honestly that it did nothing.
+fn git_blob_sha(content: &[u8]) -> String {
+    use sha1::{Digest, Sha1};
+    let mut hasher = Sha1::new();
+    hasher.update(format!("blob {}\0", content.len()).as_bytes());
+    hasher.update(content);
+    hex::encode(hasher.finalize())
+}
+
+/// One script's sync row.
+#[derive(Debug, Clone)]
+pub struct SyncRow {
+    pub remote: String,
+    pub branch: String,
+    pub last_commit: String,
+    pub uri_base: Option<String>,
+    pub revision_at_sync: Option<i32>,
+}
+
+pub async fn sync_row(script_uri: &str) -> crate::error::AppResult<Option<SyncRow>> {
+    use sqlx::Row;
+    let row = sqlx::query(
+        "SELECT remote, branch, last_commit, uri_base, revision_at_sync \
+         FROM script_git_sync WHERE script_uri = $1",
+    )
+    .bind(script_uri)
+    .fetch_optional(&pool()?)
+    .await
+    .map_err(|e| crate::error::AppError::Database {
+        message: format!("Database error reading git sync state: {}", e),
+        source: None,
+    })?;
+
+    Ok(row.map(|row| SyncRow {
+        remote: row.get::<String, _>(0),
+        branch: row.get::<String, _>(1),
+        last_commit: row.get::<String, _>(2),
+        uri_base: row.get::<Option<String>, _>(3),
+        revision_at_sync: row.get::<Option<i32>, _>(4),
+    }))
+}
+
+// ============================================================================
 // Where a script was last synced from
 // ============================================================================
 
@@ -1165,6 +1622,10 @@ pub enum SyncError {
 
     #[error("{0}")]
     Storage(String),
+
+    /// Both sides moved. The engine does not merge; it says so and stops.
+    #[error("{0}")]
+    Diverged(String),
 }
 
 #[cfg(test)]
