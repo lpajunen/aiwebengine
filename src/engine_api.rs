@@ -5382,6 +5382,87 @@ fn tool_push_to_git(args: &Value, user: &UserContext) -> Value {
     }
 }
 
+#[derive(Deserialize, Default, utoipa::IntoParams)]
+pub struct GitStatusQuery {
+    /// URI of the script to report on.
+    pub script: Option<String>,
+}
+
+fn status_json(status: &crate::git_sync::SyncStatus) -> Value {
+    json!({
+        "script": status.script_uri,
+        "state": status.state.as_str(),
+        "action": status.state.advice(),
+        "repo": status.remote,
+        "branch": status.branch,
+        "commit": status.remote_commit,
+        "commitAtSync": status.commit_at_sync,
+        "revision": status.revision,
+        "revisionAtSync": status.revision_at_sync,
+        "pinnedRevision": status.pinned,
+        "unreachable": status.unreachable,
+        "timestamp": iso_timestamp(),
+    })
+}
+
+/// Where a script stands relative to the repository it came from.
+///
+/// Answers one of `unbound`, `in_sync`, `behind`, `ahead`, `diverged` or
+/// `unreachable`, which is the whole decision about what to do next — so an
+/// agent can choose between pushing, pulling and reconciling without attempting
+/// an operation and reading the refusal.
+///
+/// Reports the deployment pin alongside, because a pull into a pinned script
+/// advances head without changing what answers requests, and that is worth
+/// knowing at the point somebody is deciding.
+#[utoipa::path(
+    get,
+    path = "/engine/git/status",
+    tags = ["Git"],
+    params(GitStatusQuery),
+    responses(
+        (status = 200, description = "The script's sync state, and what it suggests doing"),
+        (status = 400, description = "No such script"),
+        (status = 403, description = "Access denied"),
+    )
+)]
+pub async fn git_status_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<GitStatusQuery>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+
+    let Some(script) = query.script else {
+        return missing_param_response("script");
+    };
+    if !can_read_history(&user, &script) {
+        return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+    }
+
+    match crate::git_sync::status(&user, &script).await {
+        Ok(status) => json_response(StatusCode::OK, status_json(&status)),
+        Err(e) => error_response(git_sync_status(&e), e.to_string()),
+    }
+}
+
+fn tool_get_git_status(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    if !can_read_history(user, script) {
+        return json!({ "error": "Access denied" });
+    }
+
+    let user = user.clone();
+    let script = script.to_string();
+    match crate::database::run_blocking(
+        async move { crate::git_sync::status(&user, &script).await },
+    ) {
+        Ok(status) => status_json(&status),
+        Err(e) => json!({ "error": e.to_string() }),
+    }
+}
+
 fn tool_pull_from_git(args: &Value, user: &UserContext) -> Value {
     let Some(repo) = arg_str(args, "repo") else {
         return missing_arg("repo");
@@ -8205,6 +8286,24 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 })
             },
             tool_delete_git_credential,
+        ),
+        (
+            "get_git_status",
+            "Where a script stands relative to the repository it came from: unbound, in_sync, \
+            behind, ahead, diverged, or unreachable. That is the whole decision about what to do \
+            next, so ask this rather than attempting a push and reading the refusal. Reports the \
+            deployment pin too, since a pull into a pinned script advances head without changing \
+            what answers requests.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script to report on" }
+                    },
+                    "required": ["script"]
+                })
+            },
+            tool_get_git_status,
         ),
         (
             "push_to_git",

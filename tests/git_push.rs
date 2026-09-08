@@ -10,7 +10,9 @@
 mod common;
 
 use aiwebengine::git_github::GitHubClient;
-use aiwebengine::git_sync::{PullRequest, PushRequest, pull_with, push_with};
+use aiwebengine::git_sync::{
+    PullRequest, PushRequest, SyncState, pull_with, push_with, status_with,
+};
 use aiwebengine::repository;
 use aiwebengine::security::UserContext;
 use axum::extract::{Path, State};
@@ -684,4 +686,169 @@ async fn a_script_with_no_repository_is_refused() {
         "unexpected: {}",
         error
     );
+}
+
+// ============================================================================
+// Status
+// ============================================================================
+
+/// The four cells of the sync matrix, each reached the way it happens in
+/// practice. This is what an agent asks instead of attempting an operation and
+/// reading the refusal, so the mapping from "what has moved" to "what to do"
+/// is the thing worth pinning down.
+#[tokio::test(flavor = "multi_thread")]
+async fn status_reports_which_cell_a_script_is_in() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = Fixture::start(&[("shop/main.js", "function init() {}")])
+        .await
+        .expect("fixture should start");
+
+    let uri = &script_uri("status-matrix/shop.js");
+    clear(uri);
+
+    pull_with(github.client(), &pusher(), pull_request("status-matrix"))
+        .await
+        .expect("pull should succeed");
+
+    // Neither side has moved.
+    let settled = status_with(github.client(), uri)
+        .await
+        .expect("status should answer");
+    assert_eq!(settled.state, SyncState::InSync);
+    assert_eq!(settled.remote.as_deref(), Some("lpajunen/solution"));
+    assert_eq!(settled.branch.as_deref(), Some("main"));
+
+    // We change it here.
+    edit(uri, "function init() { /* ours */ }");
+    let ahead = status_with(github.client(), uri)
+        .await
+        .expect("status should answer");
+    assert_eq!(ahead.state, SyncState::Ahead);
+    assert!(
+        ahead.state.advice().contains("Push"),
+        "unexpected: {}",
+        ahead.state.advice()
+    );
+
+    // And they change it too.
+    github.land_commit(&[("shop/main.js", "function init() { /* theirs */ }")]);
+    let diverged = status_with(github.client(), uri)
+        .await
+        .expect("status should answer");
+    assert_eq!(diverged.state, SyncState::Diverged);
+    assert_ne!(diverged.remote_commit, diverged.commit_at_sync);
+    assert_ne!(diverged.revision, diverged.revision_at_sync);
+}
+
+/// A remote that moved on its own is a pull waiting to happen, and status says
+/// so before anything is attempted.
+#[tokio::test(flavor = "multi_thread")]
+async fn status_reports_behind_when_only_the_remote_moved() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = Fixture::start(&[("shop/main.js", "function init() {}")])
+        .await
+        .expect("fixture should start");
+
+    let uri = &script_uri("status-behind/shop.js");
+    clear(uri);
+
+    pull_with(github.client(), &pusher(), pull_request("status-behind"))
+        .await
+        .expect("pull should succeed");
+
+    github.land_commit(&[("shop/main.js", "function init() { /* theirs */ }")]);
+
+    let behind = status_with(github.client(), uri)
+        .await
+        .expect("status should answer");
+    assert_eq!(behind.state, SyncState::Behind);
+    assert!(behind.state.advice().contains("Pull"));
+}
+
+/// A script nobody has synced is not an error and not a conflict — it has
+/// simply never been anywhere, and the answer says what would change that.
+#[tokio::test(flavor = "multi_thread")]
+async fn status_reports_a_script_that_came_from_nowhere() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = Fixture::start(&[("shop/main.js", "function init() {}")])
+        .await
+        .expect("fixture should start");
+
+    let uri = "status-unbound/loose.js";
+    edit(uri, "function init() {}");
+
+    let status = status_with(github.client(), uri)
+        .await
+        .expect("status should answer");
+    assert_eq!(status.state, SyncState::Unbound);
+    assert_eq!(status.remote, None);
+    assert!(status.state.advice().contains("Push it"));
+}
+
+/// The remote half is the part that can fail for reasons unrelated to the
+/// script, so it degrades rather than taking the whole answer down with it.
+#[tokio::test(flavor = "multi_thread")]
+async fn status_still_answers_when_the_host_cannot_be_reached() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = Fixture::start(&[("shop/main.js", "function init() {}")])
+        .await
+        .expect("fixture should start");
+
+    let uri = &script_uri("status-offline/shop.js");
+    clear(uri);
+
+    pull_with(github.client(), &pusher(), pull_request("status-offline"))
+        .await
+        .expect("pull should succeed");
+
+    // A client pointed at nothing listening.
+    let offline = GitHubClient::for_tests("http://127.0.0.1:1").expect("client");
+    let status = status_with(offline, uri)
+        .await
+        .expect("status should still answer");
+
+    assert_eq!(status.state, SyncState::Unreachable);
+    assert!(status.unreachable.is_some(), "and says why");
+    assert!(
+        status.revision.is_some(),
+        "while still reporting the half it does know"
+    );
+    assert_eq!(status.remote.as_deref(), Some("lpajunen/solution"));
+}
+
+/// A pinned script serves its pin, so a pull advancing head changes nothing
+/// about what answers requests. Status reports the pin for that reason.
+#[tokio::test(flavor = "multi_thread")]
+async fn status_reports_a_deployment_pin() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = Fixture::start(&[("shop/main.js", "function init() {}")])
+        .await
+        .expect("fixture should start");
+
+    let uri = &script_uri("status-pinned/shop.js");
+    clear(uri);
+
+    pull_with(github.client(), &pusher(), pull_request("status-pinned"))
+        .await
+        .expect("pull should succeed");
+
+    let revision = aiwebengine::revisions::current(uri).expect("a revision");
+    aiwebengine::deployments::deploy(uri, revision, Some("git-pusher"))
+        .await
+        .expect("should pin");
+
+    let status = status_with(github.client(), uri)
+        .await
+        .expect("status should answer");
+    assert_eq!(status.pinned, Some(revision));
 }

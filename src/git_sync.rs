@@ -1503,6 +1503,172 @@ pub async fn sync_row(script_uri: &str) -> crate::error::AppResult<Option<SyncRo
 }
 
 // ============================================================================
+// Where a script stands
+// ============================================================================
+
+/// Which cell of the sync matrix a script sits in.
+///
+/// The four states are the whole decision, and naming them is the point of this
+/// type: an agent holding one of these knows whether to push, to pull, or to
+/// stop and reconcile, without having to attempt an operation and read the
+/// refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncState {
+    /// Never pulled from or pushed to anywhere.
+    Unbound,
+    /// Neither side has moved since they last agreed.
+    InSync,
+    /// The repository moved and this engine did not — a pull.
+    Behind,
+    /// This engine moved and the repository did not — a push.
+    Ahead,
+    /// Both moved. Nothing to do automatically; somebody has to reconcile them.
+    Diverged,
+    /// The repository could not be reached, so only the local half is known.
+    Unreachable,
+}
+
+impl SyncState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SyncState::Unbound => "unbound",
+            SyncState::InSync => "in_sync",
+            SyncState::Behind => "behind",
+            SyncState::Ahead => "ahead",
+            SyncState::Diverged => "diverged",
+            SyncState::Unreachable => "unreachable",
+        }
+    }
+
+    /// What to do about it, in the words the caller would use.
+    pub fn advice(self) -> &'static str {
+        match self {
+            SyncState::Unbound => {
+                "This script came from nowhere. Push it, naming a repository, to publish it."
+            }
+            SyncState::InSync => "Nothing to do.",
+            SyncState::Behind => "Pull. The repository has changes this engine does not.",
+            SyncState::Ahead => "Push. This engine has changes the repository does not.",
+            SyncState::Diverged => {
+                "Both sides have changed. Compare them — /engine/revisions/diff shows what \
+                 changed here — and reconcile before pushing, or pull to take the \
+                 repository's copy."
+            }
+            SyncState::Unreachable => {
+                "The repository could not be reached, so only this engine's half is known."
+            }
+        }
+    }
+}
+
+/// What a script's relationship with its repository looks like right now.
+#[derive(Debug, Clone)]
+pub struct SyncStatus {
+    pub script_uri: String,
+    pub state: SyncState,
+    /// Where it came from, when it came from anywhere.
+    pub remote: Option<String>,
+    pub branch: Option<String>,
+    /// The commit the two sides last agreed on.
+    pub commit_at_sync: Option<String>,
+    /// What the branch points at now, when the host could be asked.
+    pub remote_commit: Option<String>,
+    /// The revision they last agreed on, and the newest one here.
+    pub revision_at_sync: Option<i32>,
+    pub revision: Option<i32>,
+    /// The revision this script is pinned to, if any.
+    ///
+    /// Reported beside the sync state because a pull into a pinned script
+    /// advances head without changing what answers requests — correct, and
+    /// surprising if nothing says so at the point somebody is deciding what to
+    /// do next.
+    pub pinned: Option<i32>,
+    /// Why the remote half is missing, when it is.
+    pub unreachable: Option<String>,
+}
+
+/// Report where `script_uri` stands relative to its repository.
+pub async fn status(user: &UserContext, script_uri: &str) -> Result<SyncStatus, SyncError> {
+    let host = crate::git_github::HOST;
+    let token = match &user.user_id {
+        Some(user_id) => crate::git_credentials::token_for(user_id, host).await,
+        None => None,
+    };
+    let client = crate::git_github::GitHubClient::new()?.with_token(token);
+    status_with(client, script_uri).await
+}
+
+/// [`status`], against a GitHub client the caller supplies.
+pub async fn status_with(
+    client: crate::git_github::GitHubClient,
+    script_uri: &str,
+) -> Result<SyncStatus, SyncError> {
+    if crate::repository::fetch_script(script_uri).is_none() {
+        return Err(SyncError::Layout(format!("No script '{}'", script_uri)));
+    }
+
+    let revision = crate::revisions::current(script_uri);
+    let pinned = crate::deployments::pinned(script_uri);
+    let known = crate::database::run_blocking(sync_row(script_uri)).unwrap_or_default();
+
+    let Some(row) = known else {
+        return Ok(SyncStatus {
+            script_uri: script_uri.to_string(),
+            state: SyncState::Unbound,
+            remote: None,
+            branch: None,
+            commit_at_sync: None,
+            remote_commit: None,
+            revision_at_sync: None,
+            revision,
+            pinned,
+            unreachable: None,
+        });
+    };
+
+    let repo = crate::git_github::RepoRef::parse(&row.remote)?;
+    let branch = row.branch.clone();
+
+    // Asking the host is what makes this worth calling, and it is also the one
+    // part that can fail for reasons that have nothing to do with the script.
+    // A host that cannot be reached degrades to the local half rather than
+    // failing the whole answer: "your copy has changed and I could not check
+    // theirs" is useful, and an error is not.
+    let probe = tokio::task::spawn_blocking(move || client.resolve_branch(&repo, &branch))
+        .await
+        .map_err(|e| SyncError::Storage(format!("Status did not finish: {}", e)))?;
+
+    let (remote_commit, unreachable) = match probe {
+        Ok(resolved) => (Some(resolved.commit), None),
+        Err(e) => (None, Some(e.to_string())),
+    };
+
+    let local_moved = revision != row.revision_at_sync;
+    let state = match &remote_commit {
+        None => SyncState::Unreachable,
+        Some(commit) => match (commit != &row.last_commit, local_moved) {
+            (false, false) => SyncState::InSync,
+            (true, false) => SyncState::Behind,
+            (false, true) => SyncState::Ahead,
+            (true, true) => SyncState::Diverged,
+        },
+    };
+
+    Ok(SyncStatus {
+        script_uri: script_uri.to_string(),
+        state,
+        remote: Some(row.remote),
+        branch: Some(row.branch),
+        commit_at_sync: Some(row.last_commit),
+        remote_commit,
+        revision_at_sync: row.revision_at_sync,
+        revision,
+        pinned,
+        unreachable,
+    })
+}
+
+// ============================================================================
 // Where a script was last synced from
 // ============================================================================
 
