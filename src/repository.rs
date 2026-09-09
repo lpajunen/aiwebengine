@@ -499,6 +499,37 @@ fn invalidate_script_asset_caches(script_uri: &str, asset_path: &str) {
     crate::module_loader::invalidate_asset(script_uri, asset_path);
 }
 
+/// How many times a script's stored source has changed under this process.
+///
+/// Read by [`note_script_write`] and by the cache fill in `get_script_metadata`,
+/// which is a read-modify-write across an `await`: it looks in the cache, reads
+/// the database when it misses, and only then takes the lock again to store
+/// what it read. A write landing in that gap updates the database and the cache
+/// and is then overwritten by the older content the reader already had in hand
+/// — leaving the cache, which is what `fetch_script` answers from, permanently
+/// behind the database. A first write is where it bites, because
+/// [`refresh_cached_script_source`] does nothing when the script is not cached
+/// yet, so the stale fill has no fresher entry to lose to.
+///
+/// Counting writes rather than versioning entries keeps this to two atomic
+/// loads: the reader takes the count before its database read and again before
+/// caching, and declines to cache when it moved. Coarse on purpose — a write to
+/// any script makes every concurrent fill skip — which costs one repeated
+/// database read of a script nobody wrote, and script writes happen at the rate
+/// people deploy.
+static SCRIPT_WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The write count a cache fill should compare against.
+fn script_write_count() -> u64 {
+    SCRIPT_WRITES.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Record that a script's stored source changed, so a cache fill that read the
+/// database before this point does not install what it read.
+fn note_script_write() {
+    SCRIPT_WRITES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Point the metadata cache at `content` without disturbing the script's route
 /// registrations, so requests keep routing while the re-init that follows an
 /// upsert runs. Does nothing when the script is not cached — the next
@@ -547,7 +578,11 @@ pub async fn refresh_cached_script_hosts_from_db(uri: &str) {
 /// stale *source* is a correctness bug, while losing the registrations only
 /// costs the routes until the pending init() restores them.
 pub async fn refresh_cached_script_source_from_db(uri: &str) {
-    match read_served_source(uri).await {
+    let content = read_served_source(uri).await;
+    // Counted like a local write: this changes what the cache holds too, and a
+    // fill still in flight would otherwise put back what it read before.
+    note_script_write();
+    match content {
         Some(content) => refresh_cached_script_source(uri, &content),
         None => {
             if let Ok(mut guard) = safe_lock_scripts() {
@@ -6579,6 +6614,7 @@ impl Repository for PostgresRepository {
     async fn upsert_script(&self, uri: &str, content: &str) -> AppResult<()> {
         let executor = crate::database::get_current_executor(&self.pool);
         db_upsert_script(executor, uri, content).await?;
+        note_script_write();
 
         // Send notification after successful upsert
         send_script_notification(&self.pool, uri, "upserted", &self.server_id).await?;
@@ -6623,6 +6659,8 @@ impl Repository for PostgresRepository {
         };
 
         if result {
+            note_script_write();
+
             // Send notification after successful deletion
             send_script_notification(&self.pool, uri, "deleted", &self.server_id).await?;
 
@@ -6646,7 +6684,9 @@ impl Repository for PostgresRepository {
             return Ok(metadata.clone());
         }
 
-        // Fetch from DB
+        // Fetch from DB. Taken before the read, so a write that lands while it
+        // is in flight is visible to the fill below.
+        let writes_before = script_write_count();
         let content = self
             .get_script(uri)
             .await?
@@ -6675,8 +6715,14 @@ impl Repository for PostgresRepository {
         metadata.owners = owners;
         metadata.hosts = script_hosts;
 
-        // Cache it
-        if let Ok(mut guard) = safe_lock_scripts() {
+        // Cache it, unless a write landed while the read above was in flight:
+        // that write already put its own content in the database and the cache,
+        // and installing what this read holds would put the cache permanently
+        // behind the database. Skipping the fill costs the next reader one
+        // query, which is the cheap side of the trade.
+        if writes_before == script_write_count()
+            && let Ok(mut guard) = safe_lock_scripts()
+        {
             guard.insert(uri.to_string(), metadata.clone());
         }
 

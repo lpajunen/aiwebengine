@@ -2,7 +2,8 @@ use crate::error::AppResult;
 use crate::repository;
 use crate::repository::Repository;
 use crate::scheduler;
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
@@ -49,6 +50,31 @@ fn init_concurrency() -> usize {
         .map(|n| n.get())
         .unwrap_or(4)
         .clamp(4, 16)
+}
+
+/// One `init()` at a time per script.
+///
+/// Every path that re-initializes runs from a detached task — an upsert answers
+/// its caller and spawns one — so two writes landing close together put two
+/// passes over the same script in flight at once. They interleave: each clears
+/// what the script had registered and then registers again, and the outcome
+/// depends on how the two orders of "clear" and "register" happen to fall.
+/// Two listeners for one registration is the visible face of it; the last
+/// writer of `update_script_init_status` deciding the route table is the same
+/// bug wearing a different hat, and there the loser can be the *older* pass.
+///
+/// Keyed by URI rather than global, because startup initializes every script at
+/// once ([`init_concurrency`]) and those passes have nothing to say to each
+/// other. Entries are left behind on purpose: there is one per script this
+/// process has initialized, which is bounded by what is deployed.
+fn init_gate(script_uri: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static GATES: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let gates = GATES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = match gates.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.entry(script_uri.to_string()).or_default().clone()
 }
 
 /// Attribute an init failure the engine reports to the script's startup.
@@ -165,6 +191,9 @@ impl ScriptInitializer {
         script_uri: &str,
         is_startup: bool,
     ) -> Result<InitResult, String> {
+        let gate = init_gate(script_uri);
+        let _pass = gate.lock().await;
+
         let ran = crate::deployments::serving_revision(script_uri);
         let result = self.run_init(script_uri, is_startup).await;
 
@@ -205,17 +234,24 @@ impl ScriptInitializer {
         // that would wake any of them.
         scheduler::clear_script_jobs_async(script_uri).await;
 
-        // And stale listeners, for the same reason. The dispatcher appends
+        // And stale listeners, for the same reason — the dispatcher appends
         // rather than replaces, and this pass runs the script's program and
-        // its `init()` again, so without this a script re-initialised once per
-        // upsert handled every message once per time it had been written since
-        // the engine started — a listener with a side effect running a number
-        // of times that depends on the deploy history. Registrations are
-        // rebuilt by the pass below, exactly as the scheduled jobs are.
-        if let Err(e) = crate::dispatcher::GLOBAL_DISPATCHER.remove_listeners_for_script(script_uri)
-        {
+        // its `init()` again, so a script re-initialised once per upsert would
+        // handle every message once per time it had been written since the
+        // engine started.
+        //
+        // Staged rather than cleared up front, unlike the scheduled jobs. What
+        // a script listens to has to change *once*, when `init()` has finished
+        // saying what it listens to, because the clear and the re-registration
+        // do not happen together: between them the script is registered for
+        // nothing, and a message dispatched in that window is dropped by a
+        // listener that exists both before and after. Registrations made from
+        // here on go to a staging area, and the swap below installs them.
+        // Routes already work this way — the repository installs a rebuilt
+        // table when `init()` reports one, not one route at a time.
+        if let Err(e) = crate::dispatcher::GLOBAL_DISPATCHER.begin_script_registration(script_uri) {
             warn!(
-                "Failed to clear message listeners for script '{}': {}",
+                "Failed to stage message listeners for script '{}': {}",
                 script_uri, e
             );
         }
@@ -263,6 +299,19 @@ impl ScriptInitializer {
         })
         .await;
         debug!("Blocking task finished for {}", script_uri);
+
+        // Whatever `init()` got as far as registering becomes what the script
+        // listens to, in one step. An `init()` that failed part way through has
+        // its partial set installed for the same reason a partial route table
+        // is offered: it is what the script asked for before it broke, and the
+        // alternative is a script listening to nothing with no record of why.
+        if let Err(e) = crate::dispatcher::GLOBAL_DISPATCHER.commit_script_registration(script_uri)
+        {
+            warn!(
+                "Failed to install message listeners for script '{}': {}",
+                script_uri, e
+            );
+        }
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
 

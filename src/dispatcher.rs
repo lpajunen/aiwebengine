@@ -43,21 +43,36 @@ struct DispatcherState {
     /// Key: message type (e.g., "user.created")
     /// Value: Vec of (script_uri, handler_name)
     listeners: HashMap<String, Vec<MessageListener>>,
+    /// What a script's `init()` has registered so far, for the scripts
+    /// currently being initialized. Keyed by script URI; see
+    /// [`MessageDispatcher::begin_script_registration`].
+    staged: HashMap<String, Vec<(String, MessageListener)>>,
 }
 
 impl DispatcherState {
     fn new() -> Self {
         Self {
             listeners: HashMap::new(),
+            staged: HashMap::new(),
         }
     }
 
-    /// Register a listener for a message type
+    /// Register a listener for a message type.
+    ///
+    /// While the registering script has a staging area open, the listener goes
+    /// there rather than into the live table: what a re-initializing script
+    /// listens to should change once, when its `init()` has finished, and not
+    /// one registration at a time.
     fn register_listener(&mut self, message_type: String, listener: MessageListener) {
         debug!(
             "Registering listener for message type '{}': script={}, handler={}",
             message_type, listener.script_uri, listener.handler_name
         );
+
+        if let Some(staged) = self.staged.get_mut(&listener.script_uri) {
+            staged.push((message_type, listener));
+            return;
+        }
 
         self.listeners
             .entry(message_type)
@@ -65,13 +80,38 @@ impl DispatcherState {
             .push(listener);
     }
 
+    /// Open a staging area for `script_uri`, discarding any left over from a
+    /// previous pass. The script's live listeners are untouched until
+    /// [`DispatcherState::commit_staged`] replaces them.
+    fn begin_staged(&mut self, script_uri: &str) {
+        self.staged.insert(script_uri.to_string(), Vec::new());
+    }
+
+    /// Replace `script_uri`'s live listeners with what it staged, and close the
+    /// staging area. Returns how many listeners the script now has.
+    fn commit_staged(&mut self, script_uri: &str) -> usize {
+        let staged = self.staged.remove(script_uri).unwrap_or_default();
+        self.remove_listeners_for_script(script_uri);
+        let count = staged.len();
+        for (message_type, listener) in staged {
+            self.listeners
+                .entry(message_type)
+                .or_default()
+                .push(listener);
+        }
+        count
+    }
+
     /// Get all listeners for a message type
     fn get_listeners(&self, message_type: &str) -> Option<Vec<MessageListener>> {
         self.listeners.get(message_type).cloned()
     }
 
-    /// Remove all listeners for a specific script URI
+    /// Remove all listeners for a specific script URI, staged ones included:
+    /// a script that is going away is not one whose in-flight `init()` should
+    /// still get to install anything.
     fn remove_listeners_for_script(&mut self, script_uri: &str) -> usize {
+        self.staged.remove(script_uri);
         let mut removed_count = 0;
 
         for listeners in self.listeners.values_mut() {
@@ -175,6 +215,41 @@ impl MessageDispatcher {
         })?;
 
         Ok(state.get_listeners(message_type).unwrap_or_default())
+    }
+
+    /// Start a registration pass for `script_uri`.
+    ///
+    /// Until [`MessageDispatcher::commit_script_registration`] closes it, the
+    /// script's `registerListener` calls are staged instead of applied, so what
+    /// the script listens to changes once — when its `init()` has finished
+    /// saying what that is — rather than one registration at a time with a gap
+    /// in the middle where it listens to nothing.
+    ///
+    /// Callers hold [`crate::script_init`]'s per-script gate, so a pass cannot
+    /// open over another script's open one.
+    pub fn begin_script_registration(&self, script_uri: &str) -> Result<(), String> {
+        let mut state = self.state.lock().map_err(|e| {
+            error!("Failed to lock dispatcher state: {}", e);
+            format!("Failed to lock dispatcher state: {}", e)
+        })?;
+
+        state.begin_staged(script_uri);
+        Ok(())
+    }
+
+    /// Close `script_uri`'s registration pass, replacing its listeners with
+    /// what the pass staged. Returns how many it now has.
+    ///
+    /// Safe to call for a script that never opened a pass: it then registered
+    /// nothing, and replacing its listeners with nothing is what the caller
+    /// means.
+    pub fn commit_script_registration(&self, script_uri: &str) -> Result<usize, String> {
+        let mut state = self.state.lock().map_err(|e| {
+            error!("Failed to lock dispatcher state: {}", e);
+            format!("Failed to lock dispatcher state: {}", e)
+        })?;
+
+        Ok(state.commit_staged(script_uri))
     }
 
     /// Remove all listeners registered by a specific script
@@ -315,6 +390,130 @@ mod tests {
         // Get listeners for non-existent type
         let listeners = dispatcher.get_listeners("nonexistent").unwrap();
         assert_eq!(listeners.len(), 0);
+    }
+
+    /// A registration pass leaves the script listening to what the pass
+    /// registered, and to nothing it registered last time.
+    #[test]
+    fn a_registration_pass_replaces_what_the_script_listens_to() {
+        let dispatcher = MessageDispatcher::new();
+
+        dispatcher
+            .begin_script_registration("script.js")
+            .expect("first pass should open");
+        dispatcher
+            .register_listener(
+                "event1".to_string(),
+                "script.js".to_string(),
+                "handler1".to_string(),
+            )
+            .unwrap();
+        assert_eq!(
+            dispatcher.commit_script_registration("script.js").unwrap(),
+            1
+        );
+        assert_eq!(dispatcher.get_listeners("event1").unwrap().len(), 1);
+
+        // A second pass registering elsewhere leaves one listener, not two, and
+        // the message type the script no longer names is not still its.
+        dispatcher
+            .begin_script_registration("script.js")
+            .expect("second pass should open");
+        dispatcher
+            .register_listener(
+                "event2".to_string(),
+                "script.js".to_string(),
+                "handler2".to_string(),
+            )
+            .unwrap();
+        assert_eq!(
+            dispatcher.commit_script_registration("script.js").unwrap(),
+            1
+        );
+        assert_eq!(dispatcher.get_listeners("event1").unwrap().len(), 0);
+        assert_eq!(dispatcher.get_listeners("event2").unwrap().len(), 1);
+    }
+
+    /// The point of staging: what a script listens to changes when its pass
+    /// commits, not while the pass is running. A message dispatched mid-pass
+    /// reaches the listener the script had, rather than nothing at all.
+    #[test]
+    fn a_pass_in_progress_does_not_disturb_what_the_script_already_listens_to() {
+        let dispatcher = MessageDispatcher::new();
+
+        dispatcher
+            .register_listener(
+                "event".to_string(),
+                "script.js".to_string(),
+                "old".to_string(),
+            )
+            .unwrap();
+
+        dispatcher.begin_script_registration("script.js").unwrap();
+        let mid_pass = dispatcher.get_listeners("event").unwrap();
+        assert_eq!(mid_pass.len(), 1, "still listening while the pass runs");
+        assert_eq!(mid_pass[0].handler_name, "old");
+
+        dispatcher
+            .register_listener(
+                "event".to_string(),
+                "script.js".to_string(),
+                "new".to_string(),
+            )
+            .unwrap();
+        let mid_pass = dispatcher.get_listeners("event").unwrap();
+        assert_eq!(mid_pass.len(), 1, "and only once, not once per pass");
+        assert_eq!(mid_pass[0].handler_name, "old");
+
+        dispatcher.commit_script_registration("script.js").unwrap();
+        let after = dispatcher.get_listeners("event").unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].handler_name, "new");
+    }
+
+    /// A pass that registered nothing — a script whose `init()` was removed, or
+    /// one that failed before its first `registerListener` — leaves the script
+    /// listening to nothing.
+    #[test]
+    fn a_pass_that_registers_nothing_clears_what_was_there() {
+        let dispatcher = MessageDispatcher::new();
+
+        dispatcher
+            .register_listener(
+                "event".to_string(),
+                "script.js".to_string(),
+                "handler".to_string(),
+            )
+            .unwrap();
+
+        dispatcher.begin_script_registration("script.js").unwrap();
+        assert_eq!(
+            dispatcher.commit_script_registration("script.js").unwrap(),
+            0
+        );
+        assert_eq!(dispatcher.get_listeners("event").unwrap().len(), 0);
+    }
+
+    /// A script that goes away mid-pass does not get to install what the pass
+    /// staged: the deletion is the later word.
+    #[test]
+    fn removing_a_scripts_listeners_discards_a_pass_in_progress() {
+        let dispatcher = MessageDispatcher::new();
+
+        dispatcher.begin_script_registration("script.js").unwrap();
+        dispatcher
+            .register_listener(
+                "event".to_string(),
+                "script.js".to_string(),
+                "handler".to_string(),
+            )
+            .unwrap();
+        dispatcher.remove_listeners_for_script("script.js").unwrap();
+        assert_eq!(
+            dispatcher.commit_script_registration("script.js").unwrap(),
+            0
+        );
+        assert_eq!(dispatcher.get_listeners("event").unwrap().len(), 0);
     }
 
     #[test]
