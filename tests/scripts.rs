@@ -13,7 +13,7 @@ use aiwebengine::js_engine::call_init_if_exists;
 use aiwebengine::repository;
 use aiwebengine::repository::{get_script_metadata, upsert_script};
 use aiwebengine::script_init::{InitContext, ScriptInitializer};
-use common::{AdminServer, setup_env, should_skip_integration_tests};
+use common::{AdminServer, setup_env, should_skip_integration_tests, wait_for_status};
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -101,25 +101,18 @@ async fn js_write_log() {
     let engine = AdminServer::start().await.expect("server failed to start");
     let port = engine.port();
 
-    // Wait for server to be ready and scripts to be executed
-
-    // Give extra time for JavaScript scripts to execute and register routes
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
     println!("Server started on port: {}", port);
 
     let client = engine.client();
 
-    // Call the route which should call writeLog with timeout
-    let log_request = client
-        .get(format!("http://127.0.0.1:{}/js-log-test", port))
-        .send();
-
-    let res = match timeout(Duration::from_secs(5), log_request).await {
-        Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("Log test request failed: {:?}", e),
-        Err(_) => panic!("Log test request timed out"),
-    };
+    // The script was written before the server came up, so its route appears
+    // when the startup pass runs its `init()` — waited for rather than slept on.
+    let res = wait_for_status(
+        &client,
+        &format!("http://127.0.0.1:{}/js-log-test", port),
+        200,
+    )
+    .await;
 
     let body = match timeout(Duration::from_secs(5), res.text()).await {
         Ok(Ok(text)) => text,
@@ -214,24 +207,15 @@ function init(context) {
         "Expected contentLength > 0"
     );
 
-    // Verify the script was actually upserted by calling the new endpoint
-    tokio::time::sleep(Duration::from_millis(500)).await; // Give time for script to be processed and initialized
-
-    let test_endpoint_request = client
-        .get(format!("http://127.0.0.1:{}/test-endpoint", port))
-        .send();
-
-    let test_response = match timeout(Duration::from_secs(5), test_endpoint_request).await {
-        Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("GET request to test endpoint failed: {:?}", e),
-        Err(_) => panic!("GET request to test endpoint timed out"),
-    };
-
-    assert_eq!(
-        test_response.status(),
+    // Verify the script was actually upserted by calling the new endpoint. The
+    // upsert answers before the `init()` it spawns has registered the route,
+    // so this waits for the route rather than guessing at how long that takes.
+    let test_response = wait_for_status(
+        &client,
+        &format!("http://127.0.0.1:{}/test-endpoint", port),
         200,
-        "Expected 200 status for test endpoint"
-    );
+    )
+    .await;
 
     let test_body = match timeout(Duration::from_secs(5), test_response.text()).await {
         Ok(Ok(text)) => text,
@@ -297,24 +281,14 @@ function init(context) {
         "Expected 200 status for upsert_script"
     );
 
-    // Verify the script was upserted
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let verify_request = client
-        .get(format!("http://127.0.0.1:{}/delete-test-endpoint", port))
-        .send();
-
-    let test_response = match timeout(Duration::from_secs(5), verify_request).await {
-        Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("GET request to delete test endpoint failed: {:?}", e),
-        Err(_) => panic!("GET request to delete test endpoint timed out"),
-    };
-
-    assert_eq!(
-        test_response.status(),
+    // Verify the script was upserted, once its spawned `init()` has registered
+    // the route.
+    wait_for_status(
+        &client,
+        &format!("http://127.0.0.1:{}/delete-test-endpoint", port),
         200,
-        "Expected 200 status for upserted endpoint"
-    );
+    )
+    .await;
 
     // Now test the delete_script endpoint
     let delete_request = client
@@ -350,27 +324,13 @@ function init(context) {
         "Expected correct URI in delete response"
     );
 
-    // Verify the script was actually deleted by checking the endpoint returns 404
-    tokio::time::sleep(Duration::from_millis(100)).await; // Give time for script to be deleted
-
-    let after_delete_request = client
-        .get(format!("http://127.0.0.1:{}/delete-test-endpoint", port))
-        .send();
-
-    let after_delete_response = match timeout(Duration::from_secs(5), after_delete_request).await {
-        Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!(
-            "GET request to delete test endpoint after deletion failed: {:?}",
-            e
-        ),
-        Err(_) => panic!("GET request to delete test endpoint after deletion timed out"),
-    };
-
-    assert_eq!(
-        after_delete_response.status(),
+    // Verify the script was actually deleted by checking the endpoint 404s.
+    wait_for_status(
+        &client,
+        &format!("http://127.0.0.1:{}/delete-test-endpoint", port),
         404,
-        "Expected 404 for deleted script endpoint"
-    );
+    )
+    .await;
 
     // Test deleting a non-existent script
     let nonexistent_delete_request = client
@@ -462,24 +422,13 @@ function init(context) {
         "Expected 200 status for script creation"
     );
 
-    // 2. Verify script works
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let test_request = client
-        .get(format!("http://127.0.0.1:{}/lifecycle-test", port))
-        .send();
-
-    let test_response = match timeout(Duration::from_secs(5), test_request).await {
-        Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("Failed to test script endpoint: {:?}", e),
-        Err(_) => panic!("Test script request timed out"),
-    };
-
-    assert_eq!(
-        test_response.status(),
+    // 2. Verify script works, once its spawned `init()` has registered the route
+    let test_response = wait_for_status(
+        &client,
+        &format!("http://127.0.0.1:{}/lifecycle-test", port),
         200,
-        "Expected 200 status for lifecycle test"
-    );
+    )
+    .await;
 
     let test_body = match timeout(Duration::from_secs(5), test_response.text()).await {
         Ok(Ok(text)) => text,
@@ -511,23 +460,12 @@ function init(context) {
     );
 
     // 4. Verify script is gone
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let after_delete_request = client
-        .get(format!("http://127.0.0.1:{}/lifecycle-test", port))
-        .send();
-
-    let after_delete_response = match timeout(Duration::from_secs(5), after_delete_request).await {
-        Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("Failed to check deleted script endpoint: {:?}", e),
-        Err(_) => panic!("Check deleted script request timed out"),
-    };
-
-    assert_eq!(
-        after_delete_response.status(),
+    wait_for_status(
+        &client,
+        &format!("http://127.0.0.1:{}/lifecycle-test", port),
         404,
-        "Expected 404 for deleted script endpoint"
-    );
+    )
+    .await;
 
     // Proper cleanup
     engine.shutdown().await;

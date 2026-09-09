@@ -544,6 +544,50 @@ pub async fn wait_for_server(port: u16, max_attempts: u32) -> anyhow::Result<()>
     ))
 }
 
+/// Wait for a URL to answer with `expected`, and return the response that did.
+///
+/// Writing a script and its route answering requests are not the same moment:
+/// `/engine/upsert_script` records the script and *spawns* its `init()`
+/// ([`engine_api::upsert_script_authorized`]), so the response comes back
+/// before the route the script registers exists. Deletion is the mirror image
+/// on the way out. Tests used to bridge that with a fixed sleep — 100ms in
+/// some places, 500ms in others for the same wait — which is a bet on how
+/// quickly a machine can spin up a QuickJS runtime, transpile a script and run
+/// its `init()`. The bet holds on a developer's machine and loses on a loaded
+/// CI runner, which is what made `tests/scripts.rs` fail intermittently while
+/// passing every time locally.
+///
+/// Polling the condition instead makes the test wait exactly as long as the
+/// engine takes, and turns "slower than I guessed" into "never happened".
+#[allow(dead_code)]
+pub async fn wait_for_status(
+    client: &reqwest::Client,
+    url: &str,
+    expected: u16,
+) -> reqwest::Response {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    // Assigned on every path below before the panic reads it, so there is no
+    // placeholder here that the first attempt would immediately overwrite.
+    let mut last;
+
+    loop {
+        match client.get(url).send().await {
+            Ok(response) if response.status().as_u16() == expected => return response,
+            Ok(response) => last = format!("status {}", response.status()),
+            Err(e) => last = format!("request failed: {}", e),
+        }
+
+        if std::time::Instant::now() >= deadline {
+            panic!(
+                "{} never answered with {}: last saw {}",
+                url, expected, last
+            );
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 /// A running engine and an administrator signed into it.
 ///
 /// What the engine's own APIs need, and what replaced development mode: those
