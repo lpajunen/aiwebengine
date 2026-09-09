@@ -1,12 +1,13 @@
-use crate::auth::client_registration::{ClientRegistrationManager, register_client_handler};
-use crate::auth::metadata::{
-    MetadataConfig, metadata_handler, protected_resource_metadata_handler,
-};
 /// Authentication Routes
 ///
 /// HTTP route handlers for OAuth2 authentication flow including
 /// login initiation, callback processing, and logout.
-use crate::auth::{AuthManager, AuthSecurityContext};
+use crate::auth::AuthManager;
+use crate::auth::client_registration::{ClientRegistrationManager, register_client_handler};
+use crate::auth::metadata::{
+    MetadataConfig, metadata_handler, protected_resource_metadata_handler,
+};
+use crate::auth::oauth_state;
 use crate::security::client_ip;
 use axum::{
     Json, Router,
@@ -111,8 +112,8 @@ impl IntoResponse for ErrorResponse {
     }
 }
 
-/// Read the session token out of the request's cookies.
-fn session_token_from_headers(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
+/// Read one cookie's value out of a request's `Cookie` header.
+fn cookie_from_headers(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
     headers
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
@@ -126,6 +127,26 @@ fn session_token_from_headers(headers: &HeaderMap, cookie_name: &str) -> Option<
                 }
             })
         })
+}
+
+/// Read the session token out of the request's cookies.
+fn session_token_from_headers(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
+    cookie_from_headers(headers, cookie_name)
+}
+
+/// Add a `Set-Cookie` to a response.
+///
+/// Appends rather than inserts, because a response may carry more than one —
+/// the OAuth callback sets a session and retires a pending-login cookie in the
+/// same reply — and because a cookie a script route set has to survive beside
+/// the engine's.
+fn append_cookie(headers: &mut HeaderMap, value: &str) -> Result<(), ErrorResponse> {
+    let cookie = value.parse().map_err(|_| ErrorResponse {
+        error: "internal_error".to_string(),
+        message: "Invalid cookie header value".to_string(),
+    })?;
+    headers.append(header::SET_COOKIE, cookie);
+    Ok(())
 }
 
 /// Build the `Set-Cookie` value that carries a session.
@@ -165,10 +186,11 @@ pub(crate) fn get_request_host(headers: &HeaderMap) -> Option<String> {
 
 /// Reduce a caller-supplied post-login redirect to a same-host relative path.
 ///
-/// The OAuth state carrying this value is not authenticated, and the value
-/// itself originates in a query parameter, so an absolute URL here would let
-/// anyone bounce a freshly authenticated user to another origin. Keeping it
-/// relative also keeps the user on the host whose session cookie was just set.
+/// The value originates in a query parameter, so an absolute URL here would
+/// let anyone bounce a freshly authenticated user to another origin. Keeping
+/// it relative also keeps the user on the host whose session cookie was just
+/// set. Applied when a login starts, before the target is stored in the
+/// pending-login cookie, and again on the way out.
 fn safe_redirect_target(candidate: Option<&str>) -> String {
     let fallback = "/".to_string();
     let Some(target) = candidate else {
@@ -1345,36 +1367,52 @@ pub async fn start_login(
     Path(provider): Path<String>,
     Query(params): Query<LoginParams>,
     headers: HeaderMap,
-) -> Result<Redirect, ErrorResponse> {
+) -> Result<Response, ErrorResponse> {
     let ip_addr = client_ip::from_headers(&headers);
     // Selects the redirect URI, so the flow returns to the host it began on
     // and sets its session cookie there.
     let host = get_request_host(&headers);
+    let config = auth_manager.config();
 
-    // Generate authorization URL with or without redirect
-    let (auth_url, _state) = if let Some(ref redirect_url) = params.redirect {
-        let redirect_url = safe_redirect_target(Some(redirect_url));
-        tracing::info!("Starting login with redirect URL: {}", redirect_url);
-        auth_manager
-            .start_login_with_redirect(&provider, &ip_addr, redirect_url, host.as_deref())
-            .await
-            .map_err(|e| ErrorResponse {
-                error: "login_failed".to_string(),
-                message: e.to_string(),
-            })?
-    } else {
-        tracing::info!("Starting login without redirect URL");
-        auth_manager
-            .start_login(&provider, &ip_addr, host.as_deref())
-            .await
-            .map_err(|e| ErrorResponse {
-                error: "login_failed".to_string(),
-                message: e.to_string(),
-            })?
-    };
+    // The redirect is reduced to a local path here, before it is stored, so
+    // the cookie only ever holds a target the engine would follow.
+    let redirect = params
+        .redirect
+        .as_deref()
+        .map(|target| safe_redirect_target(Some(target)));
 
-    // Redirect to provider
-    Ok(Redirect::temporary(&auth_url))
+    let now = Utc::now().timestamp();
+    let login = oauth_state::PendingLogin::new(&provider, redirect, now);
+
+    let auth_url = auth_manager
+        .authorization_url(&provider, &login.nonce, &ip_addr, host.as_deref())
+        .await
+        .map_err(|e| ErrorResponse {
+            error: "login_failed".to_string(),
+            message: e.to_string(),
+        })?;
+
+    // Remember the nonce in the browser, beside whatever other logins this
+    // browser already has in flight. The callback is accepted only if it comes
+    // back carrying this cookie — which is what the client's IP address used
+    // to stand in for, badly.
+    let state_cookie_name = oauth_state::cookie_name(config.cookie_secure);
+    let pending = oauth_state::push(
+        cookie_from_headers(&headers, &state_cookie_name)
+            .map(|value| oauth_state::decode(&value))
+            .unwrap_or_default(),
+        login,
+        now,
+    );
+
+    let response = Redirect::temporary(&auth_url).into_response();
+    let (mut parts, body) = response.into_parts();
+    append_cookie(
+        &mut parts.headers,
+        &oauth_state::set_cookie(&oauth_state::encode(&pending), config.cookie_secure),
+    )?;
+
+    Ok(Response::from_parts(parts, body))
 }
 
 /// Handle OAuth2 callback from provider
@@ -1425,17 +1463,33 @@ pub async fn oauth_callback(
     // reselects the provider instance the authorization request used and the
     // token exchange repeats the matching redirect URI.
     let host = get_request_host(&headers);
+    let config = auth_manager.config();
+    let state_cookie_name = oauth_state::cookie_name(config.cookie_secure);
 
-    // Provider comes from the URL path parameter
-    // Extract redirect URL from state (stateless approach)
-    let redirect_url = AuthSecurityContext::extract_redirect_url(&state);
+    // The state is worth something only against what the browser remembers of
+    // the login it started. Nothing about the request's network path is
+    // consulted: an address is a property of the route a packet took, and
+    // holding a login to the one it began on is what refused perfectly good
+    // callbacks that came back over a different one.
+    let pending = cookie_from_headers(&headers, &state_cookie_name)
+        .map(|value| oauth_state::decode(&value))
+        .unwrap_or_default();
 
-    // Log the redirect URL for debugging
-    if let Some(ref url) = redirect_url {
-        tracing::info!("OAuth callback redirect URL extracted from state: {}", url);
-    } else {
-        tracing::warn!("No redirect URL found in OAuth state, will redirect to /");
-    }
+    let Some(login) = oauth_state::take(&pending, &state, &provider, Utc::now().timestamp()) else {
+        return Err(ErrorResponse {
+            error: "invalid_state".to_string(),
+            message: "This login could not be matched to one started in this browser. \
+                      It may have been left open too long — please sign in again."
+                .to_string(),
+        });
+    };
+
+    // Every login still in flight but this one. The nonce just spent is
+    // dropped, so a replayed callback finds nothing to match.
+    let remaining: Vec<_> = pending
+        .into_iter()
+        .filter(|entry| entry.nonce != login.nonce)
+        .collect();
 
     // Handle callback
     let session_token = auth_manager
@@ -1453,29 +1507,24 @@ pub async fn oauth_callback(
             message: e.to_string(),
         })?;
 
-    // Set session cookie — use absolute max age so the browser retains the
-    // cookie for the full session lifetime (up to 30 days), not just one hour.
-    let config = auth_manager.config();
-    let cookie_value = format!(
-        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}",
-        config.session_cookie_name,
-        session_token,
-        config.max_session_age,
-        if config.cookie_secure { "; Secure" } else { "" }
-    );
+    // Redirect to the target the login was started with, keeping the user on
+    // the host whose session cookie was just set.
+    let redirect_target = safe_redirect_target(login.redirect.as_deref());
 
-    // Redirect to stored URL or default to home, keeping the user on the host
-    // whose session cookie was just set
-    let redirect_target = safe_redirect_target(redirect_url.as_deref());
-
-    // Return redirect with cookie
     let response = Redirect::to(&redirect_target).into_response();
     let (mut parts, body) = response.into_parts();
-    let cookie_header = cookie_value.parse().map_err(|_| ErrorResponse {
-        error: "internal_error".to_string(),
-        message: "Invalid cookie header value".to_string(),
-    })?;
-    parts.headers.insert(header::SET_COOKIE, cookie_header);
+    append_cookie(
+        &mut parts.headers,
+        &session_cookie_value(config, &session_token),
+    )?;
+    append_cookie(
+        &mut parts.headers,
+        &if remaining.is_empty() {
+            oauth_state::clear_cookie(config.cookie_secure)
+        } else {
+            oauth_state::set_cookie(&oauth_state::encode(&remaining), config.cookie_secure)
+        },
+    )?;
 
     Ok(Response::from_parts(parts, body))
 }

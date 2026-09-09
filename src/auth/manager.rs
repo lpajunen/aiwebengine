@@ -256,92 +256,57 @@ impl AuthManager {
         self.providers.keys().cloned().collect()
     }
 
-    /// Generate OAuth2 authorization URL for a provider
+    /// Build the authorization URL a login redirects to.
+    ///
+    /// `state` is minted by the caller rather than here, because the only
+    /// thing that makes it worth anything is the cookie the caller sets
+    /// alongside it — see [`crate::auth::oauth_state`]. This used to generate
+    /// the state itself, out of the client's IP address, which is what made a
+    /// login fail when the callback arrived over a different network path than
+    /// the request that started it.
     ///
     /// # Arguments
     /// * `provider_name` - Name of the OAuth2 provider
-    /// * `ip_addr` - Client IP address for CSRF state tracking
+    /// * `state` - The opaque value the provider will hand back
+    /// * `ip_addr` - Client IP address, for the audit record only
     /// * `host` - Host the login was started on, selecting the redirect URI
-    ///
-    /// # Returns
-    /// Tuple of (authorization_url, csrf_state_token)
-    pub async fn start_login(
+    pub async fn authorization_url(
         &self,
         provider_name: &str,
+        state: &str,
         ip_addr: &str,
         host: Option<&str>,
-    ) -> Result<(String, String), AuthError> {
+    ) -> Result<String, AuthError> {
         let provider = self
             .get_provider_for_host(host, provider_name)
             .ok_or_else(|| AuthError::UnsupportedProvider(provider_name.to_string()))?;
-
-        // Generate CSRF state token
-        let state = self
-            .security_context
-            .create_oauth_state(provider_name, ip_addr)
-            .await?;
 
         // Generate nonce for OIDC providers
         let nonce = format!("nonce_{}", uuid::Uuid::new_v4());
 
         // Generate authorization URL (no PKCE for now - will be added when needed)
-        let auth_url = provider.authorization_url(&state, Some(&nonce), None, None)?;
+        let auth_url = provider.authorization_url(state, Some(&nonce), None, None)?;
 
         // Log authentication attempt
         self.security_context
             .log_auth_attempt(provider_name, ip_addr)
             .await;
 
-        Ok((auth_url, state))
-    }
-
-    /// Generate OAuth2 authorization URL with redirect URL
-    ///
-    /// # Arguments
-    /// * `provider_name` - Name of the OAuth2 provider
-    /// * `ip_addr` - Client IP address for CSRF state tracking
-    /// * `redirect_url` - URL to redirect to after successful authentication
-    /// * `host` - Host the login was started on, selecting the redirect URI
-    ///
-    /// # Returns
-    /// Tuple of (authorization_url, csrf_state_token)
-    pub async fn start_login_with_redirect(
-        &self,
-        provider_name: &str,
-        ip_addr: &str,
-        redirect_url: String,
-        host: Option<&str>,
-    ) -> Result<(String, String), AuthError> {
-        let provider = self
-            .get_provider_for_host(host, provider_name)
-            .ok_or_else(|| AuthError::UnsupportedProvider(provider_name.to_string()))?;
-
-        // Generate CSRF state token with redirect URL
-        let state = self
-            .security_context
-            .create_oauth_state_with_redirect(provider_name, ip_addr, redirect_url)
-            .await?;
-
-        // Generate nonce for OIDC providers
-        let nonce = format!("nonce_{}", uuid::Uuid::new_v4());
-
-        // Generate authorization URL (no PKCE for now - will be added when needed)
-        let auth_url = provider.authorization_url(&state, Some(&nonce), None, None)?;
-
-        // Log authentication attempt
-        self.security_context
-            .log_auth_attempt(provider_name, ip_addr)
-            .await;
-
-        Ok((auth_url, state))
+        Ok(auth_url)
     }
 
     /// Handle OAuth2 callback and complete authentication
     ///
+    /// The `state` is *not* checked here: what it is checked against is the
+    /// cookie the browser carries, which only the route handler can see
+    /// ([`crate::auth::oauth_state::take`]). It is taken as an argument
+    /// because the token exchange repeats it to the provider.
+    ///
     /// # Arguments
     /// * `provider_name` - Name of the OAuth2 provider
     /// * `code` - Authorization code from provider
-    /// * `state` - CSRF state token to validate
+    /// * `state` - The state the provider handed back, already matched against
+    ///   the browser's pending-login cookie by the caller
     /// * `ip_addr` - Client IP address
     /// * `user_agent` - Client user agent string
     /// * `host` - Host the callback arrived on; must be the host the flow was
@@ -359,18 +324,6 @@ impl AuthManager {
         user_agent: &str,
         host: Option<&str>,
     ) -> Result<String, AuthError> {
-        // Validate CSRF state
-        if !self
-            .security_context
-            .validate_oauth_state(state, provider_name, ip_addr)
-            .await?
-        {
-            self.security_context
-                .log_auth_failure(provider_name, "Invalid OAuth state", Some(ip_addr))
-                .await;
-            return Err(AuthError::InvalidState);
-        }
-
         // Get provider
         let provider = self
             .get_provider_for_host(host, provider_name)
@@ -1282,7 +1235,9 @@ mod tests {
     #[tokio::test]
     async fn test_unsupported_provider() {
         let manager = create_test_manager().await;
-        let result = manager.start_login("nonexistent", "127.0.0.1", None).await;
+        let result = manager
+            .authorization_url("nonexistent", "state", "127.0.0.1", None)
+            .await;
         assert!(matches!(result, Err(AuthError::UnsupportedProvider(_))));
     }
 
@@ -1316,8 +1271,8 @@ mod tests {
             )
             .expect("host registration should succeed");
 
-        let (auth_url, _) = manager
-            .start_login("google", "127.0.0.1", Some("manage.example.com"))
+        let auth_url = manager
+            .authorization_url("google", "state", "127.0.0.1", Some("manage.example.com"))
             .await
             .expect("login should start");
         assert!(
@@ -1365,8 +1320,8 @@ mod tests {
 
         // A Host header naming somewhere we never registered must not steer the
         // flow anywhere new — it gets the configured base URL's provider.
-        let (auth_url, _) = manager
-            .start_login("google", "127.0.0.1", Some("attacker.test"))
+        let auth_url = manager
+            .authorization_url("google", "state", "127.0.0.1", Some("attacker.test"))
             .await
             .expect("login should start");
         assert!(

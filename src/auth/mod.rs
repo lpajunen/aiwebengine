@@ -10,6 +10,7 @@ pub mod manager;
 pub mod mcp_middleware;
 pub mod metadata;
 pub mod middleware;
+pub mod oauth_state;
 pub mod pkce;
 pub mod providers;
 pub mod refresh_tokens;
