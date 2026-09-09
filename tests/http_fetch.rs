@@ -117,6 +117,170 @@ async fn test_fetch_custom_headers() {
     mock.shutdown().await;
 }
 
+/// A gzipped answer reads as text, and the headers stop describing the body
+/// that was sent in favour of the one the caller gets.
+#[tokio::test]
+async fn test_fetch_decodes_gzip() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/compressed/gzip");
+
+    let response = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        client.fetch(url, FetchOptions::default(), None, None)
+    })
+    .await
+    .expect("Task panicked")
+    .expect("gzip response should be decoded");
+
+    assert_eq!(response.status, 200);
+    assert!(
+        response.body.contains("compressed payload"),
+        "body should be inflated, got: {}",
+        response.body
+    );
+    // The request offered gzip without being asked to.
+    assert!(
+        response.body.contains("gzip"),
+        "client should advertise gzip: {}",
+        response.body
+    );
+    assert!(
+        !response.headers.contains_key("content-encoding"),
+        "content-encoding describes a body the caller no longer has"
+    );
+    assert!(
+        !response.headers.contains_key("content-length"),
+        "content-length counted the compressed bytes"
+    );
+
+    mock.shutdown().await;
+}
+
+/// Both shapes of `deflate` in the wild: zlib-wrapped, and the raw stream.
+#[tokio::test]
+async fn test_fetch_decodes_deflate() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+
+    for path in ["/compressed/deflate", "/compressed/raw-deflate"] {
+        let url = mock.url(path);
+        let response = tokio::task::spawn_blocking(move || {
+            let client = HttpClient::new_for_tests().expect("Failed to create client");
+            client.fetch(url, FetchOptions::default(), None, None)
+        })
+        .await
+        .expect("Task panicked")
+        .unwrap_or_else(|e| panic!("{} should be decoded: {}", path, e));
+
+        assert!(
+            response.body.contains("compressed payload"),
+            "{} should be inflated, got: {}",
+            path,
+            response.body
+        );
+    }
+
+    mock.shutdown().await;
+}
+
+/// The case this was built for: an API that answers only when the request
+/// carries its own `Accept-Encoding`. The caller's header is sent as written,
+/// and the answer is still decoded — decoding follows the response's
+/// `Content-Encoding`, not what the client happened to ask for.
+#[tokio::test]
+async fn test_fetch_decodes_gzip_with_caller_supplied_accept_encoding() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/compressed/gzip");
+
+    let response = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        let mut headers = HashMap::new();
+        headers.insert("Accept-Encoding".to_string(), "gzip".to_string());
+        client.fetch(
+            url,
+            FetchOptions {
+                method: "GET".to_string(),
+                headers: Some(headers),
+                body: None,
+                timeout_ms: None,
+            },
+            None,
+            None,
+        )
+    })
+    .await
+    .expect("Task panicked")
+    .expect("gzip response should be decoded");
+
+    assert!(response.body.contains("compressed payload"));
+    assert!(
+        response.body.contains(r#""accept_encoding":"gzip""#),
+        "the caller's header should reach the server unchanged: {}",
+        response.body
+    );
+
+    mock.shutdown().await;
+}
+
+/// A coding this client never offered and cannot undo is named as such,
+/// rather than surfacing as an unreadable body.
+#[tokio::test]
+async fn test_fetch_reports_unsupported_encoding() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/compressed/br");
+
+    let result = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        client.fetch(url, FetchOptions::default(), None, None)
+    })
+    .await
+    .expect("Task panicked");
+
+    let error = result.expect_err("brotli should be refused").to_string();
+    assert!(
+        error.contains("Unsupported Content-Encoding") && error.contains("br"),
+        "error should name the coding: {}",
+        error
+    );
+
+    mock.shutdown().await;
+}
+
+/// The response ceiling applies to what comes out of the decompressor, not
+/// only to what arrived: a few kilobytes of gzip can inflate past it.
+#[tokio::test]
+async fn test_fetch_bounds_decompressed_size() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/compressed/bomb");
+
+    let result = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        client.fetch(url, FetchOptions::default(), None, None)
+    })
+    .await
+    .expect("Task panicked");
+
+    let error = result
+        .expect_err("an over-sized inflated body should be refused")
+        .to_string();
+    assert!(
+        error.contains("Response too large"),
+        "error should name the size limit: {}",
+        error
+    );
+
+    mock.shutdown().await;
+}
+
 #[test]
 fn test_fetch_blocks_localhost() {
     let client = HttpClient::new().expect("Failed to create client");

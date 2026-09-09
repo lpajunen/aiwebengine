@@ -3,7 +3,7 @@
 use axum::{
     Json, Router,
     body::Body,
-    extract::Query,
+    extract::{Path, Query},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -61,7 +61,11 @@ impl MockServer {
             )
             .route("/status/{code}", axum::routing::get(handle_status))
             .route("/redirect/{n}", axum::routing::any(handle_redirect))
-            .route("/redirect-loop", axum::routing::get(handle_redirect_loop));
+            .route("/redirect-loop", axum::routing::get(handle_redirect_loop))
+            .route(
+                "/compressed/{coding}",
+                axum::routing::get(handle_compressed),
+            );
 
         // Bind to random port
         let addr = SocketAddr::from(([127, 0, 0, 1], 0));
@@ -179,6 +183,63 @@ async fn handle_patch(headers: HeaderMap, body: String) -> Json<Value> {
         "origin": "127.0.0.1",
         "url": "http://127.0.0.1/patch"
     }))
+}
+
+/// Answer with a body under a `Content-Encoding`.
+///
+/// `coding` picks what is applied: `gzip` and `deflate` are real, `br` is
+/// labelled but never applied (nothing here can produce brotli, and the point
+/// is what the client does with a coding it cannot undo), and `bomb` is a
+/// gzip stream that inflates past the client's response ceiling.
+///
+/// The body repeats the request's `Accept-Encoding` so a test can see what was
+/// offered as well as what came back.
+async fn handle_compressed(Path(coding): Path<String>, headers: HeaderMap) -> Response {
+    use std::io::Write;
+
+    let offered = headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let payload = if coding == "bomb" {
+        "a".repeat(11 * 1024 * 1024)
+    } else {
+        json!({ "accept_encoding": offered, "message": "compressed payload" }).to_string()
+    };
+
+    let (label, body) = match coding.as_str() {
+        "gzip" | "bomb" => {
+            let mut encoder =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            encoder.write_all(payload.as_bytes()).expect("gzip");
+            ("gzip", encoder.finish().expect("finish gzip"))
+        }
+        "deflate" => {
+            let mut encoder =
+                flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+            encoder.write_all(payload.as_bytes()).expect("deflate");
+            ("deflate", encoder.finish().expect("finish deflate"))
+        }
+        "raw-deflate" => {
+            let mut encoder =
+                flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+            encoder.write_all(payload.as_bytes()).expect("raw deflate");
+            ("deflate", encoder.finish().expect("finish raw deflate"))
+        }
+        // Labelled brotli, sent as plain text: a client that trusts the label
+        // must say it cannot read this, not hand the bytes on as if it had.
+        _ => ("br", payload.into_bytes()),
+    };
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CONTENT_ENCODING, label)
+        .header(header::CONTENT_LENGTH, body.len())
+        .body(Body::from(body))
+        .expect("build compressed response")
 }
 
 async fn handle_headers(headers: HeaderMap) -> Json<HeadersResponse> {

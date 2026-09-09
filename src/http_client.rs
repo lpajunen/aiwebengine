@@ -33,6 +33,15 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Maximum redirects followed per fetch (each hop is re-validated)
 const MAX_REDIRECTS: usize = 5;
 
+/// Content codings this client asks for and can undo.
+///
+/// Advertising exactly what [`decode_body`] implements is the whole contract:
+/// a server may only use a coding the request offered, so naming `br` or
+/// `zstd` here without being able to inflate them would hand a script a body
+/// it cannot read. `gzip` and `deflate` are what `flate2` — already a
+/// dependency, for the git archives — gives us.
+const SUPPORTED_ENCODINGS: &str = "gzip, deflate";
+
 /// Shared connection-pooled client. Redirects are disabled: `fetch` follows
 /// them manually so every hop gets URL and DNS validation (a public URL
 /// redirecting to an internal address must be blocked).
@@ -138,7 +147,20 @@ impl HttpClient {
             .map_err(|_| HttpError::InvalidMethod(options.method.clone()))?;
 
         // Process headers and inject secrets
-        let headers = self.process_headers(options.headers, &url, script_uri, user_id)?;
+        let mut headers = self.process_headers(options.headers, &url, script_uri, user_id)?;
+
+        // Offer the codings we can undo. A caller that named its own is left
+        // alone — some APIs answer `406` unless the request carries a
+        // particular `Accept-Encoding`, so the header is a thing a script has
+        // a reason to set, and what comes back is decoded either way because
+        // `convert_response` reads the response's `Content-Encoding` rather
+        // than remembering what was asked for.
+        if !headers.contains_key(reqwest::header::ACCEPT_ENCODING) {
+            headers.insert(
+                reqwest::header::ACCEPT_ENCODING,
+                reqwest::header::HeaderValue::from_static(SUPPORTED_ENCODINGS),
+            );
+        }
 
         let timeout = options
             .timeout_ms
@@ -164,6 +186,11 @@ impl HttpClient {
     /// `max_bytes` is the caller's ceiling rather than this client's: the 10MB
     /// bounding a script's `fetch` is not the right bound for a repository
     /// archive, and the caller is the only one that knows what it is reading.
+    ///
+    /// It also neither offers nor undoes a content coding, which the text path
+    /// does: a `.tar.gz` is gzip as *content*, and a client that inflated
+    /// bodies on this path would hand [`crate::git_sync::extract_tree`] a bare
+    /// tar its own decoder cannot read. Bytes here means the bytes that came.
     pub fn fetch_bytes(
         &self,
         url: &str,
@@ -472,7 +499,7 @@ impl HttpClient {
         let ok = response.status().is_success();
 
         // Extract headers
-        let mut headers = HashMap::new();
+        let mut headers: HashMap<String, String> = HashMap::new();
         for (key, value) in response.headers() {
             if let Ok(value_str) = value.to_str() {
                 headers.insert(key.to_string(), value_str.to_string());
@@ -499,6 +526,29 @@ impl HttpClient {
             return Err(HttpError::ResponseTooLarge(bytes.len() as u64));
         }
 
+        // Undo the content coding before the UTF-8 decode: a gzipped body is
+        // not text, and reading it as such is where this used to fail with
+        // `invalid utf8` on any host that compresses by default.
+        let encoding = headers
+            .get("content-encoding")
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        // An empty body carries no stream to inflate however it is labelled —
+        // a `HEAD` or a `204` may still name a coding — and handing a
+        // decompressor nothing is an error about the wrong thing.
+        let bytes = if bytes.is_empty() || is_identity(&encoding) {
+            bytes
+        } else {
+            let decoded = decode_body(&encoding, bytes, self.max_response_size)?;
+            // The headers now describe a body that no longer exists: the
+            // content is decoded, and `Content-Length` counted the compressed
+            // bytes. Browsers drop both from what `fetch` exposes, for the
+            // same reason — a script reading either would be misled.
+            headers.remove("content-encoding");
+            headers.remove("content-length");
+            decoded
+        };
+
         // Convert to string (UTF-8)
         let body = String::from_utf8(bytes)
             .map_err(|e| HttpError::ResponseEncodingError(e.to_string()))?;
@@ -510,6 +560,77 @@ impl HttpClient {
             ok,
         })
     }
+}
+
+/// Whether a `Content-Encoding` means "nothing was applied".
+///
+/// Absent and `identity` are the same answer, and an empty header field is
+/// treated as absent rather than as an error nobody can act on.
+fn is_identity(encoding: &str) -> bool {
+    encoding
+        .split(',')
+        .map(str::trim)
+        .all(|coding| coding.is_empty() || coding.eq_ignore_ascii_case("identity"))
+}
+
+/// Undo the codings named by a `Content-Encoding` header.
+///
+/// The header lists them in the order they were applied, so they come off in
+/// reverse. In practice there is one, but a chain is what the field means and
+/// applying it backwards would silently produce rubbish.
+///
+/// `max_bytes` bounds what comes _out_, not what went in: the input is already
+/// capped, and without a second bound a small compressed body could inflate to
+/// whatever a decompression bomb wanted. Exceeding it is `ResponseTooLarge`
+/// for the same reason an oversized plain body is.
+fn decode_body(encoding: &str, body: Vec<u8>, max_bytes: usize) -> Result<Vec<u8>, HttpError> {
+    let codings: Vec<&str> = encoding
+        .split(',')
+        .map(str::trim)
+        .filter(|coding| !coding.is_empty() && !coding.eq_ignore_ascii_case("identity"))
+        .collect();
+
+    let mut body = body;
+    for coding in codings.into_iter().rev() {
+        body = if coding.eq_ignore_ascii_case("gzip") || coding.eq_ignore_ascii_case("x-gzip") {
+            read_capped(flate2::read::GzDecoder::new(body.as_slice()), max_bytes)?
+        } else if coding.eq_ignore_ascii_case("deflate") {
+            // `deflate` is zlib-wrapped per RFC 9110, but enough servers send
+            // the raw stream that every browser accepts both. Falling back
+            // costs one failed read of a body that is in memory already.
+            match read_capped(flate2::read::ZlibDecoder::new(body.as_slice()), max_bytes) {
+                Ok(decoded) => decoded,
+                Err(HttpError::ResponseTooLarge(size)) => {
+                    return Err(HttpError::ResponseTooLarge(size));
+                }
+                Err(_) => read_capped(
+                    flate2::read::DeflateDecoder::new(body.as_slice()),
+                    max_bytes,
+                )?,
+            }
+        } else {
+            return Err(HttpError::UnsupportedContentEncoding(coding.to_string()));
+        };
+    }
+
+    Ok(body)
+}
+
+/// Read a decoder to its end, refusing anything past `max_bytes`.
+fn read_capped(reader: impl std::io::Read, max_bytes: usize) -> Result<Vec<u8>, HttpError> {
+    use std::io::Read;
+
+    let mut out = Vec::new();
+    reader
+        .take(max_bytes as u64 + 1)
+        .read_to_end(&mut out)
+        .map_err(|e| HttpError::ResponseEncodingError(format!("Could not decompress: {}", e)))?;
+
+    if out.len() > max_bytes {
+        return Err(HttpError::ResponseTooLarge(out.len() as u64));
+    }
+
+    Ok(out)
 }
 
 impl Default for HttpClient {
@@ -627,6 +748,9 @@ pub enum HttpError {
 
     #[error("Response encoding error: {0}")]
     ResponseEncodingError(String),
+
+    #[error("Unsupported Content-Encoding: {0} (this client understands {SUPPORTED_ENCODINGS})")]
+    UnsupportedContentEncoding(String),
 }
 
 #[cfg(test)]

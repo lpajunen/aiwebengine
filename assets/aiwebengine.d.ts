@@ -1233,6 +1233,14 @@ interface FetchResponse {
  * `Promise.all` over several fetches gives the right answers and runs them one
  * after another.
  *
+ * Responses are decompressed for you: the request offers `gzip, deflate` and
+ * anything that comes back under one of those is inflated before you see it,
+ * so `body` is text either way and `content-encoding` and `content-length` are
+ * absent from `headers` when it was. Set your own `Accept-Encoding` if an API
+ * demands one — it is sent as written, and the answer is still decoded. A
+ * coding the engine cannot undo (`br`, `zstd`) is an error rather than an
+ * unreadable body, so do not ask for those.
+ *
  * @param url - URL to fetch (supports {{SECRET_NAME}} syntax for secret injection)
  * @param options - Fetch options
  * @returns The response, readable directly or via `await`
