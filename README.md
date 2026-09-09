@@ -107,6 +107,7 @@ In the context of aiwebengine, a **solution** refers to any website, GraphQL API
 - Test runner for solution scripts ([docs](docs/SCRIPT_TESTS.md))
 - Atomic multi-file writes for a script's assets ([docs](docs/ASSET_BATCH.md))
 - Correlated script logs with filtering and a live tail ([docs](docs/SCRIPT_LOGS.md))
+- Sharing a solution through a GitHub repository, in both directions ([docs](docs/GIT_SYNC.md))
 
 ### Roadmap
 
