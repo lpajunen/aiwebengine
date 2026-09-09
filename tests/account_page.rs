@@ -18,7 +18,7 @@ mod common;
 use aiwebengine::auth::config::InternalAuthConfig;
 use aiwebengine::auth::local::GUEST_PROVIDER;
 use aiwebengine::auth::routes::render_account_forms;
-use common::{AdminServer, should_skip_integration_tests};
+use common::AdminServer;
 
 /// Password long enough for the configured minimum in the test server.
 const PASSWORD: &str = "a-perfectly-fine-password";
@@ -220,9 +220,6 @@ fn location_of(response: &reqwest::Response) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_signed_out_caller_is_sent_to_sign_in_and_back() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     let response = engine
@@ -244,9 +241,6 @@ async fn a_signed_out_caller_is_sent_to_sign_in_and_back() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_page_names_the_account_and_is_never_cached() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (username, cookie) = register_account(&engine, &http)
@@ -284,9 +278,6 @@ async fn the_page_names_the_account_and_is_never_cached() {
 /// about the new password: every other session the account had ends.
 #[tokio::test(flavor = "multi_thread")]
 async fn changing_a_password_works_and_ends_the_other_sessions() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (username, cookie) = register_account(&engine, &http)
@@ -371,9 +362,6 @@ async fn changing_a_password_works_and_ends_the_other_sessions() {
 /// trip to a sign-in page saying your username and password do not match.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_wrong_current_password_comes_back_to_this_page() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (_, cookie) = register_account(&engine, &http)
@@ -416,9 +404,6 @@ async fn a_wrong_current_password_comes_back_to_this_page() {
 /// it looks like to the one person who will ever see it honestly.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_token_from_the_sign_in_page_cannot_change_a_password() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (username, cookie) = register_account(&engine, &http)
@@ -470,9 +455,6 @@ async fn a_token_from_the_sign_in_page_cannot_change_a_password() {
 /// was just told to drop.
 #[tokio::test(flavor = "multi_thread")]
 async fn signing_out_clears_the_cookie_rather_than_renewing_it() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (_, cookie) = register_account(&engine, &http)

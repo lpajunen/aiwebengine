@@ -16,7 +16,7 @@ mod common;
 use aiwebengine::repository;
 use aiwebengine::script_eval::{EvalReport, EvalRequest, eval_blocking};
 use aiwebengine::security::UserContext;
-use common::{setup_env, should_skip_integration_tests, test_mutex};
+use common::{setup_env, test_mutex};
 use serde_json::Value;
 
 /// Evaluate `source` against a fresh, empty table named `probe`.
@@ -59,9 +59,6 @@ fn value_of(report: &EvalReport) -> &Value {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn every_column_type_reads_back_as_the_type_it_was_declared() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -118,9 +115,6 @@ async fn every_column_type_reads_back_as_the_type_it_was_declared() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_false_is_not_mistaken_for_a_zero() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -149,9 +143,6 @@ async fn a_false_is_not_mistaken_for_a_zero() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_null_reads_back_as_null_in_every_column_type() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -188,9 +179,6 @@ async fn a_null_reads_back_as_null_in_every_column_type() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_write_answers_with_the_same_row_a_query_returns() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -232,9 +220,6 @@ async fn a_write_answers_with_the_same_row_a_query_returns() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_default_reaches_the_column_as_the_value_it_names() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -267,9 +252,6 @@ async fn a_default_reaches_the_column_as_the_value_it_names() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn now_is_accepted_by_either_name() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -306,9 +288,6 @@ async fn now_is_accepted_by_either_name() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_timestamp_default_that_names_no_instant_is_refused() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 

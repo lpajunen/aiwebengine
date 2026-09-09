@@ -25,7 +25,7 @@ mod common;
 use aiwebengine::repository;
 use aiwebengine::script_eval::{EvalReport, EvalRequest, eval_blocking};
 use aiwebengine::security::UserContext;
-use common::{setup_env, should_skip_integration_tests, test_mutex};
+use common::{setup_env, test_mutex};
 
 /// Enough racers that a lost update is a certainty rather than a coin toss.
 const RACERS: usize = 10;
@@ -95,9 +95,6 @@ async fn race(uri: &'static str, source: &'static str) -> Vec<i64> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn a_guarded_read_lets_ten_transactions_each_take_the_next_number() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -141,9 +138,6 @@ async fn a_guarded_read_lets_ten_transactions_each_take_the_next_number() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn an_unguarded_read_still_loses_updates() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -180,9 +174,6 @@ async fn an_unguarded_read_still_loses_updates() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn for_update_outside_a_transaction_is_refused() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -218,9 +209,6 @@ async fn for_update_outside_a_transaction_is_refused() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_misspelled_option_is_refused_rather_than_ignored() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -259,9 +247,6 @@ async fn a_misspelled_option_is_refused_rather_than_ignored() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_skipped_positional_argument_may_be_written_as_null() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 

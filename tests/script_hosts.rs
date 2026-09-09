@@ -16,7 +16,7 @@ use aiwebengine::hosts::{self, ALL_HOSTS, HostConfig};
 use aiwebengine::mcp;
 use aiwebengine::repository;
 use aiwebengine::security::{Capability, UserContext};
-use common::{setup_env, should_skip_integration_tests};
+use common::setup_env;
 use serde_json::json;
 
 /// The shared globals, plus the hosts this engine serves.
@@ -49,9 +49,6 @@ fn create_script(label: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn unbound_scripts_publish_on_the_default_host() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_hosts().await;
     let uri = create_script("default");
 
@@ -70,9 +67,6 @@ async fn unbound_scripts_publish_on_the_default_host() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn binding_to_one_host_round_trips() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_hosts().await;
     let uri = create_script("manage");
 
@@ -92,9 +86,6 @@ async fn binding_to_one_host_round_trips() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn wildcard_binding_resolves_to_every_served_host() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_hosts().await;
     let uri = create_script("about");
 
@@ -112,9 +103,6 @@ async fn wildcard_binding_resolves_to_every_served_host() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn clearing_a_binding_returns_the_script_to_the_default_host() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_hosts().await;
     let uri = create_script("cleared");
 
@@ -131,9 +119,6 @@ async fn clearing_a_binding_returns_the_script_to_the_default_host() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_host_the_engine_does_not_serve_is_rejected() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_hosts().await;
     let uri = create_script("unknown-host");
 
@@ -158,9 +143,6 @@ async fn a_host_the_engine_does_not_serve_is_rejected() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn binding_an_unknown_script_is_not_found() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_hosts().await;
 
     assert!(matches!(
@@ -171,9 +153,6 @@ async fn binding_an_unknown_script_is_not_found() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn host_bindings_are_denied_to_non_administrators() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_hosts().await;
     let uri = create_script("denied");
 
@@ -206,9 +185,6 @@ async fn host_bindings_are_denied_to_non_administrators() {
 /// management host.
 #[tokio::test(flavor = "multi_thread")]
 async fn host_bindings_reject_an_unauthenticated_holder_of_delete_scripts() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_hosts().await;
     let uri = create_script("dev-anonymous");
 
@@ -230,9 +206,6 @@ async fn host_bindings_reject_an_unauthenticated_holder_of_delete_scripts() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ownership_alone_does_not_allow_republishing_a_script() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_hosts().await;
 
     // Owning a script lets you edit it; it must not let you move it onto the
@@ -252,9 +225,6 @@ async fn ownership_alone_does_not_allow_republishing_a_script() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn host_tools_are_exposed_over_mcp() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_hosts().await;
 
     let names: Vec<&str> = native_mcp_tool_descriptors()
@@ -267,9 +237,6 @@ async fn host_tools_are_exposed_over_mcp() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn mcp_set_script_hosts_binds_for_an_admin() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_hosts().await;
     let uri = create_script("mcp");
 
@@ -297,9 +264,6 @@ async fn mcp_set_script_hosts_binds_for_an_admin() {
 /// reachable from every host's `/mcp`.
 #[tokio::test(flavor = "multi_thread")]
 async fn native_mcp_tools_are_listed_only_where_management_is_allowed() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_hosts().await;
 
     let listed = mcp::list_tools_for_host("manage.softagen.com", true).await;
@@ -331,9 +295,6 @@ async fn native_mcp_tools_are_listed_only_where_management_is_allowed() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn native_mcp_tools_are_refused_at_dispatch_off_the_management_host() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_hosts().await;
 
     // Listing and dispatch must agree; a client that learned the name
@@ -363,9 +324,6 @@ async fn native_mcp_tools_are_refused_at_dispatch_off_the_management_host() {
 /// script named after a management tool on a content host.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_script_cannot_reopen_a_native_tool_by_registering_its_name() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_hosts().await;
 
     let uri = create_script("collide");
@@ -390,9 +348,6 @@ async fn a_script_cannot_reopen_a_native_tool_by_registering_its_name() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn mcp_host_tools_enforce_admin() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_hosts().await;
     let uri = create_script("mcp-denied");
 

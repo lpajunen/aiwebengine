@@ -10,7 +10,7 @@ mod common;
 use std::time::Duration;
 
 use aiwebengine::repository;
-use common::{TestContext, should_skip_integration_tests, wait_for_server};
+use common::{TestContext, wait_for_server};
 
 const ALLOWED: &str = "https://admin.example.com";
 const DENIED: &str = "https://elsewhere.example.com";
@@ -62,9 +62,6 @@ fn header(response: &reqwest::Response, name: &str) -> Option<String> {
 /// An allowlisted origin is echoed back, and may send its session with it.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_allowed_origin_may_read_an_engine_response() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let (context, base) = engine().await;
 
     let response = client()
@@ -99,9 +96,6 @@ async fn an_allowed_origin_may_read_an_engine_response() {
 /// refuse the read.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_unlisted_origin_is_refused() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let (context, base) = engine().await;
 
     let response = client()
@@ -126,9 +120,6 @@ async fn an_unlisted_origin_is_refused() {
 /// credentials, so it has to be answered before anything that wants a session.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_preflight_is_answered_without_credentials() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let (context, base) = engine().await;
 
     let response = client()
@@ -167,9 +158,6 @@ async fn a_preflight_is_answered_without_credentials() {
 /// A preflight from an origin nobody listed is answered, but allows nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_preflight_from_an_unlisted_origin_allows_nothing() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let (context, base) = engine().await;
 
     let response = client()
@@ -198,9 +186,6 @@ async fn a_preflight_from_an_unlisted_origin_allows_nothing() {
 /// a policy applied on its behalf would either break it or over-permit it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_script_route_is_left_to_the_script() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let (context, base) = engine().await;
 
     let response = client()
@@ -226,9 +211,6 @@ async fn a_script_route_is_left_to_the_script() {
 /// would break them, so the layer it installs for itself has to win.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_oauth_token_endpoint_keeps_its_own_policy() {
-    if should_skip_integration_tests() {
-        return;
-    }
     // Needs auth enabled: without it the OAuth2 router — and the CORS layer it
     // installs for itself — is never mounted.
     let server = common::TestServer::start_with_auth_customized(|config| {

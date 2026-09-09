@@ -15,7 +15,7 @@
 mod common;
 
 use aiwebengine::auth::pkce::PkcePair;
-use common::{TestServer, should_skip_integration_tests, wait_for_server};
+use common::{TestServer, wait_for_server};
 use serde_json::Value;
 
 /// A redirect URI the tests register and never listen on: the code comes back
@@ -328,10 +328,6 @@ async fn call_mcp(client: &Client, access_token: &str) -> anyhow::Result<reqwest
 /// uses the token it gets at the endpoint the document described.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_token_minted_through_discovery_opens_the_mcp_endpoint() -> anyhow::Result<()> {
-    if should_skip_integration_tests() {
-        return Ok(());
-    }
-
     let server = TestServer::start_with_auth().await?;
     let client = Client::new(server.port())?;
     wait_for_server(server.port(), 30).await?;
@@ -365,10 +361,6 @@ async fn a_token_minted_through_discovery_opens_the_mcp_endpoint() -> anyhow::Re
 /// token minted for a whole site would otherwise authorize nothing at all.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_client_that_asks_for_the_whole_origin_still_gets_a_usable_token() -> anyhow::Result<()> {
-    if should_skip_integration_tests() {
-        return Ok(());
-    }
-
     let server = TestServer::start_with_auth().await?;
     let client = Client::new(server.port())?;
     wait_for_server(server.port(), 30).await?;
@@ -393,10 +385,6 @@ async fn a_client_that_asks_for_the_whole_origin_still_gets_a_usable_token() -> 
 /// endpoint on the host the exchange happened on, and that has to match too.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_client_that_names_no_resource_still_gets_a_usable_token() -> anyhow::Result<()> {
-    if should_skip_integration_tests() {
-        return Ok(());
-    }
-
     let server = TestServer::start_with_auth().await?;
     let client = Client::new(server.port())?;
     wait_for_server(server.port(), 30).await?;
@@ -415,10 +403,6 @@ async fn a_client_that_names_no_resource_still_gets_a_usable_token() -> anyhow::
 /// refused before any code is issued.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_resource_naming_another_host_is_still_refused() -> anyhow::Result<()> {
-    if should_skip_integration_tests() {
-        return Ok(());
-    }
-
     let server = TestServer::start_with_auth().await?;
     let client = Client::new(server.port())?;
     wait_for_server(server.port(), 30).await?;
@@ -440,10 +424,6 @@ async fn a_resource_naming_another_host_is_still_refused() -> anyhow::Result<()>
 /// registered client may *do*; it does not bound how many of them exist.
 #[tokio::test(flavor = "multi_thread")]
 async fn registering_clients_in_a_loop_is_cut_off() -> anyhow::Result<()> {
-    if should_skip_integration_tests() {
-        return Ok(());
-    }
-
     let server = TestServer::start_with_auth().await?;
     let client = Client::new(server.port())?;
     wait_for_server(server.port(), 30).await?;
@@ -506,10 +486,6 @@ async fn registering_clients_in_a_loop_is_cut_off() -> anyhow::Result<()> {
 /// the same audience and the same roles.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_refresh_token_is_not_an_access_token() -> anyhow::Result<()> {
-    if should_skip_integration_tests() {
-        return Ok(());
-    }
-
     let server = TestServer::start_with_auth().await?;
     let client = Client::new(server.port())?;
     wait_for_server(server.port(), 30).await?;
@@ -541,10 +517,6 @@ async fn a_refresh_token_is_not_an_access_token() -> anyhow::Result<()> {
 /// copy detectable rather than permanently useful.
 #[tokio::test(flavor = "multi_thread")]
 async fn redeeming_a_refresh_token_rotates_it() -> anyhow::Result<()> {
-    if should_skip_integration_tests() {
-        return Ok(());
-    }
-
     let server = TestServer::start_with_auth().await?;
     let client = Client::new(server.port())?;
     wait_for_server(server.port(), 30).await?;
@@ -592,10 +564,6 @@ async fn redeeming_a_refresh_token_rotates_it() -> anyhow::Result<()> {
 /// alternative is not knowing who else has one.
 #[tokio::test(flavor = "multi_thread")]
 async fn replaying_a_spent_refresh_token_revokes_the_chain() -> anyhow::Result<()> {
-    if should_skip_integration_tests() {
-        return Ok(());
-    }
-
     let server = TestServer::start_with_auth().await?;
     let client = Client::new(server.port())?;
     wait_for_server(server.port(), 30).await?;
@@ -629,10 +597,6 @@ async fn replaying_a_spent_refresh_token_revokes_the_chain() -> anyhow::Result<(
 /// token must not be enough to redeem it.
 #[tokio::test(flavor = "multi_thread")]
 async fn another_client_cannot_redeem_a_refresh_token() -> anyhow::Result<()> {
-    if should_skip_integration_tests() {
-        return Ok(());
-    }
-
     let server = TestServer::start_with_auth().await?;
     let client = Client::new(server.port())?;
     wait_for_server(server.port(), 30).await?;
@@ -659,10 +623,6 @@ async fn another_client_cannot_redeem_a_refresh_token() -> anyhow::Result<()> {
 /// lost comes back with the new session.
 #[tokio::test(flavor = "multi_thread")]
 async fn revoking_sessions_revokes_the_refresh_tokens_too() -> anyhow::Result<()> {
-    if should_skip_integration_tests() {
-        return Ok(());
-    }
-
     let server = TestServer::start_with_auth().await?;
     let client = Client::new(server.port())?;
     wait_for_server(server.port(), 30).await?;
@@ -708,10 +668,6 @@ async fn revoking_sessions_revokes_the_refresh_tokens_too() -> anyhow::Result<()
 /// and is signed in again — so the audience's refresh tokens go with it.
 #[tokio::test(flavor = "multi_thread")]
 async fn ending_an_api_session_ends_what_would_mint_another() -> anyhow::Result<()> {
-    if should_skip_integration_tests() {
-        return Ok(());
-    }
-
     let server = TestServer::start_with_auth().await?;
     let client = Client::new(server.port())?;
     wait_for_server(server.port(), 30).await?;

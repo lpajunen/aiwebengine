@@ -10,7 +10,7 @@
 mod common;
 
 use aiwebengine::repository;
-use common::{setup_env, should_skip_integration_tests, test_mutex};
+use common::{setup_env, test_mutex};
 use serde_json::Value;
 
 /// A lease table belonging to `script_uri`, empty whatever an earlier run left.
@@ -57,9 +57,6 @@ fn expires_at(answer: &Value) -> chrono::DateTime<chrono::Utc> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_empty_slot_is_taken_by_whoever_asks_first() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -84,9 +81,6 @@ async fn an_empty_slot_is_taken_by_whoever_asks_first() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_live_lease_turns_away_everyone_but_its_holder() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -118,9 +112,6 @@ async fn a_live_lease_turns_away_everyone_but_its_holder() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_holder_extends_its_own_lease_rather_than_being_refused() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -145,9 +136,6 @@ async fn the_holder_extends_its_own_lease_rather_than_being_refused() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_lapsed_lease_is_taken_by_the_next_caller() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -177,9 +165,6 @@ async fn a_lapsed_lease_is_taken_by_the_next_caller() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_ttl_that_names_no_future_is_refused() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -217,9 +202,6 @@ async fn a_ttl_that_names_no_future_is_refused() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn two_slots_in_one_table_are_held_independently() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 

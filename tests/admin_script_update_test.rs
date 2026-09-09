@@ -4,17 +4,13 @@ mod common;
 
 #[cfg(test)]
 mod admin_script_update_tests {
-    use super::common::{setup_env, should_skip_integration_tests};
+    use super::common::setup_env;
     use aiwebengine::repository;
     use aiwebengine::security::{Capability, UserContext};
     use std::collections::HashSet;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_admin_can_update_ownerless_script() {
-        // Skip if no database available (requires PostgreSQL, not in-memory)
-        if should_skip_integration_tests() {
-            return;
-        }
         setup_env().await;
 
         let test_uri = "https://example.com/test-ownerless-script";
@@ -107,10 +103,6 @@ mod admin_script_update_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_non_admin_cannot_update_unowned_script() {
-        // Skip if no database available (requires PostgreSQL, not in-memory)
-        if should_skip_integration_tests() {
-            return;
-        }
         setup_env().await;
 
         let test_uri = "https://example.com/test-ownerless-script-2";

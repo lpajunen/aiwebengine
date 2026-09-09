@@ -14,7 +14,6 @@ mod common;
 
 use aiwebengine::config::RepositoryConfig;
 use aiwebengine::database::Database;
-use common::should_skip_integration_tests;
 use sqlx::Row;
 use std::time::{Duration, Instant};
 
@@ -39,9 +38,6 @@ async fn setting(pool: &sqlx::PgPool, name: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_pooled_connection_arrives_already_guarded() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let config = guarded_config().await;
     let db = Database::new(&config).await.expect("connect");
 
@@ -57,9 +53,6 @@ async fn a_pooled_connection_arrives_already_guarded() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_blocked_statement_gives_up_instead_of_waiting_forever() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let config = guarded_config().await;
     let db = Database::new(&config).await.expect("connect");
 
@@ -104,9 +97,6 @@ async fn a_blocked_statement_gives_up_instead_of_waiting_forever() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn migrations_run_unguarded_without_unguarding_the_pool() {
-    if should_skip_integration_tests() {
-        return;
-    }
     // One connection, so the pool cannot hand back a different one and hide a
     // migration connection that was returned with its guards cleared.
     let mut config = guarded_config().await;

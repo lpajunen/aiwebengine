@@ -11,7 +11,7 @@ mod common;
 use aiwebengine::repository;
 use aiwebengine::script_eval::{EvalReport, EvalRequest, eval_blocking};
 use aiwebengine::security::UserContext;
-use common::{AdminServer, setup_env, should_skip_integration_tests, test_mutex};
+use common::{AdminServer, setup_env, test_mutex};
 use serde_json::json;
 
 /// Creates a table with one row, then evaluates `source` against it.
@@ -255,9 +255,6 @@ async fn an_error_carrying_quotes_still_parses() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_result_can_be_returned_as_a_response_body() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     // The script is written before the server starts, so startup registers its
     // routes — which means the database has to be up before the write.

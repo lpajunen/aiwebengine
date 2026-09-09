@@ -13,7 +13,7 @@ mod common;
 use std::time::Duration;
 
 use aiwebengine::repository;
-use common::{AdminServer, TestContext, should_skip_integration_tests, wait_for_server};
+use common::{AdminServer, TestContext, wait_for_server};
 
 /// A resolver attempts a schema change, which needs `ManageScriptDatabase`.
 ///
@@ -51,10 +51,6 @@ async fn query(client: &reqwest::Client, url: &str, field: &str) -> String {
 /// An anonymous caller cannot reach a schema change through a resolver.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_resolver_does_not_hold_more_than_the_caller_that_queried_it() {
-    if should_skip_integration_tests() {
-        return;
-    }
-
     let context = TestContext::new();
     let field = "resolverAuthorityAnonymous";
     let _ = repository::upsert_script("test_resolver_authority_anonymous", &script(field));
@@ -89,10 +85,6 @@ async fn a_resolver_does_not_hold_more_than_the_caller_that_queried_it() {
 /// authority into the resolver.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_resolver_keeps_what_the_caller_that_queried_it_holds() {
-    if should_skip_integration_tests() {
-        return;
-    }
-
     common::setup_env().await;
     let field = "resolverAuthorityAdmin";
     let _ = repository::upsert_script("test_resolver_authority_admin", &script(field));

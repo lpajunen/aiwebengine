@@ -15,7 +15,7 @@ use axum::Extension;
 use axum::extract::Query;
 use axum::response::Response;
 use base64::Engine as _;
-use common::{AdminServer, setup_env, should_skip_integration_tests, test_mutex};
+use common::{AdminServer, setup_env, test_mutex};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 
@@ -607,9 +607,6 @@ async fn drain_notifications(listener: &mut sqlx::postgres::PgListener, script_u
 /// while the body is read.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_batch_over_the_management_body_limit_is_still_accepted() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 

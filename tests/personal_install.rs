@@ -17,7 +17,7 @@ mod common;
 use aiwebengine::auth::local::{self, LOCAL_PROVIDER};
 use aiwebengine::security::{CreateSessionParams, SecureSessionManager, SecurityAuditor};
 use aiwebengine::user_repository::{self, GLOBAL_REALM, UserRole};
-use common::{setup_env, should_skip_integration_tests};
+use common::setup_env;
 use std::sync::Arc;
 
 const PASSWORD: &str = "a-perfectly-fine-password";
@@ -52,9 +52,6 @@ async fn create_local_account(username: &str) -> String {
 /// administers the engine.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_configured_username_becomes_an_administrator() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let username = unique("owner");
@@ -86,9 +83,6 @@ async fn a_configured_username_becomes_an_administrator() {
 /// the declaration applying to everyone except the person who made it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_username_named_after_the_account_exists_is_still_granted() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let username = unique("later");
@@ -117,9 +111,6 @@ async fn a_username_named_after_the_account_exists_is_still_granted() {
 /// whole reason this is safe to run on every sign-in.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_unnamed_account_is_left_alone() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     user_repository::set_bootstrap_admin_usernames(vec![unique("someone-else")]);
@@ -146,9 +137,6 @@ async fn an_unnamed_account_is_left_alone() {
 /// exists.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_password_can_be_changed_with_the_one_it_replaces() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let username = unique("rotate");
@@ -181,9 +169,6 @@ async fn a_password_can_be_changed_with_the_one_it_replaces() {
 /// a way around them.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_new_password_is_held_to_the_same_rules() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let username = unique("weak");
@@ -205,9 +190,6 @@ async fn a_new_password_is_held_to_the_same_rules() {
 /// session happened to be open.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_account_without_a_credential_cannot_have_one_set_this_way() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let guest = user_repository::upsert_internal_user(
@@ -262,9 +244,6 @@ fn session_params(user_id: &str) -> CreateSessionParams {
 /// keeps administering until the session ages out, up to thirty days later.
 #[tokio::test(flavor = "multi_thread")]
 async fn changing_a_role_ends_the_sessions_that_carry_the_old_one() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let username = unique("demoted");
@@ -305,9 +284,6 @@ async fn changing_a_role_ends_the_sessions_that_carry_the_old_one() {
 /// change, an account deleted.
 #[tokio::test(flavor = "multi_thread")]
 async fn every_session_a_user_holds_can_be_ended_at_once() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let username = unique("revoked");
@@ -346,9 +322,6 @@ async fn every_session_a_user_holds_can_be_ended_at_once() {
 /// current password on purpose.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_password_can_be_reset_without_the_one_nobody_remembers() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let username = unique("forgot");
@@ -373,9 +346,6 @@ async fn a_password_can_be_reset_without_the_one_nobody_remembers() {
 /// would refuse — the account would be no more reachable than before.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_reset_still_obeys_the_configured_minimum() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let username = unique("floor");
@@ -396,9 +366,6 @@ async fn a_reset_still_obeys_the_configured_minimum() {
 /// password reset should do.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_account_with_no_credential_gets_no_password() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = user_repository::upsert_internal_user(
@@ -422,9 +389,6 @@ async fn an_account_with_no_credential_gets_no_password() {
 /// that can answer "which account is this username".
 #[tokio::test(flavor = "multi_thread")]
 async fn a_username_finds_its_account_whatever_the_provider_says() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = user_repository::upsert_internal_user(

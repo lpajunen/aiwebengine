@@ -13,7 +13,7 @@ use aiwebengine::js_engine::call_init_if_exists;
 use aiwebengine::repository;
 use aiwebengine::repository::{get_script_metadata, upsert_script};
 use aiwebengine::script_init::{InitContext, ScriptInitializer};
-use common::{AdminServer, setup_env, should_skip_integration_tests, wait_for_status};
+use common::{AdminServer, setup_env, wait_for_status};
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -23,9 +23,6 @@ use tokio::time::timeout;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_js_registered_route_returns_expected() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let port = engine.port();
 
@@ -88,9 +85,6 @@ async fn test_js_registered_route_returns_expected() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn js_write_log() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
     // upsert the js_log_test script so it registers its routes
     let _ = repository::upsert_script(
@@ -144,9 +138,6 @@ async fn js_write_log() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_upsert_script_endpoint() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let port = engine.port();
 
@@ -234,9 +225,6 @@ function init(context) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_delete_script_endpoint() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let port = engine.port();
 
@@ -374,9 +362,6 @@ function init(context) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_lifecycle_via_http_api() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let port = engine.port();
 
@@ -473,9 +458,6 @@ function init(context) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_read_script_endpoint() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let port = engine.port();
 
@@ -634,9 +616,6 @@ function init(context) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_init_function_called_successfully() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
     let script_uri = "test://init-success";
     let script_content = r#"
@@ -673,9 +652,6 @@ async fn test_init_function_called_successfully() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_initializer_updates_metadata() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
     let script_uri = "test://init-metadata";
     let script_content = r#"
@@ -710,9 +686,6 @@ async fn test_script_initializer_updates_metadata() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_without_init_function() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
     let script_uri = "test://no-init";
     let script_content = r#"
@@ -735,9 +708,6 @@ async fn test_script_without_init_function() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_init_function_with_error() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
     let script_uri = "test://init-error";
     let script_content = r#"
@@ -779,9 +749,6 @@ async fn test_init_function_with_error() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_initializer_single_script() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
     let script_uri = "test://initializer-test";
     let script_content = r#"
@@ -809,9 +776,6 @@ async fn test_script_initializer_single_script() {
 /// table, 404ing every one of its routes until some later init() succeeded.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_redeploy_keeps_routes_when_reinit_fails() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
     let script_uri = "test://redeploy-keeps-routes";
     let route_key = ("/redeploy-probe".to_string(), "GET".to_string());
@@ -884,9 +848,6 @@ async fn test_redeploy_keeps_routes_when_reinit_fails() {
 /// are reported with the failure instead of being discarded.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_failed_first_init_keeps_routes_it_registered() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
     let script_uri = "test://partial-init-registrations";
     let route_key = ("/partial-probe".to_string(), "GET".to_string());
@@ -931,9 +892,6 @@ async fn test_failed_first_init_keeps_routes_it_registered() {
 /// still passes every other test. Only the clock shows it.
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_inits_run_alongside_each_other_rather_than_in_sequence() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     // Spin rather than sleep: the budget these burn is the interrupt handler's,
@@ -997,9 +955,6 @@ async fn slow_inits_run_alongside_each_other_rather_than_in_sequence() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_initializer_all_scripts() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
     // Create multiple test scripts
     let scripts = vec![
@@ -1034,9 +989,6 @@ async fn test_script_initializer_all_scripts() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_init_context_properties() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
     let script_uri = "test://context-test";
     let script_content = r#"

@@ -14,7 +14,7 @@ mod common;
 use aiwebengine::repository;
 use aiwebengine::script_eval::{EvalReport, EvalRequest, eval_blocking};
 use aiwebengine::security::UserContext;
-use common::{setup_env, should_skip_integration_tests, test_mutex};
+use common::{setup_env, test_mutex};
 use sqlx::Row;
 use std::time::{Duration, Instant};
 
@@ -72,9 +72,6 @@ async fn physical_table(pool: &sqlx::PgPool, logical: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_blocked_call_answers_within_the_budget_it_was_given() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     let pool = setup_pool().await;
 

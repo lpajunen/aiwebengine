@@ -13,7 +13,7 @@ use aiwebengine::engine_api::{
 };
 use aiwebengine::security::{Capability, UserContext};
 use aiwebengine::user_repository::{self, UserRole};
-use common::{AdminServer, setup_env, should_skip_integration_tests};
+use common::{AdminServer, setup_env};
 use serde_json::json;
 
 /// Create a fresh user and return its id. The email is unique per call so
@@ -41,9 +41,6 @@ fn admin() -> UserContext {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn list_users_denied_for_anonymous_and_authenticated() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     for user in [
@@ -65,9 +62,6 @@ async fn list_users_denied_for_anonymous_and_authenticated() {
 /// requires an authenticated session as well.
 #[tokio::test(flavor = "multi_thread")]
 async fn list_users_denied_for_unauthenticated_holder_of_the_admin_capability() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let dev_anonymous = UserContext {
@@ -94,9 +88,6 @@ async fn list_users_denied_for_unauthenticated_holder_of_the_admin_capability() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn list_users_returns_created_user_for_admin() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = create_user("listed").await;
@@ -113,9 +104,6 @@ async fn list_users_returns_created_user_for_admin() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn role_changes_denied_for_non_admin() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = create_user("target").await;
@@ -141,9 +129,6 @@ async fn role_changes_denied_for_non_admin() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn add_and_remove_editor_role_round_trips() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = create_user("editor").await;
@@ -172,9 +157,6 @@ async fn add_and_remove_editor_role_round_trips() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn unknown_role_and_unknown_user_are_distinguished() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = create_user("errors").await;
@@ -195,9 +177,6 @@ async fn unknown_role_and_unknown_user_are_distinguished() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn authenticated_role_cannot_be_revoked() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = create_user("authenticated").await;
@@ -214,9 +193,6 @@ async fn authenticated_role_cannot_be_revoked() {
 /// administrators present a revocation must still succeed.
 #[tokio::test(flavor = "multi_thread")]
 async fn administrator_can_be_revoked_while_another_remains() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let keeper = create_user("admin-keeper").await;
@@ -241,9 +217,6 @@ async fn administrator_can_be_revoked_while_another_remains() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn user_tools_are_exposed_over_mcp() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let names: Vec<&str> = native_mcp_tool_descriptors()
@@ -261,9 +234,6 @@ async fn user_tools_are_exposed_over_mcp() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn mcp_user_tools_enforce_admin_and_report_errors() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let caller = UserContext::authenticated("plain-user".to_string());
@@ -291,9 +261,6 @@ async fn mcp_user_tools_enforce_admin_and_report_errors() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn mcp_add_user_role_grants_for_admin() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = create_user("mcp-grant").await;
@@ -314,9 +281,6 @@ async fn mcp_add_user_role_grants_for_admin() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn user_endpoints_reject_unauthenticated_callers() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let port = engine.port();
 
@@ -357,9 +321,6 @@ async fn user_endpoints_reject_unauthenticated_callers() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn user_role_endpoint_reports_missing_parameters() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let port = engine.port();
 
@@ -395,9 +356,6 @@ async fn user_role_endpoint_reports_missing_parameters() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn user_endpoints_are_documented_in_openapi() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let port = engine.port();
 
@@ -427,9 +385,6 @@ async fn user_endpoints_are_documented_in_openapi() {
 /// repository, like they do for a browser login.
 #[tokio::test(flavor = "multi_thread")]
 async fn session_identity_carries_repository_roles() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = create_user("session-identity").await;
@@ -457,9 +412,6 @@ async fn session_identity_carries_repository_roles() {
 /// than one that guesses at them.
 #[tokio::test(flavor = "multi_thread")]
 async fn session_identity_for_unknown_user_has_no_roles() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let identity = aiwebengine::auth::routes::session_identity_for_user("no-such-user-id").await;

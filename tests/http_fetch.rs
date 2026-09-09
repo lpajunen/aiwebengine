@@ -1,6 +1,6 @@
 mod common;
 
-use common::{setup_env, should_skip_integration_tests};
+use common::setup_env;
 
 mod mock_server;
 
@@ -348,10 +348,6 @@ async fn test_fetch_secret_template_syntax() {
 
     // Secrets are read from the database, so this one test needs it standing.
     use aiwebengine::repository;
-    if should_skip_integration_tests() {
-        mock.shutdown().await;
-        return;
-    }
     setup_env().await;
 
     // Store the secret in the script_secrets table

@@ -14,7 +14,7 @@
 mod common;
 
 use aiwebengine::security::{CreateSessionParams, SecureSessionManager, SecurityAuditor};
-use common::{setup_env, should_skip_integration_tests};
+use common::setup_env;
 use std::sync::Arc;
 
 const IP: &str = "192.168.1.1";
@@ -57,9 +57,6 @@ fn params(audience: Option<&str>) -> CreateSessionParams {
 /// discards that.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_session_with_no_audience_is_not_an_api_credential() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let manager = manager().await;
 
     let cookie_session = manager
@@ -93,9 +90,6 @@ async fn a_session_with_no_audience_is_not_an_api_credential() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_token_minted_for_one_host_does_not_reach_another() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let manager = manager().await;
 
     let token = manager
@@ -137,9 +131,6 @@ async fn a_token_minted_for_one_host_does_not_reach_another() {
 /// endpoint, or enforcement would reject every legitimate client.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_absolute_uri_and_a_host_qualified_path_are_one_resource() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let manager = manager().await;
 
     let token = manager

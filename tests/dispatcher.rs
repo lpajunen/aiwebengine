@@ -5,14 +5,11 @@
 mod common;
 
 use aiwebengine::repository;
-use common::{TestContext, should_skip_integration_tests};
+use common::TestContext;
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_dispatcher_basic_functionality() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
 
     // Load the dispatcher test script before starting server
@@ -61,9 +58,6 @@ async fn test_dispatcher_basic_functionality() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_dispatcher_send_message() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
 
     // Load the dispatcher test script before starting server
@@ -119,9 +113,6 @@ async fn test_dispatcher_send_message() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_dispatcher_multiple_handlers() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
 
     // Load the dispatcher test script before starting server
@@ -176,9 +167,6 @@ async fn test_dispatcher_multiple_handlers() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_dispatcher_data_serialization() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
 
     // Load the dispatcher test script before starting server
@@ -220,9 +208,6 @@ async fn test_dispatcher_data_serialization() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_dispatcher_error_handling() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
 
     // Load the dispatcher test script before starting server
@@ -271,9 +256,6 @@ async fn test_dispatcher_error_handling() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_dispatcher_run_all_tests() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
 
     // Load the dispatcher test script before starting server
@@ -329,9 +311,6 @@ async fn test_dispatcher_run_all_tests() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_dispatcher_validation() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
 
     // Load the dispatcher test script before starting server

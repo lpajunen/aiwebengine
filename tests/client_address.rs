@@ -12,7 +12,7 @@
 mod common;
 
 use aiwebengine::repository;
-use common::{TestContext, should_skip_integration_tests, wait_for_server};
+use common::{TestContext, wait_for_server};
 
 /// A handler that answers with the forwarding header as it reaches a script.
 /// Scripts read the same header everything else does, so this is a faithful
@@ -49,10 +49,6 @@ async fn serve(context: &TestContext) -> String {
 /// a claim by a stranger. It must not survive to anything that keys on it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_forwarding_header_from_an_untrusted_caller_is_replaced() {
-    if should_skip_integration_tests() {
-        return;
-    }
-
     let context = TestContext::new();
     let base = serve(&context).await;
 
@@ -84,10 +80,6 @@ async fn a_forwarding_header_from_an_untrusted_caller_is_replaced() {
 /// caller as "unknown", so one noisy client rate-limited everybody.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_direct_request_is_named_by_the_socket_it_arrived_on() {
-    if should_skip_integration_tests() {
-        return;
-    }
-
     let context = TestContext::new();
     let base = serve(&context).await;
 

@@ -11,7 +11,7 @@ mod common;
 use std::time::Instant;
 
 use aiwebengine::repository;
-use common::{TestContext, should_skip_integration_tests, wait_for_server};
+use common::{TestContext, wait_for_server};
 
 /// Busy-waits for `ms` inside JavaScript.
 ///
@@ -42,10 +42,6 @@ fn busy_handler(path: &str, ms: u64) -> String {
 /// would fail here is not a slow machine but a limit that does not bind.
 #[tokio::test(flavor = "multi_thread")]
 async fn executions_past_the_limit_wait_their_turn() {
-    if should_skip_integration_tests() {
-        return;
-    }
-
     // Claim the process-global ceiling before the server sets it from the test
     // configuration. `configure` is first-writer-wins, so this has to run
     // before anything starts a server in this process.
@@ -115,10 +111,6 @@ async fn executions_past_the_limit_wait_their_turn() {
 /// change introduces must not feed it.
 #[tokio::test(flavor = "multi_thread")]
 async fn waiting_for_a_slot_is_not_recorded_as_an_abandoned_worker() {
-    if should_skip_integration_tests() {
-        return;
-    }
-
     assert!(
         aiwebengine::execution_slots::configure(1),
         "this test owns the ceiling for its process"

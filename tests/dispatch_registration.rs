@@ -13,7 +13,7 @@ mod common;
 use std::time::Duration;
 
 use aiwebengine::repository;
-use common::{AdminServer, should_skip_integration_tests};
+use common::AdminServer;
 
 /// A script that dispatches to its own listener and reports the summary
 /// `sendMessage` returns, which counts one invocation per registered listener.
@@ -68,10 +68,6 @@ async fn wait_for_version(engine: &AdminServer, path: &str, version: &str) -> St
 /// Writing a script again leaves it with one listener, not two.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_rewritten_script_listens_once() {
-    if should_skip_integration_tests() {
-        return;
-    }
-
     common::setup_env().await;
     let uri = "test_dispatch_registration_rewrite";
     let path = "/dispatch-registration/rewrite";
@@ -116,10 +112,6 @@ async fn a_rewritten_script_listens_once() {
 /// type counted a failure against a script that does not exist.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_deleted_script_stops_listening() {
-    if should_skip_integration_tests() {
-        return;
-    }
-
     common::setup_env().await;
     let uri = "test_dispatch_registration_delete";
     let path = "/dispatch-registration/delete";

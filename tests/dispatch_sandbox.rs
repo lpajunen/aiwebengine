@@ -11,7 +11,7 @@ mod common;
 use std::time::{Duration, Instant};
 
 use aiwebengine::repository;
-use common::{TestContext, should_skip_integration_tests, wait_for_server};
+use common::{TestContext, wait_for_server};
 
 /// A listener that never returns must not take its thread with it.
 ///
@@ -24,10 +24,6 @@ use common::{TestContext, should_skip_integration_tests, wait_for_server};
 /// worker is recorded as recovered.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_looping_listener_releases_its_thread() {
-    if should_skip_integration_tests() {
-        return;
-    }
-
     let context = TestContext::new();
     let uri = "test_dispatch_sandbox_loop";
 

@@ -13,7 +13,7 @@
 mod common;
 
 use aiwebengine::security::{CreateSessionParams, SecureSessionManager, SecurityAuditor};
-use common::{setup_env, should_skip_integration_tests};
+use common::setup_env;
 use std::sync::Arc;
 
 const HOST: &str = "binding.example.com";
@@ -56,9 +56,6 @@ fn params(audience: Option<&str>) -> CreateSessionParams {
 /// roaming user rather than of a stolen token.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cookie_presented_by_another_client_is_refused_wherever_it_comes_from() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let manager = manager(false).await;
     let session = manager
         .create_session(params(None))
@@ -86,9 +83,6 @@ async fn a_cookie_presented_by_another_client_is_refused_wherever_it_comes_from(
 /// phone changing networks keeps its session.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cookie_survives_a_change_of_address() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let manager = manager(false).await;
     let session = manager
         .create_session(params(None))
@@ -109,9 +103,6 @@ async fn a_cookie_survives_a_change_of_address() {
 /// exchange in one HTTP stack and its API calls in another.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_api_token_is_not_pinned_to_a_user_agent() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let manager = manager(false).await;
     let session = manager
         .create_session(params(Some("binding.example.com/mcp")))
@@ -131,9 +122,6 @@ async fn an_api_token_is_not_pinned_to_a_user_agent() {
 /// connection rather than read out of a header the caller wrote.
 #[tokio::test(flavor = "multi_thread")]
 async fn strict_validation_holds_a_session_to_the_address_it_was_minted_from() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let manager = manager(true).await;
     let session = manager
         .create_session(params(None))
@@ -160,9 +148,6 @@ async fn strict_validation_holds_a_session_to_the_address_it_was_minted_from() {
 /// used, not from where.
 #[tokio::test(flavor = "multi_thread")]
 async fn strict_validation_covers_api_tokens() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let manager = manager(true).await;
     let session = manager
         .create_session(params(Some("binding.example.com/mcp")))

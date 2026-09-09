@@ -113,7 +113,7 @@ fn harness_runtime() -> &'static tokio::runtime::Runtime {
 /// The connection string every test in this process should use.
 ///
 /// `None` when the database server will not answer — callers leave the globals
-/// unset, and `should_skip_integration_tests` decides whether a test runs.
+/// unset, and a test that needs a database then fails on what it does next.
 ///
 /// Resolved once per process. Under `cargo nextest` a process is one test, so
 /// that is a database per test; under `cargo test` it is one per test binary,
@@ -146,7 +146,13 @@ pub fn connection_string_blocking() -> Option<&'static str> {
 
 /// This process's test database, for a test that cannot proceed without one.
 pub fn require_connection_string() -> &'static str {
-    connection_string_blocking().expect("test database: the server should be reachable")
+    connection_string_blocking().unwrap_or_else(|| {
+        panic!(
+            "test database: no database answered. The suite has no in-memory mode, so \
+             one has to be running: `make postgres-local`, or set DATABASE_URL to name \
+             another server."
+        )
+    })
 }
 
 /// A lazy pool on this process's test database.

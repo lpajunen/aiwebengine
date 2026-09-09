@@ -8,7 +8,7 @@
 mod common;
 
 use aiwebengine::repository;
-use common::{AdminServer, TestContext, should_skip_integration_tests, wait_for_server};
+use common::{AdminServer, TestContext, wait_for_server};
 
 /// Deploys `script` and serves it to an administrator.
 ///
@@ -37,9 +37,6 @@ async fn serve(context: &TestContext, script_uri: &str, script: &str) -> String 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_async_handler_resumes_after_its_awaits() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
 
     let base = serve(
@@ -76,9 +73,6 @@ async fn an_async_handler_resumes_after_its_awaits() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_handler_rejecting_after_an_await_fails_the_request() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
 
     let base = serve(
@@ -114,9 +108,6 @@ async fn a_handler_rejecting_after_an_await_fails_the_request() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_handler_returning_an_unsettleable_promise_is_told_so() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
 
     let base = serve(
@@ -153,9 +144,6 @@ async fn a_handler_returning_an_unsettleable_promise_is_told_so() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_thenable_that_resolves_to_itself_does_not_hang_the_request() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
 
     // A thenable whose `then` resolves with the same object re-enters the
@@ -193,9 +181,6 @@ async fn a_thenable_that_resolves_to_itself_does_not_hang_the_request() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_runaway_await_loop_is_stopped_by_the_deadline() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
 
     // The async analogue of `while (true) {}`: a chain that re-enqueues itself
@@ -226,10 +211,6 @@ async fn a_runaway_await_loop_is_stopped_by_the_deadline() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn writes_made_after_an_await_are_committed() {
-    if should_skip_integration_tests() {
-        return;
-    }
-
     // The commit happens after the queue is drained. Committing when the
     // handler first returned would close the transaction while the write below
     // had not been made yet, losing it silently.
@@ -307,9 +288,6 @@ async fn writes_made_after_an_await_are_committed() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn writes_are_rolled_back_when_the_handler_fails() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
 
     // Both failure shapes have to roll back, and roll back the same: a throw
@@ -393,10 +371,6 @@ async fn writes_are_rolled_back_when_the_handler_fails() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_transaction_left_open_does_not_leak_into_the_next_request() {
-    if should_skip_integration_tests() {
-        return;
-    }
-
     // A handler that opens a transaction and returns without finishing it is
     // committed at the boundary, so the thread it ran on must be left clean for
     // whatever request lands there next.

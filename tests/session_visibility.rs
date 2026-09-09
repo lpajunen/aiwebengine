@@ -14,7 +14,7 @@
 
 mod common;
 
-use common::{AdminServer, should_skip_integration_tests};
+use common::AdminServer;
 
 const PASSWORD: &str = "a-perfectly-fine-password";
 
@@ -94,9 +94,6 @@ async fn still_valid(engine: &AdminServer, http: &reqwest::Client, cookie: &str)
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_listing_shows_every_session_and_marks_this_one() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (username, first) = register_account(&engine, &http)
@@ -132,9 +129,6 @@ async fn a_listing_shows_every_session_and_marks_this_one() {
 /// turn one stolen session into every session the account has.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_listing_never_hands_back_a_token() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (username, first) = register_account(&engine, &http)
@@ -164,9 +158,6 @@ async fn a_listing_never_hands_back_a_token() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn one_session_can_be_ended_without_touching_the_others() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (username, mine) = register_account(&engine, &http)
@@ -212,9 +203,6 @@ async fn one_session_can_be_ended_without_touching_the_others() {
 /// session has to be the same answer as naming one that does not exist.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_id_only_names_your_own_session() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (_, mine) = register_account(&engine, &http)
@@ -254,9 +242,6 @@ async fn an_id_only_names_your_own_session() {
 /// is the phone, and it does not sign them out of the browser they are using.
 #[tokio::test(flavor = "multi_thread")]
 async fn everything_else_can_be_ended_at_once() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (username, mine) = register_account(&engine, &http)
@@ -290,9 +275,6 @@ async fn everything_else_can_be_ended_at_once() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_caller_with_no_session_is_told_so() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
 
@@ -322,9 +304,6 @@ async fn a_caller_with_no_session_is_told_so() {
 /// `/auth/login` with no account at all.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_account_page_lists_them_and_offers_the_controls() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (username, mine) = register_account(&engine, &http)

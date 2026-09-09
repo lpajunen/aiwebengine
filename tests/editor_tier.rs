@@ -15,7 +15,7 @@ mod common;
 use aiwebengine::engine_api::{delete_script_authorized, upsert_script_authorized};
 use aiwebengine::repository;
 use aiwebengine::security::UserContext;
-use common::{setup_env, should_skip_integration_tests};
+use common::setup_env;
 
 fn unique_uri(label: &str) -> String {
     format!("test://editor-tier/{}-{}", label, uuid::Uuid::new_v4())
@@ -27,9 +27,6 @@ fn unique_uri(label: &str) -> String {
 /// capability is the only thing standing between a player and a new script.
 #[tokio::test(flavor = "multi_thread")]
 async fn authenticated_user_cannot_create_a_script() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let uri = unique_uri("player");
@@ -52,9 +49,6 @@ async fn authenticated_user_cannot_create_a_script() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn editor_can_create_and_delete_its_own_script() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let uri = unique_uri("owned");
@@ -78,9 +72,6 @@ async fn editor_can_create_and_delete_its_own_script() {
 /// every script in the engine.
 #[tokio::test(flavor = "multi_thread")]
 async fn editor_cannot_delete_a_script_it_does_not_own() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let uri = unique_uri("someone-elses");
@@ -106,9 +97,6 @@ async fn editor_cannot_delete_a_script_it_does_not_own() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn editor_cannot_modify_a_script_it_does_not_own() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let uri = unique_uri("guarded");

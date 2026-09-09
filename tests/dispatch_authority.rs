@@ -12,7 +12,7 @@ mod common;
 use std::time::Duration;
 
 use aiwebengine::repository;
-use common::{AdminServer, TestContext, should_skip_integration_tests, wait_for_server};
+use common::{AdminServer, TestContext, wait_for_server};
 
 /// A listener attempts a schema change, which needs `ManageScriptDatabase` — a
 /// capability an editor holds and a solution's users do not.
@@ -52,10 +52,6 @@ function init(context) {{
 /// listener that makes one.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_listener_does_not_hold_more_than_the_caller_that_dispatched_it() {
-    if should_skip_integration_tests() {
-        return;
-    }
-
     let context = TestContext::new();
     let uri = "test_dispatch_authority_anonymous";
     let path = "/dispatch-authority/anonymous";
@@ -99,10 +95,6 @@ async fn a_listener_does_not_hold_more_than_the_caller_that_dispatched_it() {
 /// administrator holds.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_listener_keeps_what_the_caller_that_dispatched_it_holds() {
-    if should_skip_integration_tests() {
-        return;
-    }
-
     common::setup_env().await;
     let uri = "test_dispatch_authority_admin";
     let path = "/dispatch-authority/admin";

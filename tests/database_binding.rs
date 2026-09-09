@@ -14,7 +14,7 @@ mod common;
 use aiwebengine::repository;
 use aiwebengine::script_eval::{EvalReport, EvalRequest, eval_blocking};
 use aiwebengine::security::UserContext;
-use common::{setup_env, should_skip_integration_tests, test_mutex};
+use common::{setup_env, test_mutex};
 use serde_json::Value;
 
 /// Evaluates `source` against a fresh `readings` table holding one integer
@@ -59,9 +59,6 @@ fn error_of(answer: &Value, what: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_fractional_value_is_refused_by_an_integer_column() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -92,9 +89,6 @@ async fn a_fractional_value_is_refused_by_an_integer_column() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_integer_bind_does_not_poison_a_later_fractional_one() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -129,9 +123,6 @@ async fn an_integer_bind_does_not_poison_a_later_fractional_one() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_refusal_is_the_same_in_and_out_of_a_transaction() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -161,9 +152,6 @@ async fn the_refusal_is_the_same_in_and_out_of_a_transaction() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_whole_number_that_arrived_as_a_float_is_accepted() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -184,9 +172,6 @@ async fn a_whole_number_that_arrived_as_a_float_is_accepted() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_null_reaches_a_column_that_is_not_text() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -212,9 +197,6 @@ async fn a_null_reaches_a_column_that_is_not_text() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_refused_value_leaves_the_transaction_usable() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -245,9 +227,6 @@ async fn a_refused_value_leaves_the_transaction_usable() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_filter_is_bound_as_the_column_it_compares() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -278,9 +257,6 @@ async fn a_filter_is_bound_as_the_column_it_compares() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_failed_statement_no_longer_takes_the_transaction_with_it() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -319,9 +295,6 @@ async fn a_failed_statement_no_longer_takes_the_transaction_with_it() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_float_column_holds_a_javascript_number() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -352,9 +325,6 @@ async fn a_float_column_holds_a_javascript_number() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bigint_column_holds_epoch_milliseconds() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 

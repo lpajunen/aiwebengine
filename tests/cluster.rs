@@ -2,7 +2,7 @@ mod common;
 
 use aiwebengine::{notifications, scheduler};
 use chrono::Utc;
-use common::{AdminServer, should_skip_integration_tests};
+use common::AdminServer;
 
 /// Test notification message structure includes timestamp and server_id
 #[test]
@@ -260,9 +260,6 @@ fn test_stream_broadcast_payload_deserialization() {
 /// must reject callers without administrator rights.
 #[tokio::test(flavor = "multi_thread")]
 async fn cluster_health_requires_admin_and_no_longer_serves_the_old_path() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let port = engine.port();
 

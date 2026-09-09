@@ -83,9 +83,8 @@ pub fn init_test_db() {
     DB_INIT.call_once(|| {
         if std::env::var("DATABASE_URL").is_err() {
             eprintln!(
-                "warning: DATABASE_URL is not set; falling back to the default local \
-                 connection string. Run `source .env` (or use `make test`) to choose \
-                 the database explicitly."
+                "note: DATABASE_URL is not set; using the default local connection \
+                 string from config.toml. Set it to test against another server."
             );
         }
 
@@ -114,12 +113,6 @@ pub fn init_test_db() {
             Err(_) => get_db_runtime().block_on(do_init()),
         }
     });
-}
-
-/// Check if database is available for integration tests
-#[allow(dead_code)]
-pub fn should_skip_integration_tests() -> bool {
-    std::env::var("DATABASE_URL").is_err()
 }
 
 /// Bring up the process-global database and repository the suite shares.
@@ -154,9 +147,11 @@ static GLOBALS: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 /// server does. Both entry points below used to build their own, one guarded
 /// and one not, and which a test got came down to which ran first.
 ///
-/// `None` when the database will not come up. Callers leave the globals unset
-/// rather than panicking: `should_skip_integration_tests` decides whether a
-/// test runs, and it should get to make that call.
+/// `None` when the database will not come up, which leaves the globals unset;
+/// the test then fails at whatever it does next, which is the point. The suite
+/// used to have a guard that turned a missing database into a test that
+/// returned at its first line and reported itself as passing — see
+/// [`test_config`].
 async fn open_database() -> Option<sqlx::PgPool> {
     let config = test_config(0).await?;
     let db = Arc::new(
@@ -255,8 +250,16 @@ fn free_port() -> anyhow::Result<u16> {
 /// all name the same one. Every call in this process answers with the same
 /// per-process database — see [`testdb`] for why there is one.
 ///
-/// `None` when the database server will not answer; `should_skip_integration_tests`
-/// is what decides whether that should fail a test or skip it.
+/// `None` when the database server will not answer, and a test that needs one
+/// then fails. There used to be a `should_skip_integration_tests` guard at the
+/// top of every integration test that turned that into an early `return`, so a
+/// suite with no database reported every one of them as passing. It asked
+/// whether `DATABASE_URL` was set rather than whether a database answered,
+/// which meant it also skipped on any machine running Postgres without that
+/// variable exported — the state in which `tests/scripts.rs` passed locally
+/// and failed on CI. The unit tests never had such a guard and panic without a
+/// database, so the guard never made the suite runnable without one; it only
+/// made half of it lie about having run.
 #[allow(dead_code)]
 pub async fn test_config(port: u16) -> Option<config::Config> {
     let mut config = config::Config::test_config_postgres(port);
@@ -281,12 +284,17 @@ pub async fn test_pool() -> sqlx::PgPool {
     sqlx::PgPool::connect_lazy(url).expect("the test database URL should parse")
 }
 
-/// The same, for a test that cannot proceed without one.
+/// The same, for a test that cannot proceed without one — which, with the
+/// skip guard gone, is every integration test.
 #[allow(dead_code)]
 pub async fn require_test_config(port: u16) -> config::Config {
-    test_config(port)
-        .await
-        .expect("the test database should be reachable")
+    match test_config(port).await {
+        Some(config) => config,
+        None => panic!(
+            "no database answered. The suite has no in-memory mode, so one has to be \
+             running: `make postgres-local`, or set DATABASE_URL to name another server."
+        ),
+    }
 }
 
 /// Improved test server with proper shutdown support

@@ -12,7 +12,7 @@
 mod common;
 
 use aiwebengine::repository;
-use common::{TestContext, should_skip_integration_tests, wait_for_server};
+use common::{TestContext, wait_for_server};
 
 /// Deploys `script` and serves it, returning the running server's base URL.
 async fn serve(context: &TestContext, script_uri: &str, script: &str) -> String {
@@ -55,9 +55,6 @@ fn probe_script(route: &str, body: &str) -> String {
 /// object made the script depend on it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_header_is_found_whatever_its_case() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
     let base = serve(
         &context,
@@ -99,9 +96,6 @@ async fn a_header_is_found_whatever_its_case() {
 /// enumeration with it.
 #[tokio::test(flavor = "multi_thread")]
 async fn headers_still_read_as_a_plain_object() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
     let base = serve(
         &context,
@@ -142,9 +136,6 @@ async fn headers_still_read_as_a_plain_object() {
 /// The same parse, spelled the same way, whichever end the body came from.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_body_reads_the_way_a_fetch_response_does() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
     let base = serve(
         &context,
@@ -186,9 +177,6 @@ async fn a_body_reads_the_way_a_fetch_response_does() {
 /// the way in from a request that arrived perfectly well.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_body_that_is_not_json_throws_at_the_parse() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
     let base = serve(
         &context,
@@ -227,9 +215,6 @@ async fn a_body_that_is_not_json_throws_at_the_parse() {
 /// `searchParams` is parsed from the URL, where both survive.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_repeated_query_parameter_survives_in_search_params() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
     let base = serve(
         &context,
@@ -274,9 +259,6 @@ async fn a_repeated_query_parameter_survives_in_search_params() {
 /// `path` cannot say which of the engine's hosts served a request. `url` can.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_request_carries_the_absolute_url_it_arrived_on() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
     let base = serve(
         &context,
@@ -313,9 +295,6 @@ async fn the_request_carries_the_absolute_url_it_arrived_on() {
 /// request as much as for reading one.
 #[tokio::test(flavor = "multi_thread")]
 async fn headers_and_search_params_are_constructible() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
     let base = serve(
         &context,
@@ -370,9 +349,6 @@ async fn headers_and_search_params_are_constructible() {
 /// Nothing above changes the fields a handler already reads.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_fields_a_handler_already_used_are_untouched() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = TestContext::new();
     let base = serve(
         &context,

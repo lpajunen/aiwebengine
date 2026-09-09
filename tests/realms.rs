@@ -16,7 +16,7 @@ use aiwebengine::security::{
     CreateSessionParams, SecureSessionManager, SecurityAuditor, UserContext,
 };
 use aiwebengine::user_repository::{self, GLOBAL_REALM, realm_authorizes_host};
-use common::{setup_env, should_skip_integration_tests};
+use common::setup_env;
 use std::sync::Arc;
 
 const IP: &str = "192.168.1.1";
@@ -91,9 +91,6 @@ fn hosts_are_matched_without_regard_to_case() {
 /// not authenticate on the management host, whatever header it arrives in.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_session_does_not_authenticate_outside_its_realm() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let manager = manager().await;
 
     let session = manager
@@ -120,9 +117,6 @@ async fn a_session_does_not_authenticate_outside_its_realm() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_global_session_authenticates_anywhere() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let manager = manager().await;
 
     let session = manager
@@ -147,9 +141,6 @@ async fn a_global_session_authenticates_anywhere() {
 /// otherwise be the one way onto a host it does not authenticate on.
 #[tokio::test(flavor = "multi_thread")]
 async fn refreshing_a_session_does_not_escape_its_realm() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let manager = manager().await;
 
     let session = manager
@@ -182,9 +173,6 @@ async fn refreshing_a_session_does_not_escape_its_realm() {
 /// being created.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_self_minted_account_is_bound_to_the_host_it_was_created_on() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = user_repository::upsert_internal_user(
@@ -211,9 +199,6 @@ async fn a_self_minted_account_is_bound_to_the_host_it_was_created_on() {
 /// re-homing an account is as easy as visiting a different URL.
 #[tokio::test(flavor = "multi_thread")]
 async fn signing_in_elsewhere_does_not_move_an_account() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let provider_user_id = uuid::Uuid::new_v4().to_string();
@@ -260,9 +245,6 @@ async fn signing_in_elsewhere_does_not_move_an_account() {
 /// something a sign-in can arrange for itself.
 #[tokio::test(flavor = "multi_thread")]
 async fn only_an_administrator_moves_a_user_between_realms() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = user_repository::upsert_internal_user(
@@ -307,9 +289,6 @@ async fn only_an_administrator_moves_a_user_between_realms() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_realm_cannot_be_set_to_nothing() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = user_repository::upsert_internal_user(
@@ -347,9 +326,6 @@ async fn a_realm_cannot_be_set_to_nothing() {
 /// revocation closes, and it takes the same statement.
 #[tokio::test(flavor = "multi_thread")]
 async fn narrowing_a_realm_ends_the_sessions_it_already_granted() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let manager = manager().await;
 
     let user_id = user_repository::upsert_internal_user(

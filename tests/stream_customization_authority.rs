@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use aiwebengine::auth::JsAuthContext;
 use aiwebengine::repository;
-use common::{setup_env, should_skip_integration_tests, test_mutex};
+use common::{setup_env, test_mutex};
 
 /// The customization function reports what a schema change did, as a filter
 /// criterion — the only thing it can return.
@@ -52,9 +52,6 @@ async fn verdict_for(auth: Option<JsAuthContext>) -> String {
 /// A connection with no session cannot reach a schema change.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_customization_function_does_not_hold_more_than_the_connecting_caller() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -69,9 +66,6 @@ async fn a_customization_function_does_not_hold_more_than_the_connecting_caller(
 /// An administrator's connection still carries an administrator's authority.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_customization_function_keeps_what_the_connecting_caller_holds() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let _guard = test_mutex().lock().await;
     setup_env().await;
 

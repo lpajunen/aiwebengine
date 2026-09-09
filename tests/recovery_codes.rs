@@ -16,7 +16,7 @@ mod common;
 
 use aiwebengine::auth::config::InternalAuthConfig;
 use aiwebengine::auth::routes::{LoginForm, render_account_forms, render_internal_auth_forms};
-use common::{AdminServer, should_skip_integration_tests};
+use common::AdminServer;
 
 const PASSWORD: &str = "a-perfectly-fine-password";
 const RECOVERED_PASSWORD: &str = "a-password-set-by-recovery";
@@ -246,9 +246,6 @@ async fn signs_in(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_set_is_ten_distinct_codes_and_needs_the_current_password() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (_, cookie) = register_account(&engine, &http)
@@ -283,9 +280,6 @@ async fn a_set_is_ten_distinct_codes_and_needs_the_current_password() {
 /// password and signs the person in.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_code_sets_a_new_password_and_signs_in() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (username, cookie) = register_account(&engine, &http)
@@ -325,9 +319,6 @@ async fn a_code_sets_a_new_password_and_signs_in() {
 /// a copy of the paper is worth as much as the original forever.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_code_works_once() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (username, cookie) = register_account(&engine, &http)
@@ -379,9 +370,6 @@ async fn a_code_works_once() {
 /// nothing, and the answer says nothing about which account it did belong to.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_code_belongs_to_one_account() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
 
@@ -416,9 +404,6 @@ async fn a_code_belongs_to_one_account() {
 /// them away.
 #[tokio::test(flavor = "multi_thread")]
 async fn issuing_a_set_replaces_the_one_before_it() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (username, cookie) = register_account(&engine, &http)
@@ -453,9 +438,6 @@ async fn issuing_a_set_replaces_the_one_before_it() {
 /// is what is left after the decoration.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_code_is_accepted_however_it_was_written_down() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (username, cookie) = register_account(&engine, &http)
@@ -480,9 +462,6 @@ async fn a_code_is_accepted_however_it_was_written_down() {
 /// about codes it stores as hashes, so it should be right.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_account_page_reports_what_is_left() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
     let http = engine.anonymous().clone();
     let (username, cookie) = register_account(&engine, &http)
@@ -539,9 +518,6 @@ async fn the_account_page_reports_what_is_left() {
 /// the page merely stops mentioning them.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_endpoints_refuse_when_recovery_is_off() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start_customized(|config| {
         if let Some(auth) = config.auth.as_mut() {
             auth.internal.allow_recovery_codes = false;

@@ -12,7 +12,7 @@ mod common;
 use aiwebengine::mcp;
 use aiwebengine::repository;
 use aiwebengine::security::UserContext;
-use common::{TestContext, should_skip_integration_tests, wait_for_server};
+use common::{TestContext, wait_for_server};
 
 /// The prompt handler reports what a schema change did, inside the message it
 /// returns — a prompt's answer is the channel it has.
@@ -65,9 +65,6 @@ async fn engine_with_the_prompt() -> TestContext {
 /// A caller with no session cannot reach a schema change through a prompt.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_prompt_handler_does_not_hold_more_than_the_caller_that_asked() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = engine_with_the_prompt().await;
 
     let verdict = verdict_for(UserContext::anonymous());
@@ -83,9 +80,6 @@ async fn a_prompt_handler_does_not_hold_more_than_the_caller_that_asked() {
 /// An administrator's request still carries an administrator's authority.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_prompt_handler_keeps_what_the_caller_that_asked_holds() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let context = engine_with_the_prompt().await;
 
     let verdict = verdict_for(UserContext::admin("prompt-authority-admin".to_string()));

@@ -10,7 +10,7 @@
 mod common;
 
 use aiwebengine::repository;
-use common::{AdminServer, should_skip_integration_tests};
+use common::AdminServer;
 
 // ============================================================================
 // Health Endpoint Tests
@@ -18,9 +18,6 @@ use common::{AdminServer, should_skip_integration_tests};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_health_endpoint() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     // Start server with proper shutdown support
@@ -60,9 +57,6 @@ async fn test_health_endpoint() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_health_endpoint_content_type() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     // Start server
@@ -92,9 +86,6 @@ async fn test_health_endpoint_content_type() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_logs_endpoint() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     let port = engine.port();
@@ -119,9 +110,6 @@ async fn test_script_logs_endpoint() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_logs_all_scripts_and_filters() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     let port = engine.port();
@@ -297,9 +285,6 @@ async fn test_script_logs_all_scripts_and_filters() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_logs_delete_clears_one_named_script() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     let port = engine.port();
@@ -347,9 +332,6 @@ async fn test_script_logs_delete_clears_one_named_script() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_routes_endpoint() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     let port = engine.port();
@@ -395,9 +377,6 @@ async fn test_routes_endpoint() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_engine_management_endpoints() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     let port = engine.port();
@@ -465,9 +444,6 @@ async fn test_engine_management_endpoints() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_favicon_default_served_when_unregistered() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     let port = engine.port();
@@ -491,9 +467,6 @@ async fn test_favicon_default_served_when_unregistered() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_different_http_methods() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     // Dynamically load the method test script
@@ -601,9 +574,6 @@ async fn test_different_http_methods() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_head_request_falls_back_to_get_with_empty_body() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     engine
@@ -649,9 +619,6 @@ async fn test_head_request_falls_back_to_get_with_empty_body() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_head_request_on_asset_route_strips_body() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     let script_uri = "https://example.com/head_asset_test";
@@ -716,9 +683,6 @@ async fn test_head_request_on_asset_route_strips_body() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_explicit_head_handler_overrides_get_fallback() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     let script = r#"
@@ -795,9 +759,6 @@ async fn test_explicit_head_handler_overrides_get_fallback() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_query_parameters() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     // Dynamically load the query test script
@@ -880,9 +841,6 @@ async fn test_query_parameters() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_form_data() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     // Dynamically load the form test script
@@ -990,9 +948,6 @@ async fn test_form_data() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_graphql_endpoints() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     // Load the GraphQL test script (a script that registers its own
@@ -1129,9 +1084,6 @@ async fn test_graphql_endpoints() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_graphql_script_defined_mutations() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     // Load the GraphQL test script, which registers its own mutations
@@ -1209,9 +1161,6 @@ async fn test_graphql_script_defined_mutations() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_graphql_registration_clearing() {
-    if should_skip_integration_tests() {
-        return;
-    }
     use aiwebengine::graphql::{
         GRAPHQL_REGISTRY, GraphQLOperation, clear_script_graphql_registrations,
     };
@@ -1289,9 +1238,6 @@ async fn test_graphql_registration_clearing() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_oversized_request_body_is_rejected() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     let port = engine.port();
@@ -1334,9 +1280,6 @@ async fn test_oversized_request_body_is_rejected() {
 /// columns: two calls to the same route are otherwise indistinguishable.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_logs_correlate_with_the_request_that_emitted_them() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     let script_uri = "test_script_logs_correlation";
@@ -1478,9 +1421,6 @@ async fn read_sse_until(
 /// guessing which lines are new.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_logs_stream_tails_entries_as_they_are_written() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     let script_uri = "test_script_logs_stream";
@@ -1690,9 +1630,6 @@ async fn test_script_logs_stream_tails_entries_as_they_are_written() {
 /// not: output from an imported module, and a handler that fails.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_logs_correlate_what_the_engine_reports_about_a_request() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let engine = AdminServer::start().await.expect("server failed to start");
 
     let script_uri = "test_script_logs_engine_reported";

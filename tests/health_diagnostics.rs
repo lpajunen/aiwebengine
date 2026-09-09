@@ -12,7 +12,6 @@ mod common;
 use aiwebengine::config::RepositoryConfig;
 use aiwebengine::database::Database;
 use aiwebengine::engine_api::lock_diagnostics;
-use common::should_skip_integration_tests;
 use std::time::{Duration, Instant};
 
 /// Long enough that the blocked reader is still waiting when the diagnostic
@@ -44,9 +43,6 @@ async fn wait_for_a_blocked_statement(pool: &sqlx::PgPool) -> serde_json::Value 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_wedged_table_names_both_the_waiter_and_the_holder() {
-    if should_skip_integration_tests() {
-        return;
-    }
     let config = patient_config().await;
     let observer = Database::new(&config).await.expect("connect");
     let holder = Database::new(&config).await.expect("connect holder");

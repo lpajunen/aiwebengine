@@ -14,7 +14,7 @@ use aiwebengine::auth::local::{
     self, GUEST_PROVIDER, LOCAL_PROVIDER, attach_credential, verify_login,
 };
 use aiwebengine::user_repository::{self, UserRole};
-use common::{setup_env, should_skip_integration_tests};
+use common::setup_env;
 
 /// Password long enough for the default configured minimum.
 const PASSWORD: &str = "a-perfectly-fine-password";
@@ -46,9 +46,6 @@ async fn create_guest() -> String {
 /// authenticated tier, with no editor or administrator role.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_internal_identity_lands_in_the_authenticated_tier() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = create_guest().await;
@@ -75,9 +72,6 @@ async fn an_internal_identity_lands_in_the_authenticated_tier() {
 /// account already had, because it is the same account.
 #[tokio::test(flavor = "multi_thread")]
 async fn claiming_a_guest_account_keeps_its_user_id() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = create_guest().await;
@@ -99,9 +93,6 @@ async fn claiming_a_guest_account_keeps_its_user_id() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_username_can_only_be_claimed_once() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let username = unique("contested");
@@ -132,9 +123,6 @@ async fn a_username_can_only_be_claimed_once() {
 /// could overwrite the credential protecting it.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_account_with_a_credential_cannot_be_claimed_again() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = create_guest().await;
@@ -159,9 +147,6 @@ async fn an_account_with_a_credential_cannot_be_claimed_again() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_wrong_password_and_an_unknown_username_answer_the_same_way() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = create_guest().await;
@@ -186,9 +171,6 @@ async fn a_wrong_password_and_an_unknown_username_answer_the_same_way() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_username_is_matched_regardless_of_how_it_is_typed() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let user_id = create_guest().await;
@@ -217,9 +199,6 @@ async fn a_username_is_matched_regardless_of_how_it_is_typed() {
 /// is, which is what lets both share the session path.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_local_account_is_recorded_under_the_local_provider() {
-    if should_skip_integration_tests() {
-        return;
-    }
     setup_env().await;
 
     let username = local::normalize_username(&unique("Registered"));
