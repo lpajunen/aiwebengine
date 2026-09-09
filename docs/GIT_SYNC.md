@@ -76,7 +76,7 @@ decides whether the file is transpiled.
 
 The built-in exclusions cover what is always junk: dotfiles, `node_modules`,
 and a `README.md` or `LICENSE` beside a script's entry. They cannot cover what
-is junk in *your* repository, so name it in `.aiwebengineignore` at the root:
+is junk in _your_ repository, so name it in `.aiwebengineignore` at the root:
 
 ```gitignore
 # kept for editors, meaningless to the engine
@@ -106,7 +106,7 @@ takes shop's and leaves another script's alone.
 
 This is not `.gitignore`, and it is not read instead of one. Everything
 `.gitignore` lists is uncommitted and never reaches the engine anyway; this
-file answers the other question — of the files git *does* track, which are
+file answers the other question — of the files git _does_ track, which are
 content.
 
 ## Pulling
@@ -131,7 +131,7 @@ one script — the entry, the assets, the removals — is one revision and one
 Pulling a repository that has not moved costs two small API calls and does
 nothing. Pass `force: true` to download and re-apply anyway, for the times the
 engine's answer looks stale for a reason the commit cannot show. Forcing decides
-whether to *look*, not what to conclude: identical content still writes nothing
+whether to _look_, not what to conclude: identical content still writes nothing
 and records no revision.
 
 ### Private repositories
@@ -187,13 +187,13 @@ credential with write access.
 get_git_status(script: "https://example.com/solution.js")
 ```
 
-| State | Meaning | Do |
-| --- | --- | --- |
-| `in_sync` | neither side has moved | nothing |
-| `ahead` | you changed it | push |
-| `behind` | they changed it | pull |
-| `diverged` | both changed it | reconcile, then push |
-| `unbound` | never synced anywhere | push, naming a repository |
+| State         | Meaning                   | Do                           |
+| ------------- | ------------------------- | ---------------------------- |
+| `in_sync`     | neither side has moved    | nothing                      |
+| `ahead`       | you changed it            | push                         |
+| `behind`      | they changed it           | pull                         |
+| `diverged`    | both changed it           | reconcile, then push         |
+| `unbound`     | never synced anywhere     | push, naming a repository    |
 | `unreachable` | GitHub could not be asked | only the local half is known |
 
 Ask this rather than attempting an operation and reading the refusal. The
@@ -214,7 +214,7 @@ this repository did not write. Owning a script is not the same as having agreed
 that a repository may replace it, and since the prefix defaults to the
 repository's name, a repository named like an existing prefix would otherwise be
 enough. Pull under a different prefix, or `force` if you meant it. A second pull
-of the *same* repository is unaffected — replacing what it wrote is the point.
+of the _same_ repository is unaffected — replacing what it wrote is the point.
 
 ## Where a script came from
 
@@ -227,7 +227,7 @@ Clearing a binding leaves the script and its files exactly as they are; what
 goes is the record of where they came from, so later pulls no longer treat it
 as that repository's to replace.
 
-There is deliberately no call that *sets* a binding without writing anything. A
+There is deliberately no call that _sets_ a binding without writing anything. A
 push names its repository and records the binding when it lands; one that has
 been neither pushed nor pulled would describe an agreement neither side has
 made.
