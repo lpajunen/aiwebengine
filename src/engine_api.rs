@@ -731,6 +731,55 @@ pub fn get_script_authorized(user: &UserContext, uri: &str) -> Option<String> {
     repository::fetch_script(uri)
 }
 
+/// Read a script's root source, whole or scoped to a line range and/or a
+/// pattern.
+///
+/// [`read_asset_authorized`] for the one file of a script that is not an
+/// asset, and the other half of what [`patch_script_authorized`] made
+/// possible: an editor could change the root without sending it, while still
+/// having to receive all of it to find what to change. A root source is the
+/// file most likely to be long — it registers everything the modules serve —
+/// so it is the one where that costs most.
+///
+/// Every read reports the digest of the whole script, not of the part
+/// returned, because that digest is what a following patch has to send to
+/// prove it edited the version it read.
+pub fn read_script_authorized(
+    user: &UserContext,
+    uri: &str,
+    options: &FileReadOptions,
+) -> Result<FileRead, FileReadError> {
+    if !may_administer(user) || user.require_capability(&Capability::ReadScripts).is_err() {
+        return Err(FileReadError::AccessDenied);
+    }
+    let Some(content) = repository::fetch_script(uri) else {
+        return Err(FileReadError::NotFound);
+    };
+
+    let sha256 = sha256_hex(content.as_bytes());
+    let bytes = content.len();
+
+    // A root source is text by construction — it is a program the engine
+    // executes — so the unscoped read hands it back as text rather than as the
+    // base64 an asset needs, an asset being anything at all.
+    if !options.is_scoped() {
+        return Ok(FileRead {
+            view: FileView::Whole { content },
+            sha256,
+            bytes,
+            total_lines: None,
+        });
+    }
+
+    let (view, total_lines) = scoped_view(content.as_bytes(), options, uri, "Script")?;
+    Ok(FileRead {
+        view,
+        sha256,
+        bytes,
+        total_lines: Some(total_lines),
+    })
+}
+
 /// List script metadata; an authenticated caller with the ReadScripts
 /// capability (empty otherwise).
 pub fn list_scripts_authorized(user: &UserContext) -> Vec<repository::ScriptMetadata> {
@@ -1296,15 +1345,16 @@ impl LineRange {
     }
 }
 
-/// How a read of one asset is scoped. The two filters compose: a `grep` inside
-/// a `lines` range searches only that range.
+/// How a read of one file is scoped — one of a script's assets, or its root
+/// source. The two filters compose: a `grep` inside a `lines` range searches
+/// only that range.
 #[derive(Default)]
-pub struct AssetReadOptions {
+pub struct FileReadOptions {
     pub lines: Option<LineRange>,
     pub grep: Option<String>,
 }
 
-impl AssetReadOptions {
+impl FileReadOptions {
     /// Whether the caller asked for a view of part of the file rather than the
     /// whole of it.
     fn is_scoped(&self) -> bool {
@@ -1332,9 +1382,14 @@ impl GrepMatch {
 
 /// What a read returned: the whole file, a range of it, or the places a
 /// pattern matched.
-pub enum AssetView {
+pub enum FileView {
     Full {
         content_base64: String,
+    },
+    /// The whole file as text. What a read of a script's root source answers
+    /// with: it is a program, so there is nothing base64 would be protecting.
+    Whole {
+        content: String,
     },
     Range {
         content: String,
@@ -1347,26 +1402,27 @@ pub enum AssetView {
     },
 }
 
-/// One asset as read, whole or scoped.
-pub struct AssetRead {
-    pub view: AssetView,
-    /// Digest of the whole stored asset, whichever part of it was returned —
+/// One file as read, whole or scoped.
+pub struct FileRead {
+    pub view: FileView,
+    /// Digest of the whole stored file, whichever part of it was returned —
     /// this is what a following patch sends as `base_sha256`.
     pub sha256: String,
-    /// Size of the whole stored asset, in bytes.
+    /// Size of the whole stored file, in bytes.
     pub bytes: usize,
-    /// Line count of the whole asset; absent from a whole-file read, which
+    /// Line count of the whole file; absent from a whole-file read, which
     /// does not require the content to be text at all.
     pub total_lines: Option<usize>,
 }
 
-impl AssetRead {
-    /// The response fields for this read, to be merged with the script and
-    /// asset the caller named.
+impl FileRead {
+    /// The response fields for this read, to be merged with the file the
+    /// caller named.
     pub fn to_json(&self) -> Value {
         let mut body = match &self.view {
-            AssetView::Full { content_base64 } => json!({ "content": content_base64 }),
-            AssetView::Range {
+            FileView::Full { content_base64 } => json!({ "content": content_base64 }),
+            FileView::Whole { content } => json!({ "encoding": "utf8", "content": content }),
+            FileView::Range {
                 content,
                 start_line,
                 end_line,
@@ -1376,7 +1432,7 @@ impl AssetRead {
                 "start_line": start_line,
                 "end_line": end_line,
             }),
-            AssetView::Matches { matches, truncated } => json!({
+            FileView::Matches { matches, truncated } => json!({
                 "encoding": "utf8",
                 "matches": matches.iter().map(GrepMatch::to_json).collect::<Vec<Value>>(),
                 "match_count": matches.len(),
@@ -1394,7 +1450,7 @@ impl AssetRead {
     }
 }
 
-pub enum AssetReadError {
+pub enum FileReadError {
     AccessDenied,
     NotFound,
     /// The read asked for a text view of something that is not text, or asked
@@ -1403,14 +1459,14 @@ pub enum AssetReadError {
 }
 
 /// Compile a `grep=` pattern, with the bounds a request-time regex needs.
-fn compile_grep(pattern: &str) -> Result<regex::Regex, AssetReadError> {
+fn compile_grep(pattern: &str) -> Result<regex::Regex, FileReadError> {
     if pattern.is_empty() {
-        return Err(AssetReadError::Validation(
+        return Err(FileReadError::Validation(
             "Empty grep pattern: there is nothing to search for".to_string(),
         ));
     }
     if pattern.chars().count() > MAX_GREP_PATTERN_CHARS {
-        return Err(AssetReadError::Validation(format!(
+        return Err(FileReadError::Validation(format!(
             "grep pattern too long (max {} characters)",
             MAX_GREP_PATTERN_CHARS
         )));
@@ -1419,7 +1475,7 @@ fn compile_grep(pattern: &str) -> Result<regex::Regex, AssetReadError> {
         .size_limit(1 << 20)
         .dfa_size_limit(1 << 20)
         .build()
-        .map_err(|e| AssetReadError::Validation(format!("Invalid grep pattern: {}", e)))
+        .map_err(|e| FileReadError::Validation(format!("Invalid grep pattern: {}", e)))
 }
 
 /// Cut a line down to what a match listing echoes back, on a character
@@ -1446,21 +1502,21 @@ pub fn read_asset_authorized(
     user: &UserContext,
     script_uri: &str,
     asset_uri: &str,
-    options: &AssetReadOptions,
-) -> Result<AssetRead, AssetReadError> {
+    options: &FileReadOptions,
+) -> Result<FileRead, FileReadError> {
     if !can_access_assets(user, script_uri, &Capability::ReadAssets) {
-        return Err(AssetReadError::AccessDenied);
+        return Err(FileReadError::AccessDenied);
     }
     let Some(asset) = repository::fetch_asset(script_uri, asset_uri) else {
-        return Err(AssetReadError::NotFound);
+        return Err(FileReadError::NotFound);
     };
 
     let sha256 = sha256_hex(&asset.content);
     let bytes = asset.content.len();
 
     if !options.is_scoped() {
-        return Ok(AssetRead {
-            view: AssetView::Full {
+        return Ok(FileRead {
+            view: FileView::Full {
                 content_base64: base64::engine::general_purpose::STANDARD.encode(&asset.content),
             },
             sha256,
@@ -1469,11 +1525,34 @@ pub fn read_asset_authorized(
         });
     }
 
-    let text = std::str::from_utf8(&asset.content).map_err(|_| {
-        AssetReadError::Validation(format!(
-            "Asset '{}' is not UTF-8 text, so it has no lines to read: fetch it without \
+    let (view, total_lines) = scoped_view(&asset.content, options, asset_uri, "Asset")?;
+
+    Ok(FileRead {
+        view,
+        sha256,
+        bytes,
+        total_lines: Some(total_lines),
+    })
+}
+
+/// The part of a file a scoped read asked for, and how many lines the whole of
+/// it has.
+///
+/// Shared by every read that can be scoped, because slicing a file and
+/// searching it are the same operations whether the file is one of a script's
+/// assets or the script's own root source. `file` and `kind` are quoted back
+/// in the refusals — the only part that differs between them.
+fn scoped_view(
+    content: &[u8],
+    options: &FileReadOptions,
+    file: &str,
+    kind: &str,
+) -> Result<(FileView, usize), FileReadError> {
+    let text = std::str::from_utf8(content).map_err(|_| {
+        FileReadError::Validation(format!(
+            "{} '{}' is not UTF-8 text, so it has no lines to read: fetch it without \
              'lines' or 'grep' to get its bytes",
-            asset_uri
+            kind, file
         ))
     })?;
 
@@ -1488,9 +1567,10 @@ pub fn read_asset_authorized(
     // `end` past the end is a different request: "through line 1000" of a
     // 400-line file plainly means the rest of it, so it clamps.
     if options.lines.is_some() && range.start > lines.len() {
-        return Err(AssetReadError::Validation(format!(
-            "Asset '{}' has {} lines, so there is no line {} to read",
-            asset_uri,
+        return Err(FileReadError::Validation(format!(
+            "{} '{}' has {} lines, so there is no line {} to read",
+            kind,
+            file,
             lines.len(),
             range.start
         )));
@@ -1506,7 +1586,7 @@ pub fn read_asset_authorized(
     };
 
     let view = match &options.grep {
-        None => AssetView::Range {
+        None => FileView::Range {
             content: selected.join("\n"),
             start_line: start,
             end_line: end,
@@ -1530,16 +1610,11 @@ pub fn read_asset_authorized(
                     truncated: line_truncated,
                 });
             }
-            AssetView::Matches { matches, truncated }
+            FileView::Matches { matches, truncated }
         }
     };
 
-    Ok(AssetRead {
-        view,
-        sha256,
-        bytes,
-        total_lines: Some(lines.len()),
-    })
+    Ok((view, lines.len()))
 }
 
 #[derive(Debug)]
@@ -2743,56 +2818,106 @@ pub async fn delete_script_route(
     }
 }
 
-/// Read a script's content.
+/// How a read of a script's root source is scoped.
+#[derive(Deserialize, Default)]
+pub struct ScriptReadQuery {
+    uri: Option<String>,
+    /// Inclusive 1-based line range to read, e.g. `120-180`, `120-`, or `120`.
+    lines: Option<String>,
+    /// Regular expression: answers with the lines that match it instead of
+    /// with the file.
+    grep: Option<String>,
+}
+
+/// Read a script's content, whole or scoped to a line range and/or a pattern.
 #[utoipa::path(
     get,
     path = "/engine/read_script",
     tags = ["Scripts"],
-    params(("uri" = String, Query, description = "Script URI")),
+    params(
+        ("uri" = String, Query, description = "Script URI"),
+        ("lines" = Option<String>, Query, description = "Inclusive 1-based line range, e.g. '120-180', '120-' to the end, or '120' alone. Answers with JSON rather than the script."),
+        ("grep" = Option<String>, Query, description = "Regular expression; answers with the matching line numbers and their text instead of the script. Searches within 'lines' when both are given."),
+    ),
     responses(
-        (status = 200, description = "Script content", content_type = "application/javascript"),
-        (status = 400, description = "Missing required parameter"),
+        (status = 200, description = "The script itself, with its sha256 as the ETag; or, with 'lines' or 'grep', a JSON view of part of it", content_type = "application/javascript"),
+        (status = 400, description = "Missing required parameter, or a range or pattern that does not apply"),
+        (status = 403, description = "Access denied"),
         (status = 404, description = "Script not found"),
     )
 )]
 pub async fn read_script_route(
     auth_user: Option<Extension<AuthUser>>,
-    Query(query): Query<ScriptParams>,
+    Query(query): Query<ScriptReadQuery>,
 ) -> Response {
     let user = user_context_from(auth_user.as_deref());
     let Some(uri) = query.uri else {
         return missing_param_response("uri");
     };
+    let options = match read_options(query.lines.as_deref(), query.grep) {
+        Ok(options) => options,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+    let scoped = options.is_scoped();
 
     let uri_for_task = uri.clone();
-    let content = tokio::task::spawn_blocking(move || get_script_authorized(&user, &uri_for_task))
-        .await
-        .unwrap_or(None);
+    let read =
+        tokio::task::spawn_blocking(move || read_script_authorized(&user, &uri_for_task, &options))
+            .await
+            .unwrap_or(Err(FileReadError::NotFound));
 
-    match content {
-        // The digest travels as an `ETag`, since the body is the script
-        // itself and has nowhere to carry one. It is what `/engine/edit_script`
-        // takes as `base_sha256`, so a caller that read the file already holds
-        // the version it is about to edit against.
-        Some(content) => (
-            StatusCode::OK,
-            [
-                ("content-type", "application/javascript"),
-                ("etag", &format!("\"{}\"", sha256_hex(content.as_bytes()))),
-            ],
-            content,
-        )
-            .into_response(),
-        None => json_response(
-            StatusCode::NOT_FOUND,
-            json!({
-                "error": "Script not found",
-                "message": "No script with the specified URI was found",
-                "uri": uri,
-                "timestamp": iso_timestamp(),
-            }),
-        ),
+    let read = match read {
+        Ok(read) => read,
+        Err(FileReadError::AccessDenied) => {
+            return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+        }
+        Err(FileReadError::Validation(message)) => {
+            return error_response(StatusCode::BAD_REQUEST, message);
+        }
+        Err(FileReadError::NotFound) => {
+            return json_response(
+                StatusCode::NOT_FOUND,
+                json!({
+                    "error": "Script not found",
+                    "message": "No script with the specified URI was found",
+                    "uri": uri,
+                    "timestamp": iso_timestamp(),
+                }),
+            );
+        }
+    };
+
+    // A scoped read is a view of the file and cannot be the file, so it
+    // answers in JSON the way a scoped asset read does. An unscoped one is
+    // what it always was — the script, as JavaScript — and the digest travels
+    // as an `ETag`, since that body has nowhere to carry one. It is what
+    // `/engine/edit_script` takes as `base_sha256`, so a caller that read the
+    // file already holds the version it is about to edit against.
+    if scoped {
+        let mut body = read.to_json();
+        if let Some(object) = body.as_object_mut() {
+            object.insert("uri".to_string(), json!(uri));
+            object.insert("timestamp".to_string(), json!(iso_timestamp()));
+        }
+        return json_response(StatusCode::OK, body);
     }
+
+    let etag = format!("\"{}\"", read.sha256);
+    let FileView::Whole { content } = read.view else {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Unscoped read did not return the whole script".to_string(),
+        );
+    };
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/javascript"),
+            ("etag", etag.as_str()),
+        ],
+        content,
+    )
+        .into_response()
 }
 
 /// A request to `/engine/edit_script`.
@@ -4205,12 +4330,12 @@ fn error_response(status: StatusCode, message: String) -> Response {
 }
 
 /// The scoping a read asked for, or why it does not parse.
-fn read_options(lines: Option<&str>, grep: Option<String>) -> Result<AssetReadOptions, String> {
+fn read_options(lines: Option<&str>, grep: Option<String>) -> Result<FileReadOptions, String> {
     let lines = match lines {
         Some(raw) => Some(LineRange::parse(raw)?),
         None => None,
     };
-    Ok(AssetReadOptions { lines, grep })
+    Ok(FileReadOptions { lines, grep })
 }
 
 /// List assets for a script, or read one asset when `asset` is given.
@@ -4257,7 +4382,7 @@ pub async fn assets_get_route(
                 read_asset_authorized(&user, &script_cl, &asset_cl, &options)
             })
             .await
-            .unwrap_or(Err(AssetReadError::NotFound));
+            .unwrap_or(Err(FileReadError::NotFound));
 
             match result {
                 Ok(read) => {
@@ -4268,14 +4393,14 @@ pub async fn assets_get_route(
                     }
                     json_response(StatusCode::OK, body)
                 }
-                Err(AssetReadError::AccessDenied) => {
+                Err(FileReadError::AccessDenied) => {
                     error_response(StatusCode::NOT_FOUND, "Error: Access denied".to_string())
                 }
-                Err(AssetReadError::NotFound) => error_response(
+                Err(FileReadError::NotFound) => error_response(
                     StatusCode::NOT_FOUND,
                     format!("Asset '{}' not found", asset),
                 ),
-                Err(AssetReadError::Validation(message)) => {
+                Err(FileReadError::Validation(message)) => {
                     error_response(StatusCode::BAD_REQUEST, message)
                 }
             }
@@ -8108,12 +8233,14 @@ fn native_tools() -> &'static [NativeToolEntry] {
     &[
         (
             "read_file",
-            "Fetch the contents of a remote file (script) by URI",
+            "Fetch a script's root source by URI: the whole file, or, with 'lines' or 'grep', part of it. Every reply carries the sha256 of the whole script, which edit_file takes as base_sha256.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "Script URI (e.g., 'https://example.com/myscript')" }
+                        "uri": { "type": "string", "description": "Script URI (e.g., 'https://example.com/myscript')" },
+                        "lines": { "type": "string", "description": "Inclusive 1-based line range, e.g. '120-180', '120-' to the end, or '120' alone" },
+                        "grep": { "type": "string", "description": "Regular expression; answers with the matching line numbers and their text instead of the file. Searches within 'lines' when both are given." }
                     },
                     "required": ["uri"]
                 })
@@ -9513,17 +9640,31 @@ fn tool_read_file(args: &Value, user: &UserContext) -> Value {
     let Some(uri) = arg_str(args, "uri") else {
         return missing_arg("uri");
     };
-    match get_script_authorized(user, uri) {
-        // `sha256` is what edit_file takes as base_sha256, so an editor that
-        // read the file already holds the version it is about to edit against.
-        Some(content) => json!({
-            "uri": uri,
-            "content": content,
-            "size": content.len(),
-            "sha256": sha256_hex(content.as_bytes()),
-            "timestamp": iso_timestamp(),
-        }),
-        None => json!({ "error": format!("File not found: {}", uri) }),
+    let options = match read_options(
+        arg_str(args, "lines"),
+        arg_str(args, "grep").map(str::to_string),
+    ) {
+        Ok(options) => options,
+        Err(message) => return json!({ "error": message }),
+    };
+
+    match read_script_authorized(user, uri, &options) {
+        Ok(read) => {
+            let mut body = read.to_json();
+            if let Some(object) = body.as_object_mut() {
+                object.insert("uri".to_string(), json!(uri));
+                // `size` is what this tool has always called the script's
+                // length; `bytes` is what every other read calls it. Both,
+                // rather than a rename that breaks a caller to save a field.
+                object.insert("size".to_string(), json!(read.bytes));
+                object.insert("timestamp".to_string(), json!(iso_timestamp()));
+            }
+            body
+        }
+        Err(FileReadError::NotFound) | Err(FileReadError::AccessDenied) => {
+            json!({ "error": format!("File not found: {}", uri) })
+        }
+        Err(FileReadError::Validation(message)) => json!({ "error": message }),
     }
 }
 
@@ -9859,11 +10000,11 @@ fn tool_read_asset(args: &Value, user: &UserContext) -> Value {
             }
             body
         }
-        Err(AssetReadError::AccessDenied) => json!({ "error": "Error: Access denied" }),
-        Err(AssetReadError::NotFound) => {
+        Err(FileReadError::AccessDenied) => json!({ "error": "Error: Access denied" }),
+        Err(FileReadError::NotFound) => {
             json!({ "error": format!("Asset not found: {}", asset) })
         }
-        Err(AssetReadError::Validation(message)) => json!({ "error": message }),
+        Err(FileReadError::Validation(message)) => json!({ "error": message }),
     }
 }
 

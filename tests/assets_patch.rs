@@ -469,7 +469,7 @@ async fn engine_asset_reads_are_closed_to_anonymous_callers() {
         &anonymous,
         uri,
         "assets_patch_anonymous/secrets.ts",
-        &aiwebengine::engine_api::AssetReadOptions::default(),
+        &aiwebengine::engine_api::FileReadOptions::default(),
     );
     assert!(
         read.is_err(),
@@ -480,7 +480,7 @@ async fn engine_asset_reads_are_closed_to_anonymous_callers() {
         &anonymous,
         uri,
         "assets_patch_anonymous/secrets.ts",
-        &aiwebengine::engine_api::AssetReadOptions {
+        &aiwebengine::engine_api::FileReadOptions {
             lines: None,
             grep: Some("API_KEY".to_string()),
         },
@@ -516,7 +516,7 @@ async fn engine_asset_reads_are_closed_to_anonymous_callers() {
             &authenticated,
             uri,
             "assets_patch_anonymous/secrets.ts",
-            &aiwebengine::engine_api::AssetReadOptions::default(),
+            &aiwebengine::engine_api::FileReadOptions::default(),
         )
         .is_err(),
         "a signed-in non-owner must not download another script's assets"
@@ -529,7 +529,7 @@ async fn engine_asset_reads_are_closed_to_anonymous_callers() {
             &admin,
             uri,
             "assets_patch_anonymous/secrets.ts",
-            &aiwebengine::engine_api::AssetReadOptions::default(),
+            &aiwebengine::engine_api::FileReadOptions::default(),
         )
         .is_ok(),
         "an administrator should still read"

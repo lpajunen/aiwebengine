@@ -14,8 +14,8 @@ use common::{setup_env, test_mutex};
 
 use aiwebengine::auth::AuthUser;
 use aiwebengine::engine_api::{
-    ScriptParams, StringEdit, edit_script_route, execute_native_mcp_tool, patch_script_authorized,
-    read_script_route,
+    ScriptParams, ScriptReadQuery, StringEdit, edit_script_route, execute_native_mcp_tool,
+    patch_script_authorized, read_script_route,
 };
 use aiwebengine::repository;
 use aiwebengine::security::{Capability, UserContext};
@@ -58,6 +58,10 @@ async fn body_json(response: Response) -> Value {
 
 fn query(raw: &str) -> Query<ScriptParams> {
     Query(serde_urlencoded::from_str::<ScriptParams>(raw).expect("query should parse"))
+}
+
+fn read_query(raw: &str) -> Query<ScriptReadQuery> {
+    Query(serde_urlencoded::from_str::<ScriptReadQuery>(raw).expect("query should parse"))
 }
 
 async fn edit(body: Value) -> (axum::http::StatusCode, Value) {
@@ -416,7 +420,7 @@ async fn a_read_reports_the_digest_an_edit_takes() {
     deploy(uri, source);
     let digest = sha256_hex(source.as_bytes());
 
-    let response = read_script_route(admin_extension(), query(&format!("uri={}", uri))).await;
+    let response = read_script_route(admin_extension(), read_query(&format!("uri={}", uri))).await;
 
     assert_eq!(response.status(), 200);
     assert_eq!(
@@ -505,4 +509,145 @@ async fn the_mcp_tool_edits_the_same_way() {
         next
     );
     assert!(stored(uri).contains("/script-edit/mcp-last"));
+}
+
+/// The other half of editing without sending: finding the place to edit
+/// without receiving the file. A root source registers everything its modules
+/// serve, so it is the file where pulling all of it to change one line costs
+/// most.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_line_range_reads_part_of_the_root_and_reports_the_whole_of_it() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://script-edit/lines";
+    let source = (1..=10)
+        .map(|n| format!("const line{} = {};", n, n))
+        .collect::<Vec<_>>()
+        .join("\n");
+    deploy(uri, &source);
+
+    let response = read_script_route(
+        admin_extension(),
+        read_query(&format!("uri={}&lines=3-5", uri)),
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    let body = body_json(response).await;
+
+    assert_eq!(
+        body["content"],
+        json!("const line3 = 3;\nconst line4 = 4;\nconst line5 = 5;"),
+        "{}",
+        body
+    );
+    assert_eq!(body["start_line"], json!(3), "{}", body);
+    assert_eq!(body["end_line"], json!(5), "{}", body);
+    // The digest and size describe the whole script, not the part returned,
+    // because that digest is what the following edit has to send.
+    assert_eq!(body["sha256"], json!(sha256_hex(source.as_bytes())));
+    assert_eq!(body["bytes"], json!(source.len()));
+    assert_eq!(body["total_lines"], json!(10), "{}", body);
+
+    // A range starting past the end is a range computed against a version that
+    // has since shrunk, and an empty 200 would leave the caller to work that
+    // out for itself.
+    let response = read_script_route(
+        admin_extension(),
+        read_query(&format!("uri={}&lines=40-50", uri)),
+    )
+    .await;
+    assert_eq!(response.status(), 400);
+    let body = body_json(response).await;
+    assert!(
+        body["error"].as_str().unwrap_or_default().contains("10"),
+        "the refusal should name the script's actual length, got {}",
+        body["error"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn grep_locates_a_line_of_the_root_without_returning_it() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://script-edit/grep";
+    let source = "const a = 1;\nfunction handler(context) {}\nfunction init() {}\n";
+    deploy(uri, source);
+
+    let response = read_script_route(
+        admin_extension(),
+        read_query(&format!("uri={}&grep=^function", uri)),
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    let body = body_json(response).await;
+
+    assert_eq!(body["match_count"], json!(2), "{}", body);
+    assert_eq!(body["matches"][0]["line"], json!(2), "{}", body);
+    assert_eq!(
+        body["matches"][0]["text"],
+        json!("function handler(context) {}"),
+        "{}",
+        body
+    );
+    assert!(
+        body.get("content").is_none(),
+        "a search should not return the file, got {}",
+        body
+    );
+
+    // The two filters compose: a grep inside a range searches only that range.
+    let response = read_script_route(
+        admin_extension(),
+        read_query(&format!("uri={}&lines=3-&grep=^function", uri)),
+    )
+    .await;
+    let body = body_json(response).await;
+    assert_eq!(body["match_count"], json!(1), "{}", body);
+    assert_eq!(body["matches"][0]["line"], json!(3), "{}", body);
+
+    // And over MCP, where the same loop is actually run.
+    let read = execute_native_mcp_tool(
+        "read_file",
+        &json!({ "uri": uri, "grep": "^function" }),
+        &UserContext::admin("editor".to_string()),
+    )
+    .expect("read_file should dispatch");
+    assert_eq!(read["match_count"], json!(2), "{}", read);
+    assert_eq!(read["sha256"], json!(sha256_hex(source.as_bytes())));
+}
+
+/// An unscoped read is what it always was, for the callers already parsing it.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unscoped_read_is_unchanged() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://script-edit/unscoped";
+    let source = "const n = 1;\nfunction init() {}\n";
+    deploy(uri, source);
+
+    let response = read_script_route(admin_extension(), read_query(&format!("uri={}", uri))).await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/javascript")
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body should read");
+    assert_eq!(String::from_utf8_lossy(&bytes), source);
+
+    let read = execute_native_mcp_tool(
+        "read_file",
+        &json!({ "uri": uri }),
+        &UserContext::admin("editor".to_string()),
+    )
+    .expect("read_file should dispatch");
+    assert_eq!(read["content"], json!(source), "{}", read);
+    assert_eq!(read["size"], json!(source.len()), "{}", read);
 }

@@ -154,6 +154,24 @@ curl -i "https://your-engine/engine/read_script?uri=https://your-engine/myapp.ts
 # etag: "4b1…"
 ```
 
+That read takes the same `lines` and `grep` filters a read of an asset takes,
+for the same reason: the counterpart to editing without sending the file is
+finding the place to edit without receiving it.
+
+```bash
+# where a pattern matches, without the script
+curl "…/engine/read_script?uri=https://your-engine/myapp.ts&grep=registerRoute"
+
+# lines 40 to 60, as text
+curl "…/engine/read_script?uri=https://your-engine/myapp.ts&lines=40-60"
+```
+
+A scoped read is a view of the file and cannot be the file, so it answers in
+JSON — `content` with `start_line`/`end_line` for a range, `matches` for a
+pattern, and `sha256`/`bytes`/`total_lines` describing the whole script either
+way. A read with neither filter is unchanged: the script, as JavaScript, with
+its digest in the `ETag`.
+
 ## Reading part of a file
 
 The counterpart to editing without sending the file is reading without
@@ -204,7 +222,9 @@ line is cut at 512 characters, with `truncated` on the match itself.
 
 Both filters require the asset to be UTF-8 text. A read with neither is
 unchanged from what it always was — the whole file, base64 in `content` — so
-existing callers are unaffected.
+existing callers are unaffected. `GET /engine/read_script` and `read_file` take
+the same two filters over a script's root source, which is text by
+construction.
 
 Reading a script's assets through `/engine/*` takes an authenticated caller
 with the `ReadAssets` capability, ownership of the script, or administrator —
@@ -229,8 +249,9 @@ twenty lines can still edit them safely.
 `edit_asset` takes the same arguments as the endpoint and answers with the same
 body, including the `init` block. `read_asset` takes the same `lines` and
 `grep` filters. `edit_file` is `edit_asset` for the root source — `uri` in
-place of `script` and `asset`, everything else identical — and `read_file`
-reports the `sha256` to aim it with.
+place of `script` and `asset`, everything else identical — and `read_file` is
+`read_asset` for it, with the same `lines` and `grep` filters and the `sha256`
+to aim an edit with.
 
 ```json
 {
