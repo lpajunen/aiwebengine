@@ -77,6 +77,16 @@ A batch carries the content it writes. To change part of a file the engine
 already has, without sending the file back, see
 [Editing a Script's Files Without Resending Them](ASSET_EDIT.md).
 
+## Writing one file
+
+`POST /engine/assets` writes a single asset and overwrites whatever is there.
+`If-None-Match: *` makes it a create instead: the write is refused with `409`
+if the asset already exists. It is a precondition on the write rather than a
+check before it, because a caller that reads first and writes second has a
+window in which the answer changes. The `create_asset` tool is the same thing
+over MCP — `create_file` for a script's modules, where `write_asset`
+overwrites — and infers the MIME type from the extension the way a batch does.
+
 Writing assets takes the same rights as writing one at a time: the
 `WriteAssets` capability, ownership of the script, or administrator. A batch
 carrying `content` also writes a script, so it takes what that takes —

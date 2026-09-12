@@ -1104,6 +1104,9 @@ fn write_script(
         crate::engine_api::AssetWriteError::AccessDenied(message) => {
             SyncError::AccessDenied(format!("{} writing '{}'", message, script_uri))
         }
+        crate::engine_api::AssetWriteError::Exists(file) => {
+            SyncError::Storage(format!("'{}' already exists", file))
+        }
         crate::engine_api::AssetWriteError::Validation(message)
         | crate::engine_api::AssetWriteError::Storage(message) => SyncError::Storage(message),
     })?;

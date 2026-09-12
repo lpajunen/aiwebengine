@@ -963,3 +963,134 @@ async fn the_mcp_tool_writes_the_whole_change_too() {
     assert_eq!(repository::fetch_script(uri).as_deref(), Some(root));
     assert!(stored(uri, "assets_batch_mcp_root/old.ts").is_none());
 }
+
+/// `create_file` could say "this is new, fail if it is not" and the asset
+/// write could not, so creating a module and overwriting somebody's were the
+/// same request.
+#[tokio::test(flavor = "multi_thread")]
+async fn creating_an_asset_refuses_to_overwrite_one() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://assets-batch/create";
+    deploy(uri, "function init() {}");
+
+    let created = execute_native_mcp_tool(
+        "create_asset",
+        &json!({
+            "script": uri,
+            "asset": "assets_batch_create/util.ts",
+            "content": b64("export const n = 1;\n"),
+        }),
+        &UserContext::admin("batcher".to_string()),
+    )
+    .expect("create_asset should dispatch");
+
+    assert_eq!(created["success"], json!(true), "{}", created);
+    assert_eq!(
+        stored_text(uri, "assets_batch_create/util.ts"),
+        "export const n = 1;\n"
+    );
+    // The type is inferred from the extension, as a batch write infers it.
+    assert_eq!(
+        stored(uri, "assets_batch_create/util.ts")
+            .expect("asset should be stored")
+            .mimetype,
+        "text/typescript"
+    );
+
+    let again = execute_native_mcp_tool(
+        "create_asset",
+        &json!({
+            "script": uri,
+            "asset": "assets_batch_create/util.ts",
+            "content": b64("export const n = 2;\n"),
+        }),
+        &UserContext::admin("batcher".to_string()),
+    )
+    .expect("create_asset should dispatch");
+
+    assert!(
+        again["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("already exists"),
+        "the second create should be refused, got {}",
+        again
+    );
+    assert_eq!(
+        stored_text(uri, "assets_batch_create/util.ts"),
+        "export const n = 1;\n",
+        "the refusal must not have overwritten anything"
+    );
+
+    // write_asset is still the way to say "overwrite".
+    let overwritten = execute_native_mcp_tool(
+        "write_asset",
+        &json!({
+            "script": uri,
+            "asset": "assets_batch_create/util.ts",
+            "mimetype": "text/typescript",
+            "content": b64("export const n = 2;\n"),
+        }),
+        &UserContext::admin("batcher".to_string()),
+    )
+    .expect("write_asset should dispatch");
+    assert_eq!(overwritten["success"], json!(true), "{}", overwritten);
+    assert_eq!(
+        stored_text(uri, "assets_batch_create/util.ts"),
+        "export const n = 2;\n"
+    );
+}
+
+/// Over HTTP the same precondition is the one HTTP already has a name for.
+#[tokio::test(flavor = "multi_thread")]
+async fn if_none_match_makes_the_asset_write_a_create() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://assets-batch/if-none-match";
+    deploy(uri, "function init() {}");
+
+    let post = |headers: axum::http::HeaderMap, content: &str| {
+        let body = json!({
+            "asset": "assets_batch_inm/util.ts",
+            "mimetype": "text/typescript",
+            "content": b64(content),
+        });
+        aiwebengine::engine_api::assets_post_route(
+            admin_extension(),
+            Query(
+                serde_urlencoded::from_str::<AssetQuery>(&format!("script={}", uri))
+                    .expect("query should parse"),
+            ),
+            headers,
+            axum::body::Bytes::from(body.to_string()),
+        )
+    };
+
+    let mut create = axum::http::HeaderMap::new();
+    create.insert("if-none-match", "*".parse().expect("header should parse"));
+
+    let response = post(create.clone(), "export const n = 1;\n").await;
+    assert_eq!(response.status(), 201);
+
+    let response = post(create, "export const n = 2;\n").await;
+    assert_eq!(
+        response.status(),
+        409,
+        "a create over something that is there is a conflict"
+    );
+    assert_eq!(
+        stored_text(uri, "assets_batch_inm/util.ts"),
+        "export const n = 1;\n"
+    );
+
+    // Without the header it is the upsert it always was.
+    let response = post(axum::http::HeaderMap::new(), "export const n = 3;\n").await;
+    assert_eq!(response.status(), 201);
+    assert_eq!(
+        stored_text(uri, "assets_batch_inm/util.ts"),
+        "export const n = 3;\n"
+    );
+}

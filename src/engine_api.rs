@@ -1789,6 +1789,10 @@ fn scoped_view(
 
 #[derive(Debug)]
 pub enum AssetWriteError {
+    /// The write was to create a file and the file is already there. Its own
+    /// variant rather than a validation message, because the caller's next
+    /// move is different: this one is told what it asked to be told.
+    Exists(String),
     /// Carries why, for the same reason [`PatchError::AccessDenied`] does: a
     /// write covering a script's root and its assets can be refused by either
     /// rule, and "you do not own this script" is not the message an asset
@@ -1867,6 +1871,24 @@ pub fn upsert_asset_authorized(
     mimetype: &str,
     content_b64: &str,
 ) -> Result<Option<i32>, AssetWriteError> {
+    write_asset_authorized(user, script_uri, asset_uri, mimetype, content_b64, false)
+}
+
+/// [`upsert_asset_authorized`], with the option of refusing to overwrite.
+///
+/// `create_file` could say "this is a new script, fail if it is not" and the
+/// asset write could not, so creating a module and overwriting somebody's was
+/// the same request. `if_absent` is that distinction: it is a precondition on
+/// the write rather than a check before it, since a caller who reads first and
+/// writes second has a window in which the answer changes.
+pub fn write_asset_authorized(
+    user: &UserContext,
+    script_uri: &str,
+    asset_uri: &str,
+    mimetype: &str,
+    content_b64: &str,
+    if_absent: bool,
+) -> Result<Option<i32>, AssetWriteError> {
     let content = base64::engine::general_purpose::STANDARD
         .decode(content_b64)
         .map_err(|e| {
@@ -1878,6 +1900,9 @@ pub fn upsert_asset_authorized(
     }
 
     validate_asset_uri(asset_uri)?;
+    if if_absent && repository::fetch_asset(script_uri, asset_uri).is_some() {
+        return Err(AssetWriteError::Exists(asset_uri.to_string()));
+    }
     if content.len() > MAX_ASSET_BYTES {
         return Err(AssetWriteError::Validation(
             "Asset too large (max 10MB)".to_string(),
@@ -4825,25 +4850,42 @@ pub async fn assets_get_route(
 }
 
 /// Create or update an asset for a script.
+///
+/// `If-None-Match: *` makes it a create: the write is refused if the asset is
+/// already there. It is a precondition on the write rather than a check before
+/// it, because a caller that reads first and writes second has a window in
+/// which the answer changes.
 #[utoipa::path(
     post,
     path = "/engine/assets",
     tags = ["Assets"],
-    params(("script" = String, Query, description = "URI of the script that will own this asset")),
+    params(
+        ("script" = String, Query, description = "URI of the script that will own this asset"),
+        ("If-None-Match" = Option<String>, Header, description = "Pass '*' to create rather than overwrite: the write is refused with 409 if the asset already exists"),
+    ),
     request_body(content_type = "application/json",
         description = "JSON fields: asset (required), mimetype (required), content (required, base64, max 10MB)"),
     responses(
         (status = 201, description = "Asset created or updated"),
         (status = 400, description = "Missing or invalid parameters"),
         (status = 403, description = "Access denied"),
+        (status = 409, description = "The asset already exists and the request carried If-None-Match: *"),
     )
 )]
 pub async fn assets_post_route(
     auth_user: Option<Extension<AuthUser>>,
     Query(query): Query<AssetQuery>,
+    headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
     let user = user_context_from(auth_user.as_deref());
+    // Only `*` is honoured. A digest here would mean "overwrite unless it is
+    // this version", which is what `PATCH`'s `base_sha256` already says, and
+    // answering it as though it meant `*` would be worse than not answering.
+    let if_absent = headers
+        .get(axum::http::header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.trim() == "*");
     let Some(script) = query.script else {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -4866,7 +4908,7 @@ pub async fn assets_post_route(
 
     let (script_cl, asset_cl) = (script.clone(), asset.clone());
     let result = tokio::task::spawn_blocking(move || {
-        upsert_asset_authorized(&user, &script_cl, &asset_cl, &mimetype, &content)
+        write_asset_authorized(&user, &script_cl, &asset_cl, &mimetype, &content, if_absent)
     })
     .await
     .unwrap_or(Err(AssetWriteError::Storage("join error".to_string())));
@@ -4880,6 +4922,10 @@ pub async fn assets_post_route(
                 "asset": asset,
                 "revision": revision,
             }),
+        ),
+        Err(AssetWriteError::Exists(asset)) => error_response(
+            StatusCode::CONFLICT,
+            format!("Asset '{}' already exists", asset),
         ),
         Err(AssetWriteError::AccessDenied(message)) => {
             error_response(StatusCode::FORBIDDEN, format!("Error: {}", message))
@@ -5005,6 +5051,14 @@ pub async fn assets_batch_route(
         Ok(outcome) => outcome,
         Err(AssetWriteError::AccessDenied(message)) => {
             return error_response(StatusCode::FORBIDDEN, format!("Error: {}", message));
+        }
+        // A batch overwrites by definition, so it never asks for the
+        // precondition that produces this.
+        Err(AssetWriteError::Exists(asset)) => {
+            return error_response(
+                StatusCode::CONFLICT,
+                format!("Asset '{}' already exists", asset),
+            );
         }
         Err(AssetWriteError::Validation(msg)) => {
             return error_response(StatusCode::BAD_REQUEST, msg);
@@ -8971,6 +9025,23 @@ fn native_tools() -> &'static [NativeToolEntry] {
             tool_edit_asset,
         ),
         (
+            "create_asset",
+            "Create a new asset for a script. Fails if the asset already exists — the counterpart of create_file for a script's modules, where write_asset overwrites. Requires the user to own the script, have WriteAssets capability, or be an administrator.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script that will own the asset" },
+                        "asset": { "type": "string", "description": "URI/path of the asset (e.g., '/lib/util.ts')" },
+                        "mimetype": { "type": "string", "description": "MIME type; inferred from the file extension when omitted" },
+                        "content": { "type": "string", "description": "Base64-encoded content of the asset (max 10MB)" }
+                    },
+                    "required": ["script", "asset", "content"]
+                })
+            },
+            tool_create_asset,
+        ),
+        (
             "delete_asset",
             "Delete an asset from a script. Requires the user to own the script, have DeleteAssets capability, or be an administrator.",
             || {
@@ -10457,6 +10528,9 @@ fn tool_write_asset(args: &Value, user: &UserContext) -> Value {
             "revision": revision,
             "timestamp": iso_timestamp(),
         }),
+        Err(AssetWriteError::Exists(asset)) => {
+            json!({ "error": format!("Asset already exists: {}", asset) })
+        }
         Err(AssetWriteError::AccessDenied(message)) => {
             json!({ "error": format!("Failed to write asset: {}", message) })
         }
@@ -10551,11 +10625,52 @@ fn tool_write_assets(args: &Value, user: &UserContext) -> Value {
             }
             body
         }
+        Err(AssetWriteError::Exists(asset)) => {
+            json!({ "error": format!("Asset already exists: {}", asset) })
+        }
         Err(AssetWriteError::AccessDenied(message)) => {
             json!({ "error": format!("Failed to write assets: {}", message) })
         }
         Err(AssetWriteError::Validation(msg)) | Err(AssetWriteError::Storage(msg)) => {
             json!({ "error": format!("Failed to write assets: {}", msg) })
+        }
+    }
+}
+
+fn tool_create_asset(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    let Some(asset) = arg_str(args, "asset") else {
+        return missing_arg("asset");
+    };
+    let Some(content) = arg_str(args, "content") else {
+        return missing_arg("content");
+    };
+    // Inferred rather than required, as a batch write infers it: a caller
+    // creating `lib/util.ts` should not have to know what the engine calls a
+    // TypeScript file.
+    let mimetype = arg_str(args, "mimetype")
+        .map(str::to_string)
+        .unwrap_or_else(|| mimetype_for(asset).to_string());
+
+    match write_asset_authorized(user, script, asset, &mimetype, content, true) {
+        Ok(revision) => json!({
+            "success": true,
+            "message": format!("Asset '{}' created successfully", asset),
+            "script": script,
+            "asset": asset,
+            "revision": revision,
+            "timestamp": iso_timestamp(),
+        }),
+        Err(AssetWriteError::Exists(asset)) => {
+            json!({ "error": format!("Asset already exists: {}", asset) })
+        }
+        Err(AssetWriteError::AccessDenied(message)) => {
+            json!({ "error": format!("Failed to create asset: {}", message) })
+        }
+        Err(AssetWriteError::Validation(message)) | Err(AssetWriteError::Storage(message)) => {
+            json!({ "error": format!("Failed to create asset: {}", message) })
         }
     }
 }
