@@ -1060,21 +1060,6 @@ fn write_script(
         ))
     })?;
 
-    // A root whose bytes already match is not rewritten. The write itself is
-    // cheap, but it is what decides whether this pull produced a revision, and
-    // recording one for a script nothing changed would put noise in the history
-    // a person reads to find the change they are looking for.
-    let stored = crate::repository::fetch_script(script_uri);
-    let root_changed = stored.as_deref() != Some(entry.as_str());
-    let action = if root_changed {
-        crate::engine_api::upsert_script_for_sync(user, script_uri, &entry)
-            .map_err(SyncError::AccessDenied)?
-    } else if stored.is_some() {
-        crate::engine_api::UpsertAction::Updated
-    } else {
-        crate::engine_api::UpsertAction::Inserted
-    };
-
     let writes: Vec<crate::engine_api::AssetWrite> = layout
         .assets
         .iter()
@@ -1097,60 +1082,44 @@ fn write_script(
         .filter(|existing| !layout.assets.contains_key(existing))
         .collect();
 
-    // A script can legitimately be one file. The asset write refuses an empty
-    // batch — right for a caller who sent an empty request, wrong for a sync
-    // whose script simply has no assets — so it is not called at all when there
-    // is nothing for it to do.
-    let outcome = if writes.is_empty() && removed.is_empty() {
-        crate::engine_api::BatchWriteOutcome {
-            results: Vec::new(),
-            revision: None,
-            written: 0,
-            deleted: 0,
+    // The root and the assets as one change, under one revision — the unit a
+    // person reverts, and the unit the repository actually changed. A pull is
+    // the same shape of write as the batch endpoint's, differing in its
+    // ceilings and in what the revision says it came from.
+    let outcome = crate::engine_api::write_script_files_authorized(
+        user,
+        script_uri,
+        crate::engine_api::ScriptFilesChange {
+            root: Some(&entry),
+            writes: &writes,
+            delete: &removed,
+        },
+        crate::engine_api::ScriptWriteOptions {
+            origin: crate::revisions::Origin::GitPull,
+            max_total_bytes: MAX_TREE_BYTES,
+            max_files: MAX_TREE_FILES,
+        },
+    )
+    .map_err(|e| match e {
+        crate::engine_api::AssetWriteError::AccessDenied(message) => {
+            SyncError::AccessDenied(format!("{} writing '{}'", message, script_uri))
         }
-    } else {
-        crate::engine_api::upsert_assets_synced(
-            user,
-            script_uri,
-            &writes,
-            crate::engine_api::AssetSyncOptions {
-                delete: &removed,
-                origin: crate::revisions::Origin::GitPull,
-                max_total_bytes: MAX_TREE_BYTES,
-                max_files: MAX_TREE_FILES,
-                // One revision covers the root and the assets together; it is
-                // recorded below, once both have landed.
-                record_revision: false,
-            },
-        )
-        .map_err(|e| match e {
-            crate::engine_api::AssetWriteError::AccessDenied => {
-                SyncError::AccessDenied(format!("Access denied writing '{}'", script_uri))
-            }
-            crate::engine_api::AssetWriteError::Validation(message)
-            | crate::engine_api::AssetWriteError::Storage(message) => SyncError::Storage(message),
-        })?
-    };
+        crate::engine_api::AssetWriteError::Validation(message)
+        | crate::engine_api::AssetWriteError::Storage(message) => SyncError::Storage(message),
+    })?;
 
     let unchanged = outcome
+        .assets
         .results
         .iter()
         .filter(|result| result.status == "unchanged")
         .count();
 
-    // One revision for the script, describing everything this pull changed
-    // about it — which is the unit a person reverts, and the unit the
-    // repository actually changed.
-    let changed = root_changed || outcome.written > 0 || outcome.deleted > 0;
-    let revision = changed
-        .then(|| {
-            crate::revisions::record_blocking(
-                script_uri,
-                crate::revisions::Origin::GitPull,
-                user.user_id.as_deref(),
-            )
-        })
-        .flatten();
+    let changed = outcome.changed();
+    let revision = outcome.revision;
+    let action = outcome
+        .action
+        .unwrap_or(crate::engine_api::UpsertAction::Updated);
 
     crate::database::run_blocking(record_sync(
         script_uri,
@@ -1171,8 +1140,8 @@ fn write_script(
             crate::engine_api::UpsertAction::Updated => "updated",
         },
         changed,
-        written: outcome.written,
-        deleted: outcome.deleted,
+        written: outcome.assets.written,
+        deleted: outcome.assets.deleted,
         unchanged,
         revision,
         init: serde_json::json!({ "ran": false, "reason": "not yet run" }),

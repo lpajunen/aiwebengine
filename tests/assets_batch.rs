@@ -710,3 +710,256 @@ async fn a_sync_writes_and_removes_as_one_act() {
         "and the whole change is one revision"
     );
 }
+
+/// The whole of a change, not the assets of one. A change touching the root
+/// and the modules it imports used to be two writes — two revisions, two
+/// notifications, two init() runs — even though `/engine/check` would check
+/// exactly that change in one request.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_root_source_travels_with_the_modules_as_one_change() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://assets-batch/root";
+    deploy(
+        uri,
+        r#"
+        import { PATH } from "./assets_batch_root/routes.ts";
+        function handler(context) { return ResponseBuilder.json({}); }
+        globalThis.handler = handler;
+        function init() { routeRegistry.registerRoute(PATH, "handler", "GET"); }
+        "#,
+    );
+
+    let root = "import { PATH } from \"./assets_batch_root/routes.ts\";\n\
+                function handler(context) { return ResponseBuilder.json({ v: 2 }); }\n\
+                globalThis.handler = handler;\n\
+                function init() { routeRegistry.registerRoute(PATH, \"handler\", \"POST\"); }\n";
+
+    let (status, body) = post_batch(
+        &format!("script={}", uri),
+        json!({
+            "content": root,
+            "files": [{
+                "name": "assets_batch_root/routes.ts",
+                "content_base64": b64("export const PATH = \"/assets-batch/root\";\n"),
+            }],
+        }),
+    )
+    .await;
+
+    assert_eq!(status, 200, "{}", body);
+    assert_eq!(body["root"], json!("updated"), "{}", body);
+    assert_eq!(body["written"], json!(1), "{}", body);
+    assert_eq!(
+        repository::fetch_script(uri).as_deref(),
+        Some(root),
+        "the root source should have been stored with the modules"
+    );
+
+    // One revision for the whole change, rather than one per file: that is the
+    // unit a person reverts.
+    let revision = body["revision"].as_i64().expect("a revision was recorded");
+    assert_eq!(body["init"]["ran"], json!(true), "{}", body["init"]);
+    assert!(
+        registered_paths(uri).contains("/assets-batch/root"),
+        "init() should have run once, over the whole change, got {:?}",
+        registered_paths(uri)
+    );
+
+    // A second identical write changes nothing, so it records no revision and
+    // leaves init() alone.
+    let (status, body) = post_batch(
+        &format!("script={}", uri),
+        json!({
+            "content": root,
+            "files": [{
+                "name": "assets_batch_root/routes.ts",
+                "content_base64": b64("export const PATH = \"/assets-batch/root\";\n"),
+            }],
+        }),
+    )
+    .await;
+
+    assert_eq!(status, 200, "{}", body);
+    assert_eq!(body["root"], json!("unchanged"), "{}", body);
+    assert_eq!(body["revision"], json!(null), "{}", body);
+    assert_eq!(body["init"]["ran"], json!(false), "{}", body["init"]);
+    assert!(
+        revision > 0,
+        "the first write should have recorded a revision"
+    );
+}
+
+/// Removing a module is as much a change as rewriting one, and belongs in the
+/// same request as the change to the code that stopped importing it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_batch_removes_the_files_a_change_drops() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://assets-batch/remove";
+    deploy(uri, "function init() {}");
+
+    let (status, body) = post_batch(
+        &format!("script={}", uri),
+        json!({
+            "files": [
+                { "name": "assets_batch_remove/keep.ts", "content_base64": b64("export const a = 1;\n") },
+                { "name": "assets_batch_remove/drop.ts", "content_base64": b64("export const b = 2;\n") },
+            ],
+            "reinit": "never",
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{}", body);
+
+    let (status, body) = post_batch(
+        &format!("script={}", uri),
+        json!({
+            "files": [{
+                "name": "assets_batch_remove/keep.ts",
+                "content_base64": b64("export const a = 10;\n"),
+            }],
+            "remove": ["assets_batch_remove/drop.ts"],
+            "reinit": "never",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, 200, "{}", body);
+    assert_eq!(body["deleted"], json!(1), "{}", body);
+    assert_eq!(
+        stored_text(uri, "assets_batch_remove/keep.ts"),
+        "export const a = 10;\n"
+    );
+    assert!(
+        stored(uri, "assets_batch_remove/drop.ts").is_none(),
+        "the removed module should be gone"
+    );
+
+    // Naming a file the script no longer has is a change that has already
+    // happened, not an error.
+    let (status, body) = post_batch(
+        &format!("script={}", uri),
+        json!({
+            "remove": ["assets_batch_remove/drop.ts"],
+            "reinit": "never",
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{}", body);
+    assert_eq!(body["revision"], json!(null), "{}", body);
+}
+
+/// `files` stays required for a caller that sent neither of the other two, so
+/// a request that meant to carry files and did not is still told so.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_batch_carrying_nothing_at_all_is_refused() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://assets-batch/nothing";
+    deploy(uri, "function init() {}");
+
+    let (status, body) = post_batch(&format!("script={}", uri), json!({ "reinit": "never" })).await;
+    assert_eq!(status, 400, "{}", body);
+    assert!(
+        body["error"].as_str().unwrap_or_default().contains("files"),
+        "{}",
+        body["error"]
+    );
+}
+
+/// Writing the root takes what writing a script takes, even inside a request
+/// whose other files only take what writing an asset takes.
+#[tokio::test(flavor = "multi_thread")]
+async fn writing_the_root_in_a_batch_takes_script_write_rights() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://assets-batch/root-authz";
+    let source = "function init() {}";
+    deploy(uri, source);
+
+    let asset_writer = UserContext {
+        user_id: Some("asset-writer".to_string()),
+        is_authenticated: true,
+        capabilities: [
+            Capability::ReadScripts,
+            Capability::ReadAssets,
+            Capability::WriteAssets,
+        ]
+        .into_iter()
+        .collect(),
+    };
+
+    let result = aiwebengine::engine_api::write_script_files_authorized(
+        &asset_writer,
+        uri,
+        aiwebengine::engine_api::ScriptFilesChange {
+            root: Some("function init() { /* mine now */ }"),
+            writes: &[],
+            delete: &[],
+        },
+        aiwebengine::engine_api::ScriptWriteOptions::default(),
+    );
+
+    assert!(
+        result.is_err(),
+        "WriteAssets must not be a way to write a script's root source"
+    );
+    assert_eq!(
+        repository::fetch_script(uri).as_deref(),
+        Some(source),
+        "nothing should have been written"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_mcp_tool_writes_the_whole_change_too() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://assets-batch/mcp-root";
+    deploy(uri, "function init() {}");
+
+    let seed = execute_native_mcp_tool(
+        "write_assets",
+        &json!({
+            "script": uri,
+            "files": [{
+                "name": "assets_batch_mcp_root/old.ts",
+                "content_base64": b64("export const gone = true;\n"),
+            }],
+            "reinit": "never",
+        }),
+        &UserContext::admin("batcher".to_string()),
+    )
+    .expect("write_assets should dispatch");
+    assert_eq!(seed["success"], json!(true), "{}", seed);
+
+    let root = "function init() { /* rewritten */ }";
+    let result = execute_native_mcp_tool(
+        "write_assets",
+        &json!({
+            "script": uri,
+            "content": root,
+            "files": [{
+                "name": "assets_batch_mcp_root/new.ts",
+                "content_base64": b64("export const here = true;\n"),
+            }],
+            "remove": ["assets_batch_mcp_root/old.ts"],
+            "reinit": "never",
+        }),
+        &UserContext::admin("batcher".to_string()),
+    )
+    .expect("write_assets should dispatch");
+
+    assert_eq!(result["success"], json!(true), "{}", result);
+    assert_eq!(result["root"], json!("updated"), "{}", result);
+    assert_eq!(result["written"], json!(1), "{}", result);
+    assert_eq!(result["deleted"], json!(1), "{}", result);
+    assert_eq!(repository::fetch_script(uri).as_deref(), Some(root));
+    assert!(stored(uri, "assets_batch_mcp_root/old.ts").is_none());
+}

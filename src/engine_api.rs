@@ -1619,7 +1619,11 @@ fn scoped_view(
 
 #[derive(Debug)]
 pub enum AssetWriteError {
-    AccessDenied,
+    /// Carries why, for the same reason [`PatchError::AccessDenied`] does: a
+    /// write covering a script's root and its assets can be refused by either
+    /// rule, and "you do not own this script" is not the message an asset
+    /// write would have given.
+    AccessDenied(String),
     Validation(String),
     Storage(String),
 }
@@ -1700,7 +1704,7 @@ pub fn upsert_asset_authorized(
         })?;
 
     if !can_access_assets(user, script_uri, &Capability::WriteAssets) {
-        return Err(AssetWriteError::AccessDenied);
+        return Err(AssetWriteError::AccessDenied("Access denied".to_string()));
     }
 
     validate_asset_uri(asset_uri)?;
@@ -1878,7 +1882,7 @@ pub fn upsert_assets_synced(
     options: AssetSyncOptions<'_>,
 ) -> Result<BatchWriteOutcome, AssetWriteError> {
     if !can_access_assets(user, script_uri, &Capability::WriteAssets) {
-        return Err(AssetWriteError::AccessDenied);
+        return Err(AssetWriteError::AccessDenied("Access denied".to_string()));
     }
     if files.is_empty() && options.delete.is_empty() {
         return Err(AssetWriteError::Validation(
@@ -2034,6 +2038,161 @@ pub fn upsert_assets_synced(
         written,
         deleted,
     })
+}
+
+/// One change to a script's files: its root source, its assets, and whatever
+/// the change removes.
+pub struct ScriptFilesChange<'a> {
+    /// The root source as the change leaves it, or `None` to leave it alone.
+    pub root: Option<&'a str>,
+    pub writes: &'a [AssetWrite],
+    /// Asset paths that must not survive this change.
+    pub delete: &'a [String],
+}
+
+/// What a change to a script's files needs beyond the files themselves.
+///
+/// Deliberately not [`AssetSyncOptions`], which also carries the removals and
+/// whether to record a revision: a change already names its own removals, and
+/// recording the revision is what [`write_script_files_authorized`] is for, so
+/// taking those here would be taking two answers to each question.
+pub struct ScriptWriteOptions {
+    /// How the resulting revision describes where the change came from.
+    pub origin: revisions::Origin,
+    /// Ceiling on this change's total asset content.
+    pub max_total_bytes: usize,
+    /// Ceiling on how many assets it may carry.
+    pub max_files: usize,
+}
+
+impl Default for ScriptWriteOptions {
+    /// What a change arriving over HTTP or MCP asks for: the ceilings that
+    /// bound a request, and a history that calls it a batch.
+    fn default() -> Self {
+        Self {
+            origin: revisions::Origin::Batch,
+            max_total_bytes: MAX_BATCH_BYTES,
+            max_files: MAX_BATCH_FILES,
+        }
+    }
+}
+
+/// What a change to a script's files did.
+pub struct ScriptFilesOutcome {
+    /// Whether the root source was stored, as opposed to left alone or found
+    /// to already hold what was sent.
+    pub root_changed: bool,
+    /// `inserted` when the change created the script, `updated` when it did
+    /// not, and `None` when the change did not carry a root at all.
+    pub action: Option<UpsertAction>,
+    pub assets: BatchWriteOutcome,
+    /// The one revision describing everything this change did, or `None` when
+    /// it changed nothing.
+    pub revision: Option<i32>,
+}
+
+impl ScriptFilesOutcome {
+    /// Whether anything reached storage — which is also whether re-initializing
+    /// the script afterwards would be anything but cost.
+    pub fn changed(&self) -> bool {
+        self.root_changed || self.assets.written > 0 || self.assets.deleted > 0
+    }
+}
+
+/// Write a script's files as one change: one transaction per store, one
+/// revision, one `init()`.
+///
+/// A script's modules were already one unit of change; its root source was
+/// not. A change that touches both had to be two writes — two revisions, two
+/// cluster notifications, two `init()` runs, and a window in which the
+/// deployment is half-changed — even though `/engine/check` would check
+/// exactly such a change in one request. That asymmetry is what this removes:
+/// the request that describes a change is now the request that applies it.
+///
+/// The ordering is the root first, then the assets, then the removals, because
+/// that is the order in which a program stops being able to refer to something
+/// it no longer has.
+///
+/// `record_revision: false` on the asset write is what keeps the change one
+/// revision rather than two, and is why a caller cannot simply call the two
+/// writes in sequence: the revision is recorded here, once, after both have
+/// landed. A change that stored nothing records none at all, since the
+/// previous revision already describes exactly this content.
+pub fn write_script_files_authorized(
+    user: &UserContext,
+    script_uri: &str,
+    change: ScriptFilesChange<'_>,
+    options: ScriptWriteOptions,
+) -> Result<ScriptFilesOutcome, AssetWriteError> {
+    // A root whose bytes already match is not rewritten. The write itself is
+    // cheap, but it is what decides whether this change produced a revision,
+    // and recording one for a script nothing changed would put noise in the
+    // history a person reads to find the change they are looking for.
+    let (root_changed, action) = match change.root {
+        None => (false, None),
+        Some(root) => {
+            let stored = repository::fetch_script(script_uri);
+            if stored.as_deref() == Some(root) {
+                (false, Some(UpsertAction::Updated))
+            } else {
+                // `upsert_script_for_sync` refuses for one of two reasons, and
+                // they are not the same answer: a caller who may not write
+                // this script is forbidden, and one who sent no content asked
+                // for something impossible.
+                let action = upsert_script_for_sync(user, script_uri, root).map_err(|message| {
+                    let message = message
+                        .strip_prefix("Error: ")
+                        .unwrap_or(&message)
+                        .to_string();
+                    if message.starts_with("Script '") {
+                        AssetWriteError::Validation(message)
+                    } else {
+                        AssetWriteError::AccessDenied(message)
+                    }
+                })?;
+                (true, Some(action))
+            }
+        }
+    };
+
+    // The asset write refuses an empty batch — right for a caller who sent an
+    // empty request, wrong for a change that is only to the root, since a
+    // script can legitimately be one file.
+    let assets = if change.writes.is_empty() && change.delete.is_empty() {
+        BatchWriteOutcome {
+            results: Vec::new(),
+            revision: None,
+            written: 0,
+            deleted: 0,
+        }
+    } else {
+        upsert_assets_synced(
+            user,
+            script_uri,
+            change.writes,
+            AssetSyncOptions {
+                delete: change.delete,
+                origin: options.origin,
+                max_total_bytes: options.max_total_bytes,
+                max_files: options.max_files,
+                // One revision covers the root and the assets together; it is
+                // recorded below, once both have landed.
+                record_revision: false,
+            },
+        )?
+    };
+
+    let mut outcome = ScriptFilesOutcome {
+        root_changed,
+        action,
+        assets,
+        revision: None,
+    };
+    if outcome.changed() {
+        outcome.revision =
+            revisions::record_blocking(script_uri, options.origin, user.user_id.as_deref());
+    }
+    Ok(outcome)
 }
 
 /// One string replacement of a patch — of one of a script's assets, or of its
@@ -4299,6 +4458,13 @@ pub struct AssetBatchFile {
 pub struct AssetBatchBody {
     script: Option<String>,
     files: Option<Vec<AssetBatchFile>>,
+    /// The script's root source as this change leaves it. Absent leaves it
+    /// alone, which is what every batch written before this did.
+    content: Option<String>,
+    /// Asset paths this change removes. A change that deletes a module is as
+    /// much one change as a change that rewrites one.
+    #[serde(default, alias = "delete")]
+    remove: Option<Vec<String>>,
     reinit: Option<String>,
 }
 
@@ -4483,8 +4649,8 @@ pub async fn assets_post_route(
                 "revision": revision,
             }),
         ),
-        Err(AssetWriteError::AccessDenied) => {
-            error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string())
+        Err(AssetWriteError::AccessDenied(message)) => {
+            error_response(StatusCode::FORBIDDEN, format!("Error: {}", message))
         }
         Err(AssetWriteError::Validation(msg)) => error_response(StatusCode::BAD_REQUEST, msg),
         Err(AssetWriteError::Storage(msg)) => {
@@ -4493,7 +4659,7 @@ pub async fn assets_post_route(
     }
 }
 
-/// Write several of a script's assets in one request.
+/// Write a script's files in one request.
 ///
 /// A script's modules are one unit of change, and writing them one request at
 /// a time makes the engine act on each partial state: every single-asset write
@@ -4501,19 +4667,28 @@ pub async fn assets_post_route(
 /// cluster, so every other instance reinitializes the script once per file,
 /// each time from a tree that is still being uploaded. One batch is one
 /// transaction, one notification, and one init().
+///
+/// `content` and `remove` extend that to the whole of a change rather than to
+/// the assets of one. The root source was the file this could not carry, so a
+/// change touching it and its modules was two writes however atomic each was —
+/// while `/engine/check` would check exactly that change in one request. A
+/// deletion is the same argument: removing a module is as much a change as
+/// rewriting one, and a check can already describe it.
 #[utoipa::path(
     post,
     path = "/engine/assets/batch",
     tags = ["Assets"],
-    params(("script" = String, Query, description = "URI of the script that will own these assets")),
+    params(("script" = String, Query, description = "URI of the script whose files these are")),
     request_body(content_type = "application/json",
         description = "JSON fields: script (required here or as a query parameter), \
-                       files (required, array of { name, content_base64, mimetype?, sha256? }), \
+                       files (array of { name, content_base64, mimetype?, sha256? }; required unless the change is carried by content or remove alone), \
+                       content (the script's root source as this change leaves it; omit to leave it alone), \
+                       remove (array of asset paths this change deletes), \
                        reinit ('after' by default, or 'never')"),
     responses(
-        (status = 200, description = "Per-file result and the init() run that followed"),
+        (status = 200, description = "Per-file result, whether the root changed, how many files were removed, the revision recorded, and the init() run that followed"),
         (status = 400, description = "Missing or invalid parameters; nothing was written"),
-        (status = 403, description = "Access denied"),
+        (status = 403, description = "Access denied: writing the assets takes WriteAssets and writing the root takes WriteScripts, both with ownership of the script or administrator"),
     )
 )]
 pub async fn assets_batch_route(
@@ -4537,11 +4712,19 @@ pub async fn assets_batch_route(
         Ok(reinit) => reinit,
         Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
     };
-    let Some(files) = parsed.files else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "Missing required field: files".to_string(),
-        );
+    let remove = parsed.remove.unwrap_or_default();
+    // `files` stays required unless the change is carried entirely by the
+    // other two fields, so a caller that meant to send files and did not is
+    // still told so rather than quietly writing nothing.
+    let files = match parsed.files {
+        Some(files) => files,
+        None if parsed.content.is_some() || !remove.is_empty() => Vec::new(),
+        None => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "Missing required field: files".to_string(),
+            );
+        }
     };
 
     let mut writes = Vec::with_capacity(files.len());
@@ -4570,15 +4753,26 @@ pub async fn assets_batch_route(
     }
 
     let script_cl = script.clone();
-    let result =
-        tokio::task::spawn_blocking(move || upsert_assets_authorized(&user, &script_cl, &writes))
-            .await
-            .unwrap_or_else(|e| Err(AssetWriteError::Storage(format!("join error: {}", e))));
+    let root = parsed.content;
+    let result = tokio::task::spawn_blocking(move || {
+        write_script_files_authorized(
+            &user,
+            &script_cl,
+            ScriptFilesChange {
+                root: root.as_deref(),
+                writes: &writes,
+                delete: &remove,
+            },
+            ScriptWriteOptions::default(),
+        )
+    })
+    .await
+    .unwrap_or_else(|e| Err(AssetWriteError::Storage(format!("join error: {}", e))));
 
     let outcome = match result {
         Ok(outcome) => outcome,
-        Err(AssetWriteError::AccessDenied) => {
-            return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+        Err(AssetWriteError::AccessDenied(message)) => {
+            return error_response(StatusCode::FORBIDDEN, format!("Error: {}", message));
         }
         Err(AssetWriteError::Validation(msg)) => {
             return error_response(StatusCode::BAD_REQUEST, msg);
@@ -4591,23 +4785,44 @@ pub async fn assets_batch_route(
     // A batch that changed nothing has nothing to re-register, and running
     // init() anyway would drop and rebuild registrations that are already
     // correct.
-    let init = match (reinit, outcome.written) {
+    let init = match (reinit, outcome.changed()) {
         (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
-        (ReinitMode::After, 0) => json!({ "ran": false, "reason": "no files changed" }),
-        (ReinitMode::After, _) => reinitialize_after_write(&script).await,
+        (ReinitMode::After, false) => json!({ "ran": false, "reason": "no files changed" }),
+        (ReinitMode::After, true) => reinitialize_after_write(&script).await,
     };
 
-    json_response(
-        StatusCode::OK,
-        json!({
-            "script": script,
-            "results": outcome.results.iter().map(AssetWriteOutcome::to_json).collect::<Vec<Value>>(),
-            "written": outcome.written,
-            "revision": outcome.revision,
-            "init": init,
-            "timestamp": iso_timestamp(),
-        }),
-    )
+    json_response(StatusCode::OK, batch_outcome_json(&script, &outcome, init))
+}
+
+/// The answer a change to a script's files gives, shared by the endpoint and
+/// the tool so the two cannot drift.
+fn batch_outcome_json(script: &str, outcome: &ScriptFilesOutcome, init: Value) -> Value {
+    let mut body = json!({
+        "script": script,
+        "results": outcome.assets.results.iter().map(AssetWriteOutcome::to_json).collect::<Vec<Value>>(),
+        "written": outcome.assets.written,
+        "revision": outcome.revision,
+        "init": init,
+        "timestamp": iso_timestamp(),
+    });
+    if let Some(object) = body.as_object_mut() {
+        // Only reported when the change carried them, so a caller written
+        // against the asset-only batch sees exactly the body it always saw.
+        if outcome.action.is_some() {
+            object.insert(
+                "root".to_string(),
+                json!(if outcome.root_changed {
+                    "updated"
+                } else {
+                    "unchanged"
+                }),
+            );
+        }
+        if outcome.assets.deleted > 0 {
+            object.insert("deleted".to_string(), json!(outcome.assets.deleted));
+        }
+    }
+    body
 }
 
 /// Edit one of a script's assets in place.
@@ -8458,7 +8673,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "write_assets",
-            "Create or update several of a script's assets in one atomic write, then run the script's init() once. Nothing is written if any file is rejected. Requires the user to own the script, have WriteAssets capability, or be an administrator.",
+            "Write a script's files as one change, then run its init() once: several assets, the root source ('content'), and whatever the change removes ('remove'). One transaction, one revision, one init(), and nothing is written if any file is rejected. Writing the root takes WriteScripts; the assets take WriteAssets; both take ownership of the script or administrator.",
             || {
                 json!({
                     "type": "object",
@@ -8478,9 +8693,15 @@ fn native_tools() -> &'static [NativeToolEntry] {
                                 "required": ["name", "content_base64"]
                             }
                         },
+                        "content": { "type": "string", "description": "The script's root source as this change leaves it. Omit to leave it alone." },
+                        "remove": {
+                            "type": "array",
+                            "description": "Asset paths this change removes. Naming a file the script does not have is not an error.",
+                            "items": { "type": "string" }
+                        },
                         "reinit": { "type": "string", "enum": ["after", "never"], "description": "Run the script's init() once after the batch lands (default 'after'), or leave it alone" }
                     },
-                    "required": ["script", "files"]
+                    "required": ["script"]
                 })
             },
             tool_write_assets,
@@ -10031,8 +10252,8 @@ fn tool_write_asset(args: &Value, user: &UserContext) -> Value {
             "revision": revision,
             "timestamp": iso_timestamp(),
         }),
-        Err(AssetWriteError::AccessDenied) => {
-            json!({ "error": "Failed to write asset: Access denied" })
+        Err(AssetWriteError::AccessDenied(message)) => {
+            json!({ "error": format!("Failed to write asset: {}", message) })
         }
         Err(AssetWriteError::Validation(msg)) | Err(AssetWriteError::Storage(msg)) => {
             json!({ "error": format!("Failed to write asset: {}", msg) })
@@ -10046,8 +10267,26 @@ fn tool_write_assets(args: &Value, user: &UserContext) -> Value {
     let Some(script) = arg_str(args, "script") else {
         return missing_arg("script");
     };
-    let Some(files) = args.get("files").and_then(Value::as_array) else {
-        return missing_arg("files");
+    let root = arg_str(args, "content");
+    let remove: Vec<String> = match args.get("remove") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(paths)) => {
+            let mut collected = Vec::with_capacity(paths.len());
+            for (index, path) in paths.iter().enumerate() {
+                let Some(path) = path.as_str() else {
+                    return json!({ "error": format!("remove[{}]: expected an asset path", index) });
+                };
+                collected.push(path.to_string());
+            }
+            collected
+        }
+        Some(_) => return json!({ "error": "'remove' must be an array of asset paths" }),
+    };
+    let empty: Vec<Value> = Vec::new();
+    let files = match args.get("files") {
+        Some(Value::Array(files)) => files,
+        None | Some(Value::Null) if root.is_some() || !remove.is_empty() => &empty,
+        _ => return missing_arg("files"),
     };
     let reinit = match ReinitMode::parse(arg_str(args, "reinit")) {
         Ok(reinit) => reinit,
@@ -10079,28 +10318,36 @@ fn tool_write_assets(args: &Value, user: &UserContext) -> Value {
         });
     }
 
-    match upsert_assets_authorized(user, script, &writes) {
+    match write_script_files_authorized(
+        user,
+        script,
+        ScriptFilesChange {
+            root,
+            writes: &writes,
+            delete: &remove,
+        },
+        ScriptWriteOptions::default(),
+    ) {
         Ok(outcome) => {
             // Bridging back to async, as `check_script` does, so the caller is
             // told what init() did rather than that it was started.
-            let init = match (reinit, outcome.written) {
+            let init = match (reinit, outcome.changed()) {
                 (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
-                (ReinitMode::After, 0) => json!({ "ran": false, "reason": "no files changed" }),
-                (ReinitMode::After, _) => {
+                (ReinitMode::After, false) => {
+                    json!({ "ran": false, "reason": "no files changed" })
+                }
+                (ReinitMode::After, true) => {
                     crate::database::run_blocking(reinitialize_after_write(script))
                 }
             };
-            json!({
-                "success": true,
-                "script": script,
-                "results": outcome.results.iter().map(AssetWriteOutcome::to_json).collect::<Vec<Value>>(),
-                "written": outcome.written,
-                "init": init,
-                "timestamp": iso_timestamp(),
-            })
+            let mut body = batch_outcome_json(script, &outcome, init);
+            if let Some(object) = body.as_object_mut() {
+                object.insert("success".to_string(), json!(true));
+            }
+            body
         }
-        Err(AssetWriteError::AccessDenied) => {
-            json!({ "error": "Failed to write assets: Access denied" })
+        Err(AssetWriteError::AccessDenied(message)) => {
+            json!({ "error": format!("Failed to write assets: {}", message) })
         }
         Err(AssetWriteError::Validation(msg)) | Err(AssetWriteError::Storage(msg)) => {
             json!({ "error": format!("Failed to write assets: {}", msg) })
