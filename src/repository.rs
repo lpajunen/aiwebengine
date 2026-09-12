@@ -5344,6 +5344,14 @@ pub fn prune_log_messages(retention: LogRetention) -> AppResult<u64> {
     run_bounded(async move { repo.prune_logs(retention).await })
 }
 
+/// Largest root source a script may have.
+///
+/// Named rather than repeated so the callers that build content before storing
+/// it — a patch, which assembles the new source from edits — can refuse it
+/// themselves, instead of handing it here and reporting the refusal as a
+/// storage failure.
+pub const MAX_SCRIPT_CONTENT_BYTES: usize = 1_000_000;
+
 /// Upsert script with error handling
 pub fn upsert_script(uri: &str, content: &str) -> AppResult<()> {
     run_blocking(upsert_script_async(uri, content))
@@ -5355,8 +5363,7 @@ pub async fn upsert_script_async(uri: &str, content: &str) -> AppResult<()> {
         return Err(RepositoryError::InvalidData("URI cannot be empty".to_string()).into());
     }
 
-    if content.len() > 1_000_000 {
-        // 1MB limit
+    if content.len() > MAX_SCRIPT_CONTENT_BYTES {
         return Err(
             RepositoryError::InvalidData("Script content too large (>1MB)".to_string()).into(),
         );
@@ -5383,8 +5390,7 @@ pub fn upsert_script_with_owner(
         return Err(RepositoryError::InvalidData("URI cannot be empty".to_string()).into());
     }
 
-    if content.len() > 1_000_000 {
-        // 1MB limit
+    if content.len() > MAX_SCRIPT_CONTENT_BYTES {
         return Err(
             RepositoryError::InvalidData("Script content too large (>1MB)".to_string()).into(),
         );

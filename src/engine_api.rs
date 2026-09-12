@@ -41,7 +41,7 @@ const MAX_BATCH_BYTES: usize = MAX_ASSET_BYTES;
 pub const MAX_BATCH_BODY_BYTES: usize = MAX_BATCH_BYTES * 4 / 3 + 1024 * 1024;
 
 /// Maximum number of edits one patch may carry.
-const MAX_ASSET_EDITS: usize = 128;
+const MAX_PATCH_EDITS: usize = 128;
 
 /// How many matching lines a `grep=` read reports before it stops looking.
 const MAX_GREP_MATCHES: usize = 200;
@@ -498,6 +498,152 @@ pub fn upsert_script_authorized(
     broadcast_script_update(uri, action.as_str(), &details);
 
     Ok((action, revision))
+}
+
+/// Edit a script's root source in place, by replacing strings within it.
+///
+/// [`patch_asset_authorized`] for the one file of a script that is not an
+/// asset. A script's modules could already be changed a few lines at a time
+/// while its root could only be replaced whole — and the root is the file that
+/// registers every route the others serve, so it is both the one an editor
+/// reproduces least faithfully from memory and the one where losing something
+/// in the resend costs the most.
+///
+/// The checks are the ones a patch of an asset makes, for the same reasons:
+/// `base_sha256` establishes *which* version is being edited, and a unique
+/// `old_string` establishes *where*. What differs is the authorization, which
+/// is a script write's rather than an asset write's — `WriteScripts`, plus
+/// ownership or `AdministerEngine` — since that is what this file is.
+///
+/// It deliberately does not run `init()`. A whole write re-initialises on its
+/// way out; a patch leaves that to the caller's `reinit`, so a change spanning
+/// the root and three modules initialises once at the end rather than once per
+/// file.
+pub fn patch_script_authorized(
+    user: &UserContext,
+    uri: &str,
+    edits: &[StringEdit],
+    base_sha256: Option<&str>,
+    via: Option<&str>,
+) -> Result<PatchOutcome, PatchError> {
+    if uri.is_empty() {
+        return Err(PatchError::Validation(
+            "Script name cannot be empty".to_string(),
+        ));
+    }
+
+    // `authorize_script_write` answers "may this caller write here", and
+    // reports whether anything is there. A patch needs both: the same rule a
+    // whole write applies, and a file to apply the edits to.
+    let exists = authorize_script_write(user, uri).map_err(|message| {
+        // Its refusals are phrased for callers that render them as they stand;
+        // a patch's are wrapped, so the prefix would be said twice.
+        PatchError::AccessDenied(
+            message
+                .strip_prefix("Error: ")
+                .unwrap_or(&message)
+                .to_string(),
+        )
+    })?;
+    if !exists {
+        return Err(PatchError::NotFound);
+    }
+    let Some(stored) = repository::fetch_script(uri) else {
+        return Err(PatchError::NotFound);
+    };
+
+    let original_digest = sha256_hex(stored.as_bytes());
+    if let Some(expected) = base_sha256
+        && !expected.eq_ignore_ascii_case(&original_digest)
+    {
+        return Err(PatchError::Conflict {
+            expected: expected.to_string(),
+            actual: original_digest,
+        });
+    }
+
+    let mut text = stored.clone();
+    let replacements = apply_string_edits(&mut text, edits, uri).map_err(PatchError::Validation)?;
+
+    // The two bounds a whole write gets from its own request body, asked here
+    // of the content the edits produced — since the point of a patch is that
+    // its body is not the content, so neither bound can be read off it.
+    if text.is_empty() {
+        return Err(PatchError::Validation(format!(
+            "The edits would leave script '{}' empty; delete it instead if that is what was meant",
+            uri
+        )));
+    }
+    if text.len() > repository::MAX_SCRIPT_CONTENT_BYTES {
+        return Err(PatchError::Validation(format!(
+            "Script too large after the edits: {} bytes (max {})",
+            text.len(),
+            repository::MAX_SCRIPT_CONTENT_BYTES
+        )));
+    }
+
+    let unchanged = text == stored;
+    let digest = if unchanged {
+        original_digest
+    } else {
+        sha256_hex(text.as_bytes())
+    };
+    let bytes = text.len();
+
+    if !unchanged
+        && let Err(e) = repository::upsert_script_with_owner(uri, &text, user.user_id.as_deref())
+    {
+        return Err(PatchError::Storage(format!("Error patching script: {}", e)));
+    }
+
+    let auditor = auditor();
+    let user_id = user.user_id.clone();
+    let uri_owned = uri.to_string();
+    let edit_count = edits.len();
+    tokio::task::spawn(async move {
+        let _ = auditor
+            .log_event(
+                SecurityEvent::new(
+                    SecurityEventType::SystemSecurityEvent,
+                    SecuritySeverity::Medium,
+                    user_id,
+                )
+                .with_resource("script".to_string())
+                .with_action("patch_for_uri".to_string())
+                .with_detail("uri", &uri_owned)
+                .with_detail("edits", edit_count.to_string())
+                .with_detail("replacements", replacements.to_string())
+                .with_detail("content_size", bytes.to_string()),
+            )
+            .await;
+    });
+
+    let revision = (!unchanged)
+        .then(|| revisions::record_blocking(uri, revisions::Origin::Patch, user.user_id.as_deref()))
+        .flatten();
+
+    // Watchers of `/engine/script_updates` see a root-source patch the way
+    // they see a whole write: the file they are tracking changed, and how much
+    // of it travelled to say so is not something they should have to know.
+    if !unchanged {
+        let mut details = vec![
+            ("contentLength", json!(bytes)),
+            ("previousExists", json!(true)),
+            ("replacements", json!(replacements)),
+        ];
+        if let Some(via) = via {
+            details.push(("via", json!(via)));
+        }
+        broadcast_script_update(uri, UpsertAction::Updated.as_str(), &details);
+    }
+
+    Ok(PatchOutcome {
+        sha256: digest,
+        revision,
+        bytes,
+        replacements,
+        status: if unchanged { "unchanged" } else { "updated" },
+    })
 }
 
 /// Delete a script: `DeleteScripts` capability required, and the script must be
@@ -1815,8 +1961,10 @@ pub fn upsert_assets_synced(
     })
 }
 
-/// One string replacement of a patch.
-pub struct AssetEdit {
+/// One string replacement of a patch — of one of a script's assets, or of its
+/// root source. Editing either is the same act on the same kind of content, so
+/// both take the same request shape and the same checks.
+pub struct StringEdit {
     /// Text to find. It must be present, and unique unless `replace_all`.
     pub old_string: String,
     /// Text to put in its place.
@@ -1825,8 +1973,8 @@ pub struct AssetEdit {
     pub replace_all: bool,
 }
 
-/// What a patch did to an asset.
-pub struct AssetPatchOutcome {
+/// What a patch did to the file it edited.
+pub struct PatchOutcome {
     /// Digest of the content as it now stands, which the next patch can send
     /// back as `base_sha256`.
     pub sha256: String,
@@ -1840,7 +1988,7 @@ pub struct AssetPatchOutcome {
     pub status: &'static str,
 }
 
-impl AssetPatchOutcome {
+impl PatchOutcome {
     fn to_json(&self) -> Value {
         json!({
             "sha256": self.sha256,
@@ -1852,17 +2000,98 @@ impl AssetPatchOutcome {
     }
 }
 
-pub enum AssetPatchError {
-    AccessDenied,
+pub enum PatchError {
+    /// Carries why, because the two ways to be refused a write are not the
+    /// same thing to be told: lacking the capability is a different problem
+    /// from holding it and not owning this script.
+    AccessDenied(String),
     NotFound,
     Validation(String),
-    /// The stored asset is not the one the caller edited: `base_sha256` names
+    /// The stored file is not the one the caller edited: `base_sha256` names
     /// content it no longer has.
     Conflict {
         expected: String,
         actual: String,
     },
     Storage(String),
+}
+
+/// Apply a patch's edits to `text`, reporting how many occurrences they
+/// replaced in total.
+///
+/// This is the half of a patch that is the same whether the file being edited
+/// is one of a script's assets or its root source, so it lives in one place:
+/// the arithmetic of finding and replacing, and the rule that keeps an edit
+/// aimed by content alone from being a guess. An `old_string` that appears
+/// more than once is refused unless the caller said `replace_all`, because an
+/// edit meant for one of three identical lines cannot be aimed by content.
+///
+/// `file` is only ever quoted back in the refusals. It is what a caller needs
+/// to know which of the files it sent is the one that did not match.
+///
+/// The edits are applied to a copy the caller owns, so a patch whose third
+/// edit does not match has written nothing anywhere.
+fn apply_string_edits(
+    text: &mut String,
+    edits: &[StringEdit],
+    file: &str,
+) -> Result<usize, String> {
+    if edits.is_empty() {
+        return Err("No edits to apply: 'edits' must contain at least one entry".to_string());
+    }
+    if edits.len() > MAX_PATCH_EDITS {
+        return Err(format!(
+            "Too many edits in one patch: {} (max {})",
+            edits.len(),
+            MAX_PATCH_EDITS
+        ));
+    }
+
+    let mut replacements = 0usize;
+    for (index, edit) in edits.iter().enumerate() {
+        if edit.old_string.is_empty() {
+            return Err(format!("edits[{}]: old_string must not be empty", index));
+        }
+        if edit.old_string == edit.new_string {
+            return Err(format!(
+                "edits[{}]: old_string and new_string are identical, so the edit would do nothing",
+                index
+            ));
+        }
+
+        let occurrences = text.matches(edit.old_string.as_str()).count();
+        match (occurrences, edit.replace_all) {
+            (0, _) => {
+                return Err(format!(
+                    "edits[{}]: old_string was not found in '{}'{}",
+                    index,
+                    file,
+                    if index > 0 {
+                        " as the earlier edits left it"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+            (count, false) if count > 1 => {
+                return Err(format!(
+                    "edits[{}]: old_string appears {} times in '{}'; include enough surrounding \
+                     text to make it unique, or pass replace_all",
+                    index, count, file
+                ));
+            }
+            (count, true) => {
+                *text = text.replace(edit.old_string.as_str(), &edit.new_string);
+                replacements += count;
+            }
+            (_, false) => {
+                *text = text.replacen(edit.old_string.as_str(), &edit.new_string, 1);
+                replacements += 1;
+            }
+        }
+    }
+
+    Ok(replacements)
 }
 
 /// Edit an asset in place, by replacing strings within it.
@@ -1886,96 +2115,40 @@ pub fn patch_asset_authorized(
     user: &UserContext,
     script_uri: &str,
     asset_uri: &str,
-    edits: &[AssetEdit],
+    edits: &[StringEdit],
     base_sha256: Option<&str>,
-) -> Result<AssetPatchOutcome, AssetPatchError> {
+) -> Result<PatchOutcome, PatchError> {
     if !can_access_assets(user, script_uri, &Capability::WriteAssets) {
-        return Err(AssetPatchError::AccessDenied);
-    }
-    if edits.is_empty() {
-        return Err(AssetPatchError::Validation(
-            "No edits to apply: 'edits' must contain at least one entry".to_string(),
-        ));
-    }
-    if edits.len() > MAX_ASSET_EDITS {
-        return Err(AssetPatchError::Validation(format!(
-            "Too many edits in one patch: {} (max {})",
-            edits.len(),
-            MAX_ASSET_EDITS
-        )));
+        return Err(PatchError::AccessDenied("Access denied".to_string()));
     }
 
     let Some(asset) = repository::fetch_asset(script_uri, asset_uri) else {
-        return Err(AssetPatchError::NotFound);
+        return Err(PatchError::NotFound);
     };
 
     let original_digest = sha256_hex(&asset.content);
     if let Some(expected) = base_sha256
         && !expected.eq_ignore_ascii_case(&original_digest)
     {
-        return Err(AssetPatchError::Conflict {
+        return Err(PatchError::Conflict {
             expected: expected.to_string(),
             actual: original_digest,
         });
     }
 
     let mut text = String::from_utf8(asset.content.clone()).map_err(|_| {
-        AssetPatchError::Validation(format!(
+        PatchError::Validation(format!(
             "Asset '{}' is not UTF-8 text, so it cannot be edited as strings: write it whole \
              with POST /engine/assets or /engine/assets/batch",
             asset_uri
         ))
     })?;
 
-    let mut replacements = 0usize;
-    for (index, edit) in edits.iter().enumerate() {
-        if edit.old_string.is_empty() {
-            return Err(AssetPatchError::Validation(format!(
-                "edits[{}]: old_string must not be empty",
-                index
-            )));
-        }
-        if edit.old_string == edit.new_string {
-            return Err(AssetPatchError::Validation(format!(
-                "edits[{}]: old_string and new_string are identical, so the edit would do nothing",
-                index
-            )));
-        }
-
-        let occurrences = text.matches(edit.old_string.as_str()).count();
-        match (occurrences, edit.replace_all) {
-            (0, _) => {
-                return Err(AssetPatchError::Validation(format!(
-                    "edits[{}]: old_string was not found in '{}'{}",
-                    index,
-                    asset_uri,
-                    if index > 0 {
-                        " as the earlier edits left it"
-                    } else {
-                        ""
-                    }
-                )));
-            }
-            (count, false) if count > 1 => {
-                return Err(AssetPatchError::Validation(format!(
-                    "edits[{}]: old_string appears {} times in '{}'; include enough surrounding \
-                     text to make it unique, or pass replace_all",
-                    index, count, asset_uri
-                )));
-            }
-            (count, true) => {
-                text = text.replace(edit.old_string.as_str(), &edit.new_string);
-                replacements += count;
-            }
-            (_, false) => {
-                text = text.replacen(edit.old_string.as_str(), &edit.new_string, 1);
-                replacements += 1;
-            }
-        }
-    }
+    let replacements =
+        apply_string_edits(&mut text, edits, asset_uri).map_err(PatchError::Validation)?;
 
     if text.len() > MAX_ASSET_BYTES {
-        return Err(AssetPatchError::Validation(
+        return Err(PatchError::Validation(
             "Asset too large after the edits (max 10MB)".to_string(),
         ));
     }
@@ -2005,7 +2178,7 @@ pub fn patch_asset_authorized(
                 script_uri: script_uri.to_string(),
             }],
         )
-        .map_err(|e| AssetPatchError::Storage(format!("Error patching asset: {}", e)))?;
+        .map_err(|e| PatchError::Storage(format!("Error patching asset: {}", e)))?;
     }
 
     let auditor = auditor();
@@ -2042,7 +2215,7 @@ pub fn patch_asset_authorized(
         })
         .flatten();
 
-    Ok(AssetPatchOutcome {
+    Ok(PatchOutcome {
         sha256: digest,
         revision,
         bytes,
@@ -2597,9 +2770,16 @@ pub async fn read_script_route(
         .unwrap_or(None);
 
     match content {
+        // The digest travels as an `ETag`, since the body is the script
+        // itself and has nowhere to carry one. It is what `/engine/edit_script`
+        // takes as `base_sha256`, so a caller that read the file already holds
+        // the version it is about to edit against.
         Some(content) => (
             StatusCode::OK,
-            [("content-type", "application/javascript")],
+            [
+                ("content-type", "application/javascript"),
+                ("etag", &format!("\"{}\"", sha256_hex(content.as_bytes()))),
+            ],
             content,
         )
             .into_response(),
@@ -2613,6 +2793,143 @@ pub async fn read_script_route(
             }),
         ),
     }
+}
+
+/// A request to `/engine/edit_script`.
+#[derive(Deserialize, Default)]
+pub struct ScriptPatchBody {
+    uri: Option<String>,
+    edits: Option<Vec<StringEditBody>>,
+    /// Digest the caller believes the root source currently has; the patch is
+    /// refused if it has moved on.
+    #[serde(alias = "sha256")]
+    base_sha256: Option<String>,
+    reinit: Option<String>,
+}
+
+/// Edit a script's root source in place.
+///
+/// The counterpart of `PATCH /engine/assets` for the one file of a script that
+/// is not an asset. What is *not* in the request is the point of both: a
+/// caller changing three lines sends three lines, and `base_sha256` makes that
+/// a change to a known version rather than to whatever happens to be stored.
+///
+/// `POST /engine/upsert_script` remains the way to write a root source the
+/// caller has in hand. It takes a form, as it always has; this takes JSON,
+/// because a list of edits is not something form encoding expresses.
+#[utoipa::path(
+    post,
+    path = "/engine/edit_script",
+    tags = ["Scripts"],
+    params(("uri" = Option<String>, Query, description = "Script URI (may also be given in the body)")),
+    request_body(content_type = "application/json",
+        description = "JSON fields: edits (required, array of { old_string, new_string, replace_all? }), \
+                       uri (unless given as a query parameter), \
+                       base_sha256 (optional precondition on the stored content), \
+                       reinit ('after' by default, or 'never')"),
+    responses(
+        (status = 200, description = "The content that resulted: sha256, bytes, replacements, and the init() run that followed"),
+        (status = 400, description = "Missing or invalid parameters, or an edit that does not match; nothing was written"),
+        (status = 403, description = "Access denied"),
+        (status = 404, description = "Script not found"),
+        (status = 409, description = "The script no longer has the content named by base_sha256; nothing was written"),
+    )
+)]
+pub async fn edit_script_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<ScriptParams>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+
+    let parsed: ScriptPatchBody = match serde_json::from_slice(&body) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return error_response(StatusCode::BAD_REQUEST, format!("Invalid JSON body: {}", e));
+        }
+    };
+
+    let Some(uri) = parsed.uri.or(query.uri) else {
+        return missing_param_response("uri");
+    };
+    let reinit = match ReinitMode::parse(parsed.reinit.as_deref()) {
+        Ok(reinit) => reinit,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+    let Some(edits) = parsed.edits else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Missing required field: edits".to_string(),
+        );
+    };
+    let prepared = match prepare_edits(edits) {
+        Ok(prepared) => prepared,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+
+    let uri_for_task = uri.clone();
+    let base_sha256 = parsed.base_sha256.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        patch_script_authorized(
+            &user,
+            &uri_for_task,
+            &prepared,
+            base_sha256.as_deref(),
+            None,
+        )
+    })
+    .await
+    .unwrap_or_else(|e| Err(PatchError::Storage(format!("join error: {}", e))));
+
+    let outcome = match result {
+        Ok(outcome) => outcome,
+        Err(PatchError::AccessDenied(message)) => {
+            return error_response(StatusCode::FORBIDDEN, format!("Error: {}", message));
+        }
+        Err(PatchError::NotFound) => {
+            return error_response(StatusCode::NOT_FOUND, format!("Script '{}' not found", uri));
+        }
+        Err(PatchError::Validation(message)) => {
+            return error_response(StatusCode::BAD_REQUEST, message);
+        }
+        Err(PatchError::Conflict { expected, actual }) => {
+            // The current digest comes back with the refusal, so a caller can
+            // re-read, rebase its edits, and retry without a second round trip
+            // to find out what it is now working against.
+            return json_response(
+                StatusCode::CONFLICT,
+                json!({
+                    "error": format!(
+                        "Script '{}' has changed since it was read (expected {}, stored {})",
+                        uri, expected, actual
+                    ),
+                    "uri": uri,
+                    "expected_sha256": expected,
+                    "sha256": actual,
+                    "timestamp": iso_timestamp(),
+                }),
+            );
+        }
+        Err(PatchError::Storage(message)) => {
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, message);
+        }
+    };
+
+    // Edits that cancelled out changed no file, so there is nothing for init()
+    // to pick up and re-registering would only churn what is already right.
+    let init = match (reinit, outcome.status) {
+        (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
+        (_, "unchanged") => json!({ "ran": false, "reason": "no change" }),
+        (ReinitMode::After, _) => reinitialize_after_write(&uri).await,
+    };
+
+    let mut body = outcome.to_json();
+    if let Some(object) = body.as_object_mut() {
+        object.insert("uri".to_string(), json!(uri));
+        object.insert("init".to_string(), init);
+        object.insert("timestamp".to_string(), json!(iso_timestamp()));
+    }
+    json_response(StatusCode::OK, body)
 }
 
 /// Why a test run was refused before it started.
@@ -3785,18 +4102,47 @@ pub struct AssetQuery {
 
 /// One edit of a patch request.
 #[derive(Deserialize, Default)]
-pub struct AssetEditBody {
+pub struct StringEditBody {
     old_string: Option<String>,
     new_string: Option<String>,
     #[serde(default)]
     replace_all: bool,
 }
 
+/// Turn a request's `edits` into the patch's, or name the entry that is not
+/// one.
+///
+/// Both fields are required rather than defaulted to empty, so a misspelled
+/// field name cannot quietly turn a replacement into a deletion — which is the
+/// one mistake here that destroys content rather than being refused.
+fn prepare_edits(edits: Vec<StringEditBody>) -> Result<Vec<StringEdit>, String> {
+    edits
+        .into_iter()
+        .enumerate()
+        .map(|(index, edit)| {
+            let old_string = edit
+                .old_string
+                .ok_or_else(|| format!("edits[{}]: missing required field: old_string", index))?;
+            let new_string = edit.new_string.ok_or_else(|| {
+                format!(
+                    "edits[{}]: missing required field: new_string (pass \"\" to delete the text)",
+                    index
+                )
+            })?;
+            Ok(StringEdit {
+                old_string,
+                new_string,
+                replace_all: edit.replace_all,
+            })
+        })
+        .collect()
+}
+
 #[derive(Deserialize, Default)]
 pub struct AssetPatchBody {
     script: Option<String>,
     asset: Option<String>,
-    edits: Option<Vec<AssetEditBody>>,
+    edits: Option<Vec<StringEditBody>>,
     /// Digest the caller believes the asset currently has; the patch is
     /// refused if it has moved on.
     #[serde(alias = "sha256")]
@@ -4196,31 +4542,10 @@ pub async fn assets_patch_route(
         );
     };
 
-    let mut prepared = Vec::with_capacity(edits.len());
-    for (index, edit) in edits.into_iter().enumerate() {
-        let Some(old_string) = edit.old_string else {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                format!("edits[{}]: missing required field: old_string", index),
-            );
-        };
-        // Required rather than defaulted to empty, so a misspelled field name
-        // cannot quietly turn a replacement into a deletion.
-        let Some(new_string) = edit.new_string else {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "edits[{}]: missing required field: new_string (pass \"\" to delete the text)",
-                    index
-                ),
-            );
-        };
-        prepared.push(AssetEdit {
-            old_string,
-            new_string,
-            replace_all: edit.replace_all,
-        });
-    }
+    let prepared = match prepare_edits(edits) {
+        Ok(prepared) => prepared,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
 
     let (script_cl, asset_cl) = (script.clone(), asset.clone());
     let base_sha256 = parsed.base_sha256.clone();
@@ -4234,23 +4559,23 @@ pub async fn assets_patch_route(
         )
     })
     .await
-    .unwrap_or_else(|e| Err(AssetPatchError::Storage(format!("join error: {}", e))));
+    .unwrap_or_else(|e| Err(PatchError::Storage(format!("join error: {}", e))));
 
     let outcome = match result {
         Ok(outcome) => outcome,
-        Err(AssetPatchError::AccessDenied) => {
-            return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+        Err(PatchError::AccessDenied(message)) => {
+            return error_response(StatusCode::FORBIDDEN, format!("Error: {}", message));
         }
-        Err(AssetPatchError::NotFound) => {
+        Err(PatchError::NotFound) => {
             return error_response(
                 StatusCode::NOT_FOUND,
                 format!("Asset '{}' not found", asset),
             );
         }
-        Err(AssetPatchError::Validation(message)) => {
+        Err(PatchError::Validation(message)) => {
             return error_response(StatusCode::BAD_REQUEST, message);
         }
-        Err(AssetPatchError::Conflict { expected, actual }) => {
+        Err(PatchError::Conflict { expected, actual }) => {
             // The current digest comes back with the refusal, so a caller can
             // re-read, rebase its edits, and retry without a second round trip
             // to find out what it is now working against.
@@ -4269,7 +4594,7 @@ pub async fn assets_patch_route(
                 }),
             );
         }
-        Err(AssetPatchError::Storage(message)) => {
+        Err(PatchError::Storage(message)) => {
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, message);
         }
     };
@@ -7759,6 +8084,22 @@ fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key).and_then(Value::as_str)
 }
 
+/// A tool call's `edits` argument, read the way the HTTP routes read theirs.
+///
+/// Going through [`StringEditBody`] rather than picking the fields out of the
+/// JSON is what keeps an `edit_asset` call and a `PATCH /engine/assets` of the
+/// same edits from disagreeing about which of them is malformed.
+fn parse_tool_edits(edits: &[Value]) -> Result<Vec<StringEdit>, String> {
+    let bodies: Vec<StringEditBody> = edits
+        .iter()
+        .enumerate()
+        .map(|(index, edit)| {
+            serde_json::from_value(edit.clone()).map_err(|e| format!("edits[{}]: {}", index, e))
+        })
+        .collect::<Result<_, _>>()?;
+    prepare_edits(bodies)
+}
+
 fn missing_arg(name: &str) -> Value {
     json!({ "error": format!("Missing required parameter: {}", name) })
 }
@@ -7793,6 +8134,35 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 })
             },
             tool_write_file,
+        ),
+        (
+            "edit_file",
+            "Edit a script's root source in place by replacing strings in it, without resending the file, then run the script's init() once. The counterpart of edit_asset for the one file of a script that is not an asset. Each old_string must be present and unique unless replace_all is set; nothing is written unless every edit applies. Requires WriteScripts and ownership of the script, or administrator.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "uri": { "type": "string", "description": "Script URI whose root source to edit" },
+                        "edits": {
+                            "type": "array",
+                            "description": "Edits to apply in order (max 128). Each is checked and applied in memory before anything is stored.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "old_string": { "type": "string", "description": "Text to find. Must appear exactly once unless replace_all is set." },
+                                    "new_string": { "type": "string", "description": "Text to put in its place; empty string deletes." },
+                                    "replace_all": { "type": "boolean", "description": "Replace every occurrence rather than requiring exactly one (default false)" }
+                                },
+                                "required": ["old_string", "new_string"]
+                            }
+                        },
+                        "base_sha256": { "type": "string", "description": "SHA-256 the root source is expected to have right now, as read_file reported it. The patch is refused if the stored content has moved on." },
+                        "reinit": { "type": "string", "enum": ["after", "never"], "description": "Run the script's init() once the edits land (default 'after'), or leave it alone" }
+                    },
+                    "required": ["uri", "edits"]
+                })
+            },
+            tool_edit_file,
         ),
         (
             "create_file",
@@ -9144,13 +9514,79 @@ fn tool_read_file(args: &Value, user: &UserContext) -> Value {
         return missing_arg("uri");
     };
     match get_script_authorized(user, uri) {
+        // `sha256` is what edit_file takes as base_sha256, so an editor that
+        // read the file already holds the version it is about to edit against.
         Some(content) => json!({
             "uri": uri,
             "content": content,
             "size": content.len(),
+            "sha256": sha256_hex(content.as_bytes()),
             "timestamp": iso_timestamp(),
         }),
         None => json!({ "error": format!("File not found: {}", uri) }),
+    }
+}
+
+fn tool_edit_file(args: &Value, user: &UserContext) -> Value {
+    let Some(uri) = arg_str(args, "uri") else {
+        return missing_arg("uri");
+    };
+    let Some(edits) = args.get("edits").and_then(Value::as_array) else {
+        return missing_arg("edits");
+    };
+    let reinit = match ReinitMode::parse(arg_str(args, "reinit")) {
+        Ok(reinit) => reinit,
+        Err(message) => return json!({ "error": message }),
+    };
+    let prepared = match parse_tool_edits(edits) {
+        Ok(prepared) => prepared,
+        Err(message) => return json!({ "error": message }),
+    };
+
+    match patch_script_authorized(
+        user,
+        uri,
+        &prepared,
+        arg_str(args, "base_sha256").or_else(|| arg_str(args, "sha256")),
+        Some("mcp"),
+    ) {
+        Ok(outcome) => {
+            // Bridging back to async, as edit_asset does, so the caller is
+            // told what init() did rather than that it was started.
+            let init = match (reinit, outcome.status) {
+                (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
+                (_, "unchanged") => json!({ "ran": false, "reason": "no change" }),
+                (ReinitMode::After, _) => {
+                    crate::database::run_blocking(reinitialize_after_write(uri))
+                }
+            };
+            let mut body = outcome.to_json();
+            if let Some(object) = body.as_object_mut() {
+                object.insert("success".to_string(), json!(true));
+                object.insert("uri".to_string(), json!(uri));
+                object.insert("init".to_string(), init);
+                object.insert("timestamp".to_string(), json!(iso_timestamp()));
+            }
+            body
+        }
+        Err(PatchError::AccessDenied(message)) => {
+            json!({ "error": format!("Failed to edit file: {}", message) })
+        }
+        Err(PatchError::NotFound) => {
+            json!({ "error": format!("File not found: {}", uri) })
+        }
+        Err(PatchError::Conflict { expected, actual }) => json!({
+            "error": format!(
+                "Script '{}' has changed since it was read (expected {}, stored {})",
+                uri, expected, actual
+            ),
+            "uri": uri,
+            "expected_sha256": expected,
+            "sha256": actual,
+        }),
+        Err(PatchError::Validation(message)) | Err(PatchError::Storage(message)) => {
+            json!({ "error": format!("Failed to edit file: {}", message) })
+        }
     }
 }
 
@@ -9546,30 +9982,10 @@ fn tool_edit_asset(args: &Value, user: &UserContext) -> Value {
         Err(message) => return json!({ "error": message }),
     };
 
-    let mut prepared = Vec::with_capacity(edits.len());
-    for (index, edit) in edits.iter().enumerate() {
-        let Some(old_string) = arg_str(edit, "old_string") else {
-            return json!({
-                "error": format!("edits[{}]: missing required field: old_string", index)
-            });
-        };
-        let Some(new_string) = arg_str(edit, "new_string") else {
-            return json!({
-                "error": format!(
-                    "edits[{}]: missing required field: new_string (pass \"\" to delete the text)",
-                    index
-                )
-            });
-        };
-        prepared.push(AssetEdit {
-            old_string: old_string.to_string(),
-            new_string: new_string.to_string(),
-            replace_all: edit
-                .get("replace_all")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-        });
-    }
+    let prepared = match parse_tool_edits(edits) {
+        Ok(prepared) => prepared,
+        Err(message) => return json!({ "error": message }),
+    };
 
     match patch_asset_authorized(
         user,
@@ -9598,13 +10014,13 @@ fn tool_edit_asset(args: &Value, user: &UserContext) -> Value {
             }
             body
         }
-        Err(AssetPatchError::AccessDenied) => {
-            json!({ "error": "Failed to edit asset: Access denied" })
+        Err(PatchError::AccessDenied(message)) => {
+            json!({ "error": format!("Failed to edit asset: {}", message) })
         }
-        Err(AssetPatchError::NotFound) => {
+        Err(PatchError::NotFound) => {
             json!({ "error": format!("Asset not found: {}", asset) })
         }
-        Err(AssetPatchError::Conflict { expected, actual }) => json!({
+        Err(PatchError::Conflict { expected, actual }) => json!({
             "error": format!(
                 "Asset '{}' has changed since it was read (expected {}, stored {})",
                 asset, expected, actual
@@ -9614,7 +10030,7 @@ fn tool_edit_asset(args: &Value, user: &UserContext) -> Value {
             "expected_sha256": expected,
             "sha256": actual,
         }),
-        Err(AssetPatchError::Validation(message)) | Err(AssetPatchError::Storage(message)) => {
+        Err(PatchError::Validation(message)) | Err(PatchError::Storage(message)) => {
             json!({ "error": format!("Failed to edit asset: {}", message) })
         }
     }

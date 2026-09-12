@@ -426,7 +426,7 @@ async fn read_access_alone_cannot_patch_an_asset() {
         &reader,
         uri,
         "assets_patch_authz/util.ts",
-        &[aiwebengine::engine_api::AssetEdit {
+        &[aiwebengine::engine_api::StringEdit {
             old_string: "export const n".to_string(),
             new_string: "export const hacked".to_string(),
             replace_all: false,

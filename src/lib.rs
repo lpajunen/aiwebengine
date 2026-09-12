@@ -93,6 +93,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::upsert_script_route,
         engine_api::delete_script_route,
         engine_api::read_script_route,
+        engine_api::edit_script_route,
         engine_api::script_logs_route,
         engine_api::script_logs_delete_route,
         engine_api::script_logs_stream_route,
@@ -2723,6 +2724,10 @@ async fn setup_routes(
         .route(
             "/engine/read_script",
             axum::routing::get(engine_api::read_script_route),
+        )
+        .route(
+            "/engine/edit_script",
+            axum::routing::post(engine_api::edit_script_route),
         )
         .route(
             "/engine/script_logs",

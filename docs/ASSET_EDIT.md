@@ -2,7 +2,8 @@
 
 A change to three lines of a module is three lines. `PATCH /engine/assets`
 sends that much: the text to find and the text to put in its place, against an
-asset the engine already has.
+asset the engine already has. `POST /engine/edit_script` does the same for the
+one file of a script that is not an asset — its root source.
 
 ```bash
 curl -X PATCH "https://your-engine/engine/assets?script=myapp&asset=server/move-player.ts" \
@@ -101,6 +102,58 @@ edits, which is how a `replace_all` edit reports how much it touched.
 that file is not rewritten, and `init` reports `{"ran": false, "reason": "no
 change"}`, since there is nothing for it to pick up.
 
+## The root source
+
+A script's modules are assets; the file the engine executes is not. It is the
+one that registers every route the modules serve, which makes it both the file
+an editor is least able to reproduce faithfully from memory and the one where
+losing something in a resend costs the most — so it has a patch of its own.
+
+```bash
+curl -X POST "https://your-engine/engine/edit_script" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "uri": "https://your-engine/myapp.ts",
+           "edits": [
+             {
+               "old_string": "registerRoute(\"/play\"",
+               "new_string": "registerRoute(\"/play/:id\""
+             }
+           ],
+           "base_sha256": "4b1…"
+         }'
+```
+
+Everything about the edits is the same: applied in order, all or nothing,
+`base_sha256` as the precondition, `reinit` controlling the `init()` that
+follows, and the same answer with `sha256`, `bytes`, `replacements`, `status`
+and `init`. Three things differ, all of them consequences of this being a
+script rather than a file inside one:
+
+- **It takes what writing a script takes** — the `WriteScripts` capability, plus
+  ownership of the script or administrator. `WriteAssets` is not the question
+  here: a patch is a write, and this is the script.
+- **It cannot create one.** A patch of a URI nothing is stored under is `404`,
+  not a script with a first line in it. `POST /engine/upsert_script` creates.
+- **It cannot empty one.** Edits that would delete the whole source are refused
+  rather than storing a script with nothing in it — `POST /engine/delete_script`
+  is what deleting looks like.
+
+`POST /engine/upsert_script` remains the way to write a root source the caller
+has in hand. It takes a form, as it always has; `/engine/edit_script` takes
+JSON, because a list of edits is not something form encoding expresses.
+
+The digest to aim a patch with comes from the read. `GET /engine/read_script`
+answers with the script itself, so there is nowhere in the body to put one: it
+travels as an `ETag`, and `read_file` over MCP reports it as `sha256`.
+
+```bash
+curl -i "https://your-engine/engine/read_script?uri=https://your-engine/myapp.ts"
+# HTTP/1.1 200 OK
+# content-type: application/javascript
+# etag: "4b1…"
+```
+
 ## Reading part of a file
 
 The counterpart to editing without sending the file is reading without
@@ -175,7 +228,9 @@ twenty lines can still edit them safely.
 
 `edit_asset` takes the same arguments as the endpoint and answers with the same
 body, including the `init` block. `read_asset` takes the same `lines` and
-`grep` filters.
+`grep` filters. `edit_file` is `edit_asset` for the root source — `uri` in
+place of `script` and `asset`, everything else identical — and `read_file`
+reports the `sha256` to aim it with.
 
 ```json
 {
@@ -189,5 +244,6 @@ body, including the `init` block. `read_asset` takes the same `lines` and
 ```
 
 Together they are the loop an agent editing a solution actually runs: `grep` to
-find the place, `lines` to read around it, `edit_asset` to change it, with the
-digest carried through so the change lands on the version it was written for.
+find the place, `lines` to read around it, `edit_asset` or `edit_file` to change
+it, with the digest carried through so the change lands on the version it was
+written for.

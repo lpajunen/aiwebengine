@@ -25,7 +25,10 @@ pub enum Origin {
     Post,
     /// An atomic multi-file write through `/engine/assets/batch`.
     Batch,
-    /// A string patch through `PATCH /engine/assets`.
+    /// A string patch: `PATCH /engine/assets` for one of a script's assets,
+    /// `POST /engine/edit_script` for its root source. One origin for both,
+    /// because what a history records is the act — a few lines changed in
+    /// place — and which file it landed in the manifest already says.
     Patch,
     /// An asset removed.
     Delete,
