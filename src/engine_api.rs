@@ -789,6 +789,176 @@ pub fn list_scripts_authorized(user: &UserContext) -> Vec<repository::ScriptMeta
     repository::get_all_script_metadata().unwrap_or_default()
 }
 
+/// Which of a script's files a search reads.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SearchScope {
+    /// Root sources and assets alike — what "search my code" means, since a
+    /// solution's code is mostly its modules.
+    All,
+    /// Root sources only: what this search did before it could read assets.
+    Scripts,
+    /// Assets only.
+    Assets,
+}
+
+impl SearchScope {
+    fn parse(value: Option<&str>) -> Result<Self, String> {
+        match value {
+            None | Some("all") => Ok(SearchScope::All),
+            Some("scripts") => Ok(SearchScope::Scripts),
+            Some("assets") => Ok(SearchScope::Assets),
+            Some(other) => Err(format!(
+                "Invalid scope '{}': expected 'all', 'scripts' or 'assets'",
+                other
+            )),
+        }
+    }
+
+    fn reads_scripts(self) -> bool {
+        self != SearchScope::Assets
+    }
+
+    fn reads_assets(self) -> bool {
+        self != SearchScope::Scripts
+    }
+}
+
+/// How a search across a deployment's files is narrowed.
+pub struct SearchOptions {
+    pub case_insensitive: bool,
+    pub scope: SearchScope,
+    /// One script's files rather than every script's.
+    pub script: Option<String>,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self {
+            // The default this search has always had. A caller looking for a
+            // symbol usually does not know how it is capitalised.
+            case_insensitive: true,
+            scope: SearchScope::All,
+            script: None,
+        }
+    }
+}
+
+/// How many files one search reports before it stops looking.
+const MAX_SEARCH_FILES: usize = 200;
+
+/// How many matching lines a search reports per file.
+const MAX_SEARCH_MATCHES_PER_FILE: usize = 50;
+
+/// Search a deployment's files for a pattern.
+///
+/// The counterpart of `read_asset`'s `grep`, which searches one named file: this
+/// is for the caller that does not yet know which file to name. It read only
+/// root sources, which is the smaller half of a solution — the modules are
+/// where the code is — so "which file mentions `movePlayer`" meant listing every
+/// script's assets and fetching each one.
+///
+/// A binary asset is skipped rather than refused: a search across a tree that
+/// happens to contain a PNG is a reasonable thing to ask for, and failing the
+/// whole search because of it would not be.
+pub fn search_files_authorized(
+    user: &UserContext,
+    pattern: &str,
+    options: &SearchOptions,
+) -> Result<Value, String> {
+    if pattern.is_empty() {
+        return Err("Empty search pattern: there is nothing to search for".to_string());
+    }
+    if pattern.chars().count() > MAX_GREP_PATTERN_CHARS {
+        return Err(format!(
+            "Search pattern too long (max {} characters)",
+            MAX_GREP_PATTERN_CHARS
+        ));
+    }
+    let regex = regex::RegexBuilder::new(pattern)
+        .case_insensitive(options.case_insensitive)
+        .size_limit(1 << 20)
+        .dfa_size_limit(1 << 20)
+        .build()
+        .map_err(|e| format!("Invalid search pattern: {}", e))?;
+
+    let matches_in = |text: &str| -> Vec<Value> {
+        text.lines()
+            .enumerate()
+            .filter(|(_, line)| regex.is_match(line))
+            .take(MAX_SEARCH_MATCHES_PER_FILE)
+            .map(|(index, line)| {
+                json!({
+                    "line": index + 1,
+                    "content": line.trim(),
+                    "preview": line.chars().take(200).collect::<String>(),
+                })
+            })
+            .collect()
+    };
+
+    let mut results: Vec<Value> = Vec::new();
+    let mut truncated = false;
+    for meta in list_scripts_authorized(user) {
+        if options
+            .script
+            .as_deref()
+            .is_some_and(|script| script != meta.uri)
+        {
+            continue;
+        }
+        if truncated {
+            break;
+        }
+
+        if options.scope.reads_scripts() {
+            let matches = matches_in(&meta.content);
+            if !matches.is_empty() {
+                results.push(json!({
+                    "uri": meta.uri,
+                    "matchCount": matches.len(),
+                    "matches": matches,
+                }));
+            }
+        }
+
+        // Reading a script's assets through `/engine/*` is a permission of its
+        // own, so a caller who may list the scripts is still asked for it
+        // before their modules are searched.
+        if !options.scope.reads_assets()
+            || !can_access_assets(user, &meta.uri, &Capability::ReadAssets)
+        {
+            continue;
+        }
+        for (name, asset) in repository::fetch_assets(&meta.uri) {
+            if results.len() >= MAX_SEARCH_FILES {
+                truncated = true;
+                break;
+            }
+            let Ok(text) = std::str::from_utf8(&asset.content) else {
+                continue;
+            };
+            let matches = matches_in(text);
+            if !matches.is_empty() {
+                results.push(json!({
+                    "uri": meta.uri,
+                    "asset": name,
+                    "matchCount": matches.len(),
+                    "matches": matches,
+                }));
+            }
+        }
+    }
+
+    Ok(json!({
+        "query": pattern,
+        "caseInsensitive": options.case_insensitive,
+        "filesMatched": results.len(),
+        "truncated": truncated,
+        "results": results,
+        "timestamp": iso_timestamp(),
+    }))
+}
+
 /// One log entry as JSON. `scriptUri` is what lets an all-scripts listing
 /// attribute each line to the script that logged it, and `requestId`/`kind`/
 /// `route` are what let a caller pull one invocation's lines out of it.
@@ -3077,6 +3247,68 @@ pub async fn read_script_route(
         content,
     )
         .into_response()
+}
+
+/// Query parameters for `/engine/search`.
+#[derive(Deserialize, Default)]
+pub struct SearchQuery {
+    query: Option<String>,
+    #[serde(alias = "caseInsensitive")]
+    case_insensitive: Option<bool>,
+    scope: Option<String>,
+    script: Option<String>,
+}
+
+/// Search a deployment's files for a pattern.
+///
+/// The counterpart of the `grep` on a single-file read, for the caller that
+/// does not yet know which file to name. It searches root sources and assets
+/// alike, which is the point: the modules are where most of a solution's code
+/// is, and searching only the roots meant listing every script's assets and
+/// fetching each one to answer "which file mentions this".
+#[utoipa::path(
+    get,
+    path = "/engine/search",
+    tags = ["Scripts"],
+    params(
+        ("query" = String, Query, description = "Text or regular expression to search for"),
+        ("scope" = Option<String>, Query, description = "Which files to read: 'all' (default), 'scripts' for root sources only, or 'assets'"),
+        ("script" = Option<String>, Query, description = "Search only this script's files"),
+        ("caseInsensitive" = Option<bool>, Query, description = "Whether the search ignores case (default true)"),
+    ),
+    responses(
+        (status = 200, description = "The files that matched, with the matching lines of each"),
+        (status = 400, description = "Missing or invalid parameters"),
+        (status = 403, description = "Access denied"),
+    )
+)]
+pub async fn search_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<SearchQuery>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(pattern) = query.query else {
+        return missing_param_response("query");
+    };
+    let scope = match SearchScope::parse(query.scope.as_deref()) {
+        Ok(scope) => scope,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+    let options = SearchOptions {
+        case_insensitive: query.case_insensitive.unwrap_or(true),
+        scope,
+        script: query.script,
+    };
+
+    let result =
+        tokio::task::spawn_blocking(move || search_files_authorized(&user, &pattern, &options))
+            .await
+            .unwrap_or_else(|e| Err(format!("join error: {}", e)));
+
+    match result {
+        Ok(body) => json_response(StatusCode::OK, body),
+        Err(message) => error_response(StatusCode::BAD_REQUEST, message),
+    }
 }
 
 /// A request to `/engine/edit_script`.
@@ -8550,13 +8782,15 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "search_files",
-            "Perform text search across all files (grep-like functionality)",
+            "Search a deployment's files for a pattern: script root sources and their assets alike. Use this to find which file to read when you do not know its name; read_asset's and read_file's 'grep' searches one file you can already name.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
                         "query": { "type": "string", "description": "Text or regex pattern to search for" },
-                        "caseInsensitive": { "type": "boolean", "description": "Whether search should be case-insensitive", "default": true }
+                        "caseInsensitive": { "type": "boolean", "description": "Whether search should be case-insensitive", "default": true },
+                        "scope": { "type": "string", "enum": ["all", "scripts", "assets"], "description": "Which files to read: 'all' (default), root sources only, or assets only" },
+                        "script": { "type": "string", "description": "Search only this script's files" }
                     },
                     "required": ["query"]
                 })
@@ -10047,52 +10281,23 @@ fn tool_search_files(args: &Value, user: &UserContext) -> Value {
     let Some(query) = arg_str(args, "query") else {
         return missing_arg("query");
     };
-    let case_insensitive = args
-        .get("caseInsensitive")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-
-    let regex = match regex::RegexBuilder::new(query)
-        .case_insensitive(case_insensitive)
-        .build()
-    {
-        Ok(r) => r,
-        Err(e) => return json!({ "error": format!("Failed to search files: {}", e) }),
+    let scope = match SearchScope::parse(arg_str(args, "scope")) {
+        Ok(scope) => scope,
+        Err(message) => return json!({ "error": message }),
+    };
+    let options = SearchOptions {
+        case_insensitive: args
+            .get("caseInsensitive")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        scope,
+        script: arg_str(args, "script").map(str::to_string),
     };
 
-    let mut results: Vec<Value> = Vec::new();
-    for meta in list_scripts_authorized(user) {
-        let matches: Vec<Value> = meta
-            .content
-            .lines()
-            .enumerate()
-            .filter(|(_, line)| regex.is_match(line))
-            .take(50)
-            .map(|(i, line)| {
-                json!({
-                    "line": i + 1,
-                    "content": line.trim(),
-                    "preview": line.chars().take(200).collect::<String>(),
-                })
-            })
-            .collect();
-
-        if !matches.is_empty() {
-            results.push(json!({
-                "uri": meta.uri,
-                "matchCount": matches.len(),
-                "matches": matches,
-            }));
-        }
+    match search_files_authorized(user, query, &options) {
+        Ok(body) => body,
+        Err(message) => json!({ "error": format!("Failed to search files: {}", message) }),
     }
-
-    json!({
-        "query": query,
-        "caseInsensitive": case_insensitive,
-        "filesMatched": results.len(),
-        "results": results,
-        "timestamp": iso_timestamp(),
-    })
 }
 
 fn tool_read_logs(args: &Value, user: &UserContext) -> Value {

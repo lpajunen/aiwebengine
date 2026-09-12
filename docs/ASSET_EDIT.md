@@ -268,3 +268,56 @@ Together they are the loop an agent editing a solution actually runs: `grep` to
 find the place, `lines` to read around it, `edit_asset` or `edit_file` to change
 it, with the digest carried through so the change lands on the version it was
 written for.
+
+## Finding the file in the first place
+
+`grep` searches a file the caller can already name. `GET /engine/search` and
+the `search_files` tool are for the step before that — which file mentions
+this — and read root sources and assets alike:
+
+```bash
+curl "…/engine/search?query=movePlayer"
+curl "…/engine/search?query=movePlayer&script=myapp&scope=assets"
+```
+
+Each result names the script, and the asset within it when the match was in a
+module:
+
+```json
+{
+  "query": "movePlayer",
+  "caseInsensitive": true,
+  "filesMatched": 2,
+  "truncated": false,
+  "results": [
+    {
+      "uri": "myapp",
+      "matchCount": 1,
+      "matches": [
+        {
+          "line": 4,
+          "content": "import { movePlayer } from \"./server/move-player.ts\";",
+          "preview": "…"
+        }
+      ]
+    },
+    {
+      "uri": "myapp",
+      "asset": "server/move-player.ts",
+      "matchCount": 3,
+      "matches": []
+    }
+  ]
+}
+```
+
+`scope` is `all` by default, or `scripts` for root sources only — what this
+search read before it could read assets, which is the smaller half of a
+solution, since the modules are where the code is. A binary asset is skipped
+rather than refused: a search across a tree that happens to contain a PNG is a
+reasonable thing to ask for. A listing stops after 200 files and says so with
+`truncated`, and reports at most 50 matching lines per file.
+
+Searching a script's assets takes the same permission as reading them —
+`ReadAssets` with ownership, or administrator — asked per script, so a search
+reads exactly the files the caller could have fetched one at a time.
