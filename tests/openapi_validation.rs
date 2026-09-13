@@ -736,3 +736,133 @@ async fn test_openapi_log_tail_is_marked_as_an_event_stream() {
     );
     assert_eq!(operation["x-transport"].as_str(), Some("sse"));
 }
+
+/// A limit a caller cannot find is one they meet by surprise. The document has
+/// to carry the ones this engine enforces, and carry the values it is actually
+/// running rather than the defaults it shipped with.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_openapi_publishes_the_limits_a_developer_can_meet() {
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
+
+    let spec: Value = engine
+        .client()
+        .get(format!("http://localhost:{}/engine/openapi.json", port))
+        .send()
+        .await
+        .expect("Failed to fetch OpenAPI spec")
+        .json()
+        .await
+        .expect("Failed to parse JSON");
+
+    let limits = &spec["x-aiwebengine-limits"];
+    assert!(
+        limits.is_object(),
+        "the spec should publish x-aiwebengine-limits, got {}",
+        limits
+    );
+
+    // The groups a script author asks about, each of which has bitten someone.
+    for group in [
+        "execution",
+        "size",
+        "database",
+        "fetch",
+        "graphql",
+        "scheduler",
+        "search",
+        "retention",
+    ] {
+        assert!(
+            limits[group].is_object(),
+            "x-aiwebengine-limits should describe '{}', got {}",
+            group,
+            limits
+        );
+    }
+
+    // Published numbers must be the ones the engine enforces, not a second
+    // copy that can drift from them.
+    assert_eq!(
+        limits["database"]["maxTablesPerScript"].as_u64(),
+        Some(aiwebengine::db_schema_utils::MAX_TABLES_PER_SCRIPT as u64),
+    );
+    assert_eq!(
+        limits["database"]["maxQueryLimit"].as_i64(),
+        Some(aiwebengine::repository::MAX_QUERY_LIMIT),
+    );
+    assert_eq!(
+        limits["fetch"]["maxResponseBytes"].as_u64(),
+        Some(aiwebengine::http_client::MAX_RESPONSE_SIZE as u64),
+    );
+    assert_eq!(
+        limits["size"]["maxStorageValueBytes"].as_u64(),
+        Some(aiwebengine::repository::MAX_STORAGE_VALUE_BYTES as u64),
+    );
+    assert_eq!(
+        limits["scheduler"]["minRecurringIntervalMs"].as_i64(),
+        Some(aiwebengine::scheduler::MIN_RECURRING_INTERVAL_MS),
+    );
+
+    // The execution budget is configuration, so it has to arrive from the
+    // running engine rather than from a default written into the document.
+    assert_eq!(
+        limits["execution"]["timeoutMs"].as_u64(),
+        Some(aiwebengine::js_engine::current_execution_limits().timeout_ms),
+    );
+
+    // The constraints that are not numbers are the ones that surprise people,
+    // so they are published too.
+    let notes = limits["notes"].as_array().expect("notes should be a list");
+    assert!(
+        !notes.is_empty(),
+        "the execution model belongs in the document beside the numbers"
+    );
+
+    // And the prose half points at the machine-readable half.
+    let description = spec["info"]["description"].as_str().unwrap_or_default();
+    assert!(
+        description.contains("x-aiwebengine-limits"),
+        "the document's own description should say where the limits are, got {:?}",
+        description
+    );
+}
+
+/// The type definitions are the other document a script author reads, and they
+/// cannot link to the spec for the constraints that shape how code is written
+/// — the ones that are not numbers at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_type_definitions_describe_the_execution_model() {
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
+
+    let types = engine
+        .client()
+        .get(format!(
+            "http://localhost:{}/engine/types/v{}/aiwebengine.d.ts",
+            port,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .send()
+        .await
+        .expect("Failed to fetch type definitions")
+        .text()
+        .await
+        .expect("Failed to read type definitions");
+
+    for topic in [
+        "x-aiwebengine-limits",
+        "There are no timers",
+        "There is no concurrency",
+        "fresh runtime",
+        "50 tables per script",
+        "at most 5 redirects",
+        "Retention",
+    ] {
+        assert!(
+            types.contains(topic),
+            "the type definitions should describe '{}'",
+            topic
+        );
+    }
+}

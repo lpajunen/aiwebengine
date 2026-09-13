@@ -4481,7 +4481,10 @@ async fn db_query_table(
     }
 
     // LIMIT (default 100, max 1000)
-    let limit_val = options.limit.unwrap_or(100).min(1000);
+    let limit_val = options
+        .limit
+        .unwrap_or(DEFAULT_QUERY_LIMIT)
+        .min(MAX_QUERY_LIMIT);
     param_count += 1;
     sql.push_str(&format!(" LIMIT ${}::int8", param_count));
 
@@ -5352,6 +5355,28 @@ pub fn prune_log_messages(retention: LogRetention) -> AppResult<u64> {
 /// storage failure.
 pub const MAX_SCRIPT_CONTENT_BYTES: usize = 1_000_000;
 
+/// Largest content an asset may hold.
+///
+/// The storage-side cap, which is the one a caller actually meets: the write
+/// endpoints bound a request body a little higher (`engine_api::MAX_ASSET_BYTES`),
+/// so a body between the two is accepted by the router and refused here.
+pub const MAX_ASSET_CONTENT_BYTES: usize = 10_000_000;
+
+/// Largest value either Web Storage store — `scriptStorage`, `personalStorage`
+/// — or a secret may hold. Named so the four write paths that enforce it and
+/// the documents that publish it cannot drift apart.
+pub const MAX_STORAGE_VALUE_BYTES: usize = 1_000_000;
+
+/// Longest an asset's URI — its path within the owning script — may be.
+pub const MAX_ASSET_URI_CHARS: usize = 255;
+
+/// Rows a `database.query` returns when the caller names no limit, and the
+/// ceiling a named one is clamped to. A caller asking for more is not refused,
+/// it is answered with [`MAX_QUERY_LIMIT`] rows.
+pub const DEFAULT_QUERY_LIMIT: i64 = 100;
+/// See [`DEFAULT_QUERY_LIMIT`].
+pub const MAX_QUERY_LIMIT: i64 = 1000;
+
 /// Upsert script with error handling
 pub fn upsert_script(uri: &str, content: &str) -> AppResult<()> {
     run_blocking(upsert_script_async(uri, content))
@@ -5876,8 +5901,7 @@ fn validate_asset(asset: &Asset) -> AppResult<()> {
         return Err(RepositoryError::InvalidData("Asset URI cannot be empty".to_string()).into());
     }
 
-    if asset.content.len() > 10_000_000 {
-        // 10MB limit for assets
+    if asset.content.len() > MAX_ASSET_CONTENT_BYTES {
         return Err(
             RepositoryError::InvalidData("Asset content too large (>10MB)".to_string()).into(),
         );
@@ -6037,8 +6061,7 @@ pub fn set_script_properties_item(script_uri: &str, key: &str, value: &str) -> A
         return Err(RepositoryError::InvalidData("Key cannot be empty".to_string()).into());
     }
 
-    if value.len() > 1_000_000 {
-        // 1MB limit per value
+    if value.len() > MAX_STORAGE_VALUE_BYTES {
         return Err(RepositoryError::InvalidData("Value too large (>1MB)".to_string()).into());
     }
 
@@ -6125,8 +6148,7 @@ pub fn set_user_properties_item(
         return Err(RepositoryError::InvalidData("Key cannot be empty".to_string()).into());
     }
 
-    if value.len() > 1_000_000 {
-        // 1MB limit per value
+    if value.len() > MAX_STORAGE_VALUE_BYTES {
         return Err(RepositoryError::InvalidData("Value too large (>1MB)".to_string()).into());
     }
 
@@ -6204,8 +6226,7 @@ pub fn set_script_secret_item(script_uri: &str, key: &str, value: &str) -> AppRe
         return Err(RepositoryError::InvalidData("Key cannot be empty".to_string()).into());
     }
 
-    if value.len() > 1_000_000 {
-        // 1MB limit per value
+    if value.len() > MAX_STORAGE_VALUE_BYTES {
         return Err(RepositoryError::InvalidData("Value too large (>1MB)".to_string()).into());
     }
 
@@ -6288,8 +6309,7 @@ pub fn set_user_secret_item(
         return Err(RepositoryError::InvalidData("Key cannot be empty".to_string()).into());
     }
 
-    if value.len() > 1_000_000 {
-        // 1MB limit per value
+    if value.len() > MAX_STORAGE_VALUE_BYTES {
         return Err(RepositoryError::InvalidData("Value too large (>1MB)".to_string()).into());
     }
 

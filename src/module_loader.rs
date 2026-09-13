@@ -8,7 +8,7 @@ use std::path::{Component, Path};
 use std::sync::{Arc, OnceLock};
 use tracing::debug;
 
-const MAX_MODULE_SPECIFIER_LENGTH: usize = 255;
+pub const MAX_MODULE_SPECIFIER_LENGTH: usize = 255;
 
 /// Cache of fully-prepared executable programs, keyed by root `script_uri`.
 ///

@@ -3,10 +3,10 @@ use handlebars::Handlebars;
 use pulldown_cmark::{Options, Parser, html};
 
 /// Maximum size for markdown input (1MB)
-const MAX_MARKDOWN_SIZE: usize = 1_000_000;
+pub const MAX_MARKDOWN_SIZE: usize = 1_000_000;
 
 /// Maximum size for Handlebars template input (1MB)
-const MAX_TEMPLATE_SIZE: usize = 1_000_000;
+pub const MAX_TEMPLATE_SIZE: usize = 1_000_000;
 
 /// Convert markdown string to HTML
 ///

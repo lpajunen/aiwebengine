@@ -21,7 +21,7 @@ use tokio::time::{Duration, interval};
 use tracing::{debug, error, info, warn};
 
 /// Maximum number of concurrent subscriptions per WebSocket connection
-const MAX_SUBSCRIPTIONS_PER_CONNECTION: usize = 20;
+pub const MAX_SUBSCRIPTIONS_PER_CONNECTION: usize = 20;
 
 /// Keep-alive ping interval (30 seconds)
 const PING_INTERVAL_SECS: u64 = 30;

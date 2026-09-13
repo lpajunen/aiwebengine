@@ -23,14 +23,14 @@ use crate::security::{
 };
 
 /// Maximum asset size accepted by the write paths (same limit as the sandbox).
-const MAX_ASSET_BYTES: usize = 10 * 1024 * 1024;
+pub const MAX_ASSET_BYTES: usize = 10 * 1024 * 1024;
 
 /// Maximum number of files one batch write may carry.
-const MAX_BATCH_FILES: usize = 256;
+pub const MAX_BATCH_FILES: usize = 256;
 
 /// Maximum total decoded size of one batch write. The per-file ceiling still
 /// applies to each file, so a batch cannot smuggle in an oversized asset.
-const MAX_BATCH_BYTES: usize = MAX_ASSET_BYTES;
+pub const MAX_BATCH_BYTES: usize = MAX_ASSET_BYTES;
 
 /// Request body ceiling for the batch route: the decoded ceiling, plus the
 /// third base64 adds, plus room for the JSON envelope around it.
@@ -41,17 +41,17 @@ const MAX_BATCH_BYTES: usize = MAX_ASSET_BYTES;
 pub const MAX_BATCH_BODY_BYTES: usize = MAX_BATCH_BYTES * 4 / 3 + 1024 * 1024;
 
 /// Maximum number of edits one patch may carry.
-const MAX_PATCH_EDITS: usize = 128;
+pub const MAX_PATCH_EDITS: usize = 128;
 
 /// How many matching lines a `grep=` read reports before it stops looking.
-const MAX_GREP_MATCHES: usize = 200;
+pub const MAX_GREP_MATCHES: usize = 200;
 
 /// How much of a matching line a `grep=` read echoes back.
-const MAX_GREP_LINE_CHARS: usize = 512;
+pub const MAX_GREP_LINE_CHARS: usize = 512;
 
 /// Longest `grep=` pattern accepted, so a read cannot hand the regex engine an
 /// arbitrarily large program to compile.
-const MAX_GREP_PATTERN_CHARS: usize = 512;
+pub const MAX_GREP_PATTERN_CHARS: usize = 512;
 
 fn iso_timestamp() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
@@ -844,10 +844,10 @@ impl Default for SearchOptions {
 }
 
 /// How many files one search reports before it stops looking.
-const MAX_SEARCH_FILES: usize = 200;
+pub const MAX_SEARCH_FILES: usize = 200;
 
 /// How many matching lines a search reports per file.
-const MAX_SEARCH_MATCHES_PER_FILE: usize = 50;
+pub const MAX_SEARCH_MATCHES_PER_FILE: usize = 50;
 
 /// Search a deployment's files for a pattern.
 ///
@@ -3019,6 +3019,22 @@ pub fn generate_merged_openapi_spec() -> String {
         }
     }
 
+    // What a caller — or a script written against this engine — may spend, as
+    // this deployment is configured. A limit nobody can find is one every
+    // caller meets by surprise, and the numbers here are read from the code
+    // that enforces them rather than retyped beside it.
+    match serde_json::to_value(crate::limits::snapshot()) {
+        Ok(limits) => {
+            if let Some(spec) = rust_spec.as_object_mut() {
+                spec.insert("x-aiwebengine-limits".to_string(), limits);
+            }
+        }
+        Err(e) => warn!(
+            "Failed to serialize engine limits for the OpenAPI document: {}",
+            e
+        ),
+    }
+
     match serde_json::to_string_pretty(&rust_spec) {
         Ok(json) => json,
         Err(e) => json!({ "error": format!("Failed to serialize merged OpenAPI spec: {}", e) })
@@ -3056,6 +3072,11 @@ pub struct ScriptParams {
 }
 
 /// Create or update a script.
+///
+/// A root source is bounded by `repository.max_script_size_bytes` — 1 MB by
+/// default, and published with every other limit as `x-aiwebengine-limits` in
+/// this document. A script larger than that is a script whose code belongs in
+/// modules, which are assets and are bounded separately.
 #[utoipa::path(
     post,
     path = "/engine/upsert_script",
@@ -3286,6 +3307,11 @@ pub struct SearchQuery {
 
 /// Search a deployment's files for a pattern.
 ///
+/// One search reads at most 200 files and reports at most 50 matches from each;
+/// a pattern is at most 512 characters and a matching line is truncated to 512.
+/// A result that hit a ceiling carries `truncated: true`, so a caller can
+/// narrow the query rather than believe it has seen everything.
+///
 /// The counterpart of the `grep` on a single-file read, for the caller that
 /// does not yet know which file to name. It searches root sources and assets
 /// alike, which is the point: the modules are where most of a solution's code
@@ -3349,6 +3375,9 @@ pub struct ScriptPatchBody {
 }
 
 /// Edit a script's root source in place.
+///
+/// Up to 128 edits in one request, all of which must match, and a result that
+/// exceeds the script size limit is refused before anything is written.
 ///
 /// The counterpart of `PATCH /engine/assets` for the one file of a script that
 /// is not an asset. What is *not* in the request is the point of both: a
@@ -3515,6 +3544,11 @@ pub struct TestRunParams {
 }
 
 /// Run a script's test modules and report the verdicts.
+///
+/// Two budgets bound a run: one per test module and one for the whole run
+/// (`javascript.test_timeout_ms` and `test_run_timeout_ms`, 30 s and 120 s by
+/// default). Either reached, the report comes back with `timedOut: true` and
+/// the verdicts gathered so far rather than nothing.
 #[utoipa::path(
     post,
     path = "/engine/run_tests",
@@ -3763,6 +3797,12 @@ fn candidate_overlay(
 }
 
 /// Check what a script would do if it were deployed.
+///
+/// `timeout_ms` is clamped to between the deploy budget and 60,000: below the
+/// budget it would fail a script a deploy would have accepted, and a check
+/// holds a blocking thread for its whole duration. Without one, the ceiling is
+/// several times the deploy budget, so a slow init() is measured rather than
+/// interrupted.
 #[utoipa::path(
     post,
     path = "/engine/check",
@@ -3967,6 +4007,12 @@ pub fn authorize_eval(user: &UserContext, uri: &str) -> Result<(), CheckRefusal>
 }
 
 /// Evaluate a snippet against a script's sandbox.
+///
+/// The snippet runs under the engine's own execution limits — wall clock,
+/// memory and stack, as published in `x-aiwebengine-limits` — and `timeout_ms`
+/// can only shorten them. Captured `console` output stops at 1,000 lines and
+/// reports how many were dropped, so a snippet that logs in a loop cannot grow
+/// the answer without bound.
 #[utoipa::path(
     post,
     path = "/engine/eval",
@@ -4195,6 +4241,11 @@ fn parse_since(raw: &str) -> Option<std::time::SystemTime> {
 /// Entries come back oldest-first for a single script and newest-first for the
 /// all-scripts view. `level`, `since` and `limit` filter in SQL; `limit` keeps
 /// the newest matching entries.
+///
+/// What is here to be read is bounded by retention: a line survives only while
+/// it is within both the newest `logs.keep_per_script` of its script and
+/// `logs.retention_hours` of now — either clause alone removes it. The values
+/// in force are in `x-aiwebengine-limits`. A log is a diagnostic, not a store.
 #[utoipa::path(
     get,
     path = "/engine/script_logs",
@@ -4851,6 +4902,11 @@ pub async fn assets_get_route(
 
 /// Create or update an asset for a script.
 ///
+/// One asset holds up to 10,000,000 bytes of content, and its URI up to 255
+/// characters; `content` is base64, so the request body is about a third
+/// larger than the asset it carries. The exact values are in
+/// `x-aiwebengine-limits`.
+///
 /// `If-None-Match: *` makes it a create: the write is refused if the asset is
 /// already there. It is a precondition on the write rather than a check before
 /// it, because a caller that reads first and writes second has a window in
@@ -4952,6 +5008,11 @@ pub async fn assets_post_route(
 /// while `/engine/check` would check exactly that change in one request. A
 /// deletion is the same argument: removing a module is as much a change as
 /// rewriting one, and a check can already describe it.
+///
+/// One batch carries at most 256 files and 10 MB of decoded content. The
+/// request body is bounded a little above that, since base64 costs a third —
+/// a change larger than one batch is two batches and therefore two init()
+/// runs, so size the split around the states the script can be left in.
 #[utoipa::path(
     post,
     path = "/engine/assets/batch",
@@ -5112,6 +5173,10 @@ fn batch_outcome_json(script: &str, outcome: &ScriptFilesOutcome, init: Value) -
 }
 
 /// Edit one of a script's assets in place.
+///
+/// Up to 128 edits in one request; they are applied in order and the whole
+/// request is refused if any one of them does not match, so a rejected call
+/// leaves the asset as it was.
 ///
 /// The point of it is what is *not* in the request: a caller changing three
 /// lines of a module sends those three lines, not the module. That keeps a
@@ -5640,6 +5705,10 @@ fn file_diff_to_json(file: &revisions::FileDiff) -> Value {
 ///
 /// With neither `from` nor `to`, this is the newest change — `to` is head and
 /// `from` is what head was computed against.
+///
+/// A diff is rendered up to 512 KB; past that the answer is marked truncated,
+/// since a diff nobody can read is worth less than knowing there is more of
+/// it.
 #[utoipa::path(
     get,
     path = "/engine/revisions/diff",

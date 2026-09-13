@@ -38,6 +38,7 @@ pub mod graphql_ws;
 pub mod hosts;
 pub mod http_client;
 pub mod js_engine;
+pub mod limits;
 pub mod log_retention;
 pub mod mcp;
 pub mod mcp_client;
@@ -87,6 +88,14 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
 /// OpenAPI documentation for all Rust-implemented endpoints
 #[derive(OpenApi)]
 #[openapi(
+    info(
+        title = "aiwebengine",
+        description = "The engine's own HTTP surface, plus every route, asset route and stream the scripts installed on this host have registered.
+
+**Limits.** The exact numbers this deployment enforces are published as `x-aiwebengine-limits` at the root of this document — execution budgets, sizes, database and fetch bounds, retention, and the throttled surfaces — because several of them are configuration and a document that named the shipped defaults would be describing some other engine. The JavaScript API a script is written against carries the same limits in prose, in the type definitions at `/engine/types/{version}/aiwebengine.d.ts`.
+
+What a script may spend is worth knowing before writing one: each invocation gets a fresh runtime (nothing assigned at module scope survives a request), there are no timers, every host call blocks rather than yielding, and imports resolve to the script's own assets — no dynamic `import()`, no npm."
+    ),
     paths(
         health_handler,
         engine_api::cluster_health_route,
@@ -1596,6 +1605,13 @@ pub async fn start_server_with_config(
     // pruner enforces.
     if !log_retention::configure(log_retention::LogRetention::from_config(&config.logs)) {
         debug!("Log retention was already configured");
+    }
+
+    // Every limit a solution developer can meet, captured so the OpenAPI
+    // document publishes what this engine enforces rather than the defaults it
+    // shipped with.
+    if !limits::configure(&config) {
+        debug!("Developer-facing limits were already configured");
     }
 
     // Test budgets: one per test module, one for a whole run.

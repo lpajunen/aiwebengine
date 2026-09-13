@@ -331,6 +331,15 @@ impl RateLimiter {
         self
     }
 
+    /// The budget configured for a named bucket — "ip", "login_failure",
+    /// "client_registration", "git_sync", "endpoint", "user", "global".
+    ///
+    /// Exists so the limits this engine publishes are read from the limiter it
+    /// is running rather than retyped into a document beside it.
+    pub fn config_named(&self, name: &str) -> Option<RateLimitConfig> {
+        self.configs.get(name).cloned()
+    }
+
     /// Check rate limit for a key
     pub async fn check_rate_limit(&self, key: RateLimitKey, tokens: u32) -> RateLimitResult {
         let config = self.get_config(&key);

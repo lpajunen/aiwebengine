@@ -91,6 +91,93 @@ declare function init(context?: HandlerContext): void;
  */
 
 // ============================================================================
+// Limits
+// ============================================================================
+
+/**
+ * What a script may spend, and how large anything it handles may be.
+ *
+ * The numbers below are the shipped defaults. Several of them are
+ * configuration, so an engine you did not configure yourself may enforce
+ * others: `GET /engine/openapi.json` publishes what *that* engine is running
+ * as `x-aiwebengine-limits`, generated from the code that enforces it. This
+ * file is compiled into the binary and cannot know.
+ *
+ * **The execution model.** These are not numbers, and they are what surprises
+ * people arriving from a browser or from Node:
+ *
+ * - Every invocation gets a fresh runtime. A script's top-level program is
+ *   re-evaluated per request, so nothing assigned at module scope survives one
+ *   request into the next — a cache, a counter, a connection. Persist through
+ *   `scriptStorage`, `personalStorage` or `database`.
+ * - There are no timers. `setTimeout` and `setInterval` do not exist, and a
+ *   promise still pending when a handler returns can never settle: there is
+ *   nothing left to wait *for*. Use `schedulerService` for later work.
+ * - There is no concurrency. Every host call — `fetch`, `database`,
+ *   `dispatcher.sendMessage`, `McpClient` — blocks until it has an answer.
+ *   `await` sequences work rather than overlapping it, so `Promise.all` over
+ *   five fetches gives five correct answers and makes five requests one after
+ *   another.
+ * - Imports resolve to this script's own assets. A specifier is relative
+ *   (`./x.ts`, `../y.ts`) or an asset-root path (`server/x.ts`), at most 255
+ *   characters; there is no dynamic `import()`, no npm and no node built-ins.
+ * - Engine administration — writing scripts and assets, users, secrets of
+ *   other scripts, logs — is not reachable from JavaScript at all. It lives on
+ *   the `/engine/*` endpoints and the engine MCP tools.
+ *
+ * **Budgets.** One invocation gets `javascript.execution_timeout_ms` of wall
+ * clock (10 s), 128 MB of memory and a 512 KB stack — about 500 frames of
+ * recursion, past which QuickJS throws an error the script can see. `init()`
+ * gets its own budget (`javascript.init_timeout_ms`, the same by default), a
+ * test module 30 s and a whole test run 120 s.
+ *
+ * The budget is enforced between JavaScript operations *and* as a ceiling on
+ * each host call, so a slow database statement cannot outlive it. What it
+ * cannot do is interrupt a statement already running inside Postgres: that is
+ * what `repository.statement_timeout_ms` (30 s), `lock_timeout_ms` (5 s) and
+ * `idle_in_transaction_timeout_ms` (5 min) are for, and why
+ * `database.beginTransaction(timeoutMs)` can only tighten them.
+ *
+ * At most `javascript.max_concurrent_executions` scripts run at once (200).
+ * Past that a request waits for a slot inside the timeout it already had,
+ * rather than being refused.
+ *
+ * **Sizes.** A script's root source is 1 MB, one asset 10,000,000 bytes with a
+ * URI of at most 255 characters, one `scriptStorage` / `personalStorage` value
+ * 1 MB, one secret 1 MB, a `fetch` response 10 MB, and
+ * `convert.markdown_to_html` / `render_handlebars_template` 1 MB of input
+ * each. A request arriving at one of your routes is bounded by
+ * `security.max_request_body_bytes` (10 MB), or by
+ * `repository.max_upload_size_bytes` plus framing when it is form-encoded or
+ * multipart (10 MB); past either, the caller gets a 413 and your handler is
+ * never entered. A GraphQL query executed through `graphQLRegistry` is at most
+ * 100,000 characters with 50,000 of variables.
+ *
+ * **The script database.** 50 tables per script, 50 columns per table, and
+ * identifiers of at most 63 characters matching `^[a-z][a-z0-9_]*$`.
+ * `database.query` returns 100 rows when you name no limit and clamps a named
+ * one to 1000 — silently, so a query wanting more has to page. The connection
+ * pool (32) is shared by every script on the instance, and each call holds a
+ * connection for its whole round trip.
+ *
+ * **Network.** `fetch` speaks http and https only, refuses localhost and
+ * private, loopback and link-local addresses — including a public host that
+ * resolves to one, at every hop — follows at most 5 redirects within one
+ * budget, and understands `gzip` and `deflate`. Asking for `br` or `zstd` is
+ * an error rather than an unreadable body.
+ *
+ * **Scheduled jobs.** A recurring interval is at least 100 ms and a job name
+ * 1-64 characters.
+ *
+ * **Retention.** Logs are not storage: a line survives only while it is within
+ * both the newest 1000 of its script and 168 hours of now, and either clause
+ * alone removes it. Revisions are kept for 30 days *and* the newest 50 per
+ * script — a revision has to fall outside both before it goes — and a labelled
+ * revision, the newest that initialised cleanly, and the newest of each script
+ * are kept regardless.
+ */
+
+// ============================================================================
 // HTTP Request and Response Types
 // ============================================================================
 
@@ -502,9 +589,13 @@ interface AssetStorage {
 
   /**
    * Create or update an asset owned by this script
-   * @param name - Asset name/URI
+   *
+   * The name is at most 255 characters and may not traverse (`..`); the
+   * content is at most 10,000,000 bytes. Either exceeded, this answers with
+   * the reason rather than throwing.
+   * @param name - Asset name/URI (1-255 characters)
    * @param mimetype - MIME type (e.g., "image/png", "text/css")
-   * @param contentBase64 - Base64-encoded content
+   * @param contentBase64 - Base64-encoded content (max 10,000,000 bytes)
    * @returns Operation result message
    * @example
    * assetStorage.upsertAsset("logo.svg", "image/svg+xml", base64Content);
@@ -756,7 +847,7 @@ interface SchedulerService {
    * @param options - Job options
    * @param options.handler - Name of the handler function to call
    * @param options.runAt - UTC ISO timestamp when to run (e.g., "2025-12-17T15:30:00Z")
-   * @param options.name - Optional job name/key
+   * @param options.name - Optional job name/key (1-64 characters)
    * @returns Result message with job details
    * @example
    * const oneHourFromNow = new Date(Date.now() + 3600000).toISOString();
@@ -781,7 +872,7 @@ interface SchedulerService {
    * @param options.handler - Name of the handler function to call
    * @param options.intervalMilliseconds - Interval in milliseconds (minimum 100)
    * @param options.intervalMinutes - Interval in minutes (minimum 1, backward compatible)
-   * @param options.name - Optional job name/key
+   * @param options.name - Optional job name/key (1-64 characters)
    * @param options.startAt - Optional UTC ISO timestamp for first run
    * @returns Result message with job details
    * @example
@@ -899,8 +990,8 @@ interface GraphQLRegistry {
 
   /**
    * Execute a GraphQL query internally
-   * @param query - GraphQL query string
-   * @param variables - Query variables (optional)
+   * @param query - GraphQL query string (1 to 100,000 characters)
+   * @param variables - Query variables as JSON (optional, max 50,000 characters)
    * @returns JSON string with query results
    * @example
    * const result = graphQLRegistry.executeGraphQL(
@@ -1233,6 +1324,13 @@ interface FetchResponse {
  * `Promise.all` over several fetches gives the right answers and runs them one
  * after another.
  *
+ * Limits: http and https only; localhost and private, loopback and link-local
+ * addresses are refused, including a public host that resolves to one and
+ * every hop of a redirect chain; at most 5 redirects and 10 MB of response;
+ * and the 30 s default timeout is shortened to whatever is left of the
+ * handler's execution budget, so a request cannot outlive the script that made
+ * it.
+ *
  * Responses are decompressed for you: the request offers `gzip, deflate` and
  * anything that comes back under one of those is inflated before you see it,
  * so `body` is text either way and `content-encoding` and `content-length` are
@@ -1319,6 +1417,10 @@ type DatabaseAnswer = string & DatabaseResult & PromiseLike<DatabaseResult>;
 interface Database {
   /**
    * Create a new table for this script
+   *
+   * A script may have 50 tables, each with 50 columns, and a name is at most
+   * 63 characters matching `^[a-z][a-z0-9_]*$`. Reaching a limit is an error
+   * in the result, not a thrown exception.
    * @param tableName - Logical table name (will be prefixed with script namespace)
    * @returns JSON string with result: {success: boolean, tableName: string, physicalName: string} or {error: string}
    * @example
@@ -1857,6 +1959,11 @@ interface Database {
  * Console logging interface
  * Note: reading and pruning stored log entries is engine administration, not a
  * script API — use `GET|DELETE /engine/script_logs` or the equivalent MCP tools.
+ *
+ * A log is a diagnostic rather than a store: a line survives only while it is
+ * within both the newest 1000 of this script and 168 hours of now, and either
+ * clause alone removes it. Anything that has to last belongs in `database` or
+ * `scriptStorage`.
  */
 interface Console {
   /**
@@ -2043,7 +2150,7 @@ interface MessageDispatcher {
 interface Convert {
   /**
    * Convert markdown string to HTML
-   * @param markdown - Markdown content to convert
+   * @param markdown - Markdown content to convert (1 byte to 1 MB)
    * @returns HTML string
    * @example
    * const html = convert.markdown_to_html("# Hello\n\nThis is **bold**");
@@ -2052,7 +2159,7 @@ interface Convert {
 
   /**
    * Render a Handlebars template with data
-   * @param template - Handlebars template string
+   * @param template - Handlebars template string (1 byte to 1 MB)
    * @param dataJson - JSON string with template data
    * @returns Rendered template string
    * @example

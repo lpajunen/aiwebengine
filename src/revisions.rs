@@ -1546,7 +1546,7 @@ pub fn spawn_pruner(
 /// A caller asking what changed between two revisions wants to read the
 /// result. Past this the response is a data dump, and the files it could not
 /// show are still listed by name so nothing goes missing silently.
-const MAX_DIFF_BYTES: usize = 512 * 1024;
+pub const MAX_DIFF_BYTES: usize = 512 * 1024;
 
 /// What happened to one file between two revisions.
 #[derive(Debug, Clone)]

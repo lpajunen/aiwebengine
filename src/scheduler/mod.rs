@@ -12,7 +12,11 @@ use uuid::Uuid;
 use crate::{js_engine, repository};
 
 static GLOBAL_SCHEDULER: OnceLock<Arc<Scheduler>> = OnceLock::new();
-const MIN_RECURRING_INTERVAL_MS: i64 = 100;
+pub const MIN_RECURRING_INTERVAL_MS: i64 = 100;
+/// Longest a scheduled job's name may be. One to this many characters: a name
+/// is a key a later `registerOnce` replaces by, so an empty one names nothing
+/// and an unbounded one is a column this engine would have to widen.
+pub const MAX_JOB_NAME_CHARS: usize = 64;
 const DB_CLAIM_BATCH_SIZE: i64 = 32;
 const DB_LOCK_TTL_SECONDS: i64 = 30;
 const DB_ONE_OFF_RETRY_DELAY_SECONDS: i64 = 2;
@@ -444,7 +448,7 @@ impl Scheduler {
     fn normalize_key(handler_name: &str, key: Option<String>) -> Result<String, SchedulerError> {
         let chosen = key.unwrap_or_else(|| handler_name.to_string());
         let trimmed = chosen.trim();
-        if trimmed.is_empty() || trimmed.len() > 64 {
+        if trimmed.is_empty() || trimmed.len() > MAX_JOB_NAME_CHARS {
             return Err(SchedulerError::InvalidJobName);
         }
         Ok(trimmed.to_string())

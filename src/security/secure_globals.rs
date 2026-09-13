@@ -338,6 +338,13 @@ pub type ConsoleSink = std::sync::Arc<std::sync::Mutex<ConsoleCapture>>;
 /// told how many.
 pub const MAX_CAPTURED_CONSOLE_LINES: usize = 1_000;
 
+/// Longest query `graphQLRegistry.executeGraphQL` accepts, in characters, and
+/// longest JSON `variables` string beside it. Named so the limits the engine
+/// publishes are the ones this call enforces.
+pub const MAX_GRAPHQL_QUERY_CHARS: usize = 100_000;
+/// See [`MAX_GRAPHQL_QUERY_CHARS`].
+pub const MAX_GRAPHQL_VARIABLES_CHARS: usize = 50_000;
+
 fn parse_filter_match_mode(
     match_mode: Option<String>,
 ) -> JsResult<crate::stream_registry::FilterMatchMode> {
@@ -830,16 +837,23 @@ impl SecureGlobalContext {
                 }
 
                 // Validate asset URI (inline validation since we can't call async)
-                if uri.is_empty() || uri.len() > 255 {
-                    return Ok("Invalid asset URI: must be 1-255 characters".to_string());
+                if uri.is_empty() || uri.len() > repository::MAX_ASSET_URI_CHARS {
+                    return Ok(format!(
+                        "Invalid asset URI: must be 1-{} characters",
+                        repository::MAX_ASSET_URI_CHARS
+                    ));
                 }
                 if uri.contains("..") || uri.contains('\\') {
                     return Ok("Invalid asset URI: path traversal not allowed".to_string());
                 }
 
-                // Validate content size (10MB limit)
-                if content.len() > 10 * 1024 * 1024 {
-                    return Ok("Asset too large (max 10MB)".to_string());
+                // The storage-side limit, so this path refuses exactly what
+                // the repository would refuse rather than a little more.
+                if content.len() > repository::MAX_ASSET_CONTENT_BYTES {
+                    return Ok(format!(
+                        "Asset too large (max {} bytes)",
+                        repository::MAX_ASSET_CONTENT_BYTES
+                    ));
                 }
 
                 // Log the operation attempt using spawn to avoid runtime conflicts
@@ -1465,13 +1479,13 @@ impl SecureGlobalContext {
                 }
 
                 // Validate query
-                if query.is_empty() || query.len() > 100_000 {
+                if query.is_empty() || query.len() > MAX_GRAPHQL_QUERY_CHARS {
                     return Ok("{\"errors\": [{\"message\": \"Invalid query: must be between 1 and 100,000 characters\"}]}".to_string());
                 }
 
                 // Parse variables if provided
                 let variables = if let Some(vars_json) = variables_json {
-                    if vars_json.len() > 50_000 {
+                    if vars_json.len() > MAX_GRAPHQL_VARIABLES_CHARS {
                         return Ok("{\"errors\": [{\"message\": \"Variables too large: max 50,000 characters\"}]}".to_string());
                     }
                     match serde_json::from_str::<serde_json::Value>(&vars_json) {

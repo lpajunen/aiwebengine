@@ -25,13 +25,13 @@ use tracing::{debug, info};
 use url::Url;
 
 /// Maximum response size (10MB)
-const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024;
+pub const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024;
 
 /// Default request timeout (30 seconds)
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Maximum redirects followed per fetch (each hop is re-validated)
-const MAX_REDIRECTS: usize = 5;
+pub const MAX_REDIRECTS: usize = 5;
 
 /// Content codings this client asks for and can undo.
 ///
@@ -40,7 +40,7 @@ const MAX_REDIRECTS: usize = 5;
 /// `zstd` here without being able to inflate them would hand a script a body
 /// it cannot read. `gzip` and `deflate` are what `flate2` — already a
 /// dependency, for the git archives — gives us.
-const SUPPORTED_ENCODINGS: &str = "gzip, deflate";
+pub const SUPPORTED_ENCODINGS: &str = "gzip, deflate";
 
 /// Shared connection-pooled client. Redirects are disabled: `fetch` follows
 /// them manually so every hop gets URL and DNS validation (a public URL
