@@ -126,10 +126,12 @@ declare function init(context?: HandlerContext): void;
  *   the `/engine/*` endpoints and the engine MCP tools.
  *
  * **Budgets.** One invocation gets `javascript.execution_timeout_ms` of wall
- * clock (10 s), 128 MB of memory and a 512 KB stack — about 500 frames of
+ * clock (10 s), 128 MB of memory and a 1 MB stack — about 1000 frames of
  * recursion, past which QuickJS throws an error the script can see. `init()`
- * gets its own budget (`javascript.init_timeout_ms`, the same by default), a
- * test module 30 s and a whole test run 120 s.
+ * gets its own budget (`javascript.init_timeout_ms`, 30 s), because it runs
+ * once per deployment rather than once per request and a script whose `init()`
+ * is cut off does not serve at all. A test module gets 30 s and a whole test
+ * run 300 s.
  *
  * The budget is enforced between JavaScript operations *and* as a ceiling on
  * each host call, so a slow database statement cannot outlive it. What it
@@ -138,9 +140,12 @@ declare function init(context?: HandlerContext): void;
  * `idle_in_transaction_timeout_ms` (5 min) are for, and why
  * `database.beginTransaction(timeoutMs)` can only tighten them.
  *
- * At most `javascript.max_concurrent_executions` scripts run at once (200).
+ * At most `javascript.max_concurrent_executions` scripts run at once (64).
  * Past that a request waits for a slot inside the timeout it already had,
- * rather than being refused.
+ * rather than being refused. The number is sized against the connection pool
+ * rather than against the CPU: a script touching the database holds a slot and
+ * a connection until it answers, so slots far above the pool would only deepen
+ * the queue.
  *
  * **Sizes.** A script's root source is 1 MB, one asset 10,000,000 bytes with a
  * URI of at most 255 characters, one `scriptStorage` / `personalStorage` value
@@ -170,7 +175,7 @@ declare function init(context?: HandlerContext): void;
  * 1-64 characters.
  *
  * **Retention.** Logs are not storage: a line survives only while it is within
- * both the newest 1000 of its script and 168 hours of now, and either clause
+ * both the newest 10,000 of its script and 168 hours of now, and either clause
  * alone removes it. Revisions are kept for 30 days *and* the newest 50 per
  * script — a revision has to fall outside both before it goes — and a labelled
  * revision, the newest that initialised cleanly, and the newest of each script
@@ -1961,7 +1966,7 @@ interface Database {
  * script API — use `GET|DELETE /engine/script_logs` or the equivalent MCP tools.
  *
  * A log is a diagnostic rather than a store: a line survives only while it is
- * within both the newest 1000 of this script and 168 hours of now, and either
+ * within both the newest 10,000 of this script and 168 hours of now, and either
  * clause alone removes it. Anything that has to last belongs in `database` or
  * `scriptStorage`.
  */

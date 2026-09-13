@@ -67,19 +67,36 @@ format = "json"
 # A script's wall-clock budget. Short locally for fast feedback, longer in
 # production where real work happens.
 execution_timeout_ms = 10000
+# A script's budget for init(), which runs once per deployment rather than once
+# per request: it registers routes, creates tables and warms caches, and a
+# script whose init() is cut off does not serve at all rather than serving one
+# slow response. Absent, it falls back to execution_timeout_ms, which is a
+# per-request budget answering a question init() is not asking.
+init_timeout_ms = 30000
 max_memory_bytes = 134217728  # 128 MB
 # How many scripts may run at once. Each holds a blocking thread and a QuickJS
 # runtime allowed max_memory_bytes, so this and that setting together are the
-# engine's memory ceiling. A caller past the limit waits for a slot rather than
-# being refused, inside the timeout it already had.
-max_concurrent_executions = 200
+# engine's memory ceiling — keep the product somewhere the host can honour.
+# A caller past the limit waits for a slot rather than being refused, inside
+# the timeout it already had.
+#
+# Sized against repository.max_connections rather than against the CPU: a
+# script has no concurrency, so one touching the database holds a slot, a
+# thread and a connection until it answers, and for the whole handler if it
+# opens a transaction. Slots far above the pool buy no throughput for the
+# workload most solutions have — they buy queue depth and memory.
+max_concurrent_executions = 64
 # Stack a script may use before QuickJS throws. A JavaScript frame costs about a
-# kilobyte, so this is roughly 500 frames of recursion.
-stack_size_bytes = 524288
+# kilobyte, so this is roughly 1000 frames of recursion. It is a limit rather
+# than an allocation, and the ceiling is the real stack of the thread the script
+# runs on: past that the process aborts instead of the script catching an error.
+stack_size_bytes = 1048576
 enable_init_functions = true
-# Budget for one test module, and for a whole run, in milliseconds.
+# Budget for one test module, and for a whole run, in milliseconds. The run
+# budget bounds the whole request, so it wants to be a multiple of the module
+# budget rather than a small number of them.
 test_timeout_ms = 30000
-test_run_timeout_ms = 120000
+test_run_timeout_ms = 300000
 
 [repository]
 # PostgreSQL is the only storage backend, and its URL is always an environment
@@ -171,7 +188,12 @@ allowed_remotes = []
 # has to fall outside both — a log line is a diagnostic, not history.
 prune_enabled = true
 retention_hours = 168
-keep_per_script = 1000
+# For anything busier than a handful of lines an hour the count is the clause
+# that binds and the age window never comes into it, so this is in practice the
+# whole of what a script's log holds. A script logging once per request at ten
+# requests a second fills a thousand lines in under two minutes, which is not
+# enough of a diagnostic to still be there when somebody looks.
+keep_per_script = 10000
 prune_interval_secs = 3600
 
 [auth]

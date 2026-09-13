@@ -276,10 +276,10 @@ Controls the JavaScript engine (QuickJS).
 [javascript]
 execution_timeout_ms = 5000              # Script execution timeout (milliseconds)
 max_memory_bytes = 10485760              # Max memory per script (bytes, 10MB)
-max_concurrent_executions = 100          # Scripts running at once; the rest queue
-stack_size_bytes = 524288                # Script stack (bytes); ~1KB per JS frame
+max_concurrent_executions = 64           # Scripts running at once; the rest queue
+stack_size_bytes = 1048576               # Script stack (bytes); ~1KB per JS frame
 enable_init_functions = true             # Enable script init() function calls
-init_timeout_ms = 5000                   # Init function timeout (defaults to execution_timeout_ms)
+init_timeout_ms = 30000                  # Init function budget (defaults to execution_timeout_ms)
 ```
 
 **Environment overrides:**
@@ -332,16 +332,29 @@ PKCE code exchange carries no cookie.
 
 `max_concurrent_executions` bounds how many scripts run at once. Each one holds
 a blocking thread and a QuickJS runtime allowed `max_memory_bytes`, so the two
-settings together are the engine's memory ceiling. A caller past the limit
-waits for a slot rather than being refused, and the wait happens inside the
-timeout the call already had — so a saturated engine answers slowly and then
-times out, rather than returning an error of its own kind.
+settings together are the engine's memory ceiling — keep the product somewhere
+the host can honour. A caller past the limit waits for a slot rather than being
+refused, and the wait happens inside the timeout the call already had — so a
+saturated engine answers slowly and then times out, rather than returning an
+error of its own kind.
+
+Size it against `repository.max_connections`, not against the CPU. A script has
+no concurrency, so one touching the database holds a slot, a thread _and_ a
+connection until it answers — and holds the connection for the whole handler if
+it opens a transaction. Slots far above the pool buy no throughput for the
+workload most solutions have; they buy queue depth and memory. Twice the pool
+is a reasonable starting ratio, which is what the defaults ship.
 
 `stack_size_bytes` is where QuickJS stops a runaway recursion. A JavaScript
 frame costs on the order of a kilobyte, so the number is only meaningful as a
-frame count: 512 KB is about 500 frames, 64 KB about 59 — fewer than a
+frame count: 1 MB is about 1000 frames, 64 KB about 59 — fewer than a
 recursive walk over any real structure needs. Exceeding it raises an error the
 script can catch; it does not take the process down.
+
+The ceiling that matters is the real stack of the thread a script runs on,
+which is 2 MB. This setting is a limit QuickJS checks against, not an
+allocation, so raising it past the thread's own stack replaces a catchable
+JavaScript error with a process abort.
 
 ### Script logs
 
@@ -688,8 +701,8 @@ format = "json"
 [javascript]
 execution_timeout_ms = 10000
 max_memory_bytes = 134217728  # 128 MB
-max_concurrent_executions = 200
-stack_size_bytes = 524288
+max_concurrent_executions = 64
+stack_size_bytes = 1048576
 enable_init_functions = true
 
 [repository]
@@ -699,7 +712,7 @@ max_script_size_bytes = 1048576
 [logs]
 prune_enabled = true
 retention_hours = 168
-keep_per_script = 1000
+keep_per_script = 10000
 prune_interval_secs = 3600
 
 [security]

@@ -499,9 +499,16 @@ impl Database {
                     .map(|(setting, milliseconds)| (setting, milliseconds.to_string())),
             );
 
+        // A backstop for a caller that has no budget of its own — startup, the
+        // scheduler, a pruner. It has to be longer than the budgets it backs:
+        // a script's database call is already bounded by its execution budget
+        // (`run_bounded`), so a shorter wait here always fires first and
+        // reports pool exhaustion as a database error, halfway through a
+        // budget the caller still had. Longer, and the script fails as the
+        // timeout it actually is.
         let pool = PgPoolOptions::new()
             .max_connections(max_connections)
-            .acquire_timeout(Duration::from_millis(5000)) // Increased for tests
+            .acquire_timeout(Duration::from_secs(90))
             .connect_with(connect_options)
             .await
             .context("Failed to connect to database")?;

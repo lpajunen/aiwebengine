@@ -3560,7 +3560,7 @@ pub struct TestRunParams {
 /// Run a script's test modules and report the verdicts.
 ///
 /// Two budgets bound a run: one per test module and one for the whole run
-/// (`javascript.test_timeout_ms` and `test_run_timeout_ms`, 30 s and 120 s by
+/// (`javascript.test_timeout_ms` and `test_run_timeout_ms`, 30 s and 300 s by
 /// default). Either reached, the report comes back with `timedOut: true` and
 /// the verdicts gathered so far rather than nothing.
 #[utoipa::path(
