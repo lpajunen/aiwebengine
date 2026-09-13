@@ -25,15 +25,30 @@ use serde_json::json;
 
 /// A stand-in `__hostFetch` returning the envelope the Rust half produces, plus
 /// a counter so a test can tell how many requests actually happened.
+///
+/// It takes its options the way the Rust half takes them — as JSON text, which
+/// is what a host binding declared `Option<String>` can accept. The stub used
+/// to read them as an object (`options.method`), a contract the host never
+/// had: QuickJS raises `TypeError: Error converting from js 'object' into type
+/// 'string'` rather than coercing one. So the one test covering options was
+/// passing against a transport more forgiving than the real one, which is how
+/// `fetch(url, { method: "POST" })` — the call the type declarations document
+/// — came to throw for every script that made it.
 const STUB: &str = r#"
     globalThis.__calls = 0;
-    globalThis.__hostFetch = function (url, options) {
+    globalThis.__hostFetch = function (url, optionsJson) {
       globalThis.__calls += 1;
+      if (optionsJson !== undefined && typeof optionsJson !== "string") {
+        throw new TypeError(
+          "Error converting from js '" + typeof optionsJson + "' into type 'string'"
+        );
+      }
+      const options = optionsJson ? JSON.parse(optionsJson) : {};
       return JSON.stringify({
         status: url.indexOf("/missing") >= 0 ? 404 : 200,
         ok: url.indexOf("/missing") < 0,
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url: url, method: (options && options.method) || "GET" }),
+        body: JSON.stringify({ url: url, method: options.method || "GET" }),
       });
     };
 "#;
@@ -139,12 +154,13 @@ async fn fields_are_readable_without_awaiting() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn options_reach_the_host_call_unchanged() {
+async fn the_options_object_reaches_the_host_call_as_json() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
-    // The wrapper passes its second argument straight through, so whatever the
-    // calling convention was before it still holds.
+    // The options are an object in the type declarations and in every example
+    // in them, and JSON text at the host binding. The wrapper is what bridges
+    // the two; passing the object through is what used to throw.
     let report = eval_stubbed(
         "test://fetch-shape/options",
         r#"
@@ -158,6 +174,31 @@ async fn options_reach_the_host_call_unchanged() {
 
     assert!(report.ok, "{:?}", report.outcome.error);
     assert_eq!(report.outcome.value, Some(json!("POST")));
+}
+
+/// A script written against the host binding sends JSON text already, and it
+/// must not be encoded a second time.
+#[tokio::test(flavor = "multi_thread")]
+async fn options_already_in_json_are_passed_through() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let report = eval_stubbed(
+        "test://fetch-shape/options-json",
+        r#"
+        (async function () {
+          const res = await fetch(
+            "https://example.test/data",
+            JSON.stringify({ method: "PUT" })
+          );
+          return (await res.json()).method;
+        })()
+        "#,
+    )
+    .await;
+
+    assert!(report.ok, "{:?}", report.outcome.error);
+    assert_eq!(report.outcome.value, Some(json!("PUT")));
 }
 
 #[tokio::test(flavor = "multi_thread")]

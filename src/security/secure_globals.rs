@@ -70,6 +70,40 @@ fn optional_arg<'js, T: rquickjs::FromJs<'js>>(
         .map_err(|e| format!("{} is not valid: {}", name, e))
 }
 
+/// Read an argument a script may pass either as JSON text or as the value that
+/// text describes.
+///
+/// The host bindings behind `sendStreamMessage`, `sendStreamMessageFiltered`
+/// and `dispatcher.sendMessage` took a `String`, while the type declarations
+/// typed the same argument `any` and every example passed an object — so the
+/// documented call raised `TypeError: Error converting from js 'object' into
+/// type 'string'` out of the binding, QuickJS having no coercion to offer it.
+/// Serializing here is what the declarations already promise ("will be JSON
+/// serialized"), and a string is passed through untouched rather than being
+/// wrapped in quotes, because every script written against the binding as it
+/// was sends `JSON.stringify(...)` already.
+fn json_arg<'js>(value: rquickjs::Value<'js>, name: &str) -> JsResult<String> {
+    if let Some(string) = value.as_string() {
+        return string.to_string();
+    }
+    if value.is_undefined() || value.is_null() {
+        return Ok(String::new());
+    }
+    let ctx = value.ctx().clone();
+    match ctx.json_stringify(value) {
+        Ok(Some(string)) => string.to_string(),
+        // `JSON.stringify` answers `undefined` for a function, a symbol, and
+        // for `undefined` itself. Naming the argument is the whole of the
+        // diagnosis, so the error says which one could not be serialized.
+        Ok(None) => Err(rquickjs::Error::new_from_js_message(
+            "value",
+            "json",
+            &format!("{} cannot be serialized as JSON", name),
+        )),
+        Err(e) => Err(e),
+    }
+}
+
 /// Turn the arguments a script passed to `database.query` into the options the
 /// repository runs it under.
 ///
@@ -2615,7 +2649,13 @@ impl SecureGlobalContext {
         let auditor_send = auditor.clone();
         let send_stream_message = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, path: String, message: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>,
+                  path: String,
+                  message: rquickjs::Value<'_>|
+                  -> JsResult<String> {
+                // Typed `any` in the declarations and serialized here, so the
+                // object every example passes is the object that arrives.
+                let message = json_arg(message, "data")?;
                 // Allow system-level broadcasting without capability checks on
                 // the shared /system/ namespace. The engine's script-update
                 // stream is deliberately not exempt: it is broadcast to from
@@ -2702,10 +2742,13 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>,
                   path: String,
-                  message: String,
+                  message: rquickjs::Value<'_>,
                   filter_json: Option<String>,
                   match_mode: Option<String>|
                   -> JsResult<String> {
+                // As in `sendStreamMessage`: the data is whatever the script
+                // has, the filter is the JSON string the declarations ask for.
+                let message = json_arg(message, "data")?;
                 // Parse filter criteria
                 let metadata_filter: HashMap<String, String> = if let Some(json_str) = filter_json {
                     serde_json::from_str(&json_str).map_err(|e| {
@@ -4864,7 +4907,9 @@ impl SecureGlobalContext {
         )?;
 
         // sendMessage(messageType, messageData)
-        // Note: messageData should be a JSON string or will be converted to empty object
+        // `messageData` is whatever the script has: an object is serialized
+        // here, a JSON string is passed through, and an omitted argument is
+        // the empty object the listeners used to be handed.
         let config_send = self.config.clone();
         // Whoever is dispatching. A listener is part of serving that caller's
         // invocation, so it runs as they do — see `execute_message_handler`.
@@ -4873,8 +4918,14 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>,
                   message_type: String,
-                  message_data_json: Opt<String>|
+                  message_data: Opt<rquickjs::Value<'_>>|
                   -> JsResult<String> {
+                let message_data_json = match message_data.0 {
+                    Some(value) if !value.is_undefined() && !value.is_null() => {
+                        Some(json_arg(value, "messageData")?)
+                    }
+                    _ => None,
+                };
                 // Validate message type
                 if message_type.is_empty() {
                     return Ok("dispatcher.sendMessage: message type cannot be empty".to_string());
@@ -4892,7 +4943,7 @@ impl SecureGlobalContext {
                 }
 
                 // Get message data as JSON string
-                let message_data_json = message_data_json.0.unwrap_or_else(|| "{}".to_string());
+                let message_data_json = message_data_json.unwrap_or_else(|| "{}".to_string());
 
                 // Get listeners for this message type
                 let listeners =
@@ -5393,6 +5444,110 @@ mod api_surface_tests {
         }
     }
 
+    /// The arguments the type declarations type `any` reach the host as JSON.
+    ///
+    /// Every one of these used to raise `TypeError: Error converting from js
+    /// 'object' into type 'string'`: the bindings took a `String`, QuickJS
+    /// does not coerce one, and the declarations — and every example in them —
+    /// passed an object. The tests are here rather than around the host
+    /// functions because what broke was the JavaScript surface, and that is
+    /// the only place it shows.
+    #[test]
+    fn fetch_serializes_the_options_object_it_documents() {
+        // `__hostFetch` is replaced so this tests the marshalling and not the
+        // network: the prelude looks the name up on each call.
+        let seen = eval_outside_registration_phase(
+            r#"(function () {
+                 var seen = null;
+                 globalThis.__hostFetch = function (url, options) {
+                   seen = options;
+                   return JSON.stringify({ status: 200, ok: true, headers: {}, body: "" });
+                 };
+                 var response = fetch("https://example.com/x", {
+                   method: "POST",
+                   headers: { "Content-Type": "application/json" },
+                   body: "{}",
+                 });
+                 return typeof seen + "|" + seen + "|" + response.status;
+               })()"#,
+        );
+        assert!(
+            seen.starts_with("string|"),
+            "options should reach the host as JSON text, got: {}",
+            seen
+        );
+        assert!(
+            seen.contains(r#""method":"POST""#) && seen.ends_with("|200"),
+            "the options the script wrote should be the options the host sees, got: {}",
+            seen
+        );
+    }
+
+    /// A script written against the host call sends JSON text already, and it
+    /// must not be re-encoded into a quoted string.
+    #[test]
+    fn fetch_passes_a_string_of_options_through_untouched() {
+        let seen = eval_outside_registration_phase(
+            r#"(function () {
+                 var seen = null;
+                 globalThis.__hostFetch = function (url, options) {
+                   seen = options;
+                   return JSON.stringify({ status: 200, ok: true, headers: {}, body: "" });
+                 };
+                 fetch("https://example.com/x", JSON.stringify({ method: "PUT" }));
+                 return seen;
+               })()"#,
+        );
+        assert_eq!(seen, r#"{"method":"PUT"}"#);
+    }
+
+    /// Omitting the options must stay omitted rather than becoming `"null"`,
+    /// which the host would fail to parse as `FetchOptions`.
+    #[test]
+    fn fetch_without_options_hands_the_host_nothing() {
+        let seen = eval_outside_registration_phase(
+            r#"(function () {
+                 var seen = "not called";
+                 globalThis.__hostFetch = function (url, options) {
+                   seen = typeof options;
+                   return JSON.stringify({ status: 200, ok: true, headers: {}, body: "" });
+                 };
+                 fetch("https://example.com/x");
+                 return seen;
+               })()"#,
+        );
+        assert_eq!(seen, "undefined");
+    }
+
+    /// The stream and dispatch calls take the object their examples pass. The
+    /// assertion is that they answer at all: a conversion failure throws out
+    /// of the binding before any of these can report anything.
+    // The stream and dispatch bindings file an audit event on a spawned task,
+    // so this one needs a runtime where the others do not.
+    #[tokio::test]
+    async fn the_data_arguments_take_the_object_their_examples_pass() {
+        for call in [
+            "routeRegistry.sendStreamMessage('/events/x', { type: 'alert', n: 1 })",
+            "routeRegistry.sendStreamMessageFiltered('/events/x', { type: 'alert' }, \
+             JSON.stringify({ role: 'admin' }))",
+            "dispatcher.sendMessage('marshalling.test.type', { userId: '123' })",
+        ] {
+            // The call is wrapped in JavaScript so a refusal comes back as
+            // text: what is being asserted is which refusal it is, and an
+            // exception out of `eval` would take that with it.
+            let result = eval_outside_registration_phase(&format!(
+                "(function () {{ try {{ return String({}); }}                  catch (e) {{ return 'threw: ' + e; }} }})()",
+                call
+            ));
+            assert!(
+                !result.contains("converting from js"),
+                "`{}` should serialize its data rather than refusing it, got: {}",
+                call,
+                result
+            );
+        }
+    }
+
     /// Argument validation is context-independent: a malformed call is reported
     /// the same way wherever it is made, rather than being masked by the phase.
     #[test]
@@ -5404,6 +5559,67 @@ mod api_surface_tests {
         assert!(
             eval_outside_registration_phase("routeRegistry.registerStreamRoute('no-slash')")
                 .contains("must start with"),
+        );
+    }
+}
+
+#[cfg(test)]
+mod json_arg_tests {
+    use super::json_arg;
+    use rquickjs::{Context, Runtime};
+
+    /// Evaluate `expr` and marshal the result the way a host binding does.
+    fn marshal(expr: &str) -> Result<String, String> {
+        let rt = Runtime::new().expect("runtime");
+        let ctx = Context::full(&rt).expect("context");
+        ctx.with(|ctx| {
+            let value = ctx.eval::<rquickjs::Value<'_>, _>(expr).expect("eval");
+            json_arg(value, "data").map_err(|e| e.to_string())
+        })
+    }
+
+    #[test]
+    fn an_object_is_serialized_the_way_the_declarations_promise() {
+        assert_eq!(
+            marshal("({ type: 'alert', n: 1 })"),
+            Ok(r#"{"type":"alert","n":1}"#.to_string())
+        );
+    }
+
+    /// The scripts that exist send `JSON.stringify(...)`, and re-encoding that
+    /// would deliver a quoted string to every listener reading it.
+    #[test]
+    fn a_string_is_the_message_rather_than_a_value_to_encode() {
+        assert_eq!(
+            marshal(r#"JSON.stringify({ a: 1 })"#),
+            Ok(r#"{"a":1}"#.to_string())
+        );
+        assert_eq!(marshal("'plain text'"), Ok("plain text".to_string()));
+    }
+
+    #[test]
+    fn arrays_and_scalars_serialize_as_themselves() {
+        assert_eq!(marshal("[1, 2]"), Ok("[1,2]".to_string()));
+        assert_eq!(marshal("42"), Ok("42".to_string()));
+        assert_eq!(marshal("true"), Ok("true".to_string()));
+    }
+
+    #[test]
+    fn nothing_at_all_is_the_empty_message() {
+        assert_eq!(marshal("undefined"), Ok(String::new()));
+        assert_eq!(marshal("null"), Ok(String::new()));
+    }
+
+    /// `JSON.stringify` has no answer for a function, and the caller is told
+    /// which argument it could not serialize rather than being handed the
+    /// conversion error QuickJS would have raised.
+    #[test]
+    fn a_value_json_cannot_describe_names_the_argument() {
+        let error = marshal("(function () {})").expect_err("a function has no JSON");
+        assert!(
+            error.contains("data"),
+            "the refusal should name the argument, got: {}",
+            error
         );
     }
 }

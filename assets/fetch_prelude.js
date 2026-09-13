@@ -51,7 +51,24 @@
     return response;
   }
 
+  // `__hostFetch` parses its second argument as JSON, so the object every
+  // caller writes — and every example in the type declarations shows — has to
+  // be serialized here. Handing it over as it stands threw
+  // `TypeError: Error converting from js 'object' into type 'string'` out of
+  // the host binding, because the binding takes a string and QuickJS does not
+  // coerce one for it. A string is passed through unchanged, since that is
+  // what callers written against the host call already send.
+  function encodeOptions(options) {
+    if (options === undefined || options === null) {
+      return undefined;
+    }
+    if (typeof options === "string") {
+      return options;
+    }
+    return JSON.stringify(options);
+  }
+
   globalThis.fetch = function (url, options) {
-    return makeResponse(__hostFetch(url, options), true);
+    return makeResponse(__hostFetch(url, encodeOptions(options)), true);
   };
 })();
