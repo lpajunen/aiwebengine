@@ -855,14 +855,36 @@ async fn test_type_definitions_describe_the_execution_model() {
         "There are no timers",
         "There is no concurrency",
         "fresh runtime",
-        "50 tables per script",
-        "at most 5 redirects",
         "Retention",
     ] {
         assert!(
             types.contains(topic),
             "the type definitions should describe '{}'",
             topic
+        );
+    }
+
+    // The numbers are rendered as the file is served, from the same snapshot
+    // the OpenAPI document publishes — so they are this engine's numbers and
+    // not the ones some earlier engine shipped with. A marker reaching a
+    // reader means one of them named nothing.
+    let limits = aiwebengine::limits::snapshot();
+    assert!(
+        !types.contains("{{limits."),
+        "the served declarations still carry an unrendered placeholder"
+    );
+    for expected in [
+        format!("{} tables per", limits.database.max_tables_per_script),
+        format!("at most {} redirects", limits.fetch.max_redirects),
+        format!(
+            "`javascript.init_timeout_ms`, {} s",
+            limits.execution.init_timeout_ms / 1000
+        ),
+    ] {
+        assert!(
+            types.contains(&expected),
+            "the type definitions should state '{}'",
+            expected
         );
     }
 }

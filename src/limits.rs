@@ -2,12 +2,15 @@
 //!
 //! A limit is only useful to somebody writing against the engine if they can
 //! find it, and the two documents they read — `aiwebengine.d.ts` and
-//! `/engine/openapi.json` — cannot describe what they cannot see. The prose
-//! half lives in the type definitions, which are compiled into the binary and
-//! therefore cannot name a number a deployment has changed; this module is the
-//! other half, and it answers with the values *this* engine is running:
-//! [`snapshot`] is what `/engine/openapi.json` publishes as
-//! `x-aiwebengine-limits`.
+//! `/engine/openapi.json` — cannot describe what they cannot see. Both read
+//! them from here: [`snapshot`] is what `/engine/openapi.json` publishes as
+//! `x-aiwebengine-limits`, and [`render_placeholders`] is what fills the
+//! `{{limits...}}` markers in the type definitions as they are served.
+//!
+//! The prose half used to be typed out by hand, and it drifted the way a
+//! second copy of a number always does: `init()`'s budget has been documented
+//! as 5 s, as 10 s and as 30 s, each of them true of some engine at some
+//! point. There is now one number per limit, in the code that enforces it.
 //!
 //! Nothing here is a limit of its own. Every field either reads the constant
 //! that enforces it or the configuration captured at startup, because a second
@@ -425,6 +428,244 @@ fn rate_limit_budgets() -> Vec<RateLimitBudget> {
         .collect()
 }
 
+/// Render `text` with every `{{limits...}}` placeholder replaced by the value
+/// this engine is running.
+///
+/// The type declarations are the other document a solution developer reads,
+/// and they used to carry the numbers as prose typed out by hand — which is
+/// how `init()`'s budget came to be documented as 5 s, as 10 s and as 30 s,
+/// each of them true of some engine at some point. A placeholder cannot drift:
+/// there is one number, it lives in the code that enforces it, and both
+/// documents read it from here.
+///
+/// An unrecognised placeholder is left as it stands rather than removed, so a
+/// typo shows up in the served file — and in the test below — instead of
+/// quietly deleting the sentence it was part of.
+pub fn render_placeholders(text: &str) -> String {
+    let limits = snapshot();
+    let mut rendered = text.to_string();
+
+    // The bullets are already prose in [`Limits::notes`], so the declarations
+    // hold the marker rather than a second copy of the sentences.
+    if let Some(position) = rendered.find(NOTES_PLACEHOLDER) {
+        let indent = line_prefix(&rendered, position);
+        let bullets = limits
+            .notes
+            .iter()
+            .map(|note| wrap_bullet(note, &indent))
+            .collect::<Vec<_>>()
+            .join(&format!("\n{}", indent));
+        rendered = rendered.replace(NOTES_PLACEHOLDER, bullets.trim_start());
+    }
+
+    for (placeholder, value) in placeholder_values(&limits) {
+        rendered = rendered.replace(&placeholder, &value);
+    }
+    rendered
+}
+
+/// The marker the notes are rendered over.
+const NOTES_PLACEHOLDER: &str = "{{limits.notes}}";
+
+/// The text opening the line a placeholder sits on — ` * ` inside a JSDoc
+/// comment — so every line the marker expands into continues that comment
+/// rather than ending it.
+///
+/// The marker is expected to sit alone on its line after whatever opens it,
+/// which is how both documents use it.
+fn line_prefix(text: &str, position: usize) -> String {
+    let line_start = text[..position].rfind('\n').map_or(0, |i| i + 1);
+    text[line_start..position].to_string()
+}
+
+/// One note as a `-` bullet, wrapped to the width the file is written at.
+fn wrap_bullet(note: &str, indent: &str) -> String {
+    const WIDTH: usize = 76;
+    let mut lines = Vec::new();
+    let mut current = String::from("- ");
+    for word in note.split_whitespace() {
+        if current.trim_end() != "-" && current.len() + 1 + word.len() + indent.len() > WIDTH {
+            lines.push(std::mem::take(&mut current).trim_end().to_string());
+            current = String::from("  ");
+        }
+        if !current.ends_with(' ') {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.trim().is_empty() {
+        lines.push(current.trim_end().to_string());
+    }
+    lines.join(&format!("\n{}", indent))
+}
+
+/// Every placeholder the documents may use, with the value it stands for.
+///
+/// The formatter is chosen per entry rather than inferred from the name: a
+/// number of bytes reads as `10 MB` and a number of files as `256`, and only
+/// the list knows which is which.
+fn placeholder_values(limits: &Limits) -> Vec<(String, String)> {
+    let execution = &limits.execution;
+    let size = &limits.size;
+    let database = &limits.database;
+    let fetch = &limits.fetch;
+    let graphql = &limits.graphql;
+    let scheduler = &limits.scheduler;
+    let logs = &limits.retention.logs;
+    let revisions = &limits.retention.revisions;
+
+    let entries: Vec<(&str, String)> = vec![
+        ("execution.timeout", duration(execution.timeout_ms)),
+        ("execution.initTimeout", duration(execution.init_timeout_ms)),
+        (
+            "execution.testModuleTimeout",
+            duration(execution.test_module_timeout_ms),
+        ),
+        (
+            "execution.testRunTimeout",
+            duration(execution.test_run_timeout_ms),
+        ),
+        ("execution.maxMemory", bytes(execution.max_memory_bytes)),
+        ("execution.stackSize", bytes(execution.stack_size_bytes)),
+        (
+            "execution.stackFrames",
+            // A JavaScript frame costs about a kilobyte, which is the same
+            // reasoning `config.toml` gives for the setting itself.
+            count(execution.stack_size_bytes / 1024),
+        ),
+        (
+            "execution.maxConcurrent",
+            count(execution.max_concurrent_executions),
+        ),
+        ("size.maxScriptSource", bytes(size.max_script_source_bytes)),
+        ("size.maxAsset", bytes(size.max_asset_bytes)),
+        ("size.maxAssetUriChars", count(size.max_asset_uri_chars)),
+        ("size.maxStorageValue", bytes(size.max_storage_value_bytes)),
+        ("size.maxSecretValue", bytes(size.max_secret_value_bytes)),
+        ("size.maxRequestBody", bytes(size.max_request_body_bytes)),
+        ("size.maxUpload", bytes(size.max_upload_bytes)),
+        ("size.maxBatchFiles", count(size.max_batch_files)),
+        ("size.maxBatchBytes", bytes(size.max_batch_bytes)),
+        ("size.maxPatchEdits", count(size.max_patch_edits)),
+        ("size.maxMarkdown", bytes(size.max_markdown_bytes)),
+        ("size.maxTemplate", bytes(size.max_template_bytes)),
+        (
+            "size.maxModuleSpecifierChars",
+            count(size.max_module_specifier_chars),
+        ),
+        (
+            "database.maxTablesPerScript",
+            count(database.max_tables_per_script),
+        ),
+        (
+            "database.maxColumnsPerTable",
+            count(database.max_columns_per_table),
+        ),
+        (
+            "database.maxIdentifierChars",
+            count(database.max_identifier_chars),
+        ),
+        (
+            "database.defaultQueryLimit",
+            count(database.default_query_limit as usize),
+        ),
+        (
+            "database.maxQueryLimit",
+            count(database.max_query_limit as usize),
+        ),
+        (
+            "database.maxConnections",
+            count(database.max_connections as usize),
+        ),
+        (
+            "database.statementTimeout",
+            duration(database.statement_timeout_ms),
+        ),
+        ("database.lockTimeout", duration(database.lock_timeout_ms)),
+        (
+            "database.idleInTransactionTimeout",
+            duration(database.idle_in_transaction_timeout_ms),
+        ),
+        ("fetch.maxResponse", bytes(fetch.max_response_bytes)),
+        ("fetch.defaultTimeout", duration(fetch.default_timeout_ms)),
+        ("fetch.maxRedirects", count(fetch.max_redirects)),
+        ("fetch.schemes", fetch.allowed_schemes.join(" and ")),
+        ("fetch.encodings", fetch.supported_encodings.to_string()),
+        ("graphql.maxQueryChars", count(graphql.max_query_chars)),
+        (
+            "graphql.maxVariablesChars",
+            count(graphql.max_variables_chars),
+        ),
+        (
+            "scheduler.minRecurringInterval",
+            duration(scheduler.min_recurring_interval_ms.max(0) as u64),
+        ),
+        (
+            "scheduler.maxJobNameChars",
+            count(scheduler.max_job_name_chars),
+        ),
+        (
+            "retention.logsKeepPerScript",
+            count(logs.keep_per_script.max(0) as usize),
+        ),
+        (
+            "retention.logsRetentionHours",
+            count(logs.retention_hours.max(0) as usize),
+        ),
+        (
+            "retention.revisionsRetentionDays",
+            count(revisions.retention_days as usize),
+        ),
+        (
+            "retention.revisionsKeepPerScript",
+            count(revisions.keep_per_script as usize),
+        ),
+    ];
+
+    entries
+        .into_iter()
+        .map(|(name, value)| (format!("{{{{limits.{}}}}}", name), value))
+        .collect()
+}
+
+/// A size as a reader states it: whole binary megabytes as `128 MB`, anything
+/// else as its exact count, because `10,000,000 bytes` is a limit somebody
+/// chose and `9.54 MB` is not.
+fn bytes(value: usize) -> String {
+    const MB: usize = 1024 * 1024;
+    if value >= MB && value.is_multiple_of(MB) {
+        format!("{} MB", value / MB)
+    } else if value >= 1024 && value.is_multiple_of(1024) {
+        format!("{} KB", value / 1024)
+    } else {
+        format!("{} bytes", count(value))
+    }
+}
+
+/// A budget in the unit it was chosen in: `5 min`, `30 s`, `100 ms`.
+fn duration(millis: u64) -> String {
+    if millis >= 60_000 && millis.is_multiple_of(60_000) {
+        format!("{} min", millis / 60_000)
+    } else if millis >= 1_000 && millis.is_multiple_of(1_000) {
+        format!("{} s", millis / 1_000)
+    } else {
+        format!("{} ms", millis)
+    }
+}
+
+/// A count with thousands separators, so `10000` reads as `10,000`.
+fn count(value: usize) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,6 +706,137 @@ mod tests {
         // An asset is bounded by storage rather than by the endpoint, which
         // allows a slightly larger body than storage will keep.
         assert!(limits.size.max_asset_bytes <= crate::repository::MAX_ASSET_CONTENT_BYTES);
+    }
+
+    /// The declarations the engine serves.
+    const TYPE_DEFINITIONS: &str = include_str!("../assets/aiwebengine.d.ts");
+
+    /// The invariant that makes generated prose worth having: a marker that
+    /// names nothing survives rendering, so a typo shows up as itself rather
+    /// than as a sentence with a hole in it — and this test fails before the
+    /// file reaches anyone.
+    #[test]
+    fn every_placeholder_in_the_declarations_resolves() {
+        let rendered = render_placeholders(TYPE_DEFINITIONS);
+        let leftovers: Vec<&str> = rendered
+            .match_indices("{{limits")
+            .map(|(index, _)| {
+                let end = rendered[index..]
+                    .find("}}")
+                    .map_or(rendered.len(), |offset| index + offset + 2);
+                &rendered[index..end]
+            })
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "unresolved placeholders in aiwebengine.d.ts: {:?}",
+            leftovers
+        );
+    }
+
+    /// What the reviewer actually asked for: the prose and the published
+    /// document cannot disagree, because they are the same numbers.
+    #[test]
+    fn the_declarations_state_the_limits_the_engine_enforces() {
+        let limits = snapshot();
+        let rendered = render_placeholders(TYPE_DEFINITIONS);
+
+        for expected in [
+            duration(limits.execution.init_timeout_ms),
+            duration(limits.execution.timeout_ms),
+            bytes(limits.execution.max_memory_bytes),
+            bytes(limits.size.max_script_source_bytes),
+            count(limits.database.max_tables_per_script),
+            count(limits.fetch.max_redirects),
+        ] {
+            assert!(
+                rendered.contains(&expected),
+                "the declarations should state `{}`",
+                expected
+            );
+        }
+    }
+
+    /// The notes are prose in one place too: the declarations hold the marker
+    /// rather than a second copy of the sentences.
+    #[test]
+    fn the_execution_model_notes_are_rendered_rather_than_repeated() {
+        let rendered = render_placeholders(TYPE_DEFINITIONS);
+        assert!(!rendered.contains(NOTES_PLACEHOLDER));
+        for note in snapshot().notes {
+            // The rendered bullet is wrapped, so the opening clause is what
+            // survives a line break intact.
+            let opening: String = note
+                .split_whitespace()
+                .take(5)
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(
+                rendered.contains(&opening),
+                "note missing from the declarations: {}",
+                opening
+            );
+        }
+        // Each one is a bullet continuing the JSDoc comment it sits in, built
+        // from the note rather than from a second copy of its wording.
+        let first = snapshot().notes[0];
+        let opening: String = first
+            .split_whitespace()
+            .take(6)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            rendered.contains(&format!(" * - {}", opening)),
+            "the first note should open a bullet inside the comment"
+        );
+    }
+
+    /// The rendered block has to stay a comment, and stay readable: every line
+    /// of it continues the JSDoc it was spliced into, and none of it runs past
+    /// the width the rest of the file is written at.
+    #[test]
+    fn the_rendered_block_stays_a_readable_comment() {
+        let rendered = render_placeholders(TYPE_DEFINITIONS);
+        let block: Vec<&str> = rendered
+            .lines()
+            .skip_while(|line| !line.contains("What a script may spend"))
+            .take_while(|line| !line.trim_start().starts_with("*/"))
+            .collect();
+        assert!(block.len() > 40, "the limits block should be substantial");
+        for line in &block {
+            assert!(
+                line.starts_with(" *"),
+                "line left the comment it was rendered into: {:?}",
+                line
+            );
+            assert!(
+                line.chars().count() <= 80,
+                "line runs past the width the file is written at: {:?}",
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn values_read_in_the_unit_they_were_chosen_in() {
+        assert_eq!(duration(30_000), "30 s");
+        assert_eq!(duration(300_000), "5 min");
+        assert_eq!(duration(100), "100 ms");
+        assert_eq!(bytes(128 * 1024 * 1024), "128 MB");
+        assert_eq!(bytes(10_000_000), "10,000,000 bytes");
+        assert_eq!(count(10_000), "10,000");
+        assert_eq!(count(64), "64");
+    }
+
+    /// A deployment's own numbers reach the declarations, which is the whole
+    /// reason this is rendered when the file is served rather than when it is
+    /// written.
+    #[test]
+    fn an_unknown_placeholder_is_left_where_a_reader_will_see_it() {
+        assert_eq!(
+            render_placeholders("a {{limits.nothing.here}} b"),
+            "a {{limits.nothing.here}} b"
+        );
     }
 
     #[test]

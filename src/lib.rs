@@ -92,7 +92,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         title = "aiwebengine",
         description = "The engine's own HTTP surface, plus every route, asset route and stream the scripts installed on this host have registered.
 
-**Limits.** The exact numbers this deployment enforces are published as `x-aiwebengine-limits` at the root of this document — execution budgets, sizes, database and fetch bounds, retention, and the throttled surfaces — because several of them are configuration and a document that named the shipped defaults would be describing some other engine. The JavaScript API a script is written against carries the same limits in prose, in the type definitions at `/engine/types/{version}/aiwebengine.d.ts`.
+**Limits.** The exact numbers this deployment enforces are published as `x-aiwebengine-limits` at the root of this document — execution budgets, sizes, database and fetch bounds, retention, and the throttled surfaces — because several of them are configuration and a document that named the shipped defaults would be describing some other engine. The JavaScript API a script is written against carries the same limits in prose, in the type definitions at `/engine/types/{version}/aiwebengine.d.ts` — rendered from this same snapshot as the file is served, so the two documents cannot disagree.
 
 What a script may spend is worth knowing before writing one: each invocation gets a fresh runtime (nothing assigned at module scope survives a request), there are no timers, every host call blocks rather than yielding, and imports resolve to the script's own assets — no dynamic `import()`, no npm."
     ),
@@ -2928,11 +2928,28 @@ async fn setup_routes(
         );
 
     // Add TypeScript type definitions endpoints (no authentication required).
+    /// Serve the type declarations, with the limits this engine enforces
+    /// rendered into them.
+    ///
+    /// The declarations are compiled into the binary and used to carry their
+    /// numbers as prose typed out by hand, which is how `init()`'s budget came
+    /// to be documented as 5 s, as 10 s and as 30 s — each true of some engine
+    /// at some point, none of them checked against the engine doing the
+    /// serving. They now hold `{{limits...}}` markers filled in from
+    /// `limits::snapshot`, the same source `/engine/openapi.json` publishes as
+    /// `x-aiwebengine-limits`.
     async fn serve_type_defs(asset_name: &'static str) -> axum::response::Response {
         if let Some(asset) =
             repository::fetch_asset_async("https://example.com/core", asset_name).await
         {
-            let mut response = asset.content.into_response();
+            let content = match String::from_utf8(asset.content) {
+                Ok(text) => crate::limits::render_placeholders(&text).into_bytes(),
+                // Not reachable for a `.d.ts`, and not worth failing over if it
+                // ever were: the declarations are more use unrendered than
+                // missing.
+                Err(e) => e.into_bytes(),
+            };
+            let mut response = content.into_response();
             response.headers_mut().insert(
                 axum::http::header::CONTENT_TYPE,
                 axum::http::HeaderValue::from_static("text/plain; charset=utf-8"),

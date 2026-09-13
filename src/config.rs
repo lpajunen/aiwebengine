@@ -255,10 +255,14 @@ pub struct LoggingConfig {
 
 /// Stack a script may use before QuickJS throws, when nothing says otherwise.
 ///
-/// What `js_engine` hardcoded for as long as `stack_size_bytes` was read by
-/// nothing, kept as the default so honouring the setting does not quietly
-/// change what an engine that never set it does.
-pub const DEFAULT_STACK_SIZE_BYTES: usize = 512 * 1024;
+/// `config.toml` ships 1 MB — about 1000 frames of recursion — and every
+/// document describing the engine says so, while this was 512 KB: what
+/// `js_engine` hardcoded back when `stack_size_bytes` was read by nothing, kept
+/// afterwards so that honouring the setting would not change what an engine
+/// that never set it did. But the shipped configuration does set it, so the
+/// only engine the old number described was one running without the file this
+/// repository ships, and the documented 1 MB was never true of it.
+pub const DEFAULT_STACK_SIZE_BYTES: usize = 1024 * 1024;
 
 /// Below this a script has too little stack to be worth running.
 ///
@@ -615,14 +619,23 @@ impl Default for LoggingConfig {
 impl Default for JavaScriptConfig {
     fn default() -> Self {
         Self {
-            execution_timeout_ms: 5000,
-            max_memory_bytes: 10 * 1024 * 1024, // 10MB
-            max_concurrent_executions: 100,
+            // These are the values `config.toml` ships, restated here rather
+            // than left to diverge from it. They had: 5 s against its 10 s,
+            // 10 MB of memory against its 128 MB, 100 concurrent executions
+            // against its 64, and an `init()` budget that fell back to the
+            // per-request one against its 30 s. Every document that named a
+            // number therefore named one of two engines, which is how the
+            // `init()` budget came to be published as 5 s, as 10 s and as
+            // 30 s. An engine started without a configuration file now
+            // behaves as the shipped one does.
+            execution_timeout_ms: 10_000,
+            max_memory_bytes: 128 * 1024 * 1024,
+            max_concurrent_executions: 64,
             stack_size_bytes: DEFAULT_STACK_SIZE_BYTES,
             enable_init_functions: true,
-            init_timeout_ms: None,     // Use execution_timeout_ms by default
-            test_timeout_ms: None,     // Use execution_timeout_ms by default
-            test_run_timeout_ms: None, // Use DEFAULT_TEST_RUN_TIMEOUT_MS
+            init_timeout_ms: Some(30_000),
+            test_timeout_ms: Some(30_000),
+            test_run_timeout_ms: Some(300_000),
             fail_startup_on_init_error: false,
         }
     }
@@ -1117,7 +1130,51 @@ mod tests {
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 8080);
         assert_eq!(config.logging.level, "info");
-        assert_eq!(config.javascript.execution_timeout_ms, 5000);
+        assert_eq!(config.javascript.execution_timeout_ms, 10_000);
+    }
+
+    /// The code defaults and the shipped configuration have to agree.
+    ///
+    /// They did not: `execution_timeout_ms` was 5 s here against `config.toml`'s
+    /// 10 s, memory 10 MB against 128 MB, concurrency 100 against 64, and
+    /// `init_timeout_ms` was absent, so it fell back to the per-request budget
+    /// rather than taking the file's 30 s. An engine started without a
+    /// configuration file was therefore a different engine from the one every
+    /// document described — which is how `init()`'s budget came to be published
+    /// as 5 s, as 10 s and as 30 s, each true of one of them at some point.
+    #[test]
+    fn the_defaults_are_what_the_shipped_configuration_says() {
+        #[derive(serde::Deserialize)]
+        struct Shipped {
+            javascript: JavaScriptConfig,
+        }
+
+        let shipped: Shipped = toml::from_str(include_str!("../config.toml"))
+            .expect("config.toml should parse as the configuration it configures");
+        let defaults = AppConfig::default().javascript;
+
+        assert_eq!(
+            shipped.javascript.execution_timeout_ms,
+            defaults.execution_timeout_ms
+        );
+        assert_eq!(shipped.javascript.init_timeout_ms, defaults.init_timeout_ms);
+        assert_eq!(shipped.javascript.test_timeout_ms, defaults.test_timeout_ms);
+        assert_eq!(
+            shipped.javascript.test_run_timeout_ms,
+            defaults.test_run_timeout_ms
+        );
+        assert_eq!(
+            shipped.javascript.max_memory_bytes,
+            defaults.max_memory_bytes
+        );
+        assert_eq!(
+            shipped.javascript.max_concurrent_executions,
+            defaults.max_concurrent_executions
+        );
+        assert_eq!(
+            shipped.javascript.stack_size_bytes,
+            defaults.stack_size_bytes
+        );
     }
 
     #[test]
@@ -1182,7 +1239,7 @@ mod tests {
     #[test]
     fn test_timeout_conversions() {
         let config = AppConfig::default();
-        assert_eq!(config.js_execution_timeout(), Duration::from_millis(5000));
+        assert_eq!(config.js_execution_timeout(), Duration::from_millis(10_000));
     }
 
     #[test]
@@ -1241,8 +1298,8 @@ mod tests {
         // Test backward compatibility methods
         assert_eq!(config.server.port, 8080);
         assert_eq!(config.server.host, "127.0.0.1");
-        assert_eq!(config.javascript.execution_timeout_ms, 5000);
-        assert_eq!(config.javascript.max_concurrent_executions, 100); // Correct default value
+        assert_eq!(config.javascript.execution_timeout_ms, 10_000);
+        assert_eq!(config.javascript.max_concurrent_executions, 64);
         assert_eq!(
             config.server_address().unwrap().to_string(),
             "127.0.0.1:8080"
@@ -1307,7 +1364,7 @@ mod tests {
     fn test_duration_helpers() {
         let config = AppConfig::default();
 
-        assert_eq!(config.js_execution_timeout().as_millis(), 5000);
+        assert_eq!(config.js_execution_timeout().as_millis(), 10_000);
     }
 
     #[test]
