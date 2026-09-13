@@ -136,7 +136,13 @@ impl SourceView {
     /// path segment.
     pub fn root_content(&self, script_uri: &str) -> Option<String> {
         match self {
-            SourceView::Live => repository::fetch_script(script_uri),
+            // Head, matching what `fetch` below reads for the assets. The
+            // assets have always come from the stored rows, so reading the
+            // served root here made `Live` mean two versions at once for a
+            // pinned script — its modules as they are, its root as it was.
+            // What a pinned script serves is `SourceView::Revision`, which
+            // `deployments::serving_view` answers with.
+            SourceView::Live => repository::fetch_script_head(script_uri),
             SourceView::Revision(revision) => {
                 match crate::database::run_blocking(revisions::root_content(script_uri, *revision))
                 {

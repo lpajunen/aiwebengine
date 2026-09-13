@@ -244,6 +244,42 @@ asset rather than for the part returned. That is deliberate: the digest's
 purpose is to be handed back as a patch's `base_sha256`, so a caller that read
 twenty lines can still edit them safely.
 
+## Which version you are editing
+
+Reads and edits act on a script's **stored** files — head — not on whatever it
+is currently serving. For almost every script those are the same thing. They
+are not the same for a script pinned with `POST /engine/deploy`: it serves the
+revision it is pinned to, while writes go on recording revisions and advancing
+head, which is the separation pinning exists to create.
+
+The root source used to be the exception, and silently. `read_file` answered
+with the pinned revision and `edit_file` applied its edits to that, then stored
+the result as head — so a patch after a batch replaced the batch's work with
+the pinned content plus three lines, and `base_sha256` could not catch it: the
+digest was taken from the same pinned content the edits were applied to, so the
+precondition agreed with itself while disagreeing with what was stored. The
+assets never behaved that way, so the two halves of a pinned script's tree were
+being edited from different versions of it.
+
+An answer about a pinned script now carries a `deployment` block naming the
+revision that is serving, because "the write landed" and "the change is live"
+stop being the same sentence:
+
+```json
+{
+  "sha256": "7c1…",
+  "revision": 42,
+  "deployment": {
+    "pinnedRevision": 40,
+    "note": "This script is pinned to revision 40, so it serves that revision and not what is stored. …"
+  }
+}
+```
+
+`GET /engine/deploy?uri=…` reports the pin, and `DELETE /engine/deploy` removes
+it so the script follows head again. See
+[Deploying a Revision](SCRIPT_REVISIONS.md).
+
 ## Over MCP
 
 `edit_asset` takes the same arguments as the endpoint and answers with the same

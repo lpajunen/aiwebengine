@@ -5188,6 +5188,31 @@ pub fn fetch_script(uri: &str) -> Option<String> {
     }
 }
 
+/// The script's root source as it is *stored*, whatever it currently serves.
+///
+/// [`fetch_script`] answers with the served source, which for a pinned script
+/// is the pinned revision — right for the execution path, and wrong for every
+/// caller that is editing. Those callers read a file, change part of it and
+/// write the result back to head: based on the pin, the write silently
+/// replaced head with the pinned content plus the edits, so a patch landing
+/// after a batch reverted the batch. It also disagreed with the asset side,
+/// which has always read head, so the two halves of a pinned script's tree
+/// were being edited from different versions of it.
+///
+/// This goes to the database rather than to the in-memory cache, because the
+/// cache holds what the script serves. Authoring is not the request path, so
+/// the read costs nothing that matters.
+pub fn fetch_script_head(uri: &str) -> Option<String> {
+    let repo = get_repository();
+    match run_bounded(async { repo.get_script(uri).await }) {
+        Ok(script) => script,
+        Err(e) => {
+            warn!("Failed to fetch stored script {}: {}", uri, e);
+            None
+        }
+    }
+}
+
 /// Get metadata for a script
 pub fn get_script_metadata(uri: &str) -> AppResult<ScriptMetadata> {
     let repo = get_repository();

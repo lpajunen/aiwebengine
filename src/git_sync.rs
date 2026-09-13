@@ -1511,7 +1511,10 @@ fn engine_files(
     script_uri: &str,
     known: Option<&SyncRow>,
 ) -> Result<BTreeMap<String, Vec<u8>>, SyncError> {
-    let Some(root) = crate::repository::fetch_script(script_uri) else {
+    // Head, because the assets below come from the stored rows: pushing a
+    // pinned script's served root beside them would commit a tree that exists
+    // in neither the engine nor the repository.
+    let Some(root) = crate::repository::fetch_script_head(script_uri) else {
         return Err(SyncError::Layout(format!(
             "No script '{}' to push",
             script_uri

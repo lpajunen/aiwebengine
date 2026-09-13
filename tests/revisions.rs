@@ -1702,6 +1702,121 @@ async fn a_write_to_a_pinned_script_does_not_change_what_it_serves() {
     aiwebengine::deployments::unpin(uri).await.expect("unpin");
 }
 
+/// Reading a pinned script's root answers with what is stored, not with what
+/// it serves.
+///
+/// A read is the first half of an edit, and its `sha256` is what the following
+/// patch sends back as `base_sha256`. Answering with the pinned revision had
+/// the caller editing a version its own write could not land on — and the
+/// assets never behaved that way, so the two halves of a pinned script's tree
+/// were read from different versions of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn reading_a_pinned_script_answers_with_what_is_stored() {
+    setup_env().await;
+    let uri = "test://deployments/reading/main.ts";
+    deploy_over_fresh(uri, "function init() { return 1; }\n").await;
+    let pinned = aiwebengine::revisions::head(uri)
+        .await
+        .expect("head should read")
+        .expect("deploying records a revision");
+    deploy_revision(uri, pinned).await;
+
+    deploy_over(uri, "function init() { return 2; }\n").await;
+
+    let read = tokio::task::spawn_blocking(move || {
+        aiwebengine::engine_api::read_script_authorized(
+            &admin(),
+            "test://deployments/reading/main.ts",
+            &aiwebengine::engine_api::FileReadOptions::default(),
+        )
+    })
+    .await
+    .expect("join");
+    let Ok(read) = read else {
+        panic!("the script can be read");
+    };
+
+    let aiwebengine::engine_api::FileView::Whole { content } = read.view else {
+        panic!("an unscoped read returns the whole file");
+    };
+    assert!(
+        content.contains("return 2"),
+        "a read is the version an edit will be applied to, which is what is \
+         stored: {}",
+        content
+    );
+
+    aiwebengine::deployments::unpin(uri).await.expect("unpin");
+    clear_script_state(uri).await;
+}
+
+/// A patch applies to the stored file, so a batch that landed before it
+/// survives it.
+///
+/// Basing the edits on the pin and storing the result as head replaced
+/// everything written since the pin with the pinned content plus the edits.
+/// `base_sha256` could not catch it either: the digest came from the same
+/// pinned content the edits were applied to, so the precondition agreed with
+/// itself while disagreeing with what was stored.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_patch_to_a_pinned_script_edits_what_a_batch_left_behind() {
+    setup_env().await;
+    let uri = "test://deployments/patching/main.ts";
+    deploy_over_fresh(uri, "function init() { return 1; }\n").await;
+    let pinned = aiwebengine::revisions::head(uri)
+        .await
+        .expect("head should read")
+        .expect("deploying records a revision");
+    deploy_revision(uri, pinned).await;
+
+    // The batch: head gains a line the pinned revision never had.
+    deploy_over(uri, "const LIMIT = 5;\nfunction init() { return LIMIT; }\n").await;
+
+    let outcome = tokio::task::spawn_blocking(move || {
+        aiwebengine::engine_api::patch_script_authorized(
+            &admin(),
+            "test://deployments/patching/main.ts",
+            &[aiwebengine::engine_api::StringEdit {
+                old_string: "const LIMIT = 5;".to_string(),
+                new_string: "const LIMIT = 6;".to_string(),
+                replace_all: false,
+            }],
+            None,
+            None,
+        )
+    })
+    .await
+    .expect("join");
+    assert!(
+        outcome.is_ok(),
+        "the edit names a line only the stored file has, so a patch based on \
+         the stored file applies it"
+    );
+
+    let stored = tokio::task::spawn_blocking(move || {
+        repository::fetch_script_head("test://deployments/patching/main.ts")
+    })
+    .await
+    .expect("join")
+    .expect("the script is stored");
+    assert!(
+        stored.contains("const LIMIT = 6;"),
+        "the patch should land on the stored file: {}",
+        stored
+    );
+    assert!(
+        stored.contains("function init() { return LIMIT; }"),
+        "and must not revert the change that was there before it: {}",
+        stored
+    );
+
+    // The pin is untouched by any of it: a write is not a deployment.
+    assert_eq!(aiwebengine::deployments::pinned(uri), Some(pinned));
+
+    aiwebengine::deployments::unpin(uri).await.expect("unpin");
+    clear_script_state(uri).await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_pinned_script_resolves_imports_from_its_own_revision() {
     setup_env().await;

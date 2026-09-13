@@ -562,7 +562,12 @@ pub fn patch_script_authorized(
     if !exists {
         return Err(PatchError::NotFound);
     }
-    let Some(stored) = repository::fetch_script(uri) else {
+    // The stored root rather than the served one. Basing the edits on a pin
+    // and writing the result to head is how a patch after a batch reverted the
+    // batch, and `base_sha256` could not catch it: the digest was taken from
+    // the same pinned content the edits were applied to, so the precondition
+    // agreed with itself while disagreeing with what was stored.
+    let Some(stored) = repository::fetch_script_head(uri) else {
         return Err(PatchError::NotFound);
     };
 
@@ -766,7 +771,12 @@ pub fn read_script_authorized(
     if !may_administer(user) || user.require_capability(&Capability::ReadScripts).is_err() {
         return Err(FileReadError::AccessDenied);
     }
-    let Some(content) = repository::fetch_script(uri) else {
+    // Head, not what the script serves: this read is the first half of an
+    // edit, and its digest is what the following patch sends back as
+    // `base_sha256`. A pinned script serves an older revision, and reading
+    // that one would have the caller editing a version its write cannot land
+    // on. `GET /engine/deploy` is where a caller asks what is being served.
+    let Some(content) = repository::fetch_script_head(uri) else {
         return Err(FileReadError::NotFound);
     };
 
@@ -2340,7 +2350,7 @@ pub fn write_script_files_authorized(
     let (root_changed, action) = match change.root {
         None => (false, None),
         Some(root) => {
-            let stored = repository::fetch_script(script_uri);
+            let stored = repository::fetch_script_head(script_uri);
             if stored.as_deref() == Some(root) {
                 (false, Some(UpsertAction::Updated))
             } else {
@@ -3374,6 +3384,25 @@ pub async fn search_route(
         Ok(body) => json_response(StatusCode::OK, body),
         Err(message) => error_response(StatusCode::BAD_REQUEST, message),
     }
+}
+
+/// Tell a caller editing a pinned script that its write will not serve.
+///
+/// Reads and edits act on head, and a pinned script serves an older revision,
+/// so the write lands somewhere the requests do not look. That is the whole
+/// point of pinning and is invisible from an answer that only reports what was
+/// written — so the answer says it, in the one case where it is true.
+fn deployment_note(script_uri: &str) -> Option<Value> {
+    let revision = crate::deployments::pinned(script_uri)?;
+    Some(json!({
+        "pinnedRevision": revision,
+        "note": format!(
+            "This script is pinned to revision {}, so it serves that revision and not what is \
+             stored. Reads and edits act on the stored files; DELETE /engine/deploy (or \
+             deploy_script) is what changes which revision serves.",
+            revision
+        ),
+    }))
 }
 
 /// A request to `/engine/edit_script`.
@@ -5181,6 +5210,9 @@ fn batch_outcome_json(script: &str, outcome: &ScriptFilesOutcome, init: Value) -
         }
         if outcome.assets.deleted > 0 {
             object.insert("deleted".to_string(), json!(outcome.assets.deleted));
+        }
+        if let Some(note) = deployment_note(script) {
+            object.insert("deployment".to_string(), note);
         }
     }
     body
@@ -8817,7 +8849,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
     &[
         (
             "read_file",
-            "Fetch a script's root source by URI: the whole file, or, with 'lines' or 'grep', part of it. Every reply carries the sha256 of the whole script, which edit_file takes as base_sha256.",
+            "Fetch a script's root source by URI: the whole file, or, with 'lines' or 'grep', part of it. Reads the stored file (head), which for a pinned script is not the revision it serves; the reply then carries a 'deployment' block saying so. Every reply carries the sha256 of the whole script, which edit_file takes as base_sha256.",
             || {
                 json!({
                     "type": "object",
@@ -8848,7 +8880,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "edit_file",
-            "Edit a script's root source in place by replacing strings in it, without resending the file, then run the script's init() once. The counterpart of edit_asset for the one file of a script that is not an asset. Each old_string must be present and unique unless replace_all is set; nothing is written unless every edit applies. Requires WriteScripts and ownership of the script, or administrator.",
+            "Edit a script's root source in place by replacing strings in it, without resending the file, then run the script's init() once. Edits the stored file (head), the same version read_file and edit_asset act on; a pinned script goes on serving its pinned revision until it is deployed or unpinned, and the answer says so. The counterpart of edit_asset for the one file of a script that is not an asset. Each old_string must be present and unique unless replace_all is set; nothing is written unless every edit applies. Requires WriteScripts and ownership of the script, or administrator.",
             || {
                 json!({
                     "type": "object",
@@ -10266,6 +10298,9 @@ fn tool_read_file(args: &Value, user: &UserContext) -> Value {
                 // length; `bytes` is what every other read calls it. Both,
                 // rather than a rename that breaks a caller to save a field.
                 object.insert("size".to_string(), json!(read.bytes));
+                if let Some(note) = deployment_note(uri) {
+                    object.insert("deployment".to_string(), note);
+                }
                 object.insert("timestamp".to_string(), json!(iso_timestamp()));
             }
             body
@@ -10315,6 +10350,9 @@ fn tool_edit_file(args: &Value, user: &UserContext) -> Value {
                 object.insert("success".to_string(), json!(true));
                 object.insert("uri".to_string(), json!(uri));
                 object.insert("init".to_string(), init);
+                if let Some(note) = deployment_note(uri) {
+                    object.insert("deployment".to_string(), note);
+                }
                 object.insert("timestamp".to_string(), json!(iso_timestamp()));
             }
             body
