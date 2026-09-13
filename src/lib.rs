@@ -2820,12 +2820,19 @@ async fn setup_routes(
             axum::routing::post(engine_api::check_route),
         )
         .route("/engine/eval", axum::routing::post(engine_api::eval_route))
+        // An asset's content is base64 in the body, so the router's
+        // `max_request_body_bytes` would bound three quarters of an asset and
+        // make the 10 MB ceiling this route enforces unreachable through it.
+        // The inner layer wins, the same way the batch route's does.
         .route(
             "/engine/assets",
             axum::routing::get(engine_api::assets_get_route)
                 .post(engine_api::assets_post_route)
                 .patch(engine_api::assets_patch_route)
-                .delete(engine_api::assets_delete_route),
+                .delete(engine_api::assets_delete_route)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    engine_api::MAX_ASSET_BODY_BYTES,
+                )),
         )
         // A batch carries a script's whole module tree, which the management
         // router's `max_request_body_bytes` (1MB by default) is far too small

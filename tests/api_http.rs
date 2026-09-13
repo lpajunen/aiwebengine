@@ -10,6 +10,7 @@
 mod common;
 
 use aiwebengine::repository;
+use base64::Engine as _;
 use common::AdminServer;
 
 // ============================================================================
@@ -1272,6 +1273,65 @@ async fn test_oversized_request_body_is_rejected() {
         body
     );
 
+    engine.shutdown().await;
+}
+
+/// The asset the write endpoint accepts has to be the asset the engine says it
+/// accepts. Content travels base64-encoded, so inheriting the router's
+/// `max_request_body_bytes` bounded three quarters of an asset: the largest one
+/// `POST /engine/assets` could write was 786 KB against the 1 MB default, while
+/// the sandbox, the repository and the published `x-aiwebengine-limits` all
+/// named 10,000,000 bytes. A limit a document promises and an endpoint refuses
+/// is worse than a smaller limit honestly stated.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_asset_at_the_documented_ceiling_can_be_written() {
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
+    let script_uri = format!("http://localhost:{}/asset_ceiling.js", port);
+
+    repository::upsert_script(&script_uri, "function handler() { return {}; }")
+        .expect("script should be stored");
+
+    // Comfortably past `max_request_body_bytes`, both encoded and decoded, so
+    // the request only succeeds if the route carries a limit of its own.
+    let content = vec![b'a'; 9_000_000];
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&content);
+    assert!(
+        encoded.len() > 1024 * 1024,
+        "the probe has to exceed the default body limit to prove anything"
+    );
+
+    let response = engine
+        .client()
+        .post(format!(
+            "http://127.0.0.1:{}/engine/assets?script={}",
+            port, script_uri
+        ))
+        .json(&serde_json::json!({
+            "asset": "big.bin",
+            "mimetype": "application/octet-stream",
+            "content": encoded,
+        }))
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_eq!(
+        response.status(),
+        201,
+        "an asset within the engine's own ceiling should be writable through \
+         the endpoint whose job is writing one, got {}",
+        response.text().await.unwrap_or_default()
+    );
+
+    let stored = repository::fetch_assets(&script_uri);
+    assert_eq!(
+        stored.get("big.bin").map(|asset| asset.content.len()),
+        Some(content.len()),
+        "the whole asset should have been stored, not a truncated one"
+    );
+
+    repository::delete_asset(&script_uri, "big.bin");
     engine.shutdown().await;
 }
 

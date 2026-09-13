@@ -40,6 +40,20 @@ pub const MAX_BATCH_BYTES: usize = MAX_ASSET_BYTES;
 /// the batch route overrides it (see `lib.rs`).
 pub const MAX_BATCH_BODY_BYTES: usize = MAX_BATCH_BYTES * 4 / 3 + 1024 * 1024;
 
+/// Request body ceiling for the single-asset routes, on the same reasoning as
+/// [`MAX_BATCH_BODY_BYTES`] and for a failure the batch route was spared by
+/// having one.
+///
+/// An asset's content travels base64-encoded, so a body limit bounds three
+/// quarters of an asset. Inheriting the router's `max_request_body_bytes` made
+/// the largest asset writable here three quarters of that — 786 KB against the
+/// 1 MB default, 7.86 MB against the 10 MB a deployment ships — while
+/// [`MAX_ASSET_BYTES`], the sandbox and the published document all named
+/// 10,000,000 bytes. The endpoint whose job is writing an asset was the one
+/// path that could not write the largest one, and it answered with a 413 about
+/// a body rather than anything about the limit it was failing.
+pub const MAX_ASSET_BODY_BYTES: usize = MAX_ASSET_BYTES * 4 / 3 + 64 * 1024;
+
 /// Maximum number of edits one patch may carry.
 pub const MAX_PATCH_EDITS: usize = 128;
 
