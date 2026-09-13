@@ -11,8 +11,8 @@ curl -X POST "https://your-engine/engine/assets/batch?script=myapp" \
      -d '{
            "content": "import { handle } from \"./server/handlers.ts\"; …",
            "files": [
-             { "name": "server/handlers.ts", "content_base64": "…" },
-             { "name": "server/model.ts",    "content_base64": "…" }
+             { "name": "server/handlers.ts", "text": "export function handle() { … }" },
+             { "name": "server/model.ts",    "text": "export type Item = { … }" }
            ],
            "remove": ["server/legacy.ts"]
          }'
@@ -62,16 +62,37 @@ entry, which is an alias for `content_base64`.
 
 Each entry in `files`:
 
-| Field            | Default                     | Meaning                                             |
-| ---------------- | --------------------------- | --------------------------------------------------- |
-| `name`           | —                           | Path of the asset within the script (required)      |
-| `content_base64` | —                           | Base64-encoded content (required, max 10MB)         |
-| `mimetype`       | inferred from the extension | MIME type stored with the asset                     |
-| `sha256`         | —                           | Digest the caller expects the decoded bytes to have |
+| Field            | Default                     | Meaning                                          |
+| ---------------- | --------------------------- | ------------------------------------------------ |
+| `name`           | —                           | Path of the asset within the script (required)   |
+| `text`           | —                           | The file as text — what a module is              |
+| `content_base64` | —                           | The file as base64, for content that is not text |
+| `mimetype`       | inferred from the extension | MIME type stored with the asset                  |
+| `sha256`         | —                           | Digest the caller expects the content to have    |
+
+Exactly one of `text` and `content_base64`. A file carrying both is refused
+rather than guessed at, and so is the whole batch with it.
 
 `asset` and `content` are accepted as aliases for `name` and `content_base64`,
 so a caller written against the single-asset route does not have to rename its
-fields. One batch may carry 10MB of content in total.
+fields. Note that `content` inside a `files` entry still means base64, not
+text: callers have been sending base64 under that name since the batch shipped,
+and re-pointing the name would decode their files as though they were prose.
+One batch may carry 10MB of content in total.
+
+### Why a module goes in as text
+
+A batch used to require base64 for every file, including the modules. That made
+the request that _applies_ a change disagree with the one that _describes_ it:
+`/engine/check` has always taken candidate modules as plain source, and says
+why — "a module the bundler can read has to be UTF-8 anyway". So a caller
+checked a change in one encoding and deployed the identical bytes in another.
+
+The cost is not only the extra third of the request. Base64 is a step an agent
+cannot do reliably without leaving what it is doing, and the documented way
+around it was to write the files one at a time — which is exactly the loop this
+endpoint exists to replace, and which leaves the deployment in the half-written
+states described above. Taking text removes the reason to go back to it.
 
 A batch carries the content it writes. To change part of a file the engine
 already has, without sending the file back, see
@@ -86,6 +107,11 @@ check before it, because a caller that reads first and writes second has a
 window in which the answer changes. The `create_asset` tool is the same thing
 over MCP — `create_file` for a script's modules, where `write_asset`
 overwrites — and infers the MIME type from the extension the way a batch does.
+
+The `write_asset` and `create_asset` tools take `text` or `content`, the same
+choice a batch's files get and for the same reason: the file is the unit that
+differs, not the encoding. `POST /engine/assets` itself is unchanged — it takes
+the whole file base64 in `content`, as it always has.
 
 Writing assets takes the same rights as writing one at a time: the
 `WriteAssets` capability, ownership of the script, or administrator. A batch
@@ -169,7 +195,9 @@ body, including the `init` block:
 ```json
 {
   "script": "myapp",
-  "files": [{ "name": "server/handlers.ts", "content_base64": "…" }],
+  "files": [
+    { "name": "server/handlers.ts", "text": "export function handle() { … }" }
+  ],
   "reinit": "after"
 }
 ```

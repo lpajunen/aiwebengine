@@ -105,6 +105,144 @@ fn registered_paths(script_uri: &str) -> HashSet<String> {
         .collect()
 }
 
+/// A module goes in as text, which is what a module is.
+///
+/// Requiring base64 for every file made the request that *applies* a change
+/// disagree with the one that *describes* it — `/engine/check` has always taken
+/// candidate modules as plain source — and cost a third of the bytes plus an
+/// encoding step, which is what sent callers back to writing one file per
+/// request and to the partial deployments a batch exists to prevent.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_batch_carries_a_module_as_the_text_it_is() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://assets-batch/text";
+    deploy(uri, "function init() {}");
+
+    let module = "export const LIMIT = 5;\n";
+    let (status, body) = post_batch(
+        &format!("script={}", uri),
+        json!({
+            "files": [
+                { "name": "assets_batch_text/limits.ts", "text": module },
+            ]
+        }),
+    )
+    .await;
+
+    assert_eq!(status, axum::http::StatusCode::OK, "batch failed: {}", body);
+    assert_eq!(
+        stored_text(uri, "assets_batch_text/limits.ts"),
+        module,
+        "the file should be stored as the text it was sent as"
+    );
+}
+
+/// The two spellings are the same write, so a caller can move to `text`
+/// without anything else about the request changing.
+#[tokio::test(flavor = "multi_thread")]
+async fn text_and_base64_store_the_same_bytes() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://assets-batch/equivalence";
+    deploy(uri, "function init() {}");
+    let module = "export const rate = () => 3;\n";
+
+    let (status, body) = post_batch(
+        &format!("script={}", uri),
+        json!({
+            "files": [
+                { "name": "assets_batch_equiv/as-text.ts", "text": module },
+                { "name": "assets_batch_equiv/as-base64.ts", "content_base64": b64(module) },
+            ]
+        }),
+    )
+    .await;
+
+    assert_eq!(status, axum::http::StatusCode::OK, "batch failed: {}", body);
+    assert_eq!(
+        stored_text(uri, "assets_batch_equiv/as-text.ts"),
+        stored_text(uri, "assets_batch_equiv/as-base64.ts")
+    );
+    // And `sha256` is a precondition on the content either way, not on the
+    // encoding it travelled in.
+    let (status, body) = post_batch(
+        &format!("script={}", uri),
+        json!({
+            "files": [
+                { "name": "assets_batch_equiv/as-text.ts", "text": module, "sha256": sha256_hex(module) },
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "batch failed: {}", body);
+}
+
+/// A file whose two spellings disagree has no right answer, so it is refused
+/// rather than guessed at — and nothing else in the batch is written.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_carrying_both_spellings_is_refused_whole() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://assets-batch/both";
+    deploy(uri, "function init() {}");
+
+    let (status, body) = post_batch(
+        &format!("script={}", uri),
+        json!({
+            "files": [
+                { "name": "assets_batch_both/ok.ts", "text": "export const a = 1;" },
+                {
+                    "name": "assets_batch_both/conflicted.ts",
+                    "text": "export const b = 2;",
+                    "content_base64": b64("export const b = 3;"),
+                },
+            ]
+        }),
+    )
+    .await;
+
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    let message = body["error"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("conflicted.ts") && message.contains("not both"),
+        "the refusal should name the file and the reason, got: {}",
+        message
+    );
+    assert!(
+        stored(uri, "assets_batch_both/ok.ts").is_none(),
+        "a refused batch writes nothing, including the files that were fine"
+    );
+}
+
+/// A file carrying neither is the caller having forgotten the content, and the
+/// refusal points at the field a module wants.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_carrying_neither_spelling_says_which_to_send() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://assets-batch/neither";
+    deploy(uri, "function init() {}");
+
+    let (status, body) = post_batch(
+        &format!("script={}", uri),
+        json!({ "files": [{ "name": "assets_batch_neither/empty.ts" }] }),
+    )
+    .await;
+
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    let message = body["error"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("empty.ts") && message.contains("text"),
+        "the refusal should name the file and the field, got: {}",
+        message
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_batch_writes_every_file_and_runs_init_once() {
     let _guard = test_mutex().lock().await;
@@ -439,7 +577,7 @@ async fn read_access_alone_cannot_write_a_batch() {
         &[aiwebengine::engine_api::AssetWrite {
             name: "assets_batch_authz/util.ts".to_string(),
             mimetype: None,
-            content_base64: b64("export const n = 1;"),
+            content: "export const n = 1;".as_bytes().to_vec(),
             expected_sha256: None,
         }],
     );
@@ -492,6 +630,115 @@ async fn the_mcp_tool_writes_the_same_batch() {
         registered_paths(uri).contains("/assets-batch/mcp"),
         "the tool should leave the script initialized from what it wrote, got {:?}",
         registered_paths(uri)
+    );
+}
+
+/// The tool takes text too, which is where it matters most: an agent calling
+/// `write_assets` has the source in hand and cannot base64 it reliably without
+/// leaving the conversation to do it.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_tool_takes_a_module_as_text() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://assets-batch/mcp-text";
+    deploy(
+        uri,
+        r#"
+        import { PATH } from "./assets_batch_mcp_text/routes.ts";
+        function handler(context) { return ResponseBuilder.json({}); }
+        globalThis.handler = handler;
+        function init() { routeRegistry.registerRoute(PATH, "handler", "GET"); }
+        "#,
+    );
+
+    let source = "export const PATH = \"/assets-batch/mcp-text\";";
+    let result = execute_native_mcp_tool(
+        "write_assets",
+        &json!({
+            "script": uri,
+            "files": [
+                {
+                    "name": "assets_batch_mcp_text/routes.ts",
+                    "text": source,
+                    "sha256": sha256_hex(source),
+                }
+            ]
+        }),
+        &UserContext::admin("batcher".to_string()),
+    )
+    .expect("write_assets should dispatch");
+
+    assert_eq!(result["success"], json!(true), "{}", result);
+    assert_eq!(stored_text(uri, "assets_batch_mcp_text/routes.ts"), source);
+    assert!(
+        registered_paths(uri).contains("/assets-batch/mcp-text"),
+        "the script should be initialized from what the tool wrote, got {:?}",
+        registered_paths(uri)
+    );
+}
+
+/// `write_asset` and `create_asset` take text as well, since they write the
+/// same kind of file the batch does.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_single_file_tools_take_text_too() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://assets-batch/single-text";
+    deploy(uri, "function init() {}");
+    let admin = UserContext::admin("batcher".to_string());
+
+    let created = execute_native_mcp_tool(
+        "create_asset",
+        &json!({
+            "script": uri,
+            "asset": "assets_batch_single/new.ts",
+            "text": "export const created = true;",
+        }),
+        &admin,
+    )
+    .expect("create_asset should dispatch");
+    assert_eq!(created["success"], json!(true), "{}", created);
+    assert_eq!(
+        stored_text(uri, "assets_batch_single/new.ts"),
+        "export const created = true;"
+    );
+
+    let written = execute_native_mcp_tool(
+        "write_asset",
+        &json!({
+            "script": uri,
+            "asset": "assets_batch_single/new.ts",
+            "mimetype": "text/typescript",
+            "text": "export const created = false;",
+        }),
+        &admin,
+    )
+    .expect("write_asset should dispatch");
+    assert_eq!(written["success"], json!(true), "{}", written);
+    assert_eq!(
+        stored_text(uri, "assets_batch_single/new.ts"),
+        "export const created = false;",
+        "write_asset overwrites, which is what distinguishes it from create_asset"
+    );
+
+    // And base64 still means base64 under the name it has always had.
+    let encoded = execute_native_mcp_tool(
+        "write_asset",
+        &json!({
+            "script": uri,
+            "asset": "assets_batch_single/new.ts",
+            "mimetype": "text/typescript",
+            "content": b64("export const created = null;"),
+        }),
+        &admin,
+    )
+    .expect("write_asset should dispatch");
+    assert_eq!(encoded["success"], json!(true), "{}", encoded);
+    assert_eq!(
+        stored_text(uri, "assets_batch_single/new.ts"),
+        "export const created = null;"
     );
 }
 
@@ -672,13 +919,13 @@ async fn a_sync_writes_and_removes_as_one_act() {
             aiwebengine::engine_api::AssetWrite {
                 name: keep.to_string(),
                 mimetype: None,
-                content_base64: b64("export const keep = 1;"),
+                content: "export const keep = 1;".as_bytes().to_vec(),
                 expected_sha256: None,
             },
             aiwebengine::engine_api::AssetWrite {
                 name: drop.to_string(),
                 mimetype: None,
-                content_base64: b64("export const drop = 2;"),
+                content: "export const drop = 2;".as_bytes().to_vec(),
                 expected_sha256: None,
             },
         ],
@@ -691,7 +938,7 @@ async fn a_sync_writes_and_removes_as_one_act() {
         &[aiwebengine::engine_api::AssetWrite {
             name: keep.to_string(),
             mimetype: None,
-            content_base64: b64("export const keep = 3;"),
+            content: "export const keep = 3;".as_bytes().to_vec(),
             expected_sha256: None,
         }],
         aiwebengine::engine_api::AssetSyncOptions {

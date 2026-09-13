@@ -133,8 +133,9 @@ pub struct SizeLimits {
     /// (`repository.max_upload_size_bytes`). Everything else is bounded by
     /// `max_request_body_bytes`.
     pub max_upload_bytes: usize,
-    /// Files in one `/engine/assets/batch` write, their combined decoded size,
-    /// and the request body that carries them base64-encoded.
+    /// Files in one `/engine/assets/batch` write, their combined size, and the
+    /// request body carrying them — a little above the content bound, since a
+    /// file that is not text still travels base64 and costs a third more.
     pub max_batch_files: usize,
     pub max_batch_bytes: usize,
     pub max_batch_body_bytes: usize,

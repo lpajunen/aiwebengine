@@ -1066,10 +1066,7 @@ fn write_script(
         .map(|(name, content)| crate::engine_api::AssetWrite {
             name: name.clone(),
             mimetype: None,
-            content_base64: base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                content,
-            ),
+            content: content.clone(),
             expected_sha256: None,
         })
         .collect();

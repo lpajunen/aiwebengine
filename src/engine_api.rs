@@ -1918,7 +1918,22 @@ pub fn write_asset_authorized(
         .map_err(|e| {
             AssetWriteError::Validation(format!("Error decoding base64 content: {}", e))
         })?;
+    write_asset_bytes_authorized(user, script_uri, asset_uri, mimetype, content, if_absent)
+}
 
+/// [`write_asset_authorized`], given the bytes rather than a spelling of them.
+///
+/// The transfer encoding is the request's business, and a module arrives as
+/// text: the batch takes `text`, and so do `write_asset` and `create_asset`,
+/// which are the same write of the same kind of file.
+pub fn write_asset_bytes_authorized(
+    user: &UserContext,
+    script_uri: &str,
+    asset_uri: &str,
+    mimetype: &str,
+    content: Vec<u8>,
+    if_absent: bool,
+) -> Result<Option<i32>, AssetWriteError> {
     if !can_access_assets(user, script_uri, &Capability::WriteAssets) {
         return Err(AssetWriteError::AccessDenied("Access denied".to_string()));
     }
@@ -1983,12 +1998,52 @@ pub struct AssetWrite {
     pub name: String,
     /// MIME type; inferred from the extension when the caller omits it.
     pub mimetype: Option<String>,
-    /// Base64-encoded content, the same transfer encoding the single-asset
-    /// write and the MCP tools use.
-    pub content_base64: String,
-    /// Digest the caller believes the decoded bytes have, lowercase hex. When
-    /// present it is checked before anything is written.
+    /// The file's bytes, already decoded.
+    ///
+    /// How they arrived is the request's business and not this type's: a
+    /// module comes as text and an image as base64, and by here both are
+    /// bytes. [`asset_content_from_request`] is where that choice is made,
+    /// once, for the endpoint and the tool alike.
+    pub content: Vec<u8>,
+    /// Digest the caller believes the bytes have, lowercase hex. When present
+    /// it is checked before anything is written.
     pub expected_sha256: Option<String>,
+}
+
+/// The bytes of one file of a batch, from whichever field carried them.
+///
+/// A batch required base64 for every file, including the modules — which are
+/// text, are written as text, and are checked as text: `/engine/check` takes
+/// candidate modules as plain source and says why ("a module the bundler can
+/// read has to be UTF-8 anyway"). So the request that *described* a change and
+/// the request that *applied* it, which are meant to be the same shape,
+/// disagreed about the one field that carries the code. Encoding it cost a
+/// third of the bytes and a step no agent can do reliably in its head, which
+/// is what drove callers back to writing one file per request — and back to
+/// the partial deployments a batch exists to prevent.
+///
+/// Exactly one of the two fields, because a file whose two spellings disagree
+/// has no right answer and guessing which was meant is worse than refusing.
+fn asset_content_from_request(
+    label: &str,
+    base64_field: &str,
+    text: Option<String>,
+    encoded: Option<String>,
+) -> Result<Vec<u8>, String> {
+    match (text, encoded) {
+        (Some(_), Some(_)) => Err(format!(
+            "{}: give either 'text' or '{}', not both",
+            label, base64_field
+        )),
+        (Some(text), None) => Ok(text.into_bytes()),
+        (None, Some(encoded)) => base64::engine::general_purpose::STANDARD
+            .decode(&encoded)
+            .map_err(|e| format!("{}: error decoding base64 content: {}", label, e)),
+        (None, None) => Err(format!(
+            "{}: missing required field: text (or {} for a file that is not text)",
+            label, base64_field
+        )),
+    }
 }
 
 /// What a batch write did with one file.
@@ -2129,14 +2184,9 @@ pub fn upsert_assets_synced(
             )));
         }
 
-        let content = base64::engine::general_purpose::STANDARD
-            .decode(&file.content_base64)
-            .map_err(|e| {
-                AssetWriteError::Validation(format!(
-                    "Error decoding base64 content for '{}': {}",
-                    file.name, e
-                ))
-            })?;
+        // Decoded at the request boundary, where the caller's spelling of it
+        // is still visible; by here a file is bytes however it arrived.
+        let content = file.content.clone();
 
         if content.len() > MAX_ASSET_BYTES {
             return Err(AssetWriteError::Validation(format!(
@@ -4800,6 +4850,13 @@ pub struct AssetBatchFile {
     #[serde(alias = "asset")]
     name: Option<String>,
     mimetype: Option<String>,
+    /// The file as text, which is what a module is.
+    #[serde(alias = "source")]
+    text: Option<String>,
+    /// The file as base64, which is what anything at all is. `content` stays
+    /// an alias for it rather than for `text`: callers have been sending
+    /// base64 under that name since the batch shipped, and re-pointing the
+    /// name would decode their files as though they were prose.
     #[serde(alias = "content")]
     content_base64: Option<String>,
     sha256: Option<String>,
@@ -5052,10 +5109,14 @@ pub async fn assets_post_route(
 /// deletion is the same argument: removing a module is as much a change as
 /// rewriting one, and a check can already describe it.
 ///
-/// One batch carries at most 256 files and 10 MB of decoded content. The
-/// request body is bounded a little above that, since base64 costs a third —
-/// a change larger than one batch is two batches and therefore two init()
-/// runs, so size the split around the states the script can be left in.
+/// A file arrives as `text` or as `content_base64`, and a module is text: the
+/// same plain source `/engine/check` takes, so the request that describes a
+/// change and the request that applies it carry it the same way.
+///
+/// One batch carries at most 256 files and 10 MB of content. The request body
+/// is bounded a little above that, since base64 costs a third — a change
+/// larger than one batch is two batches and therefore two init() runs, so size
+/// the split around the states the script can be left in.
 #[utoipa::path(
     post,
     path = "/engine/assets/batch",
@@ -5063,7 +5124,7 @@ pub async fn assets_post_route(
     params(("script" = String, Query, description = "URI of the script whose files these are")),
     request_body(content_type = "application/json",
         description = "JSON fields: script (required here or as a query parameter), \
-                       files (array of { name, content_base64, mimetype?, sha256? }; required unless the change is carried by content or remove alone), \
+                       files (array of { name, text | content_base64, mimetype?, sha256? }; required unless the change is carried by content or remove alone), \
                        content (the script's root source as this change leaves it; omit to leave it alone), \
                        remove (array of asset paths this change deletes), \
                        reinit ('after' by default, or 'never')"),
@@ -5117,19 +5178,19 @@ pub async fn assets_batch_route(
                 format!("files[{}]: missing required field: name", index),
             );
         };
-        let Some(content_base64) = file.content_base64 else {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "files[{}] ('{}'): missing required field: content_base64",
-                    index, name
-                ),
-            );
+        let content = match asset_content_from_request(
+            &format!("files[{}] ('{}')", index, name),
+            "content_base64",
+            file.text,
+            file.content_base64,
+        ) {
+            Ok(content) => content,
+            Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
         };
         writes.push(AssetWrite {
             name,
             mimetype: file.mimetype,
-            content_base64,
+            content,
             expected_sha256: file.sha256,
         });
     }
@@ -9067,16 +9128,17 @@ fn native_tools() -> &'static [NativeToolEntry] {
                         "script": { "type": "string", "description": "URI of the script that will own the asset" },
                         "asset": { "type": "string", "description": "URI/path of the asset (e.g., '/images/logo.png')" },
                         "mimetype": { "type": "string", "description": "MIME type of the asset (e.g., 'image/png', 'text/css')" },
-                        "content": { "type": "string", "description": "Base64-encoded content of the asset (max 10MB)" }
+                        "text": { "type": "string", "description": "The file as text — what a module is. Exactly one of 'text' and 'content' is required." },
+                        "content": { "type": "string", "description": "The file as base64, for content that is not text (max 10MB)" }
                     },
-                    "required": ["script", "asset", "mimetype", "content"]
+                    "required": ["script", "asset", "mimetype"]
                 })
             },
             tool_write_asset,
         ),
         (
             "write_assets",
-            "Write a script's files as one change, then run its init() once: several assets, the root source ('content'), and whatever the change removes ('remove'). One transaction, one revision, one init(), and nothing is written if any file is rejected. Writing the root takes WriteScripts; the assets take WriteAssets; both take ownership of the script or administrator.",
+            "Write a script's files as one change, then run its init() once: several assets, the root source ('content'), and whatever the change removes ('remove'). A module goes in 'text' as plain source, the way /engine/check takes it; 'content_base64' is for a file that is not text. One transaction, one revision, one init(), and nothing is written if any file is rejected. Writing the root takes WriteScripts; the assets take WriteAssets; both take ownership of the script or administrator.",
             || {
                 json!({
                     "type": "object",
@@ -9089,11 +9151,12 @@ fn native_tools() -> &'static [NativeToolEntry] {
                                 "type": "object",
                                 "properties": {
                                     "name": { "type": "string", "description": "URI/path of the asset (e.g., '/lib/util.ts')" },
-                                    "content_base64": { "type": "string", "description": "Base64-encoded content of the asset (max 10MB)" },
+                                    "text": { "type": "string", "description": "The file as text — what a module is. Use this for source; exactly one of 'text' and 'content_base64' is required." },
+                                    "content_base64": { "type": "string", "description": "The file as base64, for content that is not text (max 10MB)" },
                                     "mimetype": { "type": "string", "description": "MIME type; inferred from the file extension when omitted" },
-                                    "sha256": { "type": "string", "description": "Expected SHA-256 of the decoded content, lowercase hex. The batch is rejected if it does not match." }
+                                    "sha256": { "type": "string", "description": "Expected SHA-256 of the content, lowercase hex. The batch is rejected if it does not match." }
                                 },
-                                "required": ["name", "content_base64"]
+                                "required": ["name"]
                             }
                         },
                         "content": { "type": "string", "description": "The script's root source as this change leaves it. Omit to leave it alone." },
@@ -9149,9 +9212,10 @@ fn native_tools() -> &'static [NativeToolEntry] {
                         "script": { "type": "string", "description": "URI of the script that will own the asset" },
                         "asset": { "type": "string", "description": "URI/path of the asset (e.g., '/lib/util.ts')" },
                         "mimetype": { "type": "string", "description": "MIME type; inferred from the file extension when omitted" },
-                        "content": { "type": "string", "description": "Base64-encoded content of the asset (max 10MB)" }
+                        "text": { "type": "string", "description": "The file as text — what a module is. Exactly one of 'text' and 'content' is required." },
+                        "content": { "type": "string", "description": "The file as base64, for content that is not text (max 10MB)" }
                     },
-                    "required": ["script", "asset", "content"]
+                    "required": ["script", "asset"]
                 })
             },
             tool_create_asset,
@@ -10636,11 +10700,17 @@ fn tool_write_asset(args: &Value, user: &UserContext) -> Value {
     let Some(mimetype) = arg_str(args, "mimetype") else {
         return missing_arg("mimetype");
     };
-    let Some(content) = arg_str(args, "content") else {
-        return missing_arg("content");
+    let content = match asset_content_from_request(
+        &format!("asset '{}'", asset),
+        "content",
+        arg_str(args, "text").map(str::to_string),
+        arg_str(args, "content").map(str::to_string),
+    ) {
+        Ok(content) => content,
+        Err(message) => return json!({ "error": message }),
     };
 
-    match upsert_asset_authorized(user, script, asset, mimetype, content) {
+    match write_asset_bytes_authorized(user, script, asset, mimetype, content, false) {
         Ok(revision) => json!({
             "success": true,
             "message": format!("Asset '{}' upserted successfully", asset),
@@ -10700,20 +10770,23 @@ fn tool_write_assets(args: &Value, user: &UserContext) -> Value {
                 "error": format!("files[{}]: missing required field: name", index)
             });
         };
-        let Some(content_base64) =
-            arg_str(file, "content_base64").or_else(|| arg_str(file, "content"))
-        else {
-            return json!({
-                "error": format!(
-                    "files[{}] ('{}'): missing required field: content_base64",
-                    index, name
-                )
-            });
+        let content = match asset_content_from_request(
+            &format!("files[{}] ('{}')", index, name),
+            "content_base64",
+            arg_str(file, "text")
+                .or_else(|| arg_str(file, "source"))
+                .map(str::to_string),
+            arg_str(file, "content_base64")
+                .or_else(|| arg_str(file, "content"))
+                .map(str::to_string),
+        ) {
+            Ok(content) => content,
+            Err(message) => return json!({ "error": message }),
         };
         writes.push(AssetWrite {
             name: name.to_string(),
             mimetype: arg_str(file, "mimetype").map(str::to_string),
-            content_base64: content_base64.to_string(),
+            content,
             expected_sha256: arg_str(file, "sha256").map(str::to_string),
         });
     }
@@ -10765,8 +10838,14 @@ fn tool_create_asset(args: &Value, user: &UserContext) -> Value {
     let Some(asset) = arg_str(args, "asset") else {
         return missing_arg("asset");
     };
-    let Some(content) = arg_str(args, "content") else {
-        return missing_arg("content");
+    let content = match asset_content_from_request(
+        &format!("asset '{}'", asset),
+        "content",
+        arg_str(args, "text").map(str::to_string),
+        arg_str(args, "content").map(str::to_string),
+    ) {
+        Ok(content) => content,
+        Err(message) => return json!({ "error": message }),
     };
     // Inferred rather than required, as a batch write infers it: a caller
     // creating `lib/util.ts` should not have to know what the engine calls a
@@ -10775,7 +10854,7 @@ fn tool_create_asset(args: &Value, user: &UserContext) -> Value {
         .map(str::to_string)
         .unwrap_or_else(|| mimetype_for(asset).to_string());
 
-    match write_asset_authorized(user, script, asset, &mimetype, content, true) {
+    match write_asset_bytes_authorized(user, script, asset, &mimetype, content, true) {
         Ok(revision) => json!({
             "success": true,
             "message": format!("Asset '{}' created successfully", asset),
