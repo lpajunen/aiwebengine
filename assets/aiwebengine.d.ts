@@ -161,12 +161,13 @@ declare function init(context?: HandlerContext): void;
  * ({{limits.database.maxConnections}}) is shared by every script on the
  * instance, and each call holds a connection for its whole round trip.
  *
- * **Network.** `fetch` speaks {{limits.fetch.schemes}} only, refuses localhost
- * and private, loopback and link-local addresses — including a public host
- * that resolves to one, at every hop — follows at most
- * {{limits.fetch.maxRedirects}} redirects within one budget, and understands
+ * **Network.** `fetch` and `McpClient` speak {{limits.fetch.schemes}} only,
+ * refuse localhost and private, loopback and link-local addresses — including
+ * a public host that resolves to one, at every hop — follow at most
+ * {{limits.fetch.maxRedirects}} redirects within one budget, and understand
  * `{{limits.fetch.encodings}}`. Asking for `br` or `zstd` is an error rather
- * than an unreadable body.
+ * than an unreadable body. An `McpClient` naming a blocked address is refused
+ * when it is constructed, before its token is looked up.
  *
  * **Scheduled jobs.** A recurring interval is at least
  * {{limits.scheduler.minRecurringInterval}} and a job name

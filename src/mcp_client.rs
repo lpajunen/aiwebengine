@@ -11,8 +11,13 @@
 //! 4. Simple TTL-based caching (1 hour, max 5 servers with LRU eviction)
 //! 5. Secret injection for Authorization headers
 //! 6. Error handling for network, auth, and protocol errors
+//!
+//! Requests go out through [`crate::http_client::HttpClient`] rather than a
+//! `reqwest` of its own, so a server URL — which comes from a script — gets the
+//! same URL and DNS validation, the same per-hop redirect checking and the same
+//! response ceiling that a script's `fetch` gets.
 
-use reqwest::blocking::Client;
+use crate::http_client::{FetchOptions, HttpClient, HttpError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -29,9 +34,6 @@ const CACHE_TTL: Duration = Duration::from_secs(3600);
 
 /// Maximum number of cached MCP servers (LRU eviction)
 const MAX_CACHED_SERVERS: usize = 5;
-
-/// Default request timeout (30 seconds)
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// MCP Client errors
 #[derive(Debug, Error)]
@@ -57,8 +59,25 @@ pub enum McpClientError {
     #[error("Protocol error: {0}")]
     Protocol(String),
 
+    #[error("Blocked URL: {0}")]
+    BlockedUrl(String),
+
     #[error("Timeout")]
     Timeout,
+}
+
+impl From<HttpError> for McpClientError {
+    fn from(err: HttpError) -> Self {
+        match err {
+            HttpError::BlockedUrl(reason) => McpClientError::BlockedUrl(reason),
+            HttpError::InvalidUrl(reason) => McpClientError::InvalidUrl(reason),
+            HttpError::InvalidUrlScheme(scheme) => {
+                McpClientError::InvalidUrl(format!("Invalid scheme: {}", scheme))
+            }
+            HttpError::Timeout => McpClientError::Timeout,
+            other => McpClientError::Network(other.to_string()),
+        }
+    }
 }
 
 /// MCP tool schema
@@ -153,7 +172,7 @@ fn get_tool_cache() -> &'static Mutex<ToolCache> {
 pub struct McpClient {
     server_url: String,
     secret_identifier: String,
-    client: Client,
+    http: HttpClient,
     request_id_counter: std::sync::atomic::AtomicU64,
 }
 
@@ -164,29 +183,39 @@ impl McpClient {
     ///
     /// * `server_url` - URL of the MCP server (e.g., "https://api.githubcopilot.com/mcp/")
     /// * `secret_identifier` - Identifier for the secret to use for authentication (e.g., "github_token")
+    ///
+    /// The URL comes from a script, which is the whole reason this goes through
+    /// [`HttpClient`] rather than a `reqwest` of its own: a client without that
+    /// URL and DNS validation is a request forger pointed at whatever network
+    /// the engine runs in, and `http://127.0.0.1:3000/mcp` or
+    /// `http://169.254.169.254/` would have been as good a server URL as any.
+    /// Refusing here rather than at the first call is what keeps a blocked
+    /// address from reaching a secret lookup on the way to being refused.
     pub fn new(server_url: String, secret_identifier: String) -> Result<Self, McpClientError> {
-        // Validate URL
-        let url = reqwest::Url::parse(&server_url)
-            .map_err(|e| McpClientError::InvalidUrl(e.to_string()))?;
-
-        if url.scheme() != "http" && url.scheme() != "https" {
-            return Err(McpClientError::InvalidUrl(format!(
-                "Invalid scheme: {}. Only http and https are supported",
-                url.scheme()
-            )));
-        }
-
-        // Create HTTP client
-        let client = Client::builder()
-            .timeout(DEFAULT_TIMEOUT)
-            .use_rustls_tls()
-            .build()
-            .map_err(|e| McpClientError::Network(e.to_string()))?;
+        crate::http_client::validate_public_url(&server_url)?;
 
         Ok(Self {
             server_url,
             secret_identifier,
-            client,
+            http: HttpClient::new()?,
+            request_id_counter: std::sync::atomic::AtomicU64::new(1),
+        })
+    }
+
+    /// A client pointed at a stand-in on loopback.
+    ///
+    /// Uses the HTTP client's test mode, which is what permits a private
+    /// address at all — the production path blocks loopback precisely so that
+    /// a script-supplied server URL cannot reach inside the network.
+    #[doc(hidden)]
+    pub fn for_tests(
+        server_url: String,
+        secret_identifier: String,
+    ) -> Result<Self, McpClientError> {
+        Ok(Self {
+            server_url,
+            secret_identifier,
+            http: HttpClient::new_for_tests()?,
             request_id_counter: std::sync::atomic::AtomicU64::new(1),
         })
     }
@@ -328,49 +357,49 @@ impl McpClient {
             crate::repository::resolve_secret_db(script_uri, &self.secret_identifier, user_id)
                 .ok_or_else(|| McpClientError::SecretNotFound(self.secret_identifier.clone()))?;
 
-        // Build request. The per-request timeout overrides the client's, so a
-        // call out to another MCP server cannot outlive the script that made
-        // it — the same bound `fetch` gets.
-        let response = self
-            .client
-            .post(&self.server_url)
-            .timeout(crate::database::within_host_budget(DEFAULT_TIMEOUT))
-            .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {}", token))
-            .json(&request_body)
-            .send()
-            .map_err(|e| {
-                if e.is_timeout() {
-                    McpClientError::Timeout
-                } else {
-                    McpClientError::Network(e.to_string())
-                }
-            })?;
+        // The token is composed into the header rather than handed over as a
+        // `{{secret:...}}` template, which stands for a whole header value and
+        // so cannot carry the `Bearer ` prefix.
+        let headers = HashMap::from([
+            ("Content-Type".to_string(), "application/json".to_string()),
+            ("Authorization".to_string(), format!("Bearer {}", token)),
+        ]);
+
+        // Through the shared client: URL and DNS validation, a validated
+        // redirect at every hop with credentials dropped when the host
+        // changes, a bounded response, and the host budget applied to the
+        // timeout — the same treatment a script's `fetch` gets, which is the
+        // point of not having a client of our own here.
+        let response = self.http.fetch(
+            self.server_url.clone(),
+            FetchOptions {
+                method: "POST".to_string(),
+                headers: Some(headers),
+                body: Some(request_body.to_string()),
+                timeout_ms: None,
+            },
+            Some(script_uri),
+            user_id,
+        )?;
 
         // Check status code
-        let status = response.status();
-        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        let status = response.status;
+        if status == 401 || status == 403 {
             return Err(McpClientError::Auth(format!(
                 "HTTP {} - Check your authentication token",
-                status.as_u16()
+                status
             )));
         }
 
-        if !status.is_success() {
-            let error_text = response
-                .text()
-                .unwrap_or_else(|_| "Unknown error".to_string());
+        if !response.ok {
             return Err(McpClientError::Network(format!(
                 "HTTP {}: {}",
-                status.as_u16(),
-                error_text
+                status, response.body
             )));
         }
 
         // Parse JSON-RPC response
-        let response_text = response.text().map_err(|e| {
-            McpClientError::InvalidResponse(format!("Failed to read response body: {}", e))
-        })?;
+        let response_text = response.body;
 
         // Handle Server-Sent Events (SSE) format if present
         let json_text = if response_text.starts_with("event:") || response_text.starts_with("data:")
@@ -499,6 +528,55 @@ mod tests {
             McpClientError::InvalidUrl(_) => {}
             _ => panic!("Expected InvalidUrl error"),
         }
+    }
+
+    /// The gap this closes: a script naming the engine's own loopback address
+    /// as its "external" MCP server, which the scheme check alone allowed.
+    #[test]
+    fn refuses_loopback_and_localhost() {
+        for url in [
+            "http://127.0.0.1:3000/mcp",
+            "http://localhost:3000/mcp",
+            "http://[::1]:3000/mcp",
+        ] {
+            match McpClient::new(url.to_string(), "test_token".to_string()) {
+                Err(McpClientError::BlockedUrl(_)) => {}
+                other => panic!(
+                    "{} should be blocked, got {:?}",
+                    url,
+                    other.map(|_| "client")
+                ),
+            }
+        }
+    }
+
+    /// Private ranges and the cloud metadata address, which is the one a
+    /// request forger reaches for first.
+    #[test]
+    fn refuses_private_and_link_local_addresses() {
+        for url in [
+            "http://10.0.0.5/mcp",
+            "http://192.168.1.1/mcp",
+            "http://169.254.169.254/latest/meta-data/",
+        ] {
+            match McpClient::new(url.to_string(), "test_token".to_string()) {
+                Err(McpClientError::BlockedUrl(_)) => {}
+                other => panic!(
+                    "{} should be blocked, got {:?}",
+                    url,
+                    other.map(|_| "client")
+                ),
+            }
+        }
+    }
+
+    /// The escape hatch is real, and it is the only thing that permits a
+    /// private address — a test pointing at a stand-in on loopback.
+    #[test]
+    fn test_client_allows_loopback() {
+        assert!(
+            McpClient::for_tests("http://127.0.0.1:3000/mcp".to_string(), "t".to_string()).is_ok()
+        );
     }
 
     #[test]

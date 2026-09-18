@@ -139,6 +139,26 @@ try {
 }
 ```
 
+### Which servers can be reached
+
+A server URL is validated the same way a URL passed to `fetch` is, and for the
+same reason: the URL comes from the script, so a client that would contact any
+address it names is a way to reach whatever network the engine runs in. The
+constructor throws for
+
+- anything that is not `http` or `https`,
+- `localhost`, loopback (`127.0.0.1`, `::1`), private ranges (`10/8`,
+  `172.16/12`, `192.168/16`), carrier-grade NAT, and link-local addresses —
+  `169.254.169.254`, the cloud metadata endpoint, among them,
+- a public hostname that resolves to any of those.
+
+Redirects are followed one hop at a time with the same check applied to each,
+and the `Authorization` header is dropped when a redirect changes host.
+
+This includes the engine's own `/mcp`: a script reaching the engine it runs in
+does so through the engine's public host, with a token whose audience names it,
+exactly as any other client would.
+
 ### JSON-RPC Protocol Errors (Error Objects)
 
 Protocol-level errors are returned as objects with an `error` field:
@@ -371,7 +391,9 @@ Tool list cache expires after 1 hour. To force refresh:
 new McpClient(serverUrl, secretIdentifier);
 ```
 
-- `serverUrl`: String - MCP server endpoint URL
+- `serverUrl`: String - MCP server endpoint URL. `http` or `https`, and an
+  address outside the deployment's own network — see [Which servers can be
+  reached](#which-servers-can-be-reached).
 - `secretIdentifier`: String - Secret identifier in the database (set via `secretStorage` API)
 - Returns: Client data JSON string (internal use only)
 

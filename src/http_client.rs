@@ -79,6 +79,7 @@ fn shared_test_client() -> Result<&'static reqwest::blocking::Client, HttpError>
 
 /// HTTP client for making external requests. Cheap to construct: the
 /// underlying reqwest client (connection pool) is shared process-wide.
+#[derive(Debug)]
 pub struct HttpClient {
     default_timeout: Duration,
     max_response_size: usize,
@@ -253,9 +254,7 @@ impl HttpClient {
             if let Some(body) = body {
                 request = request.body(body);
             }
-            return request
-                .send()
-                .map_err(|e| HttpError::RequestFailed(e.to_string()));
+            return request.send().map_err(Self::transport_error);
         }
 
         // Follow redirects manually so every hop is validated (URL scheme,
@@ -278,9 +277,7 @@ impl HttpClient {
                 request = request.body(body.clone());
             }
 
-            let response = request
-                .send()
-                .map_err(|e| HttpError::RequestFailed(e.to_string()))?;
+            let response = request.send().map_err(Self::transport_error)?;
 
             let status = response.status();
             let is_redirect = matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308);
@@ -331,6 +328,20 @@ impl HttpClient {
             "Too many redirects (max {})",
             MAX_REDIRECTS
         )))
+    }
+
+    /// A transport failure, keeping a timeout distinguishable from the rest.
+    ///
+    /// The distinction belongs to the caller rather than to this client: a
+    /// timeout is the one transport failure a caller can act on — shorten the
+    /// work, raise the budget — and collapsing it into the same string as a
+    /// refused connection costs that. `mcp_client` reports one as such.
+    fn transport_error(e: reqwest::Error) -> HttpError {
+        if e.is_timeout() {
+            HttpError::Timeout
+        } else {
+            HttpError::RequestFailed(e.to_string())
+        }
     }
 
     /// Validate URL and block private IPs, localhost, and malicious URLs
@@ -633,6 +644,21 @@ fn read_capped(reader: impl std::io::Read, max_bytes: usize) -> Result<Vec<u8>, 
     Ok(out)
 }
 
+/// Validate a caller-supplied URL the way a request through [`HttpClient`]
+/// validates its target: scheme, literal address, and every address the
+/// hostname resolves to.
+///
+/// For a caller holding a URL before it has a request to make.
+/// [`crate::mcp_client::McpClient`] takes its server URL from a script, and
+/// refusing a blocked one when the client is constructed is what keeps a call
+/// to an address it was never going to be allowed to contact from reaching a
+/// secret lookup first. It is the early answer rather than the enforcement:
+/// the request path validates again, redirect hops included, because DNS can
+/// say something different by then.
+pub fn validate_public_url(url: &str) -> Result<Url, HttpError> {
+    HttpClient::validate_url(url)
+}
+
 impl Default for HttpClient {
     fn default() -> Self {
         Self::new().expect("Failed to create HTTP client")
@@ -739,6 +765,9 @@ pub enum HttpError {
 
     #[error("Request failed: {0}")]
     RequestFailed(String),
+
+    #[error("Request timed out")]
+    Timeout,
 
     #[error("Response too large: {0} bytes (max {MAX_RESPONSE_SIZE})")]
     ResponseTooLarge(u64),
