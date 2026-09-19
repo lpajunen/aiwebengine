@@ -19,23 +19,10 @@ pub const MIN_RECURRING_INTERVAL_MS: i64 = 100;
 pub const MAX_JOB_NAME_CHARS: usize = 64;
 const DB_CLAIM_BATCH_SIZE: i64 = 32;
 
-/// How long a claim on a job is good for before another instance may take it.
-///
-/// Short, and kept short by [`Scheduler::spawn_lock_renewal`] extending it for
-/// as long as the run lasts. The alternative — one claim long enough to cover
-/// the whole run — has to guess a length, and the guess cannot be made: the
-/// run's own budget is bounded by `javascript.job_timeout_ms`, but the wait for
-/// an execution slot happens after the claim and is bounded by nothing. A lease
-/// that is renewed does not have to predict how long the work takes, and a
-/// worker that dies stops renewing, so its jobs come back after this long
-/// rather than after a whole budget.
-const DB_LOCK_TTL_SECONDS: i64 = 30;
-
-/// How often the lease above is extended while a job is in flight.
-///
-/// A third of the lease, so two renewals can be missed — a slow query, a busy
-/// runtime — before anything else believes the job abandoned.
-const DB_LOCK_RENEW_EVERY_SECONDS: u64 = 10;
+/// How long a claim on a job is good for, and how often it is extended while
+/// the job runs. Both live in [`crate::lease`], which holds the reasoning and
+/// the one implementation `script_tasks` shares.
+use crate::lease::TTL_SECONDS as DB_LOCK_TTL_SECONDS;
 
 /// How many times a one-off job is run before the engine stops trying.
 ///
@@ -721,74 +708,6 @@ impl Scheduler {
         );
     }
 
-    /// Keep this worker's claim on a job alive for as long as the job runs.
-    ///
-    /// Without this the claim expired [`DB_LOCK_TTL_SECONDS`] after it was
-    /// taken, however long the run turned out to be. A longer run therefore had
-    /// its row re-claimed by another instance while it was still going; that
-    /// instance found the advisory lock held and returned, leaving `locked_by`
-    /// naming a worker that was not running the job, and the finishing worker's
-    /// `WHERE ... AND locked_by = $n` then matched nothing. A one-off that
-    /// succeeded was neither deleted nor rescheduled, so it ran again — and
-    /// nothing said so, because every statement involved reported success
-    /// having changed no rows.
-    ///
-    /// The renewal names this worker for the same reason: once the claim has
-    /// genuinely moved on, the update stops matching and the task logs that it
-    /// has lost the job rather than taking it back.
-    ///
-    /// Matching nothing also covers a job with no row at all — one whose
-    /// `persist_job_in_db` failed and which is being run from the in-memory
-    /// table. Stopping is right for that too: there is no claim to extend.
-    fn spawn_lock_renewal(&self, invocation: &ScheduledInvocation) -> tokio::task::JoinHandle<()> {
-        let job_id = invocation.job_id;
-        let job_key = invocation.key.clone();
-        let worker_id = self.worker_id.clone();
-
-        tokio::spawn(async move {
-            let mut ticker =
-                tokio::time::interval(StdDuration::from_secs(DB_LOCK_RENEW_EVERY_SECONDS));
-            // The first tick is immediate; the claim was just taken, so skip it.
-            ticker.tick().await;
-
-            loop {
-                ticker.tick().await;
-
-                let Some(db) = crate::database::get_global_database() else {
-                    return;
-                };
-
-                let renewed = sqlx::query(
-                    r#"
-                    UPDATE scheduler_jobs
-                    SET lock_expires_at = NOW() + make_interval(secs => $1),
-                        updated_at = NOW()
-                    WHERE job_id = $2 AND locked_by = $3
-                    "#,
-                )
-                .bind(DB_LOCK_TTL_SECONDS)
-                .bind(job_id)
-                .bind(&worker_id)
-                .execute(db.pool())
-                .await;
-
-                match renewed {
-                    Ok(result) if result.rows_affected() == 0 => {
-                        warn!(
-                            job = %job_key,
-                            "Scheduler job has no claim held by this worker; stopping renewal"
-                        );
-                        return;
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        warn!(job = %job_key, error = %e, "Failed renewing scheduler job claim");
-                    }
-                }
-            }
-        })
-    }
-
     async fn claim_due_jobs_from_db(&self, now: DateTime<Utc>) -> Vec<ScheduledInvocation> {
         let db = match crate::database::get_global_database() {
             Some(db) => db,
@@ -1037,7 +956,12 @@ impl Scheduler {
         // Before the slot wait, not after: waiting for a slot is unbounded and
         // is as much a part of holding the job as running it is.
         let renewal = if Self::has_database() {
-            Some(self.spawn_lock_renewal(&invocation))
+            Some(crate::lease::spawn_renewal(
+                crate::lease::Leased::SchedulerJob,
+                invocation.job_id,
+                self.worker_id.clone(),
+                invocation.key.clone(),
+            ))
         } else {
             None
         };
@@ -1266,18 +1190,6 @@ mod tests {
         assert_eq!(due[0].handler_name, "handler");
     }
 
-    /// A claim has to be renewed several times over before it lapses, so a
-    /// slow query or a busy runtime costs a renewal rather than the job.
-    #[test]
-    fn a_claim_is_renewed_well_inside_its_lease() {
-        assert!(
-            (DB_LOCK_RENEW_EVERY_SECONDS as i64) * 3 <= DB_LOCK_TTL_SECONDS,
-            "renewing every {}s does not leave room to miss one inside a {}s lease",
-            DB_LOCK_RENEW_EVERY_SECONDS,
-            DB_LOCK_TTL_SECONDS
-        );
-    }
-
     #[test]
     fn the_retry_delay_doubles_and_then_stops_growing() {
         assert_eq!(
@@ -1480,8 +1392,16 @@ mod tests {
             .await
             .expect("the lease should wind back");
 
-            let renewal = scheduler.spawn_lock_renewal(&invocation);
-            tokio::time::sleep(StdDuration::from_secs(DB_LOCK_RENEW_EVERY_SECONDS + 2)).await;
+            let renewal = crate::lease::spawn_renewal(
+                crate::lease::Leased::SchedulerJob,
+                invocation.job_id,
+                scheduler.worker_id.clone(),
+                invocation.key.clone(),
+            );
+            tokio::time::sleep(StdDuration::from_secs(
+                crate::lease::RENEW_EVERY_SECONDS + 2,
+            ))
+            .await;
             renewal.abort();
 
             let expires: DateTime<Utc> =
@@ -1507,8 +1427,16 @@ mod tests {
             let stranger = Scheduler::new();
             let invocation = claimed_job(&pool, &owner, "moved-on", 0).await;
 
-            let renewal = stranger.spawn_lock_renewal(&invocation);
-            tokio::time::sleep(StdDuration::from_secs(DB_LOCK_RENEW_EVERY_SECONDS + 2)).await;
+            let renewal = crate::lease::spawn_renewal(
+                crate::lease::Leased::SchedulerJob,
+                invocation.job_id,
+                stranger.worker_id.clone(),
+                invocation.key.clone(),
+            );
+            tokio::time::sleep(StdDuration::from_secs(
+                crate::lease::RENEW_EVERY_SECONDS + 2,
+            ))
+            .await;
 
             assert!(
                 renewal.is_finished(),

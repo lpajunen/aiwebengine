@@ -20,6 +20,7 @@ const CONSOLE_PRELUDE: &str = include_str!("../../assets/console_prelude.js");
 /// Builds the Web Storage interface — `length`, `key(i)`, named access, and
 /// failures that throw rather than being returned — over the two host stores.
 const STORAGE_PRELUDE: &str = include_str!("../../assets/storage_prelude.js");
+const TASKS_PRELUDE: &str = include_str!("../../assets/tasks_prelude.js");
 
 /// `Headers`, `URLSearchParams`, and the methods `context.request` gains so a
 /// body a script receives reads the way a body it fetched does.
@@ -611,6 +612,7 @@ impl SecureGlobalContext {
         self.setup_graphql_functions(ctx, script_uri)?;
         self.setup_mcp_functions(ctx, script_uri)?;
         self.setup_scheduler_functions(ctx, script_uri)?;
+        self.setup_task_functions(ctx, script_uri)?;
         self.setup_dispatcher_functions(ctx, script_uri)?;
 
         // Setup JSX factory functions for server-side HTML generation
@@ -4826,6 +4828,196 @@ impl SecureGlobalContext {
         Ok(())
     }
 
+    /// The Rust half of `scriptTasks` — the durable queue ([`crate::tasks`]).
+    ///
+    /// Deliberately *not* phase-gated, unlike `schedulerService` beside it.
+    /// That gate is right for a declaration, which belongs to the version of
+    /// the code that declared it; a task is a piece of work that exists because
+    /// something happened, and the shape it is for — start during a request,
+    /// answer, finish afterwards — only works if a handler can enqueue.
+    ///
+    /// Each method answers with an envelope rather than a value, and
+    /// `tasks_prelude.js` turns that into a returned object or a thrown
+    /// `Error`. A host binding cannot throw the right kind of exception, and
+    /// answering `"Error: ..."` as the value is indistinguishable from an
+    /// answer that happens to be a string.
+    fn setup_task_functions(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
+        let global = ctx.globals();
+        let host = rquickjs::Object::new(ctx.clone())?;
+
+        let script_uri_enqueue = script_uri.to_string();
+        let config_enqueue = self.config.clone();
+        let user_enqueue = self.user_context.clone();
+        let enqueue = Function::new(
+            ctx.clone(),
+            move |options_json: String| -> JsResult<String> {
+                if config_enqueue.is_dry_run() {
+                    // A check that deploys nothing must not leave work behind
+                    // for a worker to pick up afterwards.
+                    return Ok(Self::task_failure(
+                        "DryRunError",
+                        "scriptTasks.enqueue: nothing was enqueued - this is a dry run",
+                    ));
+                }
+
+                let options: serde_json::Value = match serde_json::from_str(&options_json) {
+                    Ok(options) => options,
+                    Err(e) => {
+                        return Ok(Self::task_failure(
+                            "TypeError",
+                            &format!("scriptTasks.enqueue: options are not valid JSON: {}", e),
+                        ));
+                    }
+                };
+
+                let run_at = match options.get("runAt").and_then(|v| v.as_str()) {
+                    Some(value) => match crate::scheduler::parse_utc_timestamp(value) {
+                        Ok(parsed) => Some(parsed),
+                        Err(_) => {
+                            return Ok(Self::task_failure(
+                                "RangeError",
+                                "scriptTasks.enqueue: runAt must be a UTC timestamp ending with 'Z'",
+                            ));
+                        }
+                    },
+                    None => None,
+                };
+
+                let max_attempts = match options.get("maxAttempts") {
+                    Some(serde_json::Value::Null) | None => None,
+                    Some(value) => match value.as_i64() {
+                        Some(number) if (i32::MIN as i64..=i32::MAX as i64).contains(&number) => {
+                            Some(number as i32)
+                        }
+                        _ => {
+                            return Ok(Self::task_failure(
+                                "RangeError",
+                                "scriptTasks.enqueue: maxAttempts must be a whole number",
+                            ));
+                        }
+                    },
+                };
+
+                let new_task = crate::tasks::NewTask {
+                    script_uri: script_uri_enqueue.clone(),
+                    handler_name: options
+                        .get("handler")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    payload: options
+                        .get("payload")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({})),
+                    run_at,
+                    max_attempts,
+                    // Recorded as where the work came from, not as an authority
+                    // it runs under: a task runs in script context.
+                    enqueued_by: user_enqueue.user_id.clone(),
+                };
+
+                match crate::tasks::blocking::enqueue(new_task) {
+                    Ok(task) => Ok(Self::task_ok(crate::tasks::to_json(&task))),
+                    Err(e) => Ok(Self::task_failure(
+                        Self::task_error_name(&e),
+                        &format!("scriptTasks.enqueue: {}", e),
+                    )),
+                }
+            },
+        )?;
+        host.set("enqueue", enqueue)?;
+
+        let config_cancel = self.config.clone();
+        let cancel = Function::new(ctx.clone(), move |task_id: String| -> JsResult<String> {
+            if config_cancel.is_dry_run() {
+                return Ok(Self::task_failure(
+                    "DryRunError",
+                    "scriptTasks.cancel: nothing was cancelled - this is a dry run",
+                ));
+            }
+
+            let Ok(parsed) = uuid::Uuid::parse_str(task_id.trim()) else {
+                return Ok(Self::task_failure(
+                    "TypeError",
+                    "scriptTasks.cancel: that is not a task id",
+                ));
+            };
+
+            match crate::tasks::blocking::cancel(parsed) {
+                Ok(cancelled) => Ok(Self::task_ok(serde_json::Value::Bool(cancelled))),
+                Err(e) => Ok(Self::task_failure(
+                    "Error",
+                    &format!("scriptTasks.cancel: {}", e),
+                )),
+            }
+        })?;
+        host.set("cancel", cancel)?;
+
+        // Scoped to the calling script, so one script cannot read another's
+        // queue by holding an id. Everything else here is already per script
+        // because the URI comes from the binding rather than the caller.
+        let script_uri_get = script_uri.to_string();
+        let get = Function::new(ctx.clone(), move |task_id: String| -> JsResult<String> {
+            let Ok(parsed) = uuid::Uuid::parse_str(task_id.trim()) else {
+                return Ok(Self::task_failure(
+                    "TypeError",
+                    "scriptTasks.get: that is not a task id",
+                ));
+            };
+
+            match crate::tasks::blocking::get(parsed) {
+                Ok(Some(task)) if task.script_uri == script_uri_get => {
+                    Ok(Self::task_ok(crate::tasks::to_json(&task)))
+                }
+                Ok(_) => Ok(Self::task_ok(serde_json::Value::Null)),
+                Err(e) => Ok(Self::task_failure(
+                    "Error",
+                    &format!("scriptTasks.get: {}", e),
+                )),
+            }
+        })?;
+        host.set("get", get)?;
+
+        global.set("__hostScriptTasks", host)?;
+
+        crate::bytecode::eval_program(ctx, "engine://tasks-prelude", TASKS_PRELUDE).map_err(
+            |e| {
+                rquickjs::Error::new_from_js_message(
+                    "tasks",
+                    "prelude",
+                    &format!("tasks prelude failed to load: {}", e),
+                )
+            },
+        )?;
+
+        debug!("scriptTasks initialized for script: {}", script_uri);
+        Ok(())
+    }
+
+    /// The envelope shape `tasks_prelude.js` unwraps.
+    fn task_ok(value: serde_json::Value) -> String {
+        serde_json::json!({ "ok": value }).to_string()
+    }
+
+    fn task_failure(name: &str, message: &str) -> String {
+        serde_json::json!({ "error": { "name": name, "message": message } }).to_string()
+    }
+
+    /// Which kind of exception a refusal becomes, so a script can tell a
+    /// mistake in its own call from the engine being unable to answer.
+    fn task_error_name(error: &crate::tasks::EnqueueError) -> &'static str {
+        use crate::tasks::EnqueueError;
+        match error {
+            EnqueueError::MissingHandler
+            | EnqueueError::InvalidHandler
+            | EnqueueError::PayloadNotAnObject => "TypeError",
+            EnqueueError::PayloadTooLarge
+            | EnqueueError::InvalidMaxAttempts
+            | EnqueueError::InvalidRunAt => "RangeError",
+            EnqueueError::Unavailable | EnqueueError::Storage(_) => "Error",
+        }
+    }
+
     /// Setup message dispatcher functions for inter-script communication
     fn setup_dispatcher_functions(
         &self,
@@ -5381,6 +5573,7 @@ mod api_surface_tests {
             "personalStorage",
             "secretStorage",
             "schedulerService",
+            "scriptTasks",
             "graphQLRegistry",
             "mcpRegistry",
             "database",

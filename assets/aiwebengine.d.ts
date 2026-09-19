@@ -383,6 +383,29 @@ interface HandlerContext {
 
   /** Additional metadata */
   metadata?: Record<string, any>;
+
+  /**
+   * What this particular kind of invocation was given. A scheduled handler
+   * finds its schedule under `meta.schedule`; a task handler finds `meta.task`.
+   */
+  meta?: {
+    task?: TaskContext;
+    [key: string]: any;
+  };
+}
+
+/**
+ * What a task handler is told about the run it is in — `context.meta.task`.
+ */
+interface TaskContext {
+  /** Stable across retries, so work can be keyed by it. */
+  taskId: string;
+  handler: string;
+  /** The object passed to `scriptTasks.enqueue`. */
+  payload: Record<string, unknown>;
+  /** Counts from one. A value above one means this is a retry. */
+  attempt: number;
+  maxAttempts: number;
 }
 
 // ============================================================================
@@ -923,6 +946,114 @@ interface SchedulerService {
    * clears nothing and says so in the returned message, and does not throw.
    */
   clearAll(): string;
+}
+
+// ============================================================================
+// Script Tasks API
+// ============================================================================
+
+/**
+ * One queued task.
+ */
+interface ScriptTask {
+  /** Stable across retries. */
+  taskId: string;
+  script: string;
+  handler: string;
+  payload: Record<string, unknown>;
+  /**
+   * `pending` waiting to run, `running` claimed by a worker, `failed` out of
+   * attempts, `cancelled` stopped by a person. There is no `succeeded`: a task
+   * that completes has its row deleted, so `get` answers `null` for one.
+   */
+  state: "pending" | "running" | "failed" | "cancelled";
+  attempts: number;
+  maxAttempts: number;
+  /** Why the last attempt failed. Null until one has. */
+  lastError: string | null;
+  runAt: string;
+  enqueuedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * A durable queue of work this script enqueued for itself.
+ *
+ * The shape this is for is: start something while handling a request, answer
+ * the request, and let the work finish afterwards. Unlike `schedulerService`,
+ * which registers a *schedule* and only takes effect during `init()`, these
+ * may be called from anywhere — a route handler, another task — because a task
+ * exists in response to something that happened rather than being part of what
+ * the script declares about itself.
+ *
+ * A task survives deployment. Writing a new version of the script does not
+ * discard work already accepted, where a scheduled job is wiped and
+ * re-declared on every `init()`.
+ *
+ * A handler runs with {{limits.execution.jobTimeout}} — the scheduled-handler
+ * budget, not the per-request one — and finds `context.meta.task` carrying the
+ * payload, the attempt number, and the ceiling. It runs in **script context**:
+ * it holds what the script holds, and nothing belonging to whoever enqueued
+ * it, so `personalStorage` and a per-user secret are not reachable from one.
+ *
+ * A task that throws is retried with a widening delay and given up on after
+ * `maxAttempts`, keeping its row and its last error so the failure can be read
+ * back. A task that succeeds has no row: what it did is in the script's log.
+ *
+ * @example
+ * // In a route handler: accept the work, answer now.
+ * function startExport(context) {
+ *   const task = scriptTasks.enqueue({
+ *     handler: "runExport",
+ *     payload: { accountId: context.request.query.account },
+ *   });
+ *   return { status: 202, body: JSON.stringify({ task: task.taskId }) };
+ * }
+ *
+ * // The handler, named by the enqueue above.
+ * function runExport(context) {
+ *   const { accountId } = context.meta.task.payload;
+ *   // ... and enqueue the next step, which is how work longer than one
+ *   // budget is done: a chain of tasks survives a restart, one long run does not.
+ * }
+ */
+interface ScriptTasks {
+  /**
+   * Accept a piece of work.
+   *
+   * @param options.handler - Name of the function to call. 1-{{limits.scheduler.maxJobNameChars}} characters.
+   * @param options.payload - A JSON object describing the work. At most 64KB;
+   *   put the data itself in storage and name it here, so a retry reads what
+   *   is current rather than a copy taken at enqueue time.
+   * @param options.runAt - UTC ISO timestamp to hold it until. Default: now.
+   * @param options.maxAttempts - Attempts before giving up, 1-25. Default 5.
+   * @returns The stored task.
+   * @throws TypeError if the handler or payload is not usable, RangeError if a
+   *   bound is exceeded, Error if the engine could not store it.
+   */
+  enqueue(options: {
+    handler: string;
+    payload?: Record<string, unknown>;
+    runAt?: string;
+    maxAttempts?: number;
+  }): ScriptTask;
+
+  /**
+   * Stop a task that has not started.
+   *
+   * @returns true if it was cancelled; false if it was not pending — already
+   *   running, already failed, or already cancelled.
+   */
+  cancel(taskId: string): boolean;
+
+  /**
+   * Look one up.
+   *
+   * @returns The task, or null if this script has no such task — which is also
+   *   the answer for one that already succeeded, since success keeps no row.
+   */
+  get(taskId: string): ScriptTask | null;
 }
 
 // ============================================================================
@@ -2237,6 +2368,7 @@ declare var scriptStorage: Storage;
 declare var personalStorage: Storage;
 declare var secretStorage: SecretStorage;
 declare var schedulerService: SchedulerService;
+declare var scriptTasks: ScriptTasks;
 declare var graphQLRegistry: GraphQLRegistry;
 declare var mcpRegistry: McpRegistry;
 declare var database: Database;

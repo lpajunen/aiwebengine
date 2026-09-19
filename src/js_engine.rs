@@ -2029,6 +2029,118 @@ pub fn execute_scheduled_handler(
     Ok(())
 }
 
+/// Run one attempt of a queued task ([`crate::tasks`]).
+///
+/// Deliberately the same execution as [`execute_scheduled_handler`]: the same
+/// job budget, the same script context, the same transaction handling. The two
+/// differ in what the handler is given — a task carries a payload and its
+/// attempt count, where a job carries its schedule — and in what the caller
+/// does with the outcome, which for a task is a retry with backoff.
+///
+/// A task runs in script context. It holds what the script holds, and nothing
+/// belonging to whoever enqueued it: acting as a person in the background is a
+/// grant that person has to make, and there is nowhere yet for them to make it.
+pub fn execute_task_handler(invocation: &crate::tasks::TaskInvocation) -> Result<(), String> {
+    let script_uri = invocation.script_uri.as_str();
+    let handler_name = invocation.handler_name.as_str();
+    let script_uri_owned = script_uri.to_string();
+
+    let log_context = HandlerInvocationKind::Scheduled.log_context(
+        &script_uri_owned,
+        invocation.invocation_id.clone(),
+        Some(handler_name.to_string()),
+    );
+
+    // Fetch and bundle before arming the runtime's interrupt deadline (see
+    // `execute_script_for_request_secure`).
+    let owner_script = repository::fetch_script(script_uri)
+        .ok_or_else(|| format!("no script for uri {}", script_uri))?;
+    let executable_code = transpile_if_needed(script_uri, &owner_script)?;
+
+    let limits = ExecutionLimits {
+        timeout_ms: crate::scheduler::configured_job_timeout_ms(),
+        ..current_execution_limits()
+    };
+    let (rt, _budget) = create_sandboxed_runtime(&limits)?;
+    let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
+
+    ctx.with(|ctx| -> Result<(), rquickjs::Error> {
+        let security_config = GlobalSecurityConfig {
+            enable_audit_logging: false,
+            log_context: log_context.clone(),
+            ..Default::default()
+        };
+
+        setup_secure_global_functions(
+            &ctx,
+            &script_uri_owned,
+            UserContext::admin("tasks".to_string()),
+            &security_config,
+            None,
+            None,
+        )
+    })
+    .map_err(|e| format!("install task globals: {}", e))?;
+
+    ctx.with(|ctx| {
+        crate::bytecode::eval_program(&ctx, script_uri, &executable_code).map_err(|e| {
+            let details = extract_error_details(&ctx, &e);
+            format!("script eval: {}", details)
+        })
+    })?;
+
+    let handler_result = call_and_settle(
+        &rt,
+        &ctx,
+        script_uri,
+        &format!("Task handler '{}'", handler_name),
+        TransactionHandling::Auto,
+        |ctx| {
+            let global = ctx.globals();
+            let func: Function = global
+                .get::<_, Function>(handler_name)
+                .map_err(|e| format!("no handler {}: {}", handler_name, e))?;
+
+            // `attempt` counts from one, because a handler reads it to say
+            // "attempt 2 of 5" and nobody calls the first one attempt zero.
+            let task_meta = serde_json::json!({
+                "taskId": invocation.task_id.to_string(),
+                "handler": handler_name,
+                "attempt": invocation.attempts + 1,
+                "maxAttempts": invocation.max_attempts,
+                "payload": invocation.payload,
+            });
+
+            let handler_context = JsHandlerContextBuilder::new(HandlerInvocationKind::Scheduled)
+                .with_script_metadata(script_uri, handler_name)
+                .with_metadata_value("task", task_meta)
+                .with_invocation_id(invocation.invocation_id.clone())
+                .build(ctx)
+                .map_err(|e| format!("build context: {}", e))?;
+
+            global
+                .set("context", handler_context.clone())
+                .map_err(|e| format!("set context global: {}", e))?;
+
+            let result = func.call::<_, Value>((handler_context,)).map_err(|e| {
+                let details = extract_error_details(ctx, &e);
+                if crate::database::get_current_transaction_active() {
+                    let _ = crate::database::Database::rollback_transaction();
+                }
+                format!("call handler: {}", details)
+            })?;
+
+            promise_resolve(ctx, result)
+        },
+        |_ctx, _value| Ok(()),
+    );
+
+    drop(ctx);
+
+    handler_result?;
+    Ok(())
+}
+
 /// The JavaScript authoring API (`test`, `expect`, hooks) evaluated into a test
 /// context ahead of the test module, so the module can call it as it loads.
 const TEST_PRELUDE: &str = include_str!("../assets/test_prelude.js");

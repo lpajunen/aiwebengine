@@ -5507,6 +5507,22 @@ pub fn delete_script(uri: &str) -> bool {
         Ok(existed) => {
             if existed {
                 scheduler::clear_script_jobs(uri);
+                // And its queued work. Tasks deliberately survive `init()` —
+                // a new version of a script must not discard work already
+                // accepted — but there is no version left to run them, and a
+                // task naming a script the worker cannot fetch would fail its
+                // every attempt before giving up.
+                let deleted_tasks = uri.to_string();
+                if let Err(e) = run_bounded(async move {
+                    crate::tasks::delete_for_script(&deleted_tasks)
+                        .await
+                        .map_err(|e| AppError::Database {
+                            message: e.to_string(),
+                            source: None,
+                        })
+                }) {
+                    warn!("Failed to clear queued tasks for '{}': {}", uri, e);
+                }
                 // Its message listeners go with them. A listener names a
                 // script the dispatcher then cannot fetch, so every dispatch
                 // of that message type counts a failure for a script that no

@@ -168,15 +168,19 @@ script a task runs against.** A task enqueued while the script was at revision
 40 and run after it has been pinned to 41 is running against a different
 program than the one that queued it. Consistency with everything else says
 resolve through `deployments::serving_view` (`deployments.rs:116`) at run time,
-so a task behaves like every other execution of that script. That is probably
-right — a pin exists precisely so that what serves stops moving — but it means
-a long-lived task can be picked up by code that has never seen its payload
-shape, and the note should say so out loud rather than let the reader discover
-it.
+so a task behaves like every other execution of that script.
+
+_Settled as built:_ that is what happens, and it needed no code — a task loads
+its script through `repository::fetch_script`, which already answers with what
+the script serves rather than head, for the reason written at
+`repository.rs:5170`. The consequence stands and is worth saying out loud: a
+long-lived task can be picked up by code that has never seen its payload
+shape. Keeping payloads small, and naming stored data rather than copying it,
+is what makes that survivable.
 
 ## Order
 
-Items 1 and 2 are built; the rest stands as written.
+Items 1, 2 and 3 are built; the rest stands as written.
 
 1. ~~**Fix the secret template**~~ _(done)_ (TODO-agent item 7,
    `http_client.rs:463`) and
@@ -195,9 +199,18 @@ Items 1 and 2 are built; the rest stands as written.
    instead, which needs no guess about how long the work takes and returns a
    dead worker's jobs in one lease rather than one budget.
 
-3. **`scriptTasks`** — new table, payload, attempts, last error, state;
-   enqueue from any phase; survives `init()`; `/engine/tasks` and the MCP
-   tools.
+3. ~~**`scriptTasks`**~~ _(done)_ — new table, payload, attempts, last error,
+   state; enqueue from any phase; survives `init()`; `/engine/tasks` and the
+   MCP tools. See `docs/SCRIPT_TASKS.md`.
+
+   The open question below answered itself: `repository::fetch_script` already
+   resolves through the deployment pin, so a task runs against what the script
+   _serves_ rather than against head, with no code of its own. A task also
+   keeps no row when it succeeds — one row per success grows the table for the
+   outcome nobody debugs, and the script's log already has it under the run's
+   invocation id — while a failure keeps its row and its last error, which is
+   the one somebody has to read.
+
 4. **`dispatcher.post`** onto that queue.
 5. **The delegation record** — consent page, grant table, run-time
    intersection, `/auth/sessions` surfacing, cancellation on revoke — and then

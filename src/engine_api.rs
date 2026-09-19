@@ -5707,6 +5707,181 @@ pub async fn deployment_route(
     )
 }
 
+// ============================================================================
+// Script tasks
+// ============================================================================
+
+#[derive(Deserialize, Default)]
+pub struct TaskListParams {
+    script: Option<String>,
+    limit: Option<i64>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct TaskActionParams {
+    script: Option<String>,
+    task: Option<String>,
+    /// Discard the finished tasks — failed and cancelled — rather than
+    /// cancelling one that has not run.
+    finished: Option<bool>,
+}
+
+/// What a script has queued, and what became of what it queued.
+///
+/// A task that succeeded is not here: its row is deleted when it completes,
+/// because keeping one per success grows the table for the outcome nobody is
+/// debugging. What it did is in the script's log under its invocation id.
+#[utoipa::path(
+    get,
+    path = "/engine/tasks",
+    tags = ["Scripts"],
+    params(
+        ("script" = String, Query, description = "URI of the script whose queue to read"),
+        ("limit" = Option<i64>, Query, description = "How many to return, newest first (default 50, max 500)"),
+    ),
+    responses(
+        (status = 200, description = "The script's queued and failed tasks"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Not an administrator or owner of the script"),
+    )
+)]
+pub async fn tasks_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<TaskListParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(script) = query.script else {
+        return missing_param_response("script");
+    };
+
+    let user_for_auth = user.clone();
+    let script_for_auth = script.clone();
+    let allowed =
+        tokio::task::spawn_blocking(move || can_read_history(&user_for_auth, &script_for_auth))
+            .await
+            .unwrap_or(false);
+    if !allowed {
+        return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+    }
+
+    match crate::tasks::list(&script, query.limit.unwrap_or(50)).await {
+        Ok(tasks) => json_response(
+            StatusCode::OK,
+            json!({
+                "script": script,
+                "tasks": tasks.iter().map(crate::tasks::to_json).collect::<Vec<_>>(),
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Error: Failed to read tasks: {}", e),
+        ),
+    }
+}
+
+/// Stop a task that has not run, or discard the ones that have finished.
+///
+/// Writing rather than reading, so it takes what writing the script takes.
+#[utoipa::path(
+    delete,
+    path = "/engine/tasks",
+    tags = ["Scripts"],
+    params(
+        ("script" = String, Query, description = "URI of the script whose queue to act on"),
+        ("task" = Option<String>, Query, description = "Id of a pending task to cancel"),
+        ("finished" = Option<bool>, Query, description = "Discard the failed and cancelled tasks instead"),
+    ),
+    responses(
+        (status = 200, description = "What was cancelled or discarded"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Not an administrator or owner of the script"),
+        (status = 404, description = "No such task for this script"),
+    )
+)]
+pub async fn tasks_delete_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<TaskActionParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(script) = query.script else {
+        return missing_param_response("script");
+    };
+
+    let user_for_auth = user.clone();
+    let script_for_auth = script.clone();
+    let allowed =
+        tokio::task::spawn_blocking(move || can_write_history(&user_for_auth, &script_for_auth))
+            .await
+            .unwrap_or(false);
+    if !allowed {
+        return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+    }
+
+    if query.finished.unwrap_or(false) {
+        return match crate::tasks::clear_finished(&script).await {
+            Ok(discarded) => json_response(
+                StatusCode::OK,
+                json!({
+                    "script": script,
+                    "discarded": discarded,
+                    "timestamp": iso_timestamp(),
+                }),
+            ),
+            Err(e) => error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error: Failed to discard tasks: {}", e),
+            ),
+        };
+    }
+
+    let Some(task) = query.task else {
+        return missing_param_response("task");
+    };
+    let Ok(task_id) = uuid::Uuid::parse_str(task.trim()) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Error: that is not a task id".to_string(),
+        );
+    };
+
+    // The task has to belong to the script the caller was authorized against,
+    // or holding an id would be authority over somebody else's queue.
+    match crate::tasks::get(task_id).await {
+        Ok(Some(found)) if found.script_uri == script => {}
+        Ok(_) => {
+            return error_response(
+                StatusCode::NOT_FOUND,
+                "Error: no such task for this script".to_string(),
+            );
+        }
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error: Failed to read the task: {}", e),
+            );
+        }
+    }
+
+    match crate::tasks::cancel(task_id).await {
+        Ok(cancelled) => json_response(
+            StatusCode::OK,
+            json!({
+                "script": script,
+                "task": task_id.to_string(),
+                "cancelled": cancelled,
+                // False means it was not pending: already running, already
+                // failed, or already cancelled.
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Error: Failed to cancel the task: {}", e),
+        ),
+    }
+}
+
 #[derive(Deserialize, Default)]
 pub struct RevisionLabelParams {
     script: Option<String>,
@@ -9541,6 +9716,41 @@ fn native_tools() -> &'static [NativeToolEntry] {
             tool_label_revision,
         ),
         (
+            "list_tasks",
+            "Read a script's queued work: what is waiting to run, what is running now, and what failed with the error that failed it. A task that succeeded is not listed — its row is deleted when it completes, and what it did is in the script's log under its own invocation id. Use this to find out why background work is not happening.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script whose queue to read" },
+                        "limit": { "type": "integer", "description": "How many to return, newest first (default 50, max 500)" }
+                    },
+                    "required": ["script"]
+                })
+            },
+            tool_list_tasks,
+        ),
+        (
+            "cancel_task",
+            "Stop one queued task that has not started, or discard the finished ones. Cancelling only works while a task is still pending: one already running is not stopped by this, and one that already failed is finished. Pass finished=true instead to clear out the failed and cancelled tasks once you have read them.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script whose queue to act on" },
+                        "task": { "type": "string", "description": "Id of the pending task to cancel" },
+                        "finished": {
+                            "type": "boolean",
+                            "description": "Discard this script's failed and cancelled tasks instead of cancelling one.",
+                            "default": false
+                        }
+                    },
+                    "required": ["script"]
+                })
+            },
+            tool_cancel_task,
+        ),
+        (
             "deploy_script",
             "Choose which revision of a script is served. Once deployed, writing the script's files records revisions and advances head without changing what answers requests — so code can be uploaded and tested while production stays where it is, and moves only when you say so. Pass revision='head' to take the newest, or omit 'revision' with follow=true to stop pinning entirely.",
             || {
@@ -10108,6 +10318,77 @@ fn tool_diff_revisions(args: &Value, user: &UserContext) -> Value {
         }),
         Ok(None) => json!({ "error": format!("No revision {} or {}", from, to) }),
         Err(e) => json!({ "error": format!("Failed to diff revisions: {}", e) }),
+    }
+}
+
+fn tool_list_tasks(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    if !can_read_history(user, script) {
+        return json!({ "error": "Failed to read tasks: Access denied" });
+    }
+
+    let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(50);
+    match crate::database::run_blocking(crate::tasks::list(script, limit)) {
+        Ok(tasks) => json!({
+            "success": true,
+            "script": script,
+            "tasks": tasks.iter().map(crate::tasks::to_json).collect::<Vec<_>>(),
+            "timestamp": iso_timestamp(),
+        }),
+        Err(e) => json!({ "error": format!("Failed to read tasks: {}", e) }),
+    }
+}
+
+fn tool_cancel_task(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    if !can_write_history(user, script) {
+        return json!({ "error": "Failed to cancel: Access denied" });
+    }
+
+    if args
+        .get("finished")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return match crate::database::run_blocking(crate::tasks::clear_finished(script)) {
+            Ok(discarded) => json!({
+                "success": true,
+                "script": script,
+                "discarded": discarded,
+                "timestamp": iso_timestamp(),
+            }),
+            Err(e) => json!({ "error": format!("Failed to discard tasks: {}", e) }),
+        };
+    }
+
+    let Some(task) = arg_str(args, "task") else {
+        return missing_arg("task");
+    };
+    let Ok(task_id) = uuid::Uuid::parse_str(task.trim()) else {
+        return json!({ "error": "Failed to cancel: that is not a task id" });
+    };
+
+    // Scoped to the script the caller was authorized against, so an id alone
+    // is not authority over another script's queue.
+    match crate::database::run_blocking(crate::tasks::get(task_id)) {
+        Ok(Some(found)) if found.script_uri == script => {}
+        Ok(_) => return json!({ "error": "Failed to cancel: no such task for this script" }),
+        Err(e) => return json!({ "error": format!("Failed to read the task: {}", e) }),
+    }
+
+    match crate::database::run_blocking(crate::tasks::cancel(task_id)) {
+        Ok(cancelled) => json!({
+            "success": true,
+            "script": script,
+            "task": task_id.to_string(),
+            "cancelled": cancelled,
+            "timestamp": iso_timestamp(),
+        }),
+        Err(e) => json!({ "error": format!("Failed to cancel the task: {}", e) }),
     }
 }
 

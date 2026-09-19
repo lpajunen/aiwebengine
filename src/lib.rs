@@ -38,6 +38,7 @@ pub mod graphql_ws;
 pub mod hosts;
 pub mod http_client;
 pub mod js_engine;
+pub mod lease;
 pub mod limits;
 pub mod log_retention;
 pub mod mcp;
@@ -61,6 +62,7 @@ pub mod source_view;
 pub mod sql_dialect;
 pub mod stream_manager;
 pub mod stream_registry;
+pub mod tasks;
 pub mod transpiler;
 pub mod user_repository;
 pub mod worker_census;
@@ -115,6 +117,8 @@ What a script may spend is worth knowing before writing one: each invocation get
         engine_api::deploy_route,
         engine_api::undeploy_route,
         engine_api::deployment_route,
+        engine_api::tasks_route,
+        engine_api::tasks_delete_route,
         engine_api::git_pull_route,
         engine_api::git_push_route,
         engine_api::git_status_route,
@@ -1684,14 +1688,20 @@ pub async fn start_server_with_config(
     let (scheduler_shutdown_tx, scheduler_shutdown_rx) = tokio::sync::oneshot::channel();
     let (pruner_shutdown_tx, pruner_shutdown_rx) = tokio::sync::oneshot::channel();
     let (log_pruner_shutdown_tx, log_pruner_shutdown_rx) = tokio::sync::oneshot::channel();
+    let (tasks_shutdown_tx, tasks_shutdown_rx) = tokio::sync::oneshot::channel();
 
     scheduler::spawn_worker(scheduler_shutdown_rx);
+    // The queue's worker, beside the scheduler's rather than inside it: the two
+    // read different tables and answer different questions, and a task claimed
+    // while the scheduler is busy with a slow job should not wait for it.
+    tasks::spawn_worker(notifications::generate_server_id(), tasks_shutdown_rx);
     revisions::spawn_pruner(config.revisions.clone(), pruner_shutdown_rx);
     log_retention::spawn_pruner(config.logs.clone(), log_pruner_shutdown_rx);
 
     tokio::spawn(async move {
         let _ = shutdown_rx.await;
         let _ = scheduler_shutdown_tx.send(());
+        let _ = tasks_shutdown_tx.send(());
         let _ = pruner_shutdown_tx.send(());
         let _ = log_pruner_shutdown_tx.send(());
         let _ = server_shutdown_tx.send(());
@@ -2780,6 +2790,10 @@ async fn setup_routes(
         .route(
             "/engine/revisions/revert",
             axum::routing::post(engine_api::revert_route),
+        )
+        .route(
+            "/engine/tasks",
+            axum::routing::get(engine_api::tasks_route).delete(engine_api::tasks_delete_route),
         )
         .route(
             "/engine/deploy",
