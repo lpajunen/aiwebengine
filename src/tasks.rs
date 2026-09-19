@@ -105,6 +105,38 @@ pub enum EnqueueError {
     Storage(String),
 }
 
+/// What a queued row is, and so what its handler is handed.
+///
+/// `Task` is the ordinary one — a handler named by whoever enqueued it, given
+/// the payload under `context.meta.task`. `Message` is one `dispatcher.post`
+/// enqueued, whose handler is a listener registered through
+/// `dispatcher.registerListener`; it is called with `messageType` and
+/// `messageData` the way an inline `sendMessage` calls it, so a listener works
+/// the same whichever way the message reached it. Reusing the dispatcher's
+/// registrations is the point of posting one, and a listener that had to be
+/// written twice would defeat it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskKind {
+    Task,
+    Message,
+}
+
+impl TaskKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TaskKind::Task => "task",
+            TaskKind::Message => "message",
+        }
+    }
+
+    fn from_str(value: &str) -> Self {
+        match value {
+            "message" => TaskKind::Message,
+            _ => TaskKind::Task,
+        }
+    }
+}
+
 /// What a caller is asking to have run.
 #[derive(Debug, Clone)]
 pub struct NewTask {
@@ -116,6 +148,7 @@ pub struct NewTask {
     /// How many attempts it gets. `None` takes [`DEFAULT_MAX_ATTEMPTS`].
     pub max_attempts: Option<i32>,
     pub enqueued_by: Option<String>,
+    pub kind: TaskKind,
 }
 
 /// A task as stored.
@@ -131,6 +164,7 @@ pub struct Task {
     pub last_error: Option<String>,
     pub run_at: DateTime<Utc>,
     pub enqueued_by: Option<String>,
+    pub kind: TaskKind,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -148,6 +182,7 @@ impl Task {
             last_error: row.get("last_error"),
             run_at: row.get("run_at"),
             enqueued_by: row.get("enqueued_by"),
+            kind: TaskKind::from_str(row.get::<String, _>("kind").as_str()),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -169,6 +204,7 @@ pub struct TaskInvocation {
     /// run without keeping its own count.
     pub attempts: i32,
     pub max_attempts: i32,
+    pub kind: TaskKind,
 }
 
 /// How long to wait before the attempt after `attempts` failures.
@@ -233,10 +269,10 @@ pub async fn enqueue(task: NewTask) -> Result<Task, EnqueueError> {
     let row = sqlx::query(
         r#"
         INSERT INTO script_tasks
-            (task_id, script_uri, handler_name, payload, state, max_attempts, run_at, enqueued_by)
-        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)
+            (task_id, script_uri, handler_name, payload, state, max_attempts, run_at, enqueued_by, kind)
+        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)
         RETURNING task_id, script_uri, handler_name, payload, state, attempts, max_attempts,
-                  last_error, run_at, enqueued_by, created_at, updated_at
+                  last_error, run_at, enqueued_by, kind, created_at, updated_at
         "#,
     )
     .bind(task_id)
@@ -246,6 +282,7 @@ pub async fn enqueue(task: NewTask) -> Result<Task, EnqueueError> {
     .bind(max_attempts)
     .bind(run_at)
     .bind(task.enqueued_by.as_deref())
+    .bind(task.kind.as_str())
     .fetch_one(db.pool())
     .await
     .map_err(|e| EnqueueError::Storage(e.to_string()))?;
@@ -272,7 +309,7 @@ pub async fn list(script_uri: &str, limit: i64) -> Result<Vec<Task>, sqlx::Error
     let rows = sqlx::query(
         r#"
         SELECT task_id, script_uri, handler_name, payload, state, attempts, max_attempts,
-               last_error, run_at, enqueued_by, created_at, updated_at
+               last_error, run_at, enqueued_by, kind, created_at, updated_at
         FROM script_tasks
         WHERE script_uri = $1
         ORDER BY created_at DESC
@@ -296,7 +333,7 @@ pub async fn get(task_id: Uuid) -> Result<Option<Task>, sqlx::Error> {
     let row = sqlx::query(
         r#"
         SELECT task_id, script_uri, handler_name, payload, state, attempts, max_attempts,
-               last_error, run_at, enqueued_by, created_at, updated_at
+               last_error, run_at, enqueued_by, kind, created_at, updated_at
         FROM script_tasks
         WHERE task_id = $1
         "#,
@@ -406,7 +443,7 @@ async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocation> {
         FROM candidates
         WHERE tasks.task_id = candidates.task_id
         RETURNING tasks.task_id, tasks.script_uri, tasks.handler_name, tasks.payload,
-                  tasks.attempts, tasks.max_attempts
+                  tasks.attempts, tasks.max_attempts, tasks.kind
         "#,
     )
     .bind(now)
@@ -432,6 +469,7 @@ async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocation> {
             payload: row.get("payload"),
             attempts: row.get("attempts"),
             max_attempts: row.get("max_attempts"),
+            kind: TaskKind::from_str(row.get::<String, _>("kind").as_str()),
         })
         .collect()
 }
@@ -657,6 +695,7 @@ pub fn to_json(task: &Task) -> Value {
         "lastError": task.last_error,
         "runAt": task.run_at.to_rfc3339(),
         "enqueuedBy": task.enqueued_by,
+        "kind": task.kind.as_str(),
         "createdAt": task.created_at.to_rfc3339(),
         "updatedAt": task.updated_at.to_rfc3339(),
     })
@@ -695,6 +734,7 @@ mod tests {
             run_at: None,
             max_attempts: None,
             enqueued_by: None,
+            kind: TaskKind::Task,
         }
     }
 

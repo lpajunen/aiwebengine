@@ -2307,6 +2307,37 @@ interface MessageDispatcher {
    * dispatcher.sendMessage("user.created", { userId: "123", email: "user@example.com" });
    */
   sendMessage(messageType: string, messageData?: any): string;
+
+  /**
+   * The same fan-out, queued rather than run.
+   *
+   * `sendMessage` runs every listener inline: in your execution, on your
+   * budget, under your context, and it does not return until they all have.
+   * `post` enqueues one task per listener instead, so this returns at once and
+   * each listener gets a budget of its own ({{limits.execution.jobTimeout}}),
+   * its own retries, and a row in `/engine/tasks` saying how it went.
+   *
+   * The listener is the same registration and the same code either way — it
+   * still reads `context.messageType` and `context.messageData`. A queued one
+   * additionally has `context.meta.task` if it wants to know it is a retry.
+   *
+   * Two differences worth knowing. Listeners are resolved now, so the fan-out
+   * goes to whoever is listening at this moment rather than whenever the queue
+   * gets to it. And a queued listener runs in **script context** — it holds
+   * what its own script holds, not what you hold — because there is no caller
+   * left to borrow authority from by the time it runs.
+   *
+   * @returns What was queued: `{messageType, queued, taskIds}`.
+   * @throws Error if the message type is empty or the queue could not accept
+   *   them. A partial failure says how many were queued before it.
+   * @example
+   * // Answer now; let the listeners do the slow part.
+   * const { queued } = dispatcher.post("order.placed", { orderId });
+   */
+  post(
+    messageType: string,
+    messageData?: any,
+  ): { messageType: string; queued: number; taskIds: string[] };
 }
 
 // ============================================================================

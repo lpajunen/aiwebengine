@@ -612,8 +612,10 @@ impl SecureGlobalContext {
         self.setup_graphql_functions(ctx, script_uri)?;
         self.setup_mcp_functions(ctx, script_uri)?;
         self.setup_scheduler_functions(ctx, script_uri)?;
-        self.setup_task_functions(ctx, script_uri)?;
         self.setup_dispatcher_functions(ctx, script_uri)?;
+        // After the dispatcher: the queue's prelude installs `scriptTasks` and
+        // also puts `post` on the dispatcher, which has to be there already.
+        self.setup_task_functions(ctx, script_uri)?;
 
         // Setup JSX factory functions for server-side HTML generation
         self.setup_jsx_functions(ctx)?;
@@ -4914,6 +4916,7 @@ impl SecureGlobalContext {
                     // Recorded as where the work came from, not as an authority
                     // it runs under: a task runs in script context.
                     enqueued_by: user_enqueue.user_id.clone(),
+                    kind: crate::tasks::TaskKind::Task,
                 };
 
                 match crate::tasks::blocking::enqueue(new_task) {
@@ -5220,8 +5223,120 @@ impl SecureGlobalContext {
             },
         )?;
 
+        // post(messageType, data) — the same fan-out, queued rather than run.
+        //
+        // `sendMessage` runs every listener inline: on the sender's budget, in
+        // the sender's execution, under the sender's context. That is right
+        // for a message whose result the sender needs, and wrong for anything
+        // slow, since one listener's work is charged to whoever set it off.
+        //
+        // Posting resolves the listeners now and enqueues one task each, so
+        // the sender returns immediately and each listener gets a budget, a
+        // retry and a visible state of its own. The listeners are resolved at
+        // post time, because the fan-out is to whoever was listening when the
+        // message was sent — not to whoever happens to be listening by the
+        // time the queue gets to it.
+        //
+        // The queued listener runs in *script context*, not the sender's.
+        // Inline it holds what the sender held, which is exactly as much as
+        // the sender could have done itself; queued, there is no sender left
+        // to borrow from, and the alternative — keeping a caller's authority
+        // alive in a row — is the delegation question, which is not answered
+        // by a convenience method on the dispatcher.
+        let config_post = self.config.clone();
+        let user_post = self.user_context.clone();
+        let post_message = Function::new(
+            ctx.clone(),
+            move |message_type: String, message_data_json: Opt<String>| -> JsResult<String> {
+                let message_type = message_type.trim().to_string();
+                if message_type.is_empty() {
+                    return Ok(Self::task_failure(
+                        "TypeError",
+                        "dispatcher.post: message type cannot be empty",
+                    ));
+                }
+
+                if config_post.is_dry_run() {
+                    return Ok(Self::task_failure(
+                        "DryRunError",
+                        &format!(
+                            "dispatcher.post: '{}' not queued - this is a dry run",
+                            message_type
+                        ),
+                    ));
+                }
+
+                let message_data: serde_json::Value = match message_data_json.0 {
+                    Some(raw) => match serde_json::from_str(&raw) {
+                        Ok(value) => value,
+                        Err(e) => {
+                            return Ok(Self::task_failure(
+                                "TypeError",
+                                &format!("dispatcher.post: message data is not valid JSON: {}", e),
+                            ));
+                        }
+                    },
+                    None => serde_json::json!({}),
+                };
+
+                let listeners =
+                    match crate::dispatcher::GLOBAL_DISPATCHER.get_listeners(&message_type) {
+                        Ok(listeners) => listeners,
+                        Err(e) => {
+                            return Ok(Self::task_failure(
+                                "Error",
+                                &format!("dispatcher.post: failed to read listeners: {}", e),
+                            ));
+                        }
+                    };
+
+                let mut queued = Vec::new();
+                for listener in listeners.iter() {
+                    let new_task = crate::tasks::NewTask {
+                        script_uri: listener.script_uri.clone(),
+                        handler_name: listener.handler_name.clone(),
+                        payload: serde_json::json!({
+                            "messageType": message_type,
+                            "messageData": message_data,
+                        }),
+                        run_at: None,
+                        max_attempts: None,
+                        enqueued_by: user_post.user_id.clone(),
+                        kind: crate::tasks::TaskKind::Message,
+                    };
+
+                    match crate::tasks::blocking::enqueue(new_task) {
+                        Ok(task) => queued.push(task.task_id.to_string()),
+                        Err(e) => {
+                            // Partially queued is reported rather than hidden:
+                            // some listeners will run and the caller has to
+                            // know which, since there is no transaction across
+                            // a fan-out.
+                            return Ok(Self::task_failure(
+                                "Error",
+                                &format!(
+                                    "dispatcher.post: queued {} of {} listeners for '{}', then: {}",
+                                    queued.len(),
+                                    listeners.len(),
+                                    message_type,
+                                    e
+                                ),
+                            ));
+                        }
+                    }
+                }
+
+                Ok(Self::task_ok(serde_json::json!({
+                    "messageType": message_type,
+                    "queued": queued.len(),
+                    "taskIds": queued,
+                })))
+            },
+        )?;
+
         dispatcher_obj.set("registerListener", register_listener)?;
         dispatcher_obj.set("sendMessage", send_message)?;
+        dispatcher_obj.set("__post", post_message)?;
         global.set("dispatcher", dispatcher_obj)?;
 
         debug!("Dispatcher functions initialized");

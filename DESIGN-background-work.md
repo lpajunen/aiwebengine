@@ -180,7 +180,7 @@ is what makes that survivable.
 
 ## Order
 
-Items 1, 2 and 3 are built; the rest stands as written.
+Items 1-4 are built; the rest stands as written.
 
 1. ~~**Fix the secret template**~~ _(done)_ (TODO-agent item 7,
    `http_client.rs:463`) and
@@ -211,7 +211,13 @@ Items 1, 2 and 3 are built; the rest stands as written.
    invocation id — while a failure keeps its row and its last error, which is
    the one somebody has to read.
 
-4. **`dispatcher.post`** onto that queue.
+4. ~~**`dispatcher.post`**~~ _(done)_ onto that queue. The listener is the same
+   registration and the same code either way, which needed a `kind` on the
+   queued row: a posted message is handed to its handler as `messageType` and
+   `messageData`, the shape an inline `sendMessage` uses. Without that a
+   listener would behave differently depending on how the message reached it,
+   and reusing the dispatcher's registrations is the only reason to post
+   rather than enqueue directly.
 5. **The delegation record** — consent page, grant table, run-time
    intersection, `/auth/sessions` surfacing, cancellation on revoke — and then
    `personalTasks` on top of it.

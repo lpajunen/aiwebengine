@@ -103,6 +103,31 @@ Keep the payload small and put the data itself in storage with the task naming
 it. A retry then reads what is current rather than a copy taken when the task
 was enqueued.
 
+## Posting a message instead of sending it
+
+`dispatcher.sendMessage` runs every listener inline — in your execution, on
+your budget, under your context — and does not return until they all have.
+`dispatcher.post` fans out to the same listeners and queues one task each:
+
+```javascript
+function placeOrder(context) {
+  const { queued } = dispatcher.post("order.placed", { orderId });
+  return { status: 201, body: JSON.stringify({ orderId, queued }) };
+}
+```
+
+The listener is the same registration and the same code either way — it still
+reads `context.messageType` and `context.messageData`. That compatibility is
+the whole reason to post rather than calling `scriptTasks.enqueue` directly; a
+listener that had to be written twice would defeat it. A queued one also has
+`context.meta.task` if it wants to know it is a retry.
+
+Two differences. Listeners are resolved when you post, so the fan-out goes to
+whoever is listening at that moment rather than whenever the queue reaches it.
+And a queued listener runs in script context — it holds what its own script
+holds, not what you hold — because by the time it runs there is no caller left
+to borrow authority from.
+
 ## Seeing the queue
 
 ```bash
