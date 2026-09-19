@@ -2040,7 +2040,10 @@ pub fn execute_scheduled_handler(
 /// A task runs in script context. It holds what the script holds, and nothing
 /// belonging to whoever enqueued it: acting as a person in the background is a
 /// grant that person has to make, and there is nowhere yet for them to make it.
-pub fn execute_task_handler(invocation: &crate::tasks::TaskInvocation) -> Result<(), String> {
+pub fn execute_task_handler(
+    invocation: &crate::tasks::TaskInvocation,
+    delegated: Option<&crate::delegation::Delegated>,
+) -> Result<(), String> {
     let script_uri = invocation.script_uri.as_str();
     let handler_name = invocation.handler_name.as_str();
     let script_uri_owned = script_uri.to_string();
@@ -2071,10 +2074,20 @@ pub fn execute_task_handler(invocation: &crate::tasks::TaskInvocation) -> Result
             ..Default::default()
         };
 
+        // The context the globals are installed with is what `fetch` resolves
+        // `{{secret:...}}` against — `user_secrets` for this id, then the
+        // script's. A delegated task therefore reaches the person's own key
+        // here and nowhere else; an undelegated one is the engine's own
+        // context, which has no personal secrets to find.
+        let user_context = match delegated {
+            Some(delegated) => delegated.user_context.clone(),
+            None => UserContext::admin("tasks".to_string()),
+        };
+
         setup_secure_global_functions(
             &ctx,
             &script_uri_owned,
-            UserContext::admin("tasks".to_string()),
+            user_context,
             &security_config,
             None,
             None,
@@ -2111,10 +2124,31 @@ pub fn execute_task_handler(invocation: &crate::tasks::TaskInvocation) -> Result
                 "payload": invocation.payload,
             });
 
-            let handler_context = JsHandlerContextBuilder::new(HandlerInvocationKind::Scheduled)
+            // `personalStorage` reads `context.request.auth.userId`, so a
+            // delegated task has to present one. It is the identity
+            // `delegation::resolve` just re-derived, never something carried in
+            // the task's row — and `isAdmin`/`isEditor` are false whatever the
+            // person holds, because the tier is capped at what an ordinary
+            // request has.
+            let mut builder = JsHandlerContextBuilder::new(HandlerInvocationKind::Scheduled)
                 .with_script_metadata(script_uri, handler_name)
                 .with_metadata_value("task", task_meta)
-                .with_invocation_id(invocation.invocation_id.clone())
+                .with_invocation_id(invocation.invocation_id.clone());
+
+            if let Some(delegated) = delegated {
+                builder = builder
+                    .with_request(JsRequestContext::default())
+                    .with_auth_context(crate::auth::JsAuthContext::authenticated(
+                        delegated.user_id().to_string(),
+                        delegated.email.clone(),
+                        delegated.name.clone(),
+                        "delegation".to_string(),
+                        false,
+                        false,
+                    ));
+            }
+
+            let handler_context = builder
                 .build(ctx)
                 .map_err(|e| format!("build context: {}", e))?;
 

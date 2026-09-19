@@ -180,7 +180,7 @@ is what makes that survivable.
 
 ## Order
 
-Items 1-4 are built; the rest stands as written.
+Items 1-5 are built. Item 6 (per-script limits) stands as written.
 
 1. ~~**Fix the secret template**~~ _(done)_ (TODO-agent item 7,
    `http_client.rs:463`) and
@@ -218,9 +218,19 @@ Items 1-4 are built; the rest stands as written.
    listener would behave differently depending on how the message reached it,
    and reusing the dispatcher's registrations is the only reason to post
    rather than enqueue directly.
-5. **The delegation record** — consent page, grant table, run-time
-   intersection, `/auth/sessions` surfacing, cancellation on revoke — and then
-   `personalTasks` on top of it.
+5. ~~**The delegation record**~~ _(done)_ — consent page, grant table,
+   run-time intersection, `/auth/sessions` surfacing, cancellation on revoke —
+   and then `personalTasks` on top of it. See `docs/DELEGATION.md`.
+
+   Two things the note left open. The "intersection" turned out better stated
+   as a _cap_: a delegated task runs at the authenticated tier whatever the
+   person holds, rather than computing an intersection with their roles — one
+   sentence instead of a rule that has to be re-derived every time roles
+   change, and narrowing in the only direction that is safe. And a refusal is
+   terminal rather than retried: a withdrawn grant does not clear by waiting,
+   and retrying is the engine repeatedly asking to act as somebody who has
+   said no.
+
 6. **Per-script limits.**
 
 Items 1–4 are mechanical and unblock the in-engine agent. Item 5 is the design

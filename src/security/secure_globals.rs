@@ -4917,6 +4917,9 @@ impl SecureGlobalContext {
                     // it runs under: a task runs in script context.
                     enqueued_by: user_enqueue.user_id.clone(),
                     kind: crate::tasks::TaskKind::Task,
+                    // Script context. `personalTasks.enqueue` is the one that
+                    // acts as somebody, and it takes a grant to do it.
+                    run_as: None,
                 };
 
                 match crate::tasks::blocking::enqueue(new_task) {
@@ -4980,6 +4983,165 @@ impl SecureGlobalContext {
             }
         })?;
         host.set("get", get)?;
+
+        // `personalTasks` — the same queue, acting as the person who asked.
+        //
+        // Three things have to hold before a row is written, and all three are
+        // checked again when the task runs: there is an authenticated user,
+        // they have granted this script a delegation, and it has not lapsed.
+        // Checking here as well is not redundant — it is what lets a script
+        // find out *now* that it needs to send someone to the consent page,
+        // rather than queueing work that will be abandoned later.
+        let script_uri_personal = script_uri.to_string();
+        let config_personal = self.config.clone();
+        let personal_enqueue = Function::new(
+            ctx.clone(),
+            move |ctx: rquickjs::Ctx<'_>, options_json: String| -> JsResult<String> {
+                if config_personal.is_dry_run() {
+                    return Ok(Self::task_failure(
+                        "DryRunError",
+                        "personalTasks.enqueue: nothing was enqueued - this is a dry run",
+                    ));
+                }
+
+                // The person this would act as is the one making the request,
+                // read from the live context rather than from the binding: a
+                // script serving a request runs under the requesting user, and
+                // that is who is in a position to have consented.
+                let Some(user_id) = Self::current_user_id(&ctx) else {
+                    return Ok(Self::task_failure(
+                        "SecurityError",
+                        "personalTasks.enqueue requires an authenticated user",
+                    ));
+                };
+
+                match crate::database::run_blocking(crate::delegation::get(
+                    &user_id,
+                    &script_uri_personal,
+                )) {
+                    Ok(Some(grant)) if grant.is_live(chrono::Utc::now()) => {}
+                    Ok(Some(_)) => {
+                        return Ok(Self::task_failure(
+                            "SecurityError",
+                            "personalTasks.enqueue: this person's authorisation for this script has expired",
+                        ));
+                    }
+                    Ok(None) => {
+                        return Ok(Self::task_failure(
+                            "SecurityError",
+                            "personalTasks.enqueue: this person has not authorised this script to act for them",
+                        ));
+                    }
+                    Err(e) => {
+                        return Ok(Self::task_failure(
+                            "Error",
+                            &format!(
+                                "personalTasks.enqueue: could not read the authorisation: {}",
+                                e
+                            ),
+                        ));
+                    }
+                }
+
+                let options: serde_json::Value = match serde_json::from_str(&options_json) {
+                    Ok(options) => options,
+                    Err(e) => {
+                        return Ok(Self::task_failure(
+                            "TypeError",
+                            &format!("personalTasks.enqueue: options are not valid JSON: {}", e),
+                        ));
+                    }
+                };
+
+                let run_at = match options.get("runAt").and_then(|v| v.as_str()) {
+                    Some(value) => match crate::scheduler::parse_utc_timestamp(value) {
+                        Ok(parsed) => Some(parsed),
+                        Err(_) => {
+                            return Ok(Self::task_failure(
+                                "RangeError",
+                                "personalTasks.enqueue: runAt must be a UTC timestamp ending with 'Z'",
+                            ));
+                        }
+                    },
+                    None => None,
+                };
+
+                let new_task = crate::tasks::NewTask {
+                    script_uri: script_uri_personal.clone(),
+                    handler_name: options
+                        .get("handler")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    payload: options
+                        .get("payload")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({})),
+                    run_at,
+                    max_attempts: options
+                        .get("maxAttempts")
+                        .and_then(|v| v.as_i64())
+                        .map(|n| n.clamp(i32::MIN as i64, i32::MAX as i64) as i32),
+                    enqueued_by: Some(user_id.clone()),
+                    kind: crate::tasks::TaskKind::Task,
+                    run_as: Some(user_id),
+                };
+
+                match crate::tasks::blocking::enqueue(new_task) {
+                    Ok(task) => Ok(Self::task_ok(crate::tasks::to_json(&task))),
+                    Err(e) => Ok(Self::task_failure(
+                        Self::task_error_name(&e),
+                        &format!("personalTasks.enqueue: {}", e),
+                    )),
+                }
+            },
+        )?;
+        host.set("enqueuePersonal", personal_enqueue)?;
+
+        // Whether this person has authorised this script, and for what — so a
+        // script can offer the consent page instead of failing at the enqueue.
+        let script_uri_grant = script_uri.to_string();
+        let delegation_state = Function::new(
+            ctx.clone(),
+            move |ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                let Some(user_id) = Self::current_user_id(&ctx) else {
+                    return Ok(Self::task_ok(serde_json::json!({
+                        "authenticated": false,
+                        "granted": false,
+                        "scopes": [],
+                    })));
+                };
+
+                match crate::database::run_blocking(crate::delegation::get(
+                    &user_id,
+                    &script_uri_grant,
+                )) {
+                    Ok(Some(grant)) => {
+                        let live = grant.is_live(chrono::Utc::now());
+                        Ok(Self::task_ok(serde_json::json!({
+                            "authenticated": true,
+                            "granted": live,
+                            "expired": !live,
+                            "expiresAt": grant.expires_at.to_rfc3339(),
+                            "scopes": grant.scopes.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                            "consentUrl": crate::delegation::consent_url(&script_uri_grant),
+                        })))
+                    }
+                    Ok(None) => Ok(Self::task_ok(serde_json::json!({
+                        "authenticated": true,
+                        "granted": false,
+                        "expired": false,
+                        "scopes": [],
+                        "consentUrl": crate::delegation::consent_url(&script_uri_grant),
+                    }))),
+                    Err(e) => Ok(Self::task_failure(
+                        "Error",
+                        &format!("personalTasks.authorization: {}", e),
+                    )),
+                }
+            },
+        )?;
+        host.set("authorization", delegation_state)?;
 
         global.set("__hostScriptTasks", host)?;
 
@@ -5303,6 +5465,9 @@ impl SecureGlobalContext {
                         max_attempts: None,
                         enqueued_by: user_post.user_id.clone(),
                         kind: crate::tasks::TaskKind::Message,
+                        // A queued listener runs in its own script's context:
+                        // there is no sender left to borrow authority from.
+                        run_as: None,
                     };
 
                     match crate::tasks::blocking::enqueue(new_task) {
@@ -5689,6 +5854,7 @@ mod api_surface_tests {
             "secretStorage",
             "schedulerService",
             "scriptTasks",
+            "personalTasks",
             "graphQLRegistry",
             "mcpRegistry",
             "database",

@@ -69,6 +69,13 @@ pub fn normalize_resource(resource: &str) -> String {
 /// nothing durable — a client holding a refresh token mints a new session on
 /// its next call, and the role or realm just taken away comes straight back
 /// with it.
+///
+/// And so do the delegations. Background work acting as this person is the
+/// third way something goes on being them after their access has changed, and
+/// it is the one a session list cannot show — so "everything is signed out"
+/// has to include it, or a task queued under the old roles runs afterwards
+/// with them. Dropping the grants is what stops that: the run-time check reads
+/// the grant again and refuses, and the pending rows are cancelled outright.
 pub async fn delete_sessions_for_user(pool: &PgPool, user_id: &str) -> Result<u64, sqlx::Error> {
     let result = sqlx::query("DELETE FROM sessions WHERE user_id = $1")
         .bind(user_id)
@@ -76,6 +83,18 @@ pub async fn delete_sessions_for_user(pool: &PgPool, user_id: &str) -> Result<u6
         .await?;
 
     crate::auth::refresh_tokens::revoke_for_user(pool, user_id).await?;
+
+    // Not fatal to the sign-out if it fails: the sessions and refresh tokens
+    // are already gone, and a delegation that outlived this is still checked
+    // when its task runs. Reported, because it is a revocation that did not
+    // fully land.
+    if let Err(e) = crate::delegation::revoke_all(user_id).await {
+        tracing::error!(
+            user = %user_id,
+            error = %e,
+            "Sessions were ended but the delegations could not be withdrawn"
+        );
+    }
 
     Ok(result.rows_affected())
 }

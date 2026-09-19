@@ -80,6 +80,43 @@
     }
   }
 
+  // `personalTasks` — the same queue, acting as the person who asked.
+  //
+  // Separate from `scriptTasks` rather than an option on it, because the two
+  // differ in what the work is allowed to touch, and a flag would make that
+  // the kind of thing you set without noticing. Enqueueing here needs the
+  // person to have authorised this script; `authorization()` says whether they
+  // have, and carries the page to send them to if they have not.
+  var personalTasks = {
+    enqueue: function (options) {
+      if (options === null || typeof options !== "object") {
+        throw new TypeError("personalTasks.enqueue requires an options object");
+      }
+      return unwrap(host.enqueuePersonal(JSON.stringify(options)));
+    },
+
+    // What this person has authorised this script to do:
+    // {authenticated, granted, expired, expiresAt, scopes, consentUrl}
+    authorization: function () {
+      return unwrap(host.authorization());
+    },
+
+    cancel: function (taskId) {
+      return unwrap(host.cancel(String(taskId)));
+    },
+
+    get: function (taskId) {
+      return unwrap(host.get(String(taskId)));
+    },
+  };
+
+  Object.defineProperty(globalThis, "personalTasks", {
+    value: Object.freeze(personalTasks),
+    writable: false,
+    enumerable: true,
+    configurable: false,
+  });
+
   Object.defineProperty(globalThis, "scriptTasks", {
     value: Object.freeze(scriptTasks),
     writable: false,

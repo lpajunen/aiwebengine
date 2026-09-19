@@ -924,6 +924,15 @@ fn account_notice_message(code: &str) -> &'static str {
             "Every other session is over, and so is every refresh token that could have \
              minted one."
         }
+        "delegation_granted" => {
+            "That app can now work on your behalf while you are away. You can withdraw it here \
+             at any time."
+        }
+        "delegation_withdrawn" => {
+            "That app can no longer act for you, and anything it had queued has been cancelled."
+        }
+        "delegation_declined" => "Nothing was authorised.",
+        "delegation_missing" => "There was nothing to withdraw.",
         _ => "Done.",
     }
 }
@@ -1177,6 +1186,220 @@ fn render_sessions(csrf_token: &str, sessions: &[crate::security::SessionSummary
     )
 }
 
+/// What this person has authorised scripts to do as them, and a way to stop it.
+///
+/// Rendered beside the sessions and for the same reason: a background job
+/// acting as you is the same question as a session acting as you, and the
+/// place people look for "what is currently able to act as me" is one place.
+fn render_delegations(csrf_token: &str, grants: &[crate::delegation::Grant]) -> String {
+    if grants.is_empty() {
+        return String::new();
+    }
+
+    let now = chrono::Utc::now();
+    let rows = grants
+        .iter()
+        .map(|grant| {
+            let scopes = if grant.scopes.is_empty() {
+                "nothing".to_string()
+            } else {
+                grant
+                    .scopes
+                    .iter()
+                    .map(|scope| html_escape::encode_text(scope.describe()).to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            };
+
+            // A lapsed grant is shown rather than hidden: it is still a row
+            // somebody may want gone, and "it expired" is information.
+            let when = if grant.is_live(now) {
+                format!("until {}", page_timestamp_utc(grant.expires_at))
+            } else {
+                format!("expired {}", page_timestamp_utc(grant.expires_at))
+            };
+
+            format!(
+                r#"<li>
+                <div>
+                    <span class="where">{script}</span>
+                    <span class="when">{scopes} · {when}</span>
+                </div>
+                <form method="post" action="/auth/delegations/revoke">
+                    <input type="hidden" name="csrf_token" value="{csrf}">
+                    <input type="hidden" name="script" value="{script_value}">
+                    <button type="submit">Withdraw</button>
+                </form>
+            </li>"#,
+                script = html_escape::encode_text(&grant.script_uri),
+                script_value = html_attribute(&grant.script_uri),
+                scopes = scopes,
+                when = when,
+                csrf = html_attribute(csrf_token),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n            ");
+
+    format!(
+        r#"<h2>Apps acting for you</h2>
+        <p class="explain">These can work on your behalf while you are away. Withdrawing one stops
+        it and cancels whatever it had queued.</p>
+        <ul class="sessions">
+            {rows}
+        </ul>"#,
+        rows = rows,
+    )
+}
+
+fn page_timestamp_utc(at: chrono::DateTime<chrono::Utc>) -> String {
+    at.format("%Y-%m-%d %H:%M UTC").to_string()
+}
+
+#[derive(Deserialize, Default)]
+pub struct DelegateParams {
+    script: Option<String>,
+    /// Where to send the person once they have decided. Only a path on this
+    /// engine, so the form cannot be used to bounce somebody off-site.
+    redirect: Option<String>,
+}
+
+/// Ask somebody to authorise a script to act for them.
+///
+/// The page states what is being asked for in the person's terms, not the
+/// developer's, and every scope shown is one the engine actually gates on —
+/// a name nothing checks would be a promise nobody keeps.
+#[utoipa::path(
+    get,
+    path = "/auth/delegate",
+    tags = ["Authentication"],
+    params(
+        ("script" = String, Query, description = "URI of the script asking"),
+        ("redirect" = Option<String>, Query, description = "Path on this engine to return to"),
+    ),
+    responses(
+        (status = 200, description = "Consent page HTML", content_type = "text/html"),
+        (status = 302, description = "No session; redirected to the sign-in page"),
+        (status = 400, description = "Missing or unusable parameter"),
+    )
+)]
+pub async fn delegate_page(
+    State(auth_manager): State<Arc<AuthManager>>,
+    Query(params): Query<DelegateParams>,
+    headers: HeaderMap,
+) -> Response {
+    let config = auth_manager.config();
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
+    let host = get_request_host(&headers);
+
+    let Some(script) = params.script.filter(|s| !s.trim().is_empty()) else {
+        return (StatusCode::BAD_REQUEST, "A script must be named").into_response();
+    };
+
+    let token =
+        session_token_from_headers(&headers, &config.session_cookie_name).unwrap_or_default();
+    let session = if token.is_empty() {
+        None
+    } else {
+        auth_manager
+            .get_session(&token, &ip_addr, &user_agent, host.as_deref())
+            .await
+            .ok()
+    };
+
+    let Some(session) = session else {
+        // Back here after signing in, so the script's link works for somebody
+        // whose session has aged out.
+        let here = crate::delegation::consent_url(&script);
+        return Redirect::to(&format!(
+            "/auth/login?redirect={}",
+            urlencoding::encode(&here)
+        ))
+        .into_response();
+    };
+
+    let nonce = crate::security::generate_nonce();
+    // Bound to the user: an unbound token is one anybody can fetch with no
+    // browser and no account, and this form is a grant of authority.
+    let csrf_token = auth_manager
+        .security_context()
+        .csrf
+        .generate_token(Some(session.user_id.clone()))
+        .await
+        .token;
+
+    let existing = crate::delegation::get(&session.user_id, &script)
+        .await
+        .ok()
+        .flatten();
+
+    let checkboxes = crate::delegation::Scope::all()
+        .iter()
+        .map(|scope| {
+            let already = existing.as_ref().is_some_and(|grant| grant.allows(*scope));
+            format!(
+                r#"<label class="scope">
+                    <input type="checkbox" name="scope" value="{value}"{checked}>
+                    {description}
+                </label>"#,
+                value = html_attribute(scope.as_str()),
+                checked = if already { " checked" } else { "" },
+                description = html_escape::encode_text(scope.describe()),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n                ");
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authorise an app</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <style nonce="{style_nonce}">{styles}    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Authorise an app</h1>
+        <p class="identity"><strong>{script}</strong> is asking to work on your behalf
+            while you are away.</p>
+        <p class="explain">It can already do these things while you are using it. This lets it
+        carry on after you close the page — for example to finish something long, or to check
+        for you on a schedule. You can withdraw it at any time from your account page.</p>
+        <form method="post" action="/auth/delegate">
+            <input type="hidden" name="csrf_token" value="{csrf}">
+            <input type="hidden" name="script" value="{script_value}">
+            <input type="hidden" name="redirect" value="{redirect}">
+            {checkboxes}
+            <label class="scope">Stop after
+                <select name="days">
+                    <option value="1">1 day</option>
+                    <option value="7">7 days</option>
+                    <option value="30" selected>30 days</option>
+                    <option value="90">90 days</option>
+                </select>
+            </label>
+            <button type="submit">Authorise</button>
+        </form>
+        <p class="switch"><a href="/auth/account">Not now — back to your account</a></p>
+    </div>
+</body>
+</html>"#,
+        style_nonce = html_attribute(&nonce),
+        styles = AUTH_PAGE_STYLES,
+        script = html_escape::encode_text(&script),
+        script_value = html_attribute(&script),
+        redirect = html_attribute(params.redirect.as_deref().unwrap_or(ACCOUNT_PATH)),
+        csrf = html_attribute(&csrf_token),
+        checkboxes = checkboxes,
+    );
+
+    html_page_response(html, &nonce)
+}
+
 /// The account page: what the signed-in person can do about their own way in.
 ///
 /// The sign-in page cannot hold this. Everything here needs a session, and
@@ -1307,6 +1530,18 @@ pub async fn account_page(
         }
     };
 
+    // Beside the sessions, for the same reason they are there: a background
+    // job acting as you is the same question as a session acting as you, and
+    // there should be one place to look. A listing that fails is left out
+    // rather than failing the page.
+    let delegations = match crate::delegation::list_for_user(&session.user_id).await {
+        Ok(grants) => render_delegations(&csrf_token, &grants),
+        Err(e) => {
+            tracing::error!("Could not list delegations for an account page: {}", e);
+            String::new()
+        }
+    };
+
     let html = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -1324,6 +1559,7 @@ pub async fn account_page(
         <p class="identity">Signed in as <strong>{label}</strong>
             <span class="provider">via {provider}</span></p>
         {forms}
+        {delegations}
         {sessions}
         <p class="switch"><a href="/auth/logout">Sign out</a></p>
     </div>
@@ -1335,6 +1571,7 @@ pub async fn account_page(
         label = html_escape::encode_text(&label),
         provider = html_escape::encode_text(&session.provider),
         forms = forms,
+        delegations = delegations,
         sessions = sessions,
     );
 
@@ -2662,6 +2899,239 @@ pub async fn revoke_session_route(
         username: None,
     })
     .into_response())
+}
+
+/// What a person posted from the consent page.
+#[derive(Debug, Deserialize, Default)]
+pub struct DelegateRequest {
+    pub script: Option<String>,
+    /// Which scopes were ticked. A form sends one field per checkbox, so this
+    /// is a list; none ticked is a refusal, not a grant of nothing.
+    #[serde(default)]
+    pub scope: Vec<String>,
+    pub days: Option<i64>,
+    pub csrf_token: Option<String>,
+    pub redirect: Option<String>,
+}
+
+/// What a person posted to withdraw one.
+#[derive(Debug, Deserialize, Default)]
+pub struct RevokeDelegationRequest {
+    pub script: Option<String>,
+    pub csrf_token: Option<String>,
+    pub redirect: Option<String>,
+}
+
+/// Record that this person authorises a script to act for them.
+///
+/// The three things that make this a grant rather than a setting: it is posted
+/// by the person themselves from a page that said what was being asked, its
+/// CSRF token is bound to them specifically, and it carries an expiry there is
+/// no way to opt out of.
+#[utoipa::path(
+    post,
+    path = "/auth/delegate",
+    tags = ["Authentication"],
+    responses(
+        (status = 200, description = "The grant that was recorded"),
+        (status = 302, description = "Form post; redirected back with a notice"),
+        (status = 401, description = "No session"),
+    )
+)]
+pub async fn delegate_route(
+    State(auth_manager): State<Arc<AuthManager>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, AuthErrorResponse> {
+    let (request, style) = parse_auth_body::<DelegateRequest>(&headers, &body);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
+    let config = auth_manager.config();
+
+    let token = session_token_from_headers(&headers, &config.session_cookie_name)
+        .ok_or(crate::auth::error::AuthError::AuthenticationRequired)?;
+    let session = auth_manager
+        .get_session(
+            &token,
+            &ip_addr,
+            &user_agent,
+            get_request_host(&headers).as_deref(),
+        )
+        .await
+        .map_err(|_| crate::auth::error::AuthError::AuthenticationRequired)?;
+
+    let Some(script) = request
+        .script
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(redirect_to_form_with_error(
+            &crate::auth::error::AuthError::Internal("no script was named".to_string()),
+            request.redirect.as_deref().or(Some(ACCOUNT_PATH)),
+        ));
+    };
+
+    if require_session_form_csrf(
+        &auth_manager,
+        style,
+        request.csrf_token.as_deref(),
+        &session.user_id,
+        true,
+    )
+    .await
+    .is_err()
+    {
+        return Ok(redirect_to_form_with_error(
+            &crate::auth::error::AuthError::CsrfValidationFailed,
+            Some(&crate::delegation::consent_url(script)),
+        ));
+    }
+
+    // Unknown names are dropped rather than stored: a scope nothing gates on
+    // would be a promise to this person that nothing keeps.
+    let scopes: Vec<crate::delegation::Scope> = request
+        .scope
+        .iter()
+        .filter_map(|name| crate::delegation::Scope::parse(name))
+        .collect();
+
+    // Ticking nothing is a refusal. Recording an empty grant would leave a row
+    // saying this script may act for them, which is the opposite of what they
+    // just said.
+    if scopes.is_empty() {
+        let removed = crate::delegation::revoke(&session.user_id, script)
+            .await
+            .unwrap_or(false);
+        return Ok(delegation_answer(
+            style,
+            request.redirect.as_deref(),
+            if removed {
+                "delegation_withdrawn"
+            } else {
+                "delegation_declined"
+            },
+            serde_json::json!({ "granted": false, "script": script }),
+        ));
+    }
+
+    let duration = crate::delegation::bounded_duration(request.days);
+    let grant = crate::delegation::grant(&session.user_id, script, &scopes, duration)
+        .await
+        .map_err(|e| {
+            tracing::error!("Could not record a delegation: {}", e);
+            crate::auth::error::AuthError::Internal("could not record the authorisation".into())
+        })?;
+
+    Ok(delegation_answer(
+        style,
+        request.redirect.as_deref(),
+        "delegation_granted",
+        serde_json::json!({
+            "granted": true,
+            "script": grant.script_uri,
+            "scopes": grant.scopes.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            "expiresAt": grant.expires_at.to_rfc3339(),
+        }),
+    ))
+}
+
+/// Withdraw one, and cancel what it had queued.
+#[utoipa::path(
+    post,
+    path = "/auth/delegations/revoke",
+    tags = ["Authentication"],
+    responses(
+        (status = 200, description = "Whether anything was withdrawn"),
+        (status = 302, description = "Form post; redirected back with a notice"),
+        (status = 401, description = "No session"),
+    )
+)]
+pub async fn revoke_delegation_route(
+    State(auth_manager): State<Arc<AuthManager>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, AuthErrorResponse> {
+    let (request, style) = parse_auth_body::<RevokeDelegationRequest>(&headers, &body);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
+    let config = auth_manager.config();
+
+    let token = session_token_from_headers(&headers, &config.session_cookie_name)
+        .ok_or(crate::auth::error::AuthError::AuthenticationRequired)?;
+    let session = auth_manager
+        .get_session(
+            &token,
+            &ip_addr,
+            &user_agent,
+            get_request_host(&headers).as_deref(),
+        )
+        .await
+        .map_err(|_| crate::auth::error::AuthError::AuthenticationRequired)?;
+
+    if require_session_form_csrf(
+        &auth_manager,
+        style,
+        request.csrf_token.as_deref(),
+        &session.user_id,
+        true,
+    )
+    .await
+    .is_err()
+    {
+        return Ok(redirect_to_form_with_error(
+            &crate::auth::error::AuthError::CsrfValidationFailed,
+            request.redirect.as_deref().or(Some(ACCOUNT_PATH)),
+        ));
+    }
+
+    // Scoped to the caller's own user id in the statement rather than by a
+    // check before it, the way the session listing is: another account's grant
+    // is not addressable from here at all.
+    let withdrawn = match request
+        .script
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(script) => crate::delegation::revoke(&session.user_id, script)
+            .await
+            .unwrap_or(false),
+        None => {
+            crate::delegation::revoke_all(&session.user_id)
+                .await
+                .unwrap_or(0)
+                > 0
+        }
+    };
+
+    Ok(delegation_answer(
+        style,
+        request.redirect.as_deref(),
+        if withdrawn {
+            "delegation_withdrawn"
+        } else {
+            "delegation_missing"
+        },
+        serde_json::json!({ "withdrawn": withdrawn }),
+    ))
+}
+
+/// A browser gets the page back with a notice; an API caller gets the facts.
+fn delegation_answer(
+    style: RequestStyle,
+    redirect: Option<&str>,
+    notice: &str,
+    body: serde_json::Value,
+) -> Response {
+    if style == RequestStyle::Form {
+        let target = match redirect {
+            Some(value) if !value.trim().is_empty() => safe_redirect_target(Some(value)),
+            _ => format!("{}?notice={}", ACCOUNT_PATH, notice),
+        };
+        return Redirect::to(&target).into_response();
+    }
+    Json(body).into_response()
 }
 
 /// What a caller is told when the session they named is not one of theirs.
@@ -4610,6 +5080,8 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
         .route("/local/recover", post(recover_account))
         .route("/sessions", get(list_sessions_route))
         .route("/sessions/revoke", post(revoke_session_route))
+        .route("/delegate", get(delegate_page).post(delegate_route))
+        .route("/delegations/revoke", post(revoke_delegation_route))
         .route("/logout", get(logout).post(logout))
         .route("/refresh", post(refresh_session))
         .route("/status", get(auth_status))

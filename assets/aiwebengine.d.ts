@@ -973,6 +973,9 @@ interface ScriptTask {
   lastError: string | null;
   runAt: string;
   enqueuedBy: string | null;
+  /** Who it acts as. Null for script context, which is the default. */
+  runAs?: string | null;
+  kind?: "task" | "message";
   createdAt: string;
   updatedAt: string;
 }
@@ -1053,6 +1056,87 @@ interface ScriptTasks {
    * @returns The task, or null if this script has no such task — which is also
    *   the answer for one that already succeeded, since success keeps no row.
    */
+  get(taskId: string): ScriptTask | null;
+}
+
+/**
+ * What this person has authorised this script to do as them.
+ */
+interface DelegationState {
+  /** False when nobody is signed in; nothing can be delegated then. */
+  authenticated: boolean;
+  /** True only if a grant exists and has not lapsed. */
+  granted: boolean;
+  expired?: boolean;
+  expiresAt?: string;
+  scopes?: ("personal_storage" | "secrets")[];
+  /** Where to send them to authorise it. Absent when nobody is signed in. */
+  consentUrl?: string;
+}
+
+/**
+ * The same queue as `scriptTasks`, with the work acting as the person who
+ * asked for it.
+ *
+ * `scriptTasks` runs in script context: it holds what the script holds, so
+ * `personalStorage` throws and a `{{secret:...}}` resolves the script's key
+ * rather than anybody's. That is right for work that belongs to the solution
+ * and useless for work that belongs to a person — which is why an agent could
+ * previously only act while its owner's tab was open.
+ *
+ * Acting as somebody while they are away is a grant they have to make. They
+ * make it on a consent page (`authorization().consentUrl`), it names what it
+ * covers, it expires, and they can withdraw it from their account page —
+ * which also cancels whatever it had queued.
+ *
+ * Every one of those is checked again when the task runs, not just when it is
+ * enqueued: a grant withdrawn in between takes effect rather than being
+ * carried forward. A task whose grant has gone is abandoned with a reason,
+ * without spending its retries.
+ *
+ * What a delegated task gets is what an ordinary request of that person's
+ * gets, and never more — `personalStorage` and their own secrets, but not the
+ * ability to author or administer anything, however much the person holds.
+ *
+ * @example
+ * function scheduleDigest(context) {
+ *   const auth = personalTasks.authorization();
+ *   if (!auth.granted) {
+ *     // Not an error — they simply have not been asked yet.
+ *     return { status: 302, headers: { Location: auth.consentUrl } };
+ *   }
+ *   personalTasks.enqueue({ handler: "sendDigest", payload: {} });
+ *   return { status: 202, body: "Scheduled" };
+ * }
+ *
+ * function sendDigest(context) {
+ *   // context.request.auth.userId is the person who authorised this.
+ *   const last = personalStorage.getItem("lastDigest");
+ *   fetch("https://api.example.com/send", {
+ *     method: "POST",
+ *     headers: { Authorization: "Bearer {{secret:their_api_key}}" },
+ *   });
+ * }
+ */
+interface PersonalTasks {
+  /**
+   * Queue work to run as the person making this request.
+   *
+   * @throws SecurityError if nobody is signed in, or if they have not
+   *   authorised this script, or if that authorisation has expired. Check
+   *   `authorization()` first to offer the consent page instead.
+   */
+  enqueue(options: {
+    handler: string;
+    payload?: Record<string, unknown>;
+    runAt?: string;
+    maxAttempts?: number;
+  }): ScriptTask;
+
+  /** What this person has authorised, and where to send them if nothing. */
+  authorization(): DelegationState;
+
+  cancel(taskId: string): boolean;
   get(taskId: string): ScriptTask | null;
 }
 
@@ -2400,6 +2484,7 @@ declare var personalStorage: Storage;
 declare var secretStorage: SecretStorage;
 declare var schedulerService: SchedulerService;
 declare var scriptTasks: ScriptTasks;
+declare var personalTasks: PersonalTasks;
 declare var graphQLRegistry: GraphQLRegistry;
 declare var mcpRegistry: McpRegistry;
 declare var database: Database;

@@ -20,6 +20,7 @@ fn new_task(script_uri: &str, handler: &str) -> NewTask {
         max_attempts: None,
         enqueued_by: None,
         kind: tasks::TaskKind::Task,
+        run_as: None,
     }
 }
 
@@ -54,9 +55,10 @@ async fn a_task_runs_its_handler_with_the_payload_it_carried() {
         attempts: 0,
         max_attempts: task.max_attempts,
         kind: tasks::TaskKind::Task,
+        run_as: None,
     };
 
-    tokio::task::spawn_blocking(move || js_engine::execute_task_handler(&invocation))
+    tokio::task::spawn_blocking(move || js_engine::execute_task_handler(&invocation, None))
         .await
         .expect("no panic")
         .expect("the handler should run");

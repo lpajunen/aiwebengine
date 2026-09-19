@@ -22,6 +22,7 @@ pub mod config;
 pub mod conversion;
 pub mod database;
 pub mod db_schema_utils;
+pub mod delegation;
 pub mod deployments;
 pub mod desktop;
 pub mod dispatcher;
@@ -165,6 +166,9 @@ What a script may spend is worth knowing before writing one: each invocation get
         auth::routes::recover_account,
         auth::routes::list_sessions_route,
         auth::routes::revoke_session_route,
+        auth::routes::delegate_page,
+        auth::routes::delegate_route,
+        auth::routes::revoke_delegation_route,
         auth::routes::start_login,
         auth::routes::oauth_callback,
         auth::routes::logout,

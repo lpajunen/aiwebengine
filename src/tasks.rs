@@ -149,6 +149,9 @@ pub struct NewTask {
     pub max_attempts: Option<i32>,
     pub enqueued_by: Option<String>,
     pub kind: TaskKind,
+    /// Who this runs as. `None` is script context — what every task was
+    /// before delegation existed, and still the default.
+    pub run_as: Option<String>,
 }
 
 /// A task as stored.
@@ -165,6 +168,7 @@ pub struct Task {
     pub run_at: DateTime<Utc>,
     pub enqueued_by: Option<String>,
     pub kind: TaskKind,
+    pub run_as: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -183,6 +187,7 @@ impl Task {
             run_at: row.get("run_at"),
             enqueued_by: row.get("enqueued_by"),
             kind: TaskKind::from_str(row.get::<String, _>("kind").as_str()),
+            run_as: row.get("run_as"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -205,6 +210,9 @@ pub struct TaskInvocation {
     pub attempts: i32,
     pub max_attempts: i32,
     pub kind: TaskKind,
+    /// Who this runs as, as *recorded*. Never trusted on its own: what it may
+    /// do is worked out by `delegation::resolve` when the task runs.
+    pub run_as: Option<String>,
 }
 
 /// How long to wait before the attempt after `attempts` failures.
@@ -269,10 +277,10 @@ pub async fn enqueue(task: NewTask) -> Result<Task, EnqueueError> {
     let row = sqlx::query(
         r#"
         INSERT INTO script_tasks
-            (task_id, script_uri, handler_name, payload, state, max_attempts, run_at, enqueued_by, kind)
-        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)
+            (task_id, script_uri, handler_name, payload, state, max_attempts, run_at, enqueued_by, kind, run_as)
+        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9)
         RETURNING task_id, script_uri, handler_name, payload, state, attempts, max_attempts,
-                  last_error, run_at, enqueued_by, kind, created_at, updated_at
+                  last_error, run_at, enqueued_by, kind, run_as, created_at, updated_at
         "#,
     )
     .bind(task_id)
@@ -283,6 +291,7 @@ pub async fn enqueue(task: NewTask) -> Result<Task, EnqueueError> {
     .bind(run_at)
     .bind(task.enqueued_by.as_deref())
     .bind(task.kind.as_str())
+    .bind(task.run_as.as_deref())
     .fetch_one(db.pool())
     .await
     .map_err(|e| EnqueueError::Storage(e.to_string()))?;
@@ -309,7 +318,7 @@ pub async fn list(script_uri: &str, limit: i64) -> Result<Vec<Task>, sqlx::Error
     let rows = sqlx::query(
         r#"
         SELECT task_id, script_uri, handler_name, payload, state, attempts, max_attempts,
-               last_error, run_at, enqueued_by, kind, created_at, updated_at
+               last_error, run_at, enqueued_by, kind, run_as, created_at, updated_at
         FROM script_tasks
         WHERE script_uri = $1
         ORDER BY created_at DESC
@@ -333,7 +342,7 @@ pub async fn get(task_id: Uuid) -> Result<Option<Task>, sqlx::Error> {
     let row = sqlx::query(
         r#"
         SELECT task_id, script_uri, handler_name, payload, state, attempts, max_attempts,
-               last_error, run_at, enqueued_by, kind, created_at, updated_at
+               last_error, run_at, enqueued_by, kind, run_as, created_at, updated_at
         FROM script_tasks
         WHERE task_id = $1
         "#,
@@ -394,6 +403,62 @@ pub async fn clear_finished(script_uri: &str) -> Result<u64, sqlx::Error> {
     Ok(result.rows_affected())
 }
 
+/// Cancel the pending work queued to act as `user_id`.
+///
+/// `script_uri` narrows it to one script's work — a single grant being
+/// withdrawn — and `None` takes all of it, which is what happens when an
+/// account's access changes or it is deleted.
+///
+/// Only the pending ones, for the reason [`cancel`] gives: a task already
+/// claimed is running, and marking its row would not stop it. That one is
+/// caught by the run-time check instead, which reads the grant again and
+/// refuses — so a revocation lands either way, here or there.
+pub async fn cancel_delegated(user_id: &str, script_uri: Option<&str>) -> Result<u64, sqlx::Error> {
+    let Some(db) = crate::database::get_global_database() else {
+        return Ok(0);
+    };
+
+    let result = match script_uri {
+        Some(script_uri) => {
+            sqlx::query(
+                r#"
+                UPDATE script_tasks
+                SET state = 'cancelled',
+                    last_error = 'the authorisation to act for this person was withdrawn',
+                    locked_by = NULL,
+                    locked_at = NULL,
+                    lock_expires_at = NULL,
+                    updated_at = NOW()
+                WHERE run_as = $1 AND script_uri = $2 AND state = 'pending'
+                "#,
+            )
+            .bind(user_id)
+            .bind(script_uri)
+            .execute(db.pool())
+            .await?
+        }
+        None => {
+            sqlx::query(
+                r#"
+                UPDATE script_tasks
+                SET state = 'cancelled',
+                    last_error = 'the authorisation to act for this person was withdrawn',
+                    locked_by = NULL,
+                    locked_at = NULL,
+                    lock_expires_at = NULL,
+                    updated_at = NOW()
+                WHERE run_as = $1 AND state = 'pending'
+                "#,
+            )
+            .bind(user_id)
+            .execute(db.pool())
+            .await?
+        }
+    };
+
+    Ok(result.rows_affected())
+}
+
 /// Drop every task belonging to a script.
 ///
 /// For a script being deleted. Unlike the scheduler's equivalent this is *not*
@@ -443,7 +508,7 @@ async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocation> {
         FROM candidates
         WHERE tasks.task_id = candidates.task_id
         RETURNING tasks.task_id, tasks.script_uri, tasks.handler_name, tasks.payload,
-                  tasks.attempts, tasks.max_attempts, tasks.kind
+                  tasks.attempts, tasks.max_attempts, tasks.kind, tasks.run_as
         "#,
     )
     .bind(now)
@@ -470,8 +535,58 @@ async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocation> {
             attempts: row.get("attempts"),
             max_attempts: row.get("max_attempts"),
             kind: TaskKind::from_str(row.get::<String, _>("kind").as_str()),
+            run_as: row.get("run_as"),
         })
         .collect()
+}
+
+/// Give up on a task without spending its remaining attempts.
+///
+/// For a refusal that will not clear by waiting — a withdrawn delegation, an
+/// account that is gone. Retrying those would be the engine repeatedly asking
+/// to act as somebody who has said no, and the attempts would only delay the
+/// row reaching the state that explains itself.
+async fn abandon(worker_id: &str, invocation: &TaskInvocation, reason: &str) {
+    let Some(db) = crate::database::get_global_database() else {
+        return;
+    };
+
+    if let Err(e) = sqlx::query(
+        r#"
+        UPDATE script_tasks
+        SET state = 'failed',
+            last_error = $1,
+            locked_by = NULL,
+            locked_at = NULL,
+            lock_expires_at = NULL,
+            updated_at = NOW()
+        WHERE task_id = $2 AND locked_by = $3
+        "#,
+    )
+    .bind(truncate_error(reason))
+    .bind(invocation.task_id)
+    .bind(worker_id)
+    .execute(db.pool())
+    .await
+    {
+        warn!(task = %invocation.task_id, error = %e, "Failed recording an abandoned task");
+        return;
+    }
+
+    warn!(
+        script = %invocation.script_uri,
+        handler = %invocation.handler_name,
+        task = %invocation.task_id,
+        reason,
+        "Task abandoned"
+    );
+    repository::insert_log_message_async_in_context(
+        &invocation.script_uri,
+        &format!("task '{}' was not run: {}", invocation.handler_name, reason),
+        "FATAL",
+        &invocation_log_context(invocation),
+    )
+    .await;
 }
 
 /// Record how a run ended.
@@ -611,11 +726,35 @@ async fn run(worker_id: String, invocation: TaskInvocation) {
         invocation.handler_name.clone(),
     );
 
+    // Who this may act as, worked out now rather than read from the row.
+    //
+    // A task records only *who*; every capability it gets is re-derived here,
+    // so a grant withdrawn between queueing and running takes effect instead of
+    // being carried forward. This is the argument `auth::refresh_tokens` makes
+    // for minting a fresh session on each refresh, applied to the same problem.
+    let delegated = match &invocation.run_as {
+        Some(user_id) => {
+            match crate::delegation::resolve(user_id, &invocation.script_uri).await {
+                Ok(delegated) => Some(delegated),
+                Err(refusal) => {
+                    // Not a retry. A withdrawn or lapsed grant is not a
+                    // condition that clears on its own, and going on trying
+                    // would be the engine repeatedly asking to act as somebody
+                    // who has said no.
+                    renewal.abort();
+                    abandon(&worker_id, &invocation, &refusal.to_string()).await;
+                    return;
+                }
+            }
+        }
+        None => None,
+    };
+
     let permit = crate::execution_slots::acquire().await;
     let for_engine = invocation.clone();
     let execution = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        js_engine::execute_task_handler(&for_engine)
+        js_engine::execute_task_handler(&for_engine, delegated.as_ref())
     })
     .await;
 
@@ -696,6 +835,7 @@ pub fn to_json(task: &Task) -> Value {
         "runAt": task.run_at.to_rfc3339(),
         "enqueuedBy": task.enqueued_by,
         "kind": task.kind.as_str(),
+        "runAs": task.run_as,
         "createdAt": task.created_at.to_rfc3339(),
         "updatedAt": task.updated_at.to_rfc3339(),
     })
@@ -735,6 +875,7 @@ mod tests {
             max_attempts: None,
             enqueued_by: None,
             kind: TaskKind::Task,
+            run_as: None,
         }
     }
 
