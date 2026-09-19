@@ -180,7 +180,7 @@ is what makes that survivable.
 
 ## Order
 
-Items 1-5 are built. Item 6 (per-script limits) stands as written.
+All six items are built.
 
 1. ~~**Fix the secret template**~~ _(done)_ (TODO-agent item 7,
    `http_client.rs:463`) and
@@ -231,8 +231,22 @@ Items 1-5 are built. Item 6 (per-script limits) stands as written.
    and retrying is the engine repeatedly asking to act as somebody who has
    said no.
 
-6. **Per-script limits.**
+6. ~~**Per-script limits.**~~ _(done)_ See `docs/SCRIPT_LIMITS.md`. The note
+   called this plumbing and it was, but it named the wrong beneficiary:
+   raising a ceiling for an agent is the obvious use and _lowering_ one is the
+   valuable one, since containing a script that has started holding execution
+   slots previously meant an engine-wide config change and a restart. The
+   authorisation is an administrator rather than the script's owner — this is
+   a claim on slots, threads and memory shared with every other tenant, and an
+   owner who could raise their own ceiling would be back to one script setting
+   the policy for all of them.
 
 Items 1–4 are mechanical and unblock the in-engine agent. Item 5 is the design
 decision, and it is worth arriving at deliberately rather than by adding a
 parameter.
+
+What remains from `TODO-agent.md` is items 4, 5, 6 and 8 of that note —
+streaming `fetch`, parallelism inside a turn, an MCP transport that carries
+sampling, and a non-interactive credential. None of them is background work;
+they are what an agent needs _within_ one turn, and they are the right next
+thing to look at now that work can outlive a request at all.

@@ -1106,7 +1106,7 @@ pub fn execute_script_secure(
     let start_time = Instant::now();
 
     // Validate script using configured limits
-    let limits = current_execution_limits();
+    let limits = crate::script_limits::for_script(uri);
     if let Err(e) = validate_script(content, &limits) {
         return ScriptExecutionResult::failed(e, start_time.elapsed().as_millis() as u64);
     }
@@ -1249,7 +1249,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
     tracing::info!("execute_script called for URI: {}", uri);
 
     // Validate script using configured limits
-    let limits = current_execution_limits();
+    let limits = crate::script_limits::for_script(uri);
     if let Err(e) = validate_script(content, &limits) {
         return ScriptExecutionResult::failed(e, start_time.elapsed().as_millis() as u64);
     }
@@ -1467,7 +1467,8 @@ pub fn execute_script_for_request_secure(
     let t_transpile = phase.elapsed();
 
     let phase = Instant::now();
-    let (rt, _budget) = create_sandboxed_runtime(&current_execution_limits())?;
+    let (rt, _budget) =
+        create_sandboxed_runtime(&crate::script_limits::for_script(&params.script_uri))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
     let t_runtime = phase.elapsed();
 
@@ -1814,7 +1815,7 @@ pub fn execute_script_for_request(
         .ok_or_else(|| format!("no script for uri {}", script_uri))?;
     let executable_code = transpile_if_needed(script_uri, &owner_script)?;
 
-    let (rt, _budget) = create_sandboxed_runtime(&current_execution_limits())?;
+    let (rt, _budget) = create_sandboxed_runtime(&crate::script_limits::for_script(script_uri))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     ctx.with(|ctx| -> Result<(), rquickjs::Error> {
@@ -1937,15 +1938,12 @@ pub fn execute_scheduled_handler(
         .ok_or_else(|| format!("no script for uri {}", script_uri))?;
     let executable_code = transpile_if_needed(script_uri, &owner_script)?;
 
-    // A job's budget rather than a request's (`javascript.job_timeout_ms`).
-    // The scheduler holds its claim on the job for this long plus a grace, so
-    // both have to read the same number: a claim that expires while the run is
-    // still going is what let a finished job be claimed and run a second time.
-    let limits = ExecutionLimits {
-        timeout_ms: crate::scheduler::configured_job_timeout_ms(),
-        ..current_execution_limits()
-    };
-    let (rt, _budget) = create_sandboxed_runtime(&limits)?;
+    // A job's budget rather than a request's (`javascript.job_timeout_ms`,
+    // or this script's own override). The scheduler renews its claim for as
+    // long as the run lasts, so the two no longer have to agree on a number
+    // — but this is still what bounds the run.
+    let (rt, _budget) =
+        create_sandboxed_runtime(&crate::script_limits::for_script_job(script_uri))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     ctx.with(|ctx| -> Result<(), rquickjs::Error> {
@@ -2060,11 +2058,10 @@ pub fn execute_task_handler(
         .ok_or_else(|| format!("no script for uri {}", script_uri))?;
     let executable_code = transpile_if_needed(script_uri, &owner_script)?;
 
-    let limits = ExecutionLimits {
-        timeout_ms: crate::scheduler::configured_job_timeout_ms(),
-        ..current_execution_limits()
-    };
-    let (rt, _budget) = create_sandboxed_runtime(&limits)?;
+    // A queued task is background work, so it takes the job budget — this
+    // script's own if one has been set for it.
+    let (rt, _budget) =
+        create_sandboxed_runtime(&crate::script_limits::for_script_job(script_uri))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     ctx.with(|ctx| -> Result<(), rquickjs::Error> {
@@ -2541,7 +2538,8 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
         .ok_or_else(|| format!("no script for uri {}", script_uri_owned))?;
     let executable_code = transpile_if_needed(&script_uri_owned, &script_content)?;
 
-    let (rt, _budget) = create_sandboxed_runtime(&current_execution_limits())?;
+    let (rt, _budget) =
+        create_sandboxed_runtime(&crate::script_limits::for_script(&params.script_uri))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     let setup_exec = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
@@ -2718,7 +2716,7 @@ pub fn execute_mcp_prompt_handler(
         .ok_or_else(|| format!("no script for uri {}", script_uri_owned))?;
     let executable_code = transpile_if_needed(&script_uri_owned, &script_content)?;
 
-    let (rt, _budget) = create_sandboxed_runtime(&current_execution_limits())?;
+    let (rt, _budget) = create_sandboxed_runtime(&crate::script_limits::for_script(script_uri))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     let setup_exec = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
@@ -2845,7 +2843,7 @@ pub fn execute_mcp_tool_handler(
         .ok_or_else(|| format!("no script for uri {}", script_uri_owned))?;
     let executable_code = transpile_if_needed(&script_uri_owned, &script_content)?;
 
-    let (rt, _budget) = create_sandboxed_runtime(&current_execution_limits())?;
+    let (rt, _budget) = create_sandboxed_runtime(&crate::script_limits::for_script(script_uri))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     let setup_exec = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
@@ -3018,7 +3016,7 @@ pub fn execute_stream_customization_function(
         .ok_or_else(|| format!("no script for uri {}", script_uri_owned))?;
     let executable_code = transpile_if_needed(&script_uri_owned, &script_content)?;
 
-    let (rt, _budget) = create_sandboxed_runtime(&current_execution_limits())?;
+    let (rt, _budget) = create_sandboxed_runtime(&crate::script_limits::for_script(script_uri))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     let setup_exec = ctx.with(|ctx| -> Result<(), rquickjs::Error> {

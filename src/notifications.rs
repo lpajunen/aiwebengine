@@ -256,6 +256,10 @@ impl NotificationListener {
         // source, which is chosen based on it.
         revisions::refresh_current(uri).await;
         deployments::refresh(uri).await;
+        // And what it may spend: an administrator raising or lowering a
+        // script's limits elsewhere has to reach the instances running it,
+        // since the value is cached per instance and read on every execution.
+        crate::script_limits::refresh(uri).await;
 
         // Replace the stale in-memory source (which `fetch_script` and the
         // init() below both read) with the database copy. This refreshes the
@@ -328,6 +332,7 @@ impl NotificationListener {
         // attribute output to and nothing to be pinned to.
         revisions::forget_current(uri);
         deployments::forget_pin(uri);
+        crate::script_limits::forget(uri);
 
         // Clear GraphQL registrations for this script
         graphql::clear_script_graphql_registrations(uri);

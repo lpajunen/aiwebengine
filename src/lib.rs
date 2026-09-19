@@ -57,6 +57,7 @@ pub mod scheduler;
 pub mod script_check;
 pub mod script_eval;
 pub mod script_init;
+pub mod script_limits;
 pub mod script_test;
 pub mod security;
 pub mod source_view;
@@ -118,6 +119,9 @@ What a script may spend is worth knowing before writing one: each invocation get
         engine_api::deploy_route,
         engine_api::undeploy_route,
         engine_api::deployment_route,
+        engine_api::script_limits_route,
+        engine_api::set_script_limits_route,
+        engine_api::clear_script_limits_route,
         engine_api::tasks_route,
         engine_api::tasks_delete_route,
         engine_api::git_pull_route,
@@ -1296,6 +1300,11 @@ async fn execute_startup_scripts() -> AppResult<()> {
     // pinned script would otherwise run head's code until something happened
     // to refresh it, which is the whole of what pinning promises not to do.
     deployments::load_pins().await;
+
+    // And what each of them may spend, for the same reason and in the same
+    // window: an instance coming up must not briefly run a contained script at
+    // the engine's own ceiling.
+    script_limits::load().await;
     for uri in scripts.keys() {
         if deployments::pinned(uri).is_some() {
             repository::refresh_served_source(uri).await;
@@ -2794,6 +2803,12 @@ async fn setup_routes(
         .route(
             "/engine/revisions/revert",
             axum::routing::post(engine_api::revert_route),
+        )
+        .route(
+            "/engine/limits",
+            axum::routing::get(engine_api::script_limits_route)
+                .post(engine_api::set_script_limits_route)
+                .delete(engine_api::clear_script_limits_route),
         )
         .route(
             "/engine/tasks",

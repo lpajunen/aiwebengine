@@ -5708,6 +5708,243 @@ pub async fn deployment_route(
 }
 
 // ============================================================================
+// Per-script execution limits
+// ============================================================================
+
+#[derive(Deserialize, Default)]
+pub struct ScriptLimitsParams {
+    script: Option<String>,
+}
+
+/// What one script may spend. Every field is optional; one left out follows
+/// the engine's own setting rather than keeping an earlier override.
+#[derive(Deserialize, Default, utoipa::ToSchema)]
+#[schema(example = json!({ "script": "myapp", "timeoutMs": 60000, "note": "calls a model API" }))]
+pub struct SetScriptLimitsBody {
+    pub script: Option<String>,
+    #[serde(rename = "timeoutMs")]
+    pub timeout_ms: Option<u64>,
+    #[serde(rename = "jobTimeoutMs")]
+    pub job_timeout_ms: Option<u64>,
+    #[serde(rename = "maxMemoryBytes")]
+    pub max_memory_bytes: Option<u64>,
+    pub note: Option<String>,
+}
+
+fn script_limits_to_json(limits: &crate::script_limits::ScriptLimits) -> Value {
+    json!({
+        "script": limits.script_uri,
+        "timeoutMs": limits.overrides.timeout_ms,
+        "jobTimeoutMs": limits.overrides.job_timeout_ms,
+        "maxMemoryBytes": limits.overrides.max_memory_bytes,
+        "note": limits.note,
+        "setBy": limits.set_by,
+        "updatedAt": limits.updated_at.to_rfc3339(),
+    })
+}
+
+/// What a caller is refused with, so the reason is the same in all four places.
+fn not_an_administrator(action: &str) -> Response {
+    error_response(
+        StatusCode::FORBIDDEN,
+        format!(
+            "Error: {} takes an administrator. A script's limits are a claim on the engine's \
+             execution slots, threads and memory, which are shared with every other script — \
+             owning the script is not the same question.",
+            action
+        ),
+    )
+}
+
+/// What one script may spend, or every override in the engine.
+#[utoipa::path(
+    get,
+    path = "/engine/limits",
+    tags = ["Scripts"],
+    params(
+        ("script" = Option<String>, Query, description = "URI of one script; omit to list every override"),
+    ),
+    responses(
+        (status = 200, description = "The overrides in force"),
+        (status = 403, description = "Not an administrator"),
+    )
+)]
+pub async fn script_limits_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<ScriptLimitsParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    if !is_user_admin(&user) {
+        return not_an_administrator("Reading script limits");
+    }
+
+    match query.script {
+        Some(script) => match crate::script_limits::get(&script).await {
+            Ok(limits) => json_response(
+                StatusCode::OK,
+                json!({
+                    "script": script,
+                    "limits": limits.as_ref().map(script_limits_to_json),
+                    // What it resolves to once the engine's own settings are
+                    // laid under it, since that is the number that applies.
+                    "effective": {
+                        "timeoutMs": crate::script_limits::for_script(&script).timeout_ms,
+                        "jobTimeoutMs": crate::script_limits::job_timeout_ms_for(&script),
+                        "maxMemoryBytes": crate::script_limits::for_script(&script).max_memory_mb * 1024 * 1024,
+                    },
+                    "timestamp": iso_timestamp(),
+                }),
+            ),
+            Err(e) => error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error: Failed to read limits: {}", e),
+            ),
+        },
+        None => match crate::script_limits::list().await {
+            Ok(all) => json_response(
+                StatusCode::OK,
+                json!({
+                    "limits": all.iter().map(script_limits_to_json).collect::<Vec<_>>(),
+                    "timestamp": iso_timestamp(),
+                }),
+            ),
+            Err(e) => error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error: Failed to list limits: {}", e),
+            ),
+        },
+    }
+}
+
+/// Set what one script may spend.
+#[utoipa::path(
+    post,
+    path = "/engine/limits",
+    tags = ["Scripts"],
+    request_body = SetScriptLimitsBody,
+    responses(
+        (status = 200, description = "The overrides now in force"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Not an administrator"),
+    )
+)]
+pub async fn set_script_limits_route(
+    auth_user: Option<Extension<AuthUser>>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    if !is_user_admin(&user) {
+        return not_an_administrator("Setting script limits");
+    }
+
+    let body: SetScriptLimitsBody = match serde_json::from_slice(&body) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                format!("Error: Invalid request body: {}", e),
+            );
+        }
+    };
+
+    let Some(script) = body.script.clone().filter(|s| !s.trim().is_empty()) else {
+        return missing_param_response("script");
+    };
+
+    let overrides = crate::script_limits::Overrides {
+        timeout_ms: body.timeout_ms,
+        job_timeout_ms: body.job_timeout_ms,
+        max_memory_bytes: body.max_memory_bytes,
+    };
+
+    // Nothing named is "put it back on the engine's limits", which is what
+    // DELETE does — answered the same way rather than storing an empty row
+    // that would read as an override doing nothing.
+    if overrides.is_empty() {
+        return match crate::script_limits::clear(&script).await {
+            Ok(cleared) => json_response(
+                StatusCode::OK,
+                json!({
+                    "script": script,
+                    "cleared": cleared,
+                    "limits": Value::Null,
+                    "timestamp": iso_timestamp(),
+                }),
+            ),
+            Err(e) => error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error: Failed to clear limits: {}", e),
+            ),
+        };
+    }
+
+    match crate::script_limits::set(
+        &script,
+        overrides,
+        body.note.as_deref(),
+        user.user_id.as_deref(),
+    )
+    .await
+    {
+        Ok(limits) => json_response(
+            StatusCode::OK,
+            json!({
+                "script": script,
+                "limits": script_limits_to_json(&limits),
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Error: Failed to set limits: {}", e),
+        ),
+    }
+}
+
+/// Put a script back on the engine's own limits.
+#[utoipa::path(
+    delete,
+    path = "/engine/limits",
+    tags = ["Scripts"],
+    params(
+        ("script" = String, Query, description = "URI of the script to put back on the engine's limits"),
+    ),
+    responses(
+        (status = 200, description = "Whether an override was removed"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Not an administrator"),
+    )
+)]
+pub async fn clear_script_limits_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<ScriptLimitsParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    if !is_user_admin(&user) {
+        return not_an_administrator("Clearing script limits");
+    }
+
+    let Some(script) = query.script.clone().filter(|s| !s.trim().is_empty()) else {
+        return missing_param_response("script");
+    };
+
+    match crate::script_limits::clear(&script).await {
+        Ok(cleared) => json_response(
+            StatusCode::OK,
+            json!({
+                "script": script,
+                "cleared": cleared,
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Error: Failed to clear limits: {}", e),
+        ),
+    }
+}
+
+// ============================================================================
 // Script tasks
 // ============================================================================
 
@@ -9716,6 +9953,37 @@ fn native_tools() -> &'static [NativeToolEntry] {
             tool_label_revision,
         ),
         (
+            "set_script_limits",
+            "Give one script its own execution budget, instead of the engine-wide one. Useful in both directions: raise it for a script that waits on a slow model API, or lower it to contain one that has started holding execution slots — the second takes effect without restarting the engine. Takes an administrator, because this is a claim on slots, threads and memory shared with every other script; owning the script is not the same question. Omit a field to leave it following the engine, and omit all of them to remove the override entirely.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script" },
+                        "timeoutMs": { "type": "integer", "description": "Wall clock for one request-shaped invocation" },
+                        "jobTimeoutMs": { "type": "integer", "description": "Wall clock for one scheduled job or queued task" },
+                        "maxMemoryBytes": { "type": "integer", "description": "Heap ceiling for this script's runtime" },
+                        "note": { "type": "string", "description": "Why, for whoever reads this next" }
+                    },
+                    "required": ["script"]
+                })
+            },
+            tool_set_script_limits,
+        ),
+        (
+            "get_script_limits",
+            "What one script may spend, and what that resolves to once the engine's own settings are laid under it. Omit 'script' to list every override in the engine — which is the way to find out why one script behaves differently from the rest.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of one script; omit to list every override" }
+                    }
+                })
+            },
+            tool_get_script_limits,
+        ),
+        (
             "list_tasks",
             "Read a script's queued work: what is waiting to run, what is running now, and what failed with the error that failed it. A task that succeeded is not listed — its row is deleted when it completes, and what it did is in the script's log under its own invocation id. Use this to find out why background work is not happening.",
             || {
@@ -10318,6 +10586,83 @@ fn tool_diff_revisions(args: &Value, user: &UserContext) -> Value {
         }),
         Ok(None) => json!({ "error": format!("No revision {} or {}", from, to) }),
         Err(e) => json!({ "error": format!("Failed to diff revisions: {}", e) }),
+    }
+}
+
+fn tool_set_script_limits(args: &Value, user: &UserContext) -> Value {
+    if !is_user_admin(user) {
+        return json!({
+            "error": "Failed to set limits: this takes an administrator. A script's limits are a claim on the engine's execution slots, threads and memory, which are shared with every other script — owning the script is not the same question."
+        });
+    }
+
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+
+    let as_u64 = |name: &str| args.get(name).and_then(Value::as_u64);
+    let overrides = crate::script_limits::Overrides {
+        timeout_ms: as_u64("timeoutMs"),
+        job_timeout_ms: as_u64("jobTimeoutMs"),
+        max_memory_bytes: as_u64("maxMemoryBytes"),
+    };
+
+    if overrides.is_empty() {
+        return match crate::database::run_blocking(crate::script_limits::clear(script)) {
+            Ok(cleared) => json!({
+                "success": true,
+                "script": script,
+                "cleared": cleared,
+                "timestamp": iso_timestamp(),
+            }),
+            Err(e) => json!({ "error": format!("Failed to clear limits: {}", e) }),
+        };
+    }
+
+    match crate::database::run_blocking(crate::script_limits::set(
+        script,
+        overrides,
+        args.get("note").and_then(Value::as_str),
+        user.user_id.as_deref(),
+    )) {
+        Ok(limits) => json!({
+            "success": true,
+            "script": script,
+            "limits": script_limits_to_json(&limits),
+            "timestamp": iso_timestamp(),
+        }),
+        Err(e) => json!({ "error": format!("Failed to set limits: {}", e) }),
+    }
+}
+
+fn tool_get_script_limits(args: &Value, user: &UserContext) -> Value {
+    if !is_user_admin(user) {
+        return json!({ "error": "Failed to read limits: this takes an administrator" });
+    }
+
+    match arg_str(args, "script") {
+        Some(script) => match crate::database::run_blocking(crate::script_limits::get(script)) {
+            Ok(limits) => json!({
+                "success": true,
+                "script": script,
+                "limits": limits.as_ref().map(script_limits_to_json),
+                "effective": {
+                    "timeoutMs": crate::script_limits::for_script(script).timeout_ms,
+                    "jobTimeoutMs": crate::script_limits::job_timeout_ms_for(script),
+                    "maxMemoryBytes": crate::script_limits::for_script(script).max_memory_mb * 1024 * 1024,
+                },
+                "timestamp": iso_timestamp(),
+            }),
+            Err(e) => json!({ "error": format!("Failed to read limits: {}", e) }),
+        },
+        None => match crate::database::run_blocking(crate::script_limits::list()) {
+            Ok(all) => json!({
+                "success": true,
+                "limits": all.iter().map(script_limits_to_json).collect::<Vec<_>>(),
+                "timestamp": iso_timestamp(),
+            }),
+            Err(e) => json!({ "error": format!("Failed to list limits: {}", e) }),
+        },
     }
 }
 
