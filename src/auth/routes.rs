@@ -2902,16 +2902,60 @@ pub async fn revoke_session_route(
 }
 
 /// What a person posted from the consent page.
+///
+/// The ticked scopes are deliberately *not* a field here. A form sends one
+/// `scope=` per checkbox, and `serde_urlencoded` does not deserialise repeated
+/// keys into a `Vec` — it fails the whole body, which `parse_auth_body`'s
+/// `unwrap_or_default()` then turns into an empty request. The symptom was a
+/// consent form that answered 303 and recorded nothing, because the *script
+/// name* had been lost along with the scopes.
+///
+/// So the scopes are read from the body directly by [`scopes_from_body`], and
+/// leaving them out of this struct is what keeps the rest of it parseable.
 #[derive(Debug, Deserialize, Default)]
 pub struct DelegateRequest {
     pub script: Option<String>,
-    /// Which scopes were ticked. A form sends one field per checkbox, so this
-    /// is a list; none ticked is a refusal, not a grant of nothing.
-    #[serde(default)]
-    pub scope: Vec<String>,
     pub days: Option<i64>,
     pub csrf_token: Option<String>,
     pub redirect: Option<String>,
+}
+
+/// Which scopes the person ticked.
+///
+/// Handles both shapes the endpoint accepts: a form's repeated `scope=` pairs,
+/// and a JSON body's `"scope": [...]`. Unknown names are dropped rather than
+/// carried, because a scope nothing gates on would be a promise the engine
+/// does not keep.
+///
+/// An empty answer is a refusal, not a grant of nothing — see the caller.
+fn scopes_from_body(style: RequestStyle, body: &[u8]) -> Vec<crate::delegation::Scope> {
+    let names: Vec<String> = match style {
+        RequestStyle::Form => url::form_urlencoded::parse(body)
+            .filter(|(key, _)| key == "scope")
+            .map(|(_, value)| value.into_owned())
+            .collect(),
+        RequestStyle::Json => serde_json::from_slice::<serde_json::Value>(body)
+            .ok()
+            .and_then(|value| {
+                value.get("scope").and_then(|scope| {
+                    scope.as_array().map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(str::to_string))
+                            .collect()
+                    })
+                })
+            })
+            .unwrap_or_default(),
+    };
+
+    let mut scopes: Vec<crate::delegation::Scope> = names
+        .iter()
+        .filter_map(|name| crate::delegation::Scope::parse(name))
+        .collect();
+    scopes.sort();
+    scopes.dedup();
+    scopes
 }
 
 /// What a person posted to withdraw one.
@@ -2988,13 +3032,7 @@ pub async fn delegate_route(
         ));
     }
 
-    // Unknown names are dropped rather than stored: a scope nothing gates on
-    // would be a promise to this person that nothing keeps.
-    let scopes: Vec<crate::delegation::Scope> = request
-        .scope
-        .iter()
-        .filter_map(|name| crate::delegation::Scope::parse(name))
-        .collect();
+    let scopes = scopes_from_body(style, &body);
 
     // Ticking nothing is a refusal. Recording an empty grant would leave a row
     // saying this script may act for them, which is the opposite of what they
@@ -5153,6 +5191,86 @@ pub fn create_oauth2_router(
         router.merge(registration_router)
     } else {
         router
+    }
+}
+
+#[cfg(test)]
+mod delegate_body_tests {
+    use super::*;
+    use crate::delegation::Scope;
+
+    /// The bug this covers: a browser sends one `scope=` per ticked checkbox,
+    /// and `serde_urlencoded` cannot deserialise repeated keys into a `Vec` —
+    /// it fails the *whole* body, which `parse_auth_body`'s
+    /// `unwrap_or_default()` turns into an empty request. The consent form
+    /// therefore answered 303 and recorded nothing, having lost the script
+    /// name along with the scopes.
+    ///
+    /// Every test of delegation called `delegation::grant` directly, so none
+    /// of them went near the form. This one is the form.
+    #[test]
+    fn a_form_sends_one_scope_field_per_ticked_box() {
+        let body = b"csrf_token=t&script=x&scope=personal_storage&scope=secrets&days=30";
+        assert_eq!(
+            scopes_from_body(RequestStyle::Form, body),
+            vec![Scope::PersonalStorage, Scope::Secrets]
+        );
+    }
+
+    /// And the scalars beside them still parse, which is the half that was
+    /// actually lost.
+    #[test]
+    fn the_rest_of_the_form_survives_the_repeated_field() {
+        let body = b"csrf_token=t&script=x&scope=personal_storage&scope=secrets&days=30";
+        let parsed: DelegateRequest =
+            serde_urlencoded::from_bytes(body).expect("the body should still parse");
+        assert_eq!(parsed.script.as_deref(), Some("x"));
+        assert_eq!(parsed.csrf_token.as_deref(), Some("t"));
+        assert_eq!(parsed.days, Some(30));
+    }
+
+    #[test]
+    fn one_ticked_box_grants_one_scope() {
+        assert_eq!(
+            scopes_from_body(RequestStyle::Form, b"script=x&scope=secrets"),
+            vec![Scope::Secrets]
+        );
+    }
+
+    /// Ticking nothing sends no field at all, and that is a refusal rather
+    /// than a grant of nothing — the caller turns it into a withdrawal.
+    #[test]
+    fn ticking_nothing_sends_nothing() {
+        assert!(scopes_from_body(RequestStyle::Form, b"script=x&days=30").is_empty());
+    }
+
+    /// A name nothing gates on is dropped rather than stored.
+    #[test]
+    fn an_unknown_scope_never_becomes_a_grant() {
+        assert!(scopes_from_body(RequestStyle::Form, b"scope=administer_everything").is_empty());
+    }
+
+    #[test]
+    fn a_repeated_tick_grants_it_once() {
+        assert_eq!(
+            scopes_from_body(RequestStyle::Form, b"scope=secrets&scope=secrets"),
+            vec![Scope::Secrets]
+        );
+    }
+
+    /// The endpoint takes JSON too, where the same field is an array.
+    #[test]
+    fn json_sends_the_scopes_as_an_array() {
+        let body = br#"{"script":"x","scope":["secrets","personal_storage"]}"#;
+        assert_eq!(
+            scopes_from_body(RequestStyle::Json, body),
+            vec![Scope::PersonalStorage, Scope::Secrets]
+        );
+    }
+
+    #[test]
+    fn a_json_body_with_no_scopes_is_a_refusal_too() {
+        assert!(scopes_from_body(RequestStyle::Json, br#"{"script":"x"}"#).is_empty());
     }
 }
 
