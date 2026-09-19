@@ -1937,7 +1937,15 @@ pub fn execute_scheduled_handler(
         .ok_or_else(|| format!("no script for uri {}", script_uri))?;
     let executable_code = transpile_if_needed(script_uri, &owner_script)?;
 
-    let (rt, _budget) = create_sandboxed_runtime(&current_execution_limits())?;
+    // A job's budget rather than a request's (`javascript.job_timeout_ms`).
+    // The scheduler holds its claim on the job for this long plus a grace, so
+    // both have to read the same number: a claim that expires while the run is
+    // still going is what let a finished job be claimed and run a second time.
+    let limits = ExecutionLimits {
+        timeout_ms: crate::scheduler::configured_job_timeout_ms(),
+        ..current_execution_limits()
+    };
+    let (rt, _budget) = create_sandboxed_runtime(&limits)?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     ctx.with(|ctx| -> Result<(), rquickjs::Error> {

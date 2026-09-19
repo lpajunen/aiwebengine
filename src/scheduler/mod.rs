@@ -18,8 +18,77 @@ pub const MIN_RECURRING_INTERVAL_MS: i64 = 100;
 /// and an unbounded one is a column this engine would have to widen.
 pub const MAX_JOB_NAME_CHARS: usize = 64;
 const DB_CLAIM_BATCH_SIZE: i64 = 32;
+
+/// How long a claim on a job is good for before another instance may take it.
+///
+/// Short, and kept short by [`Scheduler::spawn_lock_renewal`] extending it for
+/// as long as the run lasts. The alternative — one claim long enough to cover
+/// the whole run — has to guess a length, and the guess cannot be made: the
+/// run's own budget is bounded by `javascript.job_timeout_ms`, but the wait for
+/// an execution slot happens after the claim and is bounded by nothing. A lease
+/// that is renewed does not have to predict how long the work takes, and a
+/// worker that dies stops renewing, so its jobs come back after this long
+/// rather than after a whole budget.
 const DB_LOCK_TTL_SECONDS: i64 = 30;
+
+/// How often the lease above is extended while a job is in flight.
+///
+/// A third of the lease, so two renewals can be missed — a slow query, a busy
+/// runtime — before anything else believes the job abandoned.
+const DB_LOCK_RENEW_EVERY_SECONDS: u64 = 10;
+
+/// How many times a one-off job is run before the engine stops trying.
+///
+/// A one-off used to retry every two seconds for as long as the engine was up,
+/// so a job failing on something that would never change — a handler that no
+/// longer exists, a payload the script cannot parse — was an endless loop
+/// writing an endless log. Five attempts over a few minutes is enough to ride
+/// out a restarting dependency and short enough that a genuine failure stops
+/// being one.
+const MAX_ONE_OFF_ATTEMPTS: i32 = 5;
+
+/// The first retry delay; each attempt after that waits twice as long.
 const DB_ONE_OFF_RETRY_DELAY_SECONDS: i64 = 2;
+
+/// The ceiling on that doubling, so the last attempts are still minutes rather
+/// than hours apart.
+const DB_ONE_OFF_MAX_RETRY_DELAY_SECONDS: i64 = 300;
+
+/// The budget for one scheduled handler, from configuration, set once at
+/// startup.
+static CONFIGURED_JOB_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
+
+/// Record the configured job budget (`javascript.job_timeout_ms`, falling back
+/// to `javascript.execution_timeout_ms`). Returns false if already set.
+pub fn configure_job_timeout(timeout_ms: u64) -> bool {
+    CONFIGURED_JOB_TIMEOUT_MS.set(timeout_ms).is_ok()
+}
+
+/// The job budget in effect.
+///
+/// Read by the two things that have to agree about it: the runtime a handler
+/// executes in, and the lock that stops a second instance claiming the job
+/// while it is still running. They are the same number because a claim shorter
+/// than the run is what let a completed job be run twice.
+pub fn configured_job_timeout_ms() -> u64 {
+    CONFIGURED_JOB_TIMEOUT_MS
+        .get()
+        .copied()
+        .unwrap_or_else(|| crate::js_engine::current_execution_limits().timeout_ms)
+}
+
+/// How long to wait before attempt number `attempts + 1` of a one-off job.
+///
+/// Doubling rather than flat, because the two things a retry rides out want
+/// different waits: a dependency that is restarting wants seconds, and one that
+/// is down wants the engine to stop asking every two seconds until it is back.
+fn one_off_retry_delay(attempts: i32) -> Duration {
+    let doublings = attempts.saturating_sub(1).clamp(0, 16) as u32;
+    let seconds = DB_ONE_OFF_RETRY_DELAY_SECONDS
+        .saturating_mul(1i64 << doublings)
+        .min(DB_ONE_OFF_MAX_RETRY_DELAY_SECONDS);
+    Duration::seconds(seconds)
+}
 
 /// Errors returned by scheduler operations
 #[derive(Debug, thiserror::Error)]
@@ -97,6 +166,10 @@ pub struct ScheduledInvocation {
     pub scheduled_for: DateTime<Utc>,
     pub interval_seconds: Option<i64>,
     pub interval_milliseconds: Option<i64>,
+    /// How many times this job has already been run and failed. Zero on a
+    /// first run, and the basis for both the retry delay and the decision to
+    /// stop retrying.
+    pub attempts: i32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -239,6 +312,9 @@ impl Scheduler {
                         locked_by = NULL,
                         locked_at = NULL,
                         lock_expires_at = NULL,
+                        -- Registering again is a new piece of work that reuses
+                        -- the key, not a continuation of the one that failed.
+                        attempts = 0,
                         updated_at = NOW()
                     "#,
                 )
@@ -548,6 +624,11 @@ impl Scheduler {
             scheduled_for,
             interval_seconds: None,
             interval_milliseconds: None,
+            // Nothing counts attempts on this path. It is the in-memory
+            // table, reached with no database or when the row could not be
+            // written, and it drops a one-off as it comes due rather than
+            // retrying it at all.
+            attempts: 0,
         }
     }
 
@@ -640,6 +721,74 @@ impl Scheduler {
         );
     }
 
+    /// Keep this worker's claim on a job alive for as long as the job runs.
+    ///
+    /// Without this the claim expired [`DB_LOCK_TTL_SECONDS`] after it was
+    /// taken, however long the run turned out to be. A longer run therefore had
+    /// its row re-claimed by another instance while it was still going; that
+    /// instance found the advisory lock held and returned, leaving `locked_by`
+    /// naming a worker that was not running the job, and the finishing worker's
+    /// `WHERE ... AND locked_by = $n` then matched nothing. A one-off that
+    /// succeeded was neither deleted nor rescheduled, so it ran again — and
+    /// nothing said so, because every statement involved reported success
+    /// having changed no rows.
+    ///
+    /// The renewal names this worker for the same reason: once the claim has
+    /// genuinely moved on, the update stops matching and the task logs that it
+    /// has lost the job rather than taking it back.
+    ///
+    /// Matching nothing also covers a job with no row at all — one whose
+    /// `persist_job_in_db` failed and which is being run from the in-memory
+    /// table. Stopping is right for that too: there is no claim to extend.
+    fn spawn_lock_renewal(&self, invocation: &ScheduledInvocation) -> tokio::task::JoinHandle<()> {
+        let job_id = invocation.job_id;
+        let job_key = invocation.key.clone();
+        let worker_id = self.worker_id.clone();
+
+        tokio::spawn(async move {
+            let mut ticker =
+                tokio::time::interval(StdDuration::from_secs(DB_LOCK_RENEW_EVERY_SECONDS));
+            // The first tick is immediate; the claim was just taken, so skip it.
+            ticker.tick().await;
+
+            loop {
+                ticker.tick().await;
+
+                let Some(db) = crate::database::get_global_database() else {
+                    return;
+                };
+
+                let renewed = sqlx::query(
+                    r#"
+                    UPDATE scheduler_jobs
+                    SET lock_expires_at = NOW() + make_interval(secs => $1),
+                        updated_at = NOW()
+                    WHERE job_id = $2 AND locked_by = $3
+                    "#,
+                )
+                .bind(DB_LOCK_TTL_SECONDS)
+                .bind(job_id)
+                .bind(&worker_id)
+                .execute(db.pool())
+                .await;
+
+                match renewed {
+                    Ok(result) if result.rows_affected() == 0 => {
+                        warn!(
+                            job = %job_key,
+                            "Scheduler job has no claim held by this worker; stopping renewal"
+                        );
+                        return;
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!(job = %job_key, error = %e, "Failed renewing scheduler job claim");
+                    }
+                }
+            }
+        })
+    }
+
     async fn claim_due_jobs_from_db(&self, now: DateTime<Utc>) -> Vec<ScheduledInvocation> {
         let db = match crate::database::get_global_database() {
             Some(db) => db,
@@ -664,7 +813,7 @@ impl Scheduler {
                 updated_at = NOW()
             FROM candidates
             WHERE jobs.job_id = candidates.job_id
-            RETURNING jobs.job_id, jobs.script_uri, jobs.handler_name, jobs.job_key, jobs.kind, jobs.run_at, jobs.interval_ms
+            RETURNING jobs.job_id, jobs.script_uri, jobs.handler_name, jobs.job_key, jobs.kind, jobs.run_at, jobs.interval_ms, jobs.attempts
             "#,
         )
         .bind(now)
@@ -711,6 +860,7 @@ impl Scheduler {
                 scheduled_for: row.get("run_at"),
                 interval_seconds,
                 interval_milliseconds,
+                attempts: row.get("attempts"),
             });
         }
 
@@ -737,25 +887,75 @@ impl Scheduler {
                         warn!(job = %invocation.key, error = %e, "Failed deleting completed one-off scheduler job");
                     }
                 } else {
-                    let retry_at = Utc::now() + Duration::seconds(DB_ONE_OFF_RETRY_DELAY_SECONDS);
+                    let attempts = invocation.attempts.saturating_add(1);
+
+                    // Out of attempts: the row goes, because leaving it would
+                    // requeue it forever, and a job nobody will run again is
+                    // not a job that is still scheduled.
+                    if attempts >= MAX_ONE_OFF_ATTEMPTS {
+                        if let Err(e) = sqlx::query(
+                            "DELETE FROM scheduler_jobs WHERE job_id = $1 AND locked_by = $2",
+                        )
+                        .bind(invocation.job_id)
+                        .bind(&self.worker_id)
+                        .execute(db.pool())
+                        .await
+                        {
+                            warn!(job = %invocation.key, error = %e, "Failed dropping exhausted one-off scheduler job");
+                        }
+
+                        warn!(
+                            script = %invocation.script_uri,
+                            handler = %invocation.handler_name,
+                            job = %invocation.key,
+                            attempts,
+                            "Scheduler job failed every attempt; giving up"
+                        );
+
+                        // In the script's own log as well as the engine's: the
+                        // person who scheduled the work reads one of those and
+                        // not the other.
+                        repository::insert_log_message_async_in_context(
+                            &invocation.script_uri,
+                            &format!(
+                                "scheduler job '{}' failed {} times and will not be retried",
+                                invocation.key, attempts
+                            ),
+                            "FATAL",
+                            &Self::invocation_log_context(invocation),
+                        )
+                        .await;
+                        return;
+                    }
+
+                    let retry_at = Utc::now() + one_off_retry_delay(attempts);
                     if let Err(e) = sqlx::query(
                         r#"
                         UPDATE scheduler_jobs
                         SET run_at = $1,
+                            attempts = $2,
                             locked_by = NULL,
                             locked_at = NULL,
                             lock_expires_at = NULL,
                             updated_at = NOW()
-                        WHERE job_id = $2 AND locked_by = $3
+                        WHERE job_id = $3 AND locked_by = $4
                         "#,
                     )
                     .bind(retry_at)
+                    .bind(attempts)
                     .bind(invocation.job_id)
                     .bind(&self.worker_id)
                     .execute(db.pool())
                     .await
                     {
                         warn!(job = %invocation.key, error = %e, "Failed requeueing failed one-off scheduler job");
+                    } else {
+                        debug!(
+                            job = %invocation.key,
+                            attempts,
+                            retry_at = %retry_at.to_rfc3339(),
+                            "Scheduler job requeued after failure"
+                        );
                     }
                 }
             }
@@ -834,12 +1034,26 @@ impl Scheduler {
             "Acquired lock for job execution"
         );
 
+        // Before the slot wait, not after: waiting for a slot is unbounded and
+        // is as much a part of holding the job as running it is.
+        let renewal = if Self::has_database() {
+            Some(self.spawn_lock_renewal(&invocation))
+        } else {
+            None
+        };
+
         let permit = crate::execution_slots::acquire().await;
         let execution = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             js_engine::execute_scheduled_handler(&script_uri, &handler_name, &invocation_for_engine)
         })
         .await;
+
+        // The run is over either way, so the claim stops being extended before
+        // anything is written about how it ended.
+        if let Some(renewal) = renewal {
+            renewal.abort();
+        }
 
         let mut succeeded = false;
         match execution {
@@ -1050,6 +1264,272 @@ mod tests {
         let due = scheduler.collect_due_jobs(now + Duration::seconds(1));
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].handler_name, "handler");
+    }
+
+    /// A claim has to be renewed several times over before it lapses, so a
+    /// slow query or a busy runtime costs a renewal rather than the job.
+    #[test]
+    fn a_claim_is_renewed_well_inside_its_lease() {
+        assert!(
+            (DB_LOCK_RENEW_EVERY_SECONDS as i64) * 3 <= DB_LOCK_TTL_SECONDS,
+            "renewing every {}s does not leave room to miss one inside a {}s lease",
+            DB_LOCK_RENEW_EVERY_SECONDS,
+            DB_LOCK_TTL_SECONDS
+        );
+    }
+
+    #[test]
+    fn the_retry_delay_doubles_and_then_stops_growing() {
+        assert_eq!(
+            one_off_retry_delay(1),
+            Duration::seconds(DB_ONE_OFF_RETRY_DELAY_SECONDS)
+        );
+        assert_eq!(
+            one_off_retry_delay(2),
+            Duration::seconds(DB_ONE_OFF_RETRY_DELAY_SECONDS * 2)
+        );
+        assert_eq!(
+            one_off_retry_delay(3),
+            Duration::seconds(DB_ONE_OFF_RETRY_DELAY_SECONDS * 4)
+        );
+
+        // Far past the cap, and past the shift width, so neither overflows.
+        assert_eq!(
+            one_off_retry_delay(i32::MAX),
+            Duration::seconds(DB_ONE_OFF_MAX_RETRY_DELAY_SECONDS)
+        );
+    }
+
+    /// A first failure still waits before retrying. `attempts` counts runs that
+    /// have happened, so nothing ever asks for the delay before attempt zero.
+    #[test]
+    fn the_retry_delay_is_never_zero() {
+        for attempts in 0..=MAX_ONE_OFF_ATTEMPTS {
+            assert!(
+                one_off_retry_delay(attempts) > Duration::zero(),
+                "attempt {} would retry immediately",
+                attempts
+            );
+        }
+    }
+
+    /// Five attempts at a doubling delay is minutes, not hours: long enough to
+    /// ride out a restarting dependency, short enough that the work is not
+    /// still being retried when someone comes to look at it.
+    #[test]
+    fn giving_up_takes_minutes() {
+        let total: i64 = (1..MAX_ONE_OFF_ATTEMPTS)
+            .map(|attempts| one_off_retry_delay(attempts).num_seconds())
+            .sum();
+
+        assert!(
+            (10..=900).contains(&total),
+            "the whole retry sequence spans {}s",
+            total
+        );
+    }
+
+    /// Everything above is arithmetic. This is the half that is SQL: the
+    /// `locked_by` guard, the increment, and the delete that has to happen
+    /// once the attempts are spent.
+    mod retries {
+        use super::*;
+
+        fn use_the_test_database() -> sqlx::PgPool {
+            let pool = crate::test_db::pool();
+            // One process per test under nextest, so claiming the global is
+            // this test's own business.
+            crate::database::initialize_global_database(std::sync::Arc::new(
+                crate::database::Database::from_pool(pool.clone()),
+            ));
+            pool
+        }
+
+        /// A job row already claimed by `scheduler`, as the worker leaves it
+        /// just before running the handler.
+        async fn claimed_job(
+            pool: &sqlx::PgPool,
+            scheduler: &Scheduler,
+            key: &str,
+            attempts: i32,
+        ) -> ScheduledInvocation {
+            let job_id = Uuid::new_v4();
+            let script_uri = format!("test://scheduler-retries/{}", key);
+
+            sqlx::query(
+                r#"
+                INSERT INTO scheduler_jobs
+                    (job_id, script_uri, handler_name, job_key, kind, run_at, attempts,
+                     locked_by, locked_at, lock_expires_at)
+                VALUES ($1, $2, 'handler', $3, 'one_off', NOW(), $4, $5, NOW(), NOW() + INTERVAL '1 minute')
+                "#,
+            )
+            .bind(job_id)
+            .bind(&script_uri)
+            .bind(key)
+            .bind(attempts)
+            .bind(&scheduler.worker_id)
+            .execute(pool)
+            .await
+            .expect("the job row should insert");
+
+            ScheduledInvocation {
+                job_id,
+                invocation_id: "test-invocation".to_string(),
+                key: key.to_string(),
+                script_uri,
+                handler_name: "handler".to_string(),
+                kind: ScheduledInvocationKind::OneOff,
+                scheduled_for: Utc::now(),
+                interval_seconds: None,
+                interval_milliseconds: None,
+                attempts,
+            }
+        }
+
+        async fn row_of(pool: &sqlx::PgPool, job_id: Uuid) -> Option<(i32, DateTime<Utc>)> {
+            sqlx::query("SELECT attempts, run_at FROM scheduler_jobs WHERE job_id = $1")
+                .bind(job_id)
+                .fetch_optional(pool)
+                .await
+                .expect("the lookup should succeed")
+                .map(|row| (row.get("attempts"), row.get("run_at")))
+        }
+
+        #[tokio::test]
+        async fn a_failure_counts_the_attempt_and_waits_before_the_next() {
+            let pool = use_the_test_database();
+            let scheduler = Scheduler::new();
+            let invocation = claimed_job(&pool, &scheduler, "counts-attempts", 0).await;
+
+            let before = Utc::now();
+            scheduler
+                .finalize_db_job_execution(&invocation, false)
+                .await;
+
+            let (attempts, run_at) = row_of(&pool, invocation.job_id)
+                .await
+                .expect("a job with attempts left should still be scheduled");
+
+            assert_eq!(attempts, 1, "the failure should have been counted");
+            assert!(
+                run_at > before,
+                "the retry should be scheduled for later, not run again at once"
+            );
+        }
+
+        /// The flat two-second requeue meant a job failing on something that
+        /// would never change retried for as long as the engine was up.
+        #[tokio::test]
+        async fn the_last_failure_drops_the_job_rather_than_requeueing_it() {
+            let pool = use_the_test_database();
+            let scheduler = Scheduler::new();
+            let invocation = claimed_job(
+                &pool,
+                &scheduler,
+                "gives-up",
+                MAX_ONE_OFF_ATTEMPTS.saturating_sub(1),
+            )
+            .await;
+
+            scheduler
+                .finalize_db_job_execution(&invocation, false)
+                .await;
+
+            assert!(
+                row_of(&pool, invocation.job_id).await.is_none(),
+                "a job out of attempts should not still be scheduled"
+            );
+        }
+
+        /// The completing worker names itself in the WHERE clause. Another
+        /// instance's row is not this worker's to retry or to drop.
+        #[tokio::test]
+        async fn a_job_claimed_by_another_worker_is_left_alone() {
+            let pool = use_the_test_database();
+            let owner = Scheduler::new();
+            let stranger = Scheduler::new();
+            let invocation = claimed_job(&pool, &owner, "not-yours", 0).await;
+
+            stranger.finalize_db_job_execution(&invocation, false).await;
+
+            let (attempts, _) = row_of(&pool, invocation.job_id)
+                .await
+                .expect("the row should survive a stranger finalizing it");
+            assert_eq!(attempts, 0, "a stranger should not count an attempt");
+        }
+
+        /// The bug this replaced: a claim lapsed a fixed time after it was
+        /// taken, however long the run turned out to be, so a long job had its
+        /// row re-claimed while it was still running and its own completing
+        /// statement then matched nothing.
+        #[tokio::test]
+        async fn a_claim_is_extended_while_the_job_runs() {
+            let pool = use_the_test_database();
+            let scheduler = Scheduler::new();
+            let invocation = claimed_job(&pool, &scheduler, "renews", 0).await;
+
+            // Insert left the lease a minute out; wind it back to just before
+            // lapsing, so a renewal is visible as an increase.
+            sqlx::query(
+                "UPDATE scheduler_jobs SET lock_expires_at = NOW() + INTERVAL '1 second' \
+                 WHERE job_id = $1",
+            )
+            .bind(invocation.job_id)
+            .execute(&pool)
+            .await
+            .expect("the lease should wind back");
+
+            let renewal = scheduler.spawn_lock_renewal(&invocation);
+            tokio::time::sleep(StdDuration::from_secs(DB_LOCK_RENEW_EVERY_SECONDS + 2)).await;
+            renewal.abort();
+
+            let expires: DateTime<Utc> =
+                sqlx::query("SELECT lock_expires_at FROM scheduler_jobs WHERE job_id = $1")
+                    .bind(invocation.job_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("the row should still be there")
+                    .get("lock_expires_at");
+
+            assert!(
+                expires > Utc::now() + Duration::seconds(DB_LOCK_TTL_SECONDS / 2),
+                "the claim should have been pushed out, not left to lapse"
+            );
+        }
+
+        /// Renewal is scoped to the worker holding the claim, so a job that has
+        /// genuinely moved on is not taken back by the worker that lost it.
+        #[tokio::test]
+        async fn renewal_stops_once_the_claim_has_moved_on() {
+            let pool = use_the_test_database();
+            let owner = Scheduler::new();
+            let stranger = Scheduler::new();
+            let invocation = claimed_job(&pool, &owner, "moved-on", 0).await;
+
+            let renewal = stranger.spawn_lock_renewal(&invocation);
+            tokio::time::sleep(StdDuration::from_secs(DB_LOCK_RENEW_EVERY_SECONDS + 2)).await;
+
+            assert!(
+                renewal.is_finished(),
+                "a worker that does not hold the claim should stop renewing it"
+            );
+            renewal.abort();
+        }
+
+        #[tokio::test]
+        async fn a_successful_one_off_is_deleted() {
+            let pool = use_the_test_database();
+            let scheduler = Scheduler::new();
+            let invocation = claimed_job(&pool, &scheduler, "succeeds", 0).await;
+
+            scheduler.finalize_db_job_execution(&invocation, true).await;
+
+            assert!(
+                row_of(&pool, invocation.job_id).await.is_none(),
+                "a completed one-off should not still be scheduled"
+            );
+        }
     }
 
     #[test]

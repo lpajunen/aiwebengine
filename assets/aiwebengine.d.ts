@@ -849,7 +849,17 @@ interface SecretStorage {
 // ============================================================================
 
 /**
- * Scheduler service for managing scheduled tasks
+ * Scheduler service for managing scheduled tasks.
+ *
+ * A scheduled handler gets {{limits.execution.jobTimeout}} rather than the
+ * {{limits.execution.timeout}} a request handler gets: a job is not answering
+ * a request, so it is not held to a budget chosen to keep pages responsive.
+ * Everything else is the same — the same memory ceiling, and `fetch` still
+ * shortened to whatever is left of that budget.
+ *
+ * A one-off that throws is retried, waiting longer each time, and dropped
+ * after a few failures with a line in the script's log saying so. A recurring
+ * job is not retried: it runs again at its next interval.
  */
 interface SchedulerService {
   /**

@@ -73,6 +73,17 @@ execution_timeout_ms = 10000
 # slow response. Absent, it falls back to execution_timeout_ms, which is a
 # per-request budget answering a question init() is not asking.
 init_timeout_ms = 30000
+# A scheduled handler's budget. Separate for the same reason init_timeout_ms is:
+# a job is not answering a request, and a handler that waits on a model API or a
+# slow third party cannot finish inside a number chosen to keep pages responsive.
+# Raising execution_timeout_ms instead would raise it for every route in the
+# engine. Absent, it falls back to execution_timeout_ms.
+#
+# A job holds an execution slot and a blocking thread for as long as it runs, so
+# this and max_concurrent_executions bound each other. Minutes rather than an
+# hour on purpose: work that needs longer should be split across runs, which
+# survives a restart where one long execution does not.
+job_timeout_ms = 60000
 max_memory_bytes = 134217728  # 128 MB
 # How many scripts may run at once. Each holds a blocking thread and a QuickJS
 # runtime allowed max_memory_bytes, so this and that setting together are the

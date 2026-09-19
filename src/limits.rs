@@ -101,6 +101,9 @@ pub struct ExecutionLimits {
     /// Wall clock for `init()` (`javascript.init_timeout_ms`, defaulting to
     /// `timeout_ms`).
     pub init_timeout_ms: u64,
+    /// Wall clock for one scheduled handler (`javascript.job_timeout_ms`,
+    /// defaulting to `timeout_ms`).
+    pub job_timeout_ms: u64,
     pub max_memory_bytes: usize,
     pub stack_size_bytes: usize,
     /// Scripts that may run at once. Past this a caller waits for a slot
@@ -302,6 +305,7 @@ pub fn snapshot() -> Limits {
         execution: ExecutionLimits {
             timeout_ms: js.timeout_ms,
             init_timeout_ms: crate::script_init::configured_init_timeout_ms(),
+            job_timeout_ms: crate::scheduler::configured_job_timeout_ms(),
             max_memory_bytes: js.max_memory_mb * 1024 * 1024,
             stack_size_bytes: js.stack_size_bytes,
             max_concurrent_executions: configured.max_concurrent_executions,
@@ -518,6 +522,7 @@ fn placeholder_values(limits: &Limits) -> Vec<(String, String)> {
     let entries: Vec<(&str, String)> = vec![
         ("execution.timeout", duration(execution.timeout_ms)),
         ("execution.initTimeout", duration(execution.init_timeout_ms)),
+        ("execution.jobTimeout", duration(execution.job_timeout_ms)),
         (
             "execution.testModuleTimeout",
             duration(execution.test_module_timeout_ms),

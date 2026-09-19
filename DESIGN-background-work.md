@@ -176,15 +176,25 @@ it.
 
 ## Order
 
-1. **Fix the secret template** (TODO-agent item 7, `http_client.rs:463`) and
+Items 1 and 2 are built; the rest stands as written.
+
+1. ~~**Fix the secret template**~~ _(done)_ (TODO-agent item 7,
+   `http_client.rs:463`) and
    the `.d.ts` that documents a third syntax that also does not work. One-line
    change. Without it a personal task cannot put a per-user key in
    `Authorization: Bearer …`, which is most model APIs — so it is a
    prerequisite for any of the rest being useful, and the cheapest item here.
-2. **`javascript.job_timeout_ms`**, with the lock renewed for the length of a
-   run, an attempt cap, and real backoff. Fixes an existing bug and gives
-   immediate relief. The precedent is `init_timeout_ms`, already separate for
-   the same reason: a job is not answering a request.
+2. ~~**`javascript.job_timeout_ms`**~~ _(done)_, with the lock renewed for the
+   length of a run, an attempt cap, and real backoff. Fixes an existing bug and
+   gives immediate relief. The precedent is `init_timeout_ms`, already separate
+   for the same reason: a job is not answering a request.
+
+   One thing the note got wrong: deriving the claim's length from the job's
+   budget is not enough, because the wait for an execution slot happens after
+   the claim and is bounded by nothing. The lease is renewed on a timer
+   instead, which needs no guess about how long the work takes and returns a
+   dead worker's jobs in one lease rather than one budget.
+
 3. **`scriptTasks`** — new table, payload, attempts, last error, state;
    enqueue from any phase; survives `init()`; `/engine/tasks` and the MCP
    tools.

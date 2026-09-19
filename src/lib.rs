@@ -1601,6 +1601,16 @@ pub async fn start_server_with_config(
         debug!("Script init timeout was already configured");
     }
 
+    // The budget one scheduled handler gets, and — plus a grace — how long the
+    // worker holds its claim on the job while that handler runs.
+    let job_timeout_ms = config
+        .javascript
+        .job_timeout_ms
+        .unwrap_or(config.javascript.execution_timeout_ms);
+    if !scheduler::configure_job_timeout(job_timeout_ms) {
+        debug!("Scheduled job timeout was already configured");
+    }
+
     // Recorded so the engine API reports the same retention the background
     // pruner enforces.
     if !log_retention::configure(log_retention::LogRetention::from_config(&config.logs)) {

@@ -293,6 +293,17 @@ pub struct JavaScriptConfig {
     /// Init function timeout in milliseconds (defaults to execution_timeout_ms if not set)
     pub init_timeout_ms: Option<u64>,
 
+    /// Budget for one scheduled handler in milliseconds (defaults to
+    /// execution_timeout_ms if not set).
+    ///
+    /// Separate for the reason `init_timeout_ms` is separate: a job is not
+    /// answering a request, so the number that bounds a request is answering a
+    /// question the job is not asking. A handler that calls a model API cannot
+    /// finish inside a per-request budget, and raising that budget to suit it
+    /// raises it for every ordinary route in the engine.
+    #[serde(default)]
+    pub job_timeout_ms: Option<u64>,
+
     /// Budget for one test module in milliseconds (defaults to
     /// execution_timeout_ms if not set). Each module runs in its own runtime
     /// and gets this budget of its own, so one slow file does not spend the
@@ -634,6 +645,7 @@ impl Default for JavaScriptConfig {
             stack_size_bytes: DEFAULT_STACK_SIZE_BYTES,
             enable_init_functions: true,
             init_timeout_ms: Some(30_000),
+            job_timeout_ms: Some(60_000),
             test_timeout_ms: Some(30_000),
             test_run_timeout_ms: Some(300_000),
             fail_startup_on_init_error: false,
@@ -1158,6 +1170,7 @@ mod tests {
             defaults.execution_timeout_ms
         );
         assert_eq!(shipped.javascript.init_timeout_ms, defaults.init_timeout_ms);
+        assert_eq!(shipped.javascript.job_timeout_ms, defaults.job_timeout_ms);
         assert_eq!(shipped.javascript.test_timeout_ms, defaults.test_timeout_ms);
         assert_eq!(
             shipped.javascript.test_run_timeout_ms,
