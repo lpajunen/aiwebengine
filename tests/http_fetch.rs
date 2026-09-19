@@ -560,6 +560,63 @@ async fn test_fetch_secret_template_syntax() {
     mock.shutdown().await;
 }
 
+/// The bearer-token shape: a prefix and a secret in one value. Matching only a
+/// value that was nothing but a template put most APIs out of reach of a
+/// stored key, and the script that hit it got a 401 explaining nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fetch_secret_inside_a_header_value() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/headers");
+
+    use aiwebengine::repository;
+    setup_env().await;
+
+    let script_uri = "test://http-fetch-inline";
+    let _ = repository::set_script_secret_item(script_uri, "inline_token", "secret-key-12345");
+
+    let result = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        let mut headers = HashMap::new();
+        headers.insert(
+            "authorization".to_string(),
+            "Bearer {{secret:inline_token}}".to_string(),
+        );
+
+        client.fetch(
+            url,
+            FetchOptions {
+                method: "GET".to_string(),
+                headers: Some(headers),
+                body: None,
+                timeout_ms: None,
+            },
+            Some(script_uri),
+            None,
+        )
+    })
+    .await
+    .expect("Task panicked");
+
+    let _ = repository::remove_script_secret_item(script_uri, "inline_token");
+
+    let response = result.expect("Request with an inline secret should succeed");
+    assert_eq!(response.status, 200);
+    assert!(
+        response.body.contains("Bearer secret-key-12345"),
+        "the prefix and the secret should both arrive: {}",
+        response.body
+    );
+    assert!(
+        !response.body.contains("{{secret:"),
+        "no template text should reach the far end: {}",
+        response.body
+    );
+
+    mock.shutdown().await;
+}
+
 #[tokio::test]
 async fn test_fetch_missing_secret_error() {
     let mock = MockServer::start()

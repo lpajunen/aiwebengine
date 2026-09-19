@@ -966,14 +966,32 @@ ALTER USER aiwebengine_new RENAME TO aiwebengine;
 
 ### Template Not Replaced
 
-**Symptom:** `{{secret:key}}` appears literally in request
+**Symptom:** `{{secret:key}}` appears literally in a request
 
-**Solution:**
+A template that names a secret is now replaced wherever it appears in a header
+value, and one the engine cannot resolve fails the `fetch` rather than being
+sent as itself. So template text arriving at an API means the engine never saw
+it as a template:
 
-1. Verify secret exists: `secretStorage.exists('key')`
-2. Check template syntax (no spaces)
-3. Verify identifier matches exactly
-4. Check server logs for injection errors
+1. It is in the URL or the body. Neither is substituted — only header values.
+2. The braces are not doubled, or the `secret:` prefix is missing. `{{key}}`
+   and `{secret:key}` are both ordinary text.
+
+**Symptom:** `fetch` fails with "Secret not found: key"
+
+The engine read the template and found nothing to put there.
+
+1. Verify the secret exists: `secretStorage.exists('key')`
+2. Verify the identifier matches exactly — a lookup is case-sensitive
+3. A per-user secret is only found for an authenticated caller; a background
+   or anonymous invocation sees the script's secrets only
+
+**Symptom:** `fetch` fails with "Invalid header: ... template that is never
+closed"
+
+The value opens `{{secret:` without a matching `}}`. This is a refusal rather
+than a passed-through value on purpose: sending the text as it stands is what
+produced an unexplained 401 at the far end.
 
 ### JWT Secret Too Short
 

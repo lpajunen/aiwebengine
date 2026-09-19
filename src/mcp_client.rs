@@ -357,9 +357,13 @@ impl McpClient {
             crate::repository::resolve_secret_db(script_uri, &self.secret_identifier, user_id)
                 .ok_or_else(|| McpClientError::SecretNotFound(self.secret_identifier.clone()))?;
 
-        // The token is composed into the header rather than handed over as a
-        // `{{secret:...}}` template, which stands for a whole header value and
-        // so cannot carry the `Bearer ` prefix.
+        // The token is resolved here rather than handed to `fetch` as a
+        // `{{secret:...}}` template, which would now carry the `Bearer `
+        // prefix perfectly well. What the template cannot do is fail as
+        // [`McpClientError::SecretNotFound`]: a missing secret has to be this
+        // client's error, named for the server it could not authenticate to,
+        // rather than an `HttpError` surfacing from inside a request that was
+        // never going to be made.
         let headers = HashMap::from([
             ("Content-Type".to_string(), "application/json".to_string()),
             ("Authorization".to_string(), format!("Bearer {}", token)),

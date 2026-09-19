@@ -795,6 +795,10 @@ declare class DOMException extends Error {
  *
  * Write operations require an authenticated user.
  * The `exists` check looks in `user_secrets` first (when authenticated), then falls back to `script_secrets`.
+ *
+ * Nothing here reads a secret back. What a stored secret is for is `fetch`,
+ * which replaces a `{{secret:NAME}}` in a header value with it — so the value
+ * reaches the API it was stored for without passing through the script.
  */
 interface SecretStorage {
   /**
@@ -1269,7 +1273,12 @@ interface FetchOptions {
   /** HTTP method (default: GET) */
   method?: string;
 
-  /** Request headers */
+  /**
+   * Request headers.
+   *
+   * A `{{secret:NAME}}` anywhere in a value is replaced by that secret before
+   * the request is sent: `"Authorization": "Bearer {{secret:api_token}}"`.
+   */
   headers?: Record<string, string>;
 
   /** Request body */
@@ -1346,7 +1355,19 @@ interface FetchResponse {
  * coding the engine cannot undo (`br`, `zstd`) is an error rather than an
  * unreadable body, so do not ask for those.
  *
- * @param url - URL to fetch (supports {{SECRET_NAME}} syntax for secret injection)
+ * Secrets are injected into header values, and only into header values. A
+ * `{{secret:NAME}}` anywhere inside one is replaced before the request leaves,
+ * so a bearer token is written as the prefix and the template together. The
+ * name is looked up for the requesting user first (`secretStorage`), then for
+ * the script, and a name nothing resolves fails the call rather than being
+ * sent as itself — a request carrying template text where a credential should
+ * be comes back as a 401 that explains nothing.
+ *
+ * A URL is never substituted. A secret in one would be written to this
+ * engine's logs and to the far end's, which is the one place a credential
+ * should not appear.
+ *
+ * @param url - URL to fetch
  * @param options - Fetch options
  * @returns The response, readable directly or via `await`
  * @example
@@ -1362,7 +1383,7 @@ interface FetchResponse {
  * const response = await fetch("https://api.example.com/endpoint", {
  *   method: "POST",
  *   headers: {
- *     "Authorization": "Bearer {{API_TOKEN}}",
+ *     "Authorization": "Bearer {{secret:API_TOKEN}}",
  *     "Content-Type": "application/json"
  *   },
  *   body: JSON.stringify({ key: "value" })
