@@ -392,11 +392,221 @@ async fn the_queue_records_who_a_task_acts_as() {
     );
 }
 
-/// Unused import guard: `js_engine` is reached through the worker rather than
-/// directly here, and this keeps the dependency honest if that changes.
-#[allow(dead_code)]
-fn _uses_js_engine() {
-    let _ = js_engine::execute_task_handler;
+/// A scope is what the person ticked, and ticking one must not deliver the
+/// other. This is the boundary the consent page describes, and it was
+/// decoration until the scopes were enforced at the surfaces they name.
+#[tokio::test(flavor = "multi_thread")]
+async fn storage_consent_alone_does_not_hand_over_the_persons_secrets() {
+    setup_env().await;
+    let user_id = a_user("storage-only").await;
+    let script_uri = "test://delegation/storage-only";
+
+    repository::upsert_script(
+        script_uri,
+        r#"
+        function work() {
+          // Granted: this must work.
+          personalStorage.setItem("touched", "yes");
+          // Not granted: the person's key must not be visible.
+          if (secretStorage.exists("THEIR_KEY")) {
+            throw new Error("a storage-only grant reached the person's secrets");
+          }
+        }
+        "#,
+    )
+    .expect("script should store");
+
+    // A secret that belongs to this person, which the task must not see.
+    repository::set_user_secret_item(script_uri, &user_id, "THEIR_KEY", "sk-private")
+        .expect("the person's secret should store");
+
+    delegation::grant(
+        &user_id,
+        script_uri,
+        &[Scope::PersonalStorage],
+        Duration::days(1),
+    )
+    .await
+    .expect("granted");
+
+    let task = tasks::enqueue(personal_task(script_uri, "work", &user_id))
+        .await
+        .expect("accepted");
+    tasks::run_due_now("test-worker").await;
+
+    assert!(
+        tasks::get(task.task_id).await.expect("lookup").is_none(),
+        "the task should have succeeded, meaning it saw storage and not secrets"
+    );
+    assert_eq!(
+        repository::get_user_properties_item(script_uri, &user_id, "touched").as_deref(),
+        Some("yes"),
+        "the scope that *was* granted should still work"
+    );
+}
+
+/// And the other way round.
+#[tokio::test(flavor = "multi_thread")]
+async fn secrets_consent_alone_does_not_hand_over_the_persons_storage() {
+    setup_env().await;
+    let user_id = a_user("secrets-only").await;
+    let script_uri = "test://delegation/secrets-only";
+
+    repository::upsert_script(
+        script_uri,
+        r#"
+        function work() {
+          // Granted: the person's key is visible to the engine's substitution.
+          if (!secretStorage.exists("THEIR_KEY")) {
+            throw new Error("a secrets grant did not reach the person's secrets");
+          }
+          // Not granted: their storage must be unreachable, which reads as
+          // nobody being signed in.
+          try {
+            personalStorage.setItem("touched", "should not happen");
+          } catch (e) {
+            return;
+          }
+          throw new Error("a secrets-only grant reached the person's storage");
+        }
+        "#,
+    )
+    .expect("script should store");
+
+    repository::set_user_secret_item(script_uri, &user_id, "THEIR_KEY", "sk-private")
+        .expect("the person's secret should store");
+
+    delegation::grant(&user_id, script_uri, &[Scope::Secrets], Duration::days(1))
+        .await
+        .expect("granted");
+
+    let task = tasks::enqueue(personal_task(script_uri, "work", &user_id))
+        .await
+        .expect("accepted");
+    tasks::run_due_now("test-worker").await;
+
+    assert!(
+        tasks::get(task.task_id).await.expect("lookup").is_none(),
+        "the task should have succeeded, meaning it saw secrets and not storage"
+    );
+    assert!(
+        repository::get_user_properties_item(script_uri, &user_id, "touched").is_none(),
+        "nothing should have been written to storage that was not consented to"
+    );
+}
+
+/// Managing a credential is refused in any delegated execution, whatever was
+/// granted. The consent page offers "use the API keys you have given this
+/// app", and replacing or deleting one is not using it.
+#[tokio::test(flavor = "multi_thread")]
+async fn background_work_cannot_change_the_persons_secrets_even_with_every_scope() {
+    setup_env().await;
+    let user_id = a_user("no-manage").await;
+    let script_uri = "test://delegation/no-manage";
+
+    repository::upsert_script(
+        script_uri,
+        r#"
+        function work() {
+          secretStorage.setSecret("THEIR_KEY", "replaced-by-the-agent");
+          secretStorage.removeSecret("OTHER_KEY");
+        }
+        "#,
+    )
+    .expect("script should store");
+
+    repository::set_user_secret_item(script_uri, &user_id, "THEIR_KEY", "sk-original")
+        .expect("stored");
+    repository::set_user_secret_item(script_uri, &user_id, "OTHER_KEY", "sk-other")
+        .expect("stored");
+
+    delegation::grant(&user_id, script_uri, &Scope::all(), Duration::days(1))
+        .await
+        .expect("granted");
+
+    let _task = tasks::enqueue(personal_task(script_uri, "work", &user_id))
+        .await
+        .expect("accepted");
+    tasks::run_due_now("test-worker").await;
+
+    assert_eq!(
+        repository::get_user_secret_item(script_uri, &user_id, "THEIR_KEY").as_deref(),
+        Some("sk-original"),
+        "background work must not replace somebody's stored credential"
+    );
+    assert!(
+        repository::get_user_secret_item(script_uri, &user_id, "OTHER_KEY").is_some(),
+        "background work must not delete somebody's stored credential"
+    );
+}
+
+/// The property that keeps this change invisible to everything that is not
+/// delegated: a person acting for themselves is narrowed by nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_ordinary_request_is_narrowed_by_no_scope() {
+    setup_env().await;
+
+    let script_uri = "test://delegation/undelegated-request";
+    repository::upsert_script(
+        script_uri,
+        r#"
+        function handler(context) {
+          personalStorage.setItem("touched", "by the request");
+          const manage = secretStorage.setSecret("MINE", "sk-set-by-me");
+          return { status: 200, body: manage, contentType: "text/plain" };
+        }
+        "#,
+    )
+    .expect("script should store");
+
+    let user_id = a_user("in-person").await;
+    let auth = aiwebengine::auth::JsAuthContext::authenticated(
+        user_id.clone(),
+        None,
+        None,
+        "test".to_string(),
+        false,
+        false,
+    );
+
+    let response = tokio::task::spawn_blocking({
+        let user_id = user_id.clone();
+        move || {
+            js_engine::execute_script_for_request_secure(js_engine::RequestExecutionParams {
+                script_uri: script_uri.to_string(),
+                handler_name: "handler".to_string(),
+                path: "/x".to_string(),
+                method: "GET".to_string(),
+                query_params: None,
+                url: None,
+                form_data: None,
+                raw_body: None,
+                headers: Default::default(),
+                user_context: aiwebengine::security::UserContext::authenticated(user_id),
+                auth_context: Some(auth),
+                route_params: None,
+                uploaded_files: None,
+                request_id: None,
+                route_pattern: None,
+            })
+        }
+    })
+    .await
+    .expect("no panic")
+    .expect("the handler should answer");
+
+    let body = String::from_utf8_lossy(&response.body).to_string();
+    assert_eq!(response.status, 200);
+    assert!(
+        !body.starts_with("Error:"),
+        "a person acting for themselves should still manage their own secrets: {}",
+        body
+    );
+    assert_eq!(
+        repository::get_user_properties_item(script_uri, &user_id, "touched").as_deref(),
+        Some("by the request"),
+        "an ordinary request should still reach its own storage"
+    );
 }
 
 /// `Utc` is used by the lapse test through sqlx; this keeps the import honest.

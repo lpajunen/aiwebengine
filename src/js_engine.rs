@@ -1157,6 +1157,8 @@ pub fn execute_script_secure(
                             crate::middleware::generate_request_id(),
                             None,
                         ),
+                        // Not acting for anybody: nothing to narrow.
+                        delegated_scopes: None,
                     };
 
                     // Create the register function that captures registrations
@@ -2068,6 +2070,10 @@ pub fn execute_task_handler(
         let security_config = GlobalSecurityConfig {
             enable_audit_logging: false,
             log_context: log_context.clone(),
+            // What this person authorised, when it is acting for one. `None`
+            // for an ordinary task, which acts for nobody and so narrows
+            // nothing — the scopes only ever take things away.
+            delegated_scopes: delegated.map(|d| d.grant.scopes.clone()),
             ..Default::default()
         };
 
@@ -2376,6 +2382,8 @@ fn install_and_collect_tests<'js>(
             invocation_id.clone(),
             Some(module_path.to_string()),
         ),
+        // Not acting for anybody: nothing to narrow.
+        delegated_scopes: None,
     };
 
     setup_secure_global_functions(
@@ -3335,6 +3343,8 @@ fn run_snippet(
                 invocation_id.clone(),
                 None,
             ),
+            // Not acting for anybody: nothing to narrow.
+            delegated_scopes: None,
         };
 
         let mut outcome = EvalOutcome::default();
@@ -3904,6 +3914,8 @@ fn run_registration_pass(
                     invocation_id.clone(),
                     None,
                 ),
+                // Not acting for anybody: nothing to narrow.
+                delegated_scopes: None,
             };
 
             // Create the register function that captures registrations

@@ -29,8 +29,25 @@ somebody's API key is a real grant, and a grant has to answer four questions.
 
 **What.** A fixed vocabulary — currently "read and change the data this app
 keeps for you" (`personal_storage`) and "use the API keys you have given this
-app" (`secrets`). Each names something the engine actually gates on. A scope
-nothing checks would be a promise to the person that nothing keeps.
+app" (`secrets`). Each names something the engine actually gates on, at the
+surface it names:
+
+| Scope              | Reaches                                                            |
+| ------------------ | ------------------------------------------------------------------ |
+| `personal_storage` | `personalStorage` for that person                                  |
+| `secrets`          | their key in a `{{secret:...}}` header, and `secretStorage.exists` |
+
+A scope not ticked is not granted. A grant covering only `personal_storage`
+reaches that person's storage and _not_ their secrets, and the refusal is the
+one a script already handles — the same answer it gets when nobody is signed
+in, rather than a new failure mode.
+
+**Changing a credential is refused outright**, whatever was granted. The page
+offers to let an app _use_ the keys you have given it, and storing, replacing
+or deleting one is not using it: background work that could rotate or delete
+somebody's key while they are away would be doing something nobody was asked
+about. So `secretStorage.setSecret`, `removeSecret` and `clear` are inert in a
+delegated execution, and there is no checkbox that turns them on.
 
 **For which script.** Per `(person, script)`. Authorising one solution to act
 for you says nothing about another, and the tests pin that.
@@ -46,6 +63,10 @@ queued.
 
 This is shaped after `oauth_client_grants`, which answers the same question for
 an OAuth client.
+
+None of this narrows an ordinary request. A person acting for themselves _is_
+the person, so there is no grant to hold them to — the scopes only ever take
+things away, and only from work running while they are absent.
 
 ## Re-read, never carried forward
 

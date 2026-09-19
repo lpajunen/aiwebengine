@@ -22,6 +22,14 @@ const CONSOLE_PRELUDE: &str = include_str!("../../assets/console_prelude.js");
 const STORAGE_PRELUDE: &str = include_str!("../../assets/storage_prelude.js");
 const TASKS_PRELUDE: &str = include_str!("../../assets/tasks_prelude.js");
 
+/// What `secretStorage`'s mutating methods answer in a delegated execution.
+///
+/// Phrased as the other "Error: ..." strings on that object are, since the
+/// interface returns refusals as values rather than throwing, and a script
+/// that already handles "not authenticated" handles this the same way.
+const DELEGATED_SECRET_MANAGEMENT_REFUSAL: &str = "Error: Secrets cannot be changed by background work acting on somebody's behalf. \
+     Storing, replacing or deleting a key is something the person does in their own session.";
+
 /// `Headers`, `URLSearchParams`, and the methods `context.request` gains so a
 /// body a script receives reads the way a body it fetched does.
 const REQUEST_PRELUDE: &str = include_str!("../../assets/request_prelude.js");
@@ -476,6 +484,20 @@ pub struct GlobalSecurityConfig {
     /// Empty for contexts with no invocation to name; a line written under an
     /// empty context is stored exactly as it was before this existed.
     pub log_context: repository::LogContext,
+    /// When this execution is acting on somebody's behalf, what they
+    /// authorised ([`crate::delegation::Scope`]).
+    ///
+    /// `None` means this is not a delegated execution, and nothing is
+    /// narrowed. That is every path but a delegated task: an ordinary request
+    /// *is* the person, so there is no grant to hold it to and no question of
+    /// exceeding one. Making `None` the permissive case is what keeps this
+    /// change invisible to everything that existed before delegation did.
+    ///
+    /// `Some` is the narrow case, and it is narrow by omission: a scope not
+    /// listed is not granted. So a grant covering only `personal_storage`
+    /// reaches this person's storage and *not* their secrets, which is what
+    /// the consent page said and what was previously only decoration.
+    pub delegated_scopes: Option<Vec<crate::delegation::Scope>>,
 }
 
 impl Default for GlobalSecurityConfig {
@@ -488,11 +510,34 @@ impl Default for GlobalSecurityConfig {
             dry_run_sink: None,
             console_sink: None,
             log_context: repository::LogContext::default(),
+            // Not acting for anybody, so nothing to narrow.
+            delegated_scopes: None,
         }
     }
 }
 
 impl GlobalSecurityConfig {
+    /// Whether this execution is acting on somebody's behalf.
+    ///
+    /// The question is not "is there a user" — an ordinary request has one too.
+    /// It is whether the user is *absent*, which is what makes a grant the
+    /// only authority for touching anything of theirs.
+    pub fn is_delegated(&self) -> bool {
+        self.delegated_scopes.is_some()
+    }
+
+    /// Whether `scope` may be exercised here.
+    ///
+    /// True for every execution that is not delegated, because the person is
+    /// present and acting for themselves. For a delegated one it is exactly
+    /// what they ticked.
+    pub fn allows_delegated(&self, scope: crate::delegation::Scope) -> bool {
+        match &self.delegated_scopes {
+            None => true,
+            Some(scopes) => scopes.contains(&scope),
+        }
+    }
+
     /// Record `registration` and return the reply to give JavaScript, or `None`
     /// when this context registers for real and the caller should carry on to
     /// the live registry.
@@ -1017,6 +1062,27 @@ impl SecureGlobalContext {
         let global = ctx.globals();
         let script_uri_owned = script_uri.to_string();
 
+        // Whether this execution may see that the person has a secret stored.
+        //
+        // The value itself is never returned to JavaScript by any of this, so
+        // what the `secrets` scope really gates is `fetch`'s substitution. This
+        // is the smaller half of the same question: whether a script acting for
+        // somebody who did not grant it may learn which keys they hold.
+        let secrets_allowed = self
+            .config
+            .allows_delegated(crate::delegation::Scope::Secrets);
+
+        // Managing a credential is refused outright in a delegated execution,
+        // whatever was granted.
+        //
+        // The consent page offers "use the API keys you have given this app",
+        // and storing, replacing or deleting one is not using it. Background
+        // work that could rotate or delete somebody's key while they are away
+        // would be doing something nobody was asked about — so this is a
+        // decision about the surface rather than a scope, and there is no
+        // checkbox that turns it on.
+        let may_manage_secrets = !self.config.is_delegated();
+
         let secret_storage_obj = rquickjs::Object::new(ctx.clone())?;
 
         // secretStorage.exists(key) - Check if secret exists in user_secrets or script_secrets
@@ -1025,8 +1091,10 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<bool> {
                 let globals = ctx.globals();
-                // Check user_secrets first (if authenticated)
-                if let Some(user_id) = get_auth_user_id(&globals)
+                // Check user_secrets first (if authenticated, and if this
+                // execution was authorised to reach that person's secrets).
+                if secrets_allowed
+                    && let Some(user_id) = get_auth_user_id(&globals)
                     && crate::repository::get_user_secret_item(&script_uri_exists, &user_id, &key)
                         .is_some()
                 {
@@ -1043,6 +1111,9 @@ impl SecureGlobalContext {
         let set_secret_fn = Function::new(
             ctx.clone(),
             move |ctx: rquickjs::Ctx<'_>, key: String, value: String| -> JsResult<String> {
+                if !may_manage_secrets {
+                    return Ok(DELEGATED_SECRET_MANAGEMENT_REFUSAL.to_string());
+                }
                 let globals = ctx.globals();
                 let user_id = match get_auth_user_id(&globals) {
                     Some(id) => id,
@@ -1077,6 +1148,11 @@ impl SecureGlobalContext {
         let remove_secret_fn = Function::new(
             ctx.clone(),
             move |ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<bool> {
+                // `false` is what this already answers with no person signed
+                // in, and it means the same thing here: nothing was removed.
+                if !may_manage_secrets {
+                    return Ok(false);
+                }
                 let globals = ctx.globals();
                 let user_id = match get_auth_user_id(&globals) {
                     Some(id) => id,
@@ -1096,6 +1172,9 @@ impl SecureGlobalContext {
         let clear_fn = Function::new(
             ctx.clone(),
             move |ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                if !may_manage_secrets {
+                    return Ok(DELEGATED_SECRET_MANAGEMENT_REFUSAL.to_string());
+                }
                 let globals = ctx.globals();
                 let user_id = match get_auth_user_id(&globals) {
                     Some(id) => id,
@@ -2861,8 +2940,23 @@ impl SecureGlobalContext {
     fn setup_fetch_function(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
         let global = ctx.globals();
         let script_uri_owned = script_uri.to_string();
-        // Capture the user_id at script setup time for secret lookup in user_secrets
-        let user_id_for_fetch = self.user_context.user_id.clone();
+        // Capture the user_id at script setup time for secret lookup in
+        // user_secrets.
+        //
+        // Withheld when this execution is acting for somebody who did not
+        // authorise it to use their secrets. The lookup then finds no personal
+        // key and falls back to the script's own, which is what an undelegated
+        // background task already gets — so a narrower grant lands the caller
+        // in the weaker position rather than in an error, and `{{secret:...}}`
+        // goes on meaning what it means.
+        let user_id_for_fetch = if self
+            .config
+            .allows_delegated(crate::delegation::Scope::Secrets)
+        {
+            self.user_context.user_id.clone()
+        } else {
+            None
+        };
 
         // Create the fetch function (synchronous version)
         let fetch_fn = Function::new(
@@ -4289,6 +4383,24 @@ impl SecureGlobalContext {
     /// than four times over. `None` means there is nobody to store anything
     /// for — which the prelude turns into a `SecurityError`, as a browser does
     /// when storage is not available to the caller.
+    /// The person whose storage this execution may reach, if any.
+    ///
+    /// [`Self::current_user_id`] answers who the execution is running as;
+    /// this answers whether it may act on that in a store belonging to them.
+    /// The two differ only for a delegated task, which knows who it acts for
+    /// and may still not have been authorised to touch their data.
+    ///
+    /// Refusing by answering `None` rather than by a distinct error is
+    /// deliberate: it is the same answer a background task with nobody signed
+    /// in already produces, so the failure a script sees is one it already
+    /// had to handle.
+    fn delegated_user_id(ctx: &rquickjs::Ctx<'_>, allowed: bool) -> Option<String> {
+        if !allowed {
+            return None;
+        }
+        Self::current_user_id(ctx)
+    }
+
     fn current_user_id(ctx: &rquickjs::Ctx<'_>) -> Option<String> {
         let context_obj: rquickjs::Object = ctx.globals().get("context").ok()?;
         let request_obj: rquickjs::Object = context_obj.get("request").ok()?;
@@ -4450,6 +4562,18 @@ impl SecureGlobalContext {
         let global = ctx.globals();
         let script_uri_owned = script_uri.to_string();
 
+        // Whether this execution may reach the person's storage at all.
+        //
+        // True for everything that is not delegated — an ordinary request *is*
+        // the person, so there is no grant to hold it to. For a delegated task
+        // it is exactly what they ticked, and a grant that did not name this
+        // reads as "nobody is signed in": the same `SecurityError` a background
+        // task with no person at all already gets, rather than a new failure
+        // mode for a script to learn.
+        let storage_allowed = self
+            .config
+            .allows_delegated(crate::delegation::Scope::PersonalStorage);
+
         // The Rust half of `personalStorage`. It differs from script storage in
         // one way that matters: without an authenticated user there is no store
         // to read or write, and saying so is not the same as saying the key was
@@ -4465,7 +4589,7 @@ impl SecureGlobalContext {
                     "personalStorage.getItem called for script {} with key: {}",
                     script_uri_get, key
                 );
-                let Some(user_id) = Self::current_user_id(&ctx) else {
+                let Some(user_id) = Self::delegated_user_id(&ctx, storage_allowed) else {
                     return Ok(None);
                 };
                 Ok(crate::repository::get_user_properties_item(
@@ -4486,7 +4610,7 @@ impl SecureGlobalContext {
                     script_uri_set, key
                 );
 
-                let Some(user_id) = Self::current_user_id(&ctx) else {
+                let Some(user_id) = Self::delegated_user_id(&ctx, storage_allowed) else {
                     return Ok(Some(Self::storage_failure(
                         "SecurityError",
                         "Personal storage requires an authenticated user",
@@ -4521,7 +4645,7 @@ impl SecureGlobalContext {
                     "personalStorage.removeItem called for script {} with key: {}",
                     script_uri_remove, key
                 );
-                let Some(user_id) = Self::current_user_id(&ctx) else {
+                let Some(user_id) = Self::delegated_user_id(&ctx, storage_allowed) else {
                     return Ok(Some(Self::storage_failure(
                         "SecurityError",
                         "Personal storage requires an authenticated user",
@@ -4541,7 +4665,7 @@ impl SecureGlobalContext {
                     "personalStorage.clear called for script {}",
                     script_uri_clear
                 );
-                let Some(user_id) = Self::current_user_id(&ctx) else {
+                let Some(user_id) = Self::delegated_user_id(&ctx, storage_allowed) else {
                     return Ok(Some(Self::storage_failure(
                         "SecurityError",
                         "Personal storage requires an authenticated user",
@@ -4559,7 +4683,7 @@ impl SecureGlobalContext {
         let keys = Function::new(
             ctx.clone(),
             move |ctx: rquickjs::Ctx<'_>| -> JsResult<Vec<String>> {
-                let Some(user_id) = Self::current_user_id(&ctx) else {
+                let Some(user_id) = Self::delegated_user_id(&ctx, storage_allowed) else {
                     return Ok(Vec::new());
                 };
                 Ok(crate::repository::list_user_properties_keys(
@@ -4571,7 +4695,7 @@ impl SecureGlobalContext {
         host.set("keys", keys)?;
 
         let available = Function::new(ctx.clone(), move |ctx: rquickjs::Ctx<'_>| -> bool {
-            Self::current_user_id(&ctx).is_some()
+            Self::delegated_user_id(&ctx, storage_allowed).is_some()
         })?;
         host.set("available", available)?;
 
@@ -5576,6 +5700,8 @@ fn execute_message_handler(
                 crate::middleware::generate_request_id(),
                 Some(message_type.to_string()),
             ),
+            // Not acting for anybody: nothing to narrow.
+            delegated_scopes: None,
         };
 
         let secure_context = SecureGlobalContext::new_with_config(user_context, security_config);
@@ -5832,6 +5958,8 @@ mod api_surface_tests {
                 dry_run_sink: None,
                 console_sink: None,
                 log_context: repository::LogContext::default(),
+                // Not acting for anybody: nothing to narrow.
+                delegated_scopes: None,
             };
             let context =
                 SecureGlobalContext::new_with_config(UserContext::admin("t".into()), config);
