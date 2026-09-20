@@ -103,6 +103,54 @@ Keep the payload small and put the data itself in storage with the task naming
 it. A retry then reads what is current rather than a copy taken when the task
 was enqueued.
 
+## What must not run beside what
+
+Two tasks enqueued a moment apart run at the same time. Claiming takes a batch
+and the worker spawns each run rather than awaiting it, so this is the default
+and for most work it is the point.
+
+For work belonging to one person it is a bug. Two prompts to an agent become
+two runs interleaving turn for turn, each reading and overwriting the same
+`personalStorage` and the same notes. A **lane** says those two must not run
+together: at most one task per `(script, lane)` runs at a time, and the rest
+stay pending until it finishes.
+
+```javascript
+// One conversation at a time, several conversations at once.
+scriptTasks.enqueue({
+  handler: "runTurn",
+  payload: { text },
+  lane: `chat:${chatId}`,
+});
+```
+
+**`personalTasks` defaults its lane to the person.** That is the correctness
+fix rather than a convenience: essentially every solution queueing per-person
+work has the interleaving bug, and holding it in the queue is better than
+every caller writing the same claimed-status table. Name your own lane for a
+finer one, or pass `lane: null` to opt out and let that person's tasks run in
+parallel.
+
+`scriptTasks` has no default, because a script task belongs to the solution
+rather than to a person and there is nothing to infer one from — and
+defaulting every script task into one lane would serialise the whole queue.
+
+Three things worth knowing:
+
+- **A lane is per script**, like a job key. Two solutions both using the lane
+  `"inbox"` are not talking about the same thing.
+- **A lane is not a queue of its own.** Order within it is by `run_at`, and a
+  task waiting on a busy lane is picked up on a later tick rather than held
+  in memory.
+- **A lane unblocks when a worker dies.** "Busy" means a run whose lease is
+  live, so a task left `running` by an instance that vanished stops holding
+  its lane once the lease lapses. Without that, one crash would shut a
+  person's agent for good.
+
+The lane is on the row, so `list_tasks` and `/engine/tasks` answer "why has
+this not run" with "it is behind another task in its lane" rather than
+leaving you to guess.
+
 ## Posting a message instead of sending it
 
 `dispatcher.sendMessage` runs every listener inline — in your execution, on
@@ -156,3 +204,12 @@ holds a lease it renews for as long as the run lasts ([`src/lease.rs`], shared
 with the scheduler). A worker that dies stops renewing, and its tasks become
 claimable again once the lease lapses — which is how work survives the instance
 that was running it.
+
+Lanes hold across instances too, and that takes three separate pieces of the
+claim rather than one. A lane already holding a live run is excluded by a
+`NOT EXISTS`. Two tasks of one lane falling in a single batch are cut to one
+by a window function, since neither is running yet and the `NOT EXISTS` cannot
+see them. And two workers claiming at the same moment are kept apart by
+`FOR UPDATE`, which locks every candidate a statement selected — except at the
+batch boundary, where a lane's later tasks fall outside one worker's `LIMIT`
+and an advisory lock on the lane closes the gap.

@@ -5211,6 +5211,16 @@ impl SecureGlobalContext {
                     }
                 };
 
+                let lane = match Self::lane_from_options(&options) {
+                    Ok(lane) => lane,
+                    Err(message) => {
+                        return Ok(Self::task_failure(
+                            "TypeError",
+                            &format!("scriptTasks.enqueue: {}", message),
+                        ));
+                    }
+                };
+
                 let run_at = match options.get("runAt").and_then(|v| v.as_str()) {
                     Some(value) => match crate::scheduler::parse_utc_timestamp(value) {
                         Ok(parsed) => Some(parsed),
@@ -5259,6 +5269,12 @@ impl SecureGlobalContext {
                     // Script context. `personalTasks.enqueue` is the one that
                     // acts as somebody, and it takes a grant to do it.
                     run_as: None,
+                    // No default here, unlike the personal queue. A script
+                    // task belongs to the solution rather than to one
+                    // person, so there is nothing for the engine to infer a
+                    // lane from — and defaulting every script task into one
+                    // lane would serialise the whole queue.
+                    lane: lane.flatten(),
                 };
 
                 match crate::tasks::blocking::enqueue(new_task) {
@@ -5422,6 +5438,16 @@ impl SecureGlobalContext {
                     }
                 };
 
+                let lane = match Self::lane_from_options(&options) {
+                    Ok(lane) => lane,
+                    Err(message) => {
+                        return Ok(Self::task_failure(
+                            "TypeError",
+                            &format!("personalTasks.enqueue: {}", message),
+                        ));
+                    }
+                };
+
                 let run_at = match options.get("runAt").and_then(|v| v.as_str()) {
                     Some(value) => match crate::scheduler::parse_utc_timestamp(value) {
                         Ok(parsed) => Some(parsed),
@@ -5453,7 +5479,21 @@ impl SecureGlobalContext {
                         .map(|n| n.clamp(i32::MIN as i64, i32::MAX as i64) as i32),
                     enqueued_by: Some(user_id.clone()),
                     kind: crate::tasks::TaskKind::Task,
-                    run_as: Some(user_id),
+                    run_as: Some(user_id.clone()),
+                    // Per person by default, and this is the correctness fix
+                    // rather than a convenience. Two prompts from one person
+                    // otherwise become two runs interleaving turn for turn,
+                    // each reading and overwriting the same
+                    // `personalStorage` — which every script queueing
+                    // per-person work had to work around with a table of its
+                    // own. A caller that really wants them in parallel says
+                    // `lane: null`, and one that wants a finer lane than the
+                    // person names its own.
+                    lane: match lane {
+                        Some(Some(named)) => Some(named),
+                        Some(None) => Some(Self::person_lane(&user_id)),
+                        None => None,
+                    },
                 };
 
                 match crate::tasks::blocking::enqueue(new_task) {
@@ -5598,6 +5638,16 @@ impl SecureGlobalContext {
                     return Ok(Self::task_failure("RangeError", &message));
                 }
 
+                let lane = match Self::lane_from_options(&options) {
+                    Ok(lane) => lane,
+                    Err(message) => {
+                        return Ok(Self::task_failure(
+                            "TypeError",
+                            &format!("personalTasks.enqueueFrom: {}", message),
+                        ));
+                    }
+                };
+
                 let run_at = match options.get("runAt").and_then(|v| v.as_str()) {
                     Some(value) => match crate::scheduler::parse_utc_timestamp(value) {
                         Ok(parsed) => Some(parsed),
@@ -5634,6 +5684,16 @@ impl SecureGlobalContext {
                     enqueued_by: None,
                     kind: crate::tasks::TaskKind::Task,
                     run_as: Some(user_id.clone()),
+                    // Per person by default, as the caller-facing enqueue
+                    // is, and here it is the case the lane key was written
+                    // for: two messages arriving a second apart from the
+                    // same chat are exactly the two runs that must not
+                    // interleave.
+                    lane: match lane {
+                        Some(Some(named)) => Some(named),
+                        Some(None) => Some(Self::person_lane(&user_id)),
+                        None => None,
+                    },
                 };
 
                 match crate::tasks::blocking::enqueue(new_task) {
@@ -5893,6 +5953,35 @@ impl SecureGlobalContext {
 
         debug!("scriptTasks initialized for script: {}", script_uri);
         Ok(())
+    }
+
+    /// The lane a person's own work runs in when nobody named one.
+    ///
+    /// Prefixed, so it reads as what it is wherever a lane is shown — and
+    /// so a script choosing its own lane names is unlikely to collide with
+    /// it by accident. A script that *wants* to share this lane can spell
+    /// it out; that is a reasonable thing to want and not a hazard, since
+    /// the only consequence of sharing a lane is running one at a time.
+    fn person_lane(user_id: &str) -> String {
+        format!("person:{}", user_id)
+    }
+
+    /// The lane a caller asked for, distinguishing "omitted" from "null".
+    ///
+    /// `Ok(None)` is an explicit `lane: null` — the caller saying this must
+    /// not be serialised — and `Ok(Some(None))` is the field being absent,
+    /// which lets each surface pick its own default. `personalTasks` reads
+    /// the difference: absent means "serialise per person", which is almost
+    /// always what per-person work wants, and `null` is how a script opts
+    /// out of that on purpose.
+    #[allow(clippy::type_complexity)]
+    fn lane_from_options(options: &serde_json::Value) -> Result<Option<Option<String>>, String> {
+        match options.get("lane") {
+            None => Ok(Some(None)),
+            Some(serde_json::Value::Null) => Ok(None),
+            Some(serde_json::Value::String(lane)) => Ok(Some(Some(lane.clone()))),
+            Some(_) => Err("lane must be a string, or null for no lane".to_string()),
+        }
     }
 
     /// The `{ channel, identity }` pair a sender is named by, validated.
@@ -6507,6 +6596,14 @@ impl SecureGlobalContext {
                         // A queued listener runs in its own script's context:
                         // there is no sender left to borrow authority from.
                         run_as: None,
+                        // Posting is a fan-out: one message reaches every
+                        // listener, and the whole point is that they do not
+                        // wait on each other. A lane here would serialise
+                        // unrelated scripts because one message named them
+                        // together. A listener that must not run beside
+                        // itself is a different question, and one the
+                        // dispatcher has no vocabulary for yet.
+                        lane: None,
                     };
 
                     match crate::tasks::blocking::enqueue(new_task) {

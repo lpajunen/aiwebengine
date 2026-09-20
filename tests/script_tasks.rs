@@ -21,6 +21,7 @@ fn new_task(script_uri: &str, handler: &str) -> NewTask {
         enqueued_by: None,
         kind: tasks::TaskKind::Task,
         run_as: None,
+        lane: None,
     }
 }
 

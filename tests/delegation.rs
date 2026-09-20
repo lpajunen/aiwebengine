@@ -35,6 +35,7 @@ fn personal_task(script_uri: &str, handler: &str, user_id: &str) -> NewTask {
         enqueued_by: Some(user_id.to_string()),
         kind: TaskKind::Task,
         run_as: Some(user_id.to_string()),
+        lane: None,
     }
 }
 
@@ -278,6 +279,7 @@ async fn an_undelegated_task_reaches_nobodys_storage() {
         enqueued_by: None,
         kind: TaskKind::Task,
         run_as: None,
+        lane: None,
     })
     .await
     .expect("accepted");

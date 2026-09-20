@@ -87,6 +87,13 @@
   // the kind of thing you set without noticing. Enqueueing here needs the
   // person to have authorised this script; `authorization()` says whether they
   // have, and carries the page to send them to if they have not.
+  //
+  // One thing differs from `scriptTasks` besides the authority: a personal
+  // task is serialised per person by default. Two prompts from one person
+  // otherwise become two runs interleaving turn for turn over the same
+  // storage, which is a bug in essentially every solution that queues
+  // per-person work. Pass `lane: null` to opt out, or a lane of your own for
+  // a finer one.
   var personalTasks = {
     enqueue: function (options) {
       if (options === null || typeof options !== "object") {

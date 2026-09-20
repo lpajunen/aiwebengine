@@ -152,6 +152,13 @@ pub struct NewTask {
     /// Who this runs as. `None` is script context — what every task was
     /// before delegation existed, and still the default.
     pub run_as: Option<String>,
+    /// What this must not run beside.
+    ///
+    /// At most one task per `(script, lane)` runs at a time; the rest stay
+    /// pending until it finishes. `None` is no lane, which is every task
+    /// that existed before this and is still the default for `scriptTasks`:
+    /// claimed and run alongside anything else.
+    pub lane: Option<String>,
 }
 
 /// A task as stored.
@@ -169,6 +176,7 @@ pub struct Task {
     pub enqueued_by: Option<String>,
     pub kind: TaskKind,
     pub run_as: Option<String>,
+    pub lane: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -188,6 +196,7 @@ impl Task {
             enqueued_by: row.get("enqueued_by"),
             kind: TaskKind::from_str(row.get::<String, _>("kind").as_str()),
             run_as: row.get("run_as"),
+            lane: row.get("lane"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -230,6 +239,30 @@ fn retry_delay(attempts: i32) -> Duration {
     Duration::seconds(seconds)
 }
 
+/// The longest a lane name may be.
+///
+/// A lane is compared and never interpreted, so the cap is about what is
+/// worth storing and indexing rather than about safety. Generous enough for
+/// the shapes that matter — a user id, a conversation id, the two joined.
+const MAX_LANE_CHARS: usize = 128;
+
+/// Trim a lane, and treat an empty one as no lane.
+///
+/// Refusing an empty string instead would turn `lane: ""` — which a script
+/// gets from an interpolation whose variable was empty — into an error at
+/// the enqueue rather than into the unconstrained behaviour it plainly
+/// means. An over-long one is truncated rather than refused for the same
+/// reason: the caller's intent is legible and losing the tail still
+/// serialises everything that shares the prefix, which is the direction that
+/// errs toward running less at once rather than more.
+fn normalize_lane(lane: Option<&str>) -> Option<String> {
+    let lane = lane?.trim();
+    if lane.is_empty() {
+        return None;
+    }
+    Some(lane.chars().take(MAX_LANE_CHARS).collect())
+}
+
 /// Check and normalise what a caller asked for.
 ///
 /// Separate from the insert so the whole of it is testable without a database,
@@ -266,6 +299,7 @@ fn validate(task: &NewTask) -> Result<(i32, String), EnqueueError> {
 /// Accept a piece of work.
 pub async fn enqueue(task: NewTask) -> Result<Task, EnqueueError> {
     let (max_attempts, handler) = validate(&task)?;
+    let lane = normalize_lane(task.lane.as_deref());
 
     let Some(db) = crate::database::get_global_database() else {
         return Err(EnqueueError::Unavailable);
@@ -277,10 +311,10 @@ pub async fn enqueue(task: NewTask) -> Result<Task, EnqueueError> {
     let row = sqlx::query(
         r#"
         INSERT INTO script_tasks
-            (task_id, script_uri, handler_name, payload, state, max_attempts, run_at, enqueued_by, kind, run_as)
-        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9)
+            (task_id, script_uri, handler_name, payload, state, max_attempts, run_at, enqueued_by, kind, run_as, lane)
+        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10)
         RETURNING task_id, script_uri, handler_name, payload, state, attempts, max_attempts,
-                  last_error, run_at, enqueued_by, kind, run_as, created_at, updated_at
+                  last_error, run_at, enqueued_by, kind, run_as, lane, created_at, updated_at
         "#,
     )
     .bind(task_id)
@@ -292,6 +326,7 @@ pub async fn enqueue(task: NewTask) -> Result<Task, EnqueueError> {
     .bind(task.enqueued_by.as_deref())
     .bind(task.kind.as_str())
     .bind(task.run_as.as_deref())
+    .bind(lane.as_deref())
     .fetch_one(db.pool())
     .await
     .map_err(|e| EnqueueError::Storage(e.to_string()))?;
@@ -303,6 +338,7 @@ pub async fn enqueue(task: NewTask) -> Result<Task, EnqueueError> {
         script = %task.script_uri,
         handler = %handler,
         task = %task_id,
+        lane = ?lane,
         "Task enqueued"
     );
 
@@ -318,7 +354,7 @@ pub async fn list(script_uri: &str, limit: i64) -> Result<Vec<Task>, sqlx::Error
     let rows = sqlx::query(
         r#"
         SELECT task_id, script_uri, handler_name, payload, state, attempts, max_attempts,
-               last_error, run_at, enqueued_by, kind, run_as, created_at, updated_at
+               last_error, run_at, enqueued_by, kind, run_as, lane, created_at, updated_at
         FROM script_tasks
         WHERE script_uri = $1
         ORDER BY created_at DESC
@@ -342,7 +378,7 @@ pub async fn get(task_id: Uuid) -> Result<Option<Task>, sqlx::Error> {
     let row = sqlx::query(
         r#"
         SELECT task_id, script_uri, handler_name, payload, state, attempts, max_attempts,
-               last_error, run_at, enqueued_by, kind, run_as, created_at, updated_at
+               last_error, run_at, enqueued_by, kind, run_as, lane, created_at, updated_at
         FROM script_tasks
         WHERE task_id = $1
         "#,
@@ -477,12 +513,48 @@ pub async fn delete_for_script(script_uri: &str) -> Result<u64, sqlx::Error> {
     Ok(result.rows_affected())
 }
 
-/// Take up to [`CLAIM_BATCH_SIZE`] due tasks for this worker.
+/// Take up to [`CLAIM_BATCH_SIZE`] due tasks for this worker, at most one per
+/// lane.
 ///
 /// `FOR UPDATE SKIP LOCKED` so several instances claim disjoint batches rather
 /// than queueing behind each other, and a lapsed lease makes a row claimable
 /// again — which is how a task survives the worker that was running it dying.
-async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocation> {
+///
+/// # Holding one task per lane
+///
+/// "At most one running per `(script, lane)`" has to survive three different
+/// ways two tasks in one lane can be claimed at once, and each needs its own
+/// piece of the statement. Any one of them alone leaves a hole, and a lane
+/// key that occasionally lets two run is worse than none — scripts would go
+/// on writing the workaround it exists to remove.
+///
+/// **A lane already busy.** The `NOT EXISTS` excludes a candidate whose lane
+/// holds a live run. Live, not merely `state = 'running'`: a row left behind
+/// by a worker that died has a lapsed lease and is claimable again, so it
+/// must not hold its lane shut in the meantime.
+///
+/// **Two due tasks in one lane, one worker.** The `NOT EXISTS` cannot see
+/// this, because neither row is running yet — both pass, and one statement
+/// claims both. `ROW_NUMBER` over the locked candidates keeps the oldest of
+/// each lane and leaves the rest for the next tick. It is a second CTE
+/// because a window function and `FOR UPDATE` may not share a `SELECT`.
+///
+/// **Two due tasks in one lane, two workers.** Mostly impossible already:
+/// `FOR UPDATE` locks *every* candidate this statement selected, not just the
+/// ones that survive the filters, so a second worker's `SKIP LOCKED` passes
+/// over the whole set. The gap is the `LIMIT` — a lane's second task falling
+/// outside one worker's batch is not locked by it, and the other worker
+/// evaluates `NOT EXISTS` against a snapshot where the first claim has not
+/// committed. `pg_try_advisory_xact_lock` closes it: the lane is held for the
+/// statement that claims from it, so the other worker skips the lane rather
+/// than racing on it. The lock is re-entrant within one transaction, which is
+/// why it does not also solve the case above.
+///
+/// The advisory lock is taken in a `WHERE` alongside a `LIMIT`, so Postgres
+/// may take one for a row the statement never returns. That costs another
+/// worker one tick's sight of that lane and nothing else, since the lock ends
+/// with the statement.
+pub async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocation> {
     let Some(db) = crate::database::get_global_database() else {
         return Vec::new();
     };
@@ -490,14 +562,45 @@ async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocation> {
     let rows = match sqlx::query(
         r#"
         WITH candidates AS (
-            SELECT task_id
-            FROM script_tasks
+            SELECT task_id, script_uri, lane, run_at
+            FROM script_tasks AS due
             WHERE run_at <= $1
               AND state IN ('pending', 'running')
               AND (lock_expires_at IS NULL OR lock_expires_at <= $1)
+              AND (
+                due.lane IS NULL
+                OR (
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM script_tasks AS busy
+                        WHERE busy.script_uri = due.script_uri
+                          AND busy.lane = due.lane
+                          AND busy.state = 'running'
+                          AND busy.lock_expires_at > $1
+                    )
+                    AND pg_try_advisory_xact_lock(
+                        hashtext(due.script_uri),
+                        hashtext(due.lane)
+                    )
+                )
+              )
             ORDER BY run_at ASC
             LIMIT $2
             FOR UPDATE SKIP LOCKED
+        ),
+        one_per_lane AS (
+            SELECT task_id
+            FROM (
+                SELECT
+                    task_id,
+                    lane,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY script_uri, lane
+                        ORDER BY run_at ASC, task_id ASC
+                    ) AS position
+                FROM candidates
+            ) ranked
+            WHERE lane IS NULL OR position = 1
         )
         UPDATE script_tasks AS tasks
         SET state = 'running',
@@ -505,8 +608,8 @@ async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocation> {
             locked_at = $1,
             lock_expires_at = $1 + make_interval(secs => $4),
             updated_at = NOW()
-        FROM candidates
-        WHERE tasks.task_id = candidates.task_id
+        FROM one_per_lane
+        WHERE tasks.task_id = one_per_lane.task_id
         RETURNING tasks.task_id, tasks.script_uri, tasks.handler_name, tasks.payload,
                   tasks.attempts, tasks.max_attempts, tasks.kind, tasks.run_as
         "#,
@@ -836,6 +939,7 @@ pub fn to_json(task: &Task) -> Value {
         "enqueuedBy": task.enqueued_by,
         "kind": task.kind.as_str(),
         "runAs": task.run_as,
+        "lane": task.lane,
         "createdAt": task.created_at.to_rfc3339(),
         "updatedAt": task.updated_at.to_rfc3339(),
     })
@@ -876,7 +980,29 @@ mod tests {
             enqueued_by: None,
             kind: TaskKind::Task,
             run_as: None,
+            lane: None,
         }
+    }
+
+    /// An empty lane is no lane rather than an error: a script gets `""`
+    /// from an interpolation whose variable was empty, and that plainly
+    /// means unconstrained rather than "refuse this enqueue".
+    #[test]
+    fn an_empty_lane_is_no_lane() {
+        assert_eq!(normalize_lane(None), None);
+        assert_eq!(normalize_lane(Some("")), None);
+        assert_eq!(normalize_lane(Some("   ")), None);
+        assert_eq!(normalize_lane(Some("  inbox  ")), Some("inbox".to_string()));
+    }
+
+    /// Truncated rather than refused, and the direction matters: losing the
+    /// tail still serialises everything sharing the prefix, which errs
+    /// toward running less at once rather than more.
+    #[test]
+    fn an_over_long_lane_is_truncated_rather_than_refused() {
+        let long = "l".repeat(MAX_LANE_CHARS + 50);
+        let normalized = normalize_lane(Some(&long)).expect("still a lane");
+        assert_eq!(normalized.chars().count(), MAX_LANE_CHARS);
     }
 
     #[test]

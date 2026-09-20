@@ -975,6 +975,11 @@ interface ScriptTask {
   enqueuedBy: string | null;
   /** Who it acts as. Null for script context, which is the default. */
   runAs?: string | null;
+  /**
+   * What it will not run beside. Null for no lane. A personal task with no
+   * lane named gets `person:<id>`.
+   */
+  lane?: string | null;
   kind?: "task" | "message";
   createdAt: string;
   updatedAt: string;
@@ -1040,6 +1045,17 @@ interface ScriptTasks {
     payload?: Record<string, unknown>;
     runAt?: string;
     maxAttempts?: number;
+    /**
+     * What this must not run beside. At most one task per lane runs at a
+     * time; the rest stay pending until it finishes.
+     *
+     * No lane by default, which is how every script task behaved before
+     * lanes existed: claimed and run alongside anything else. There is
+     * nothing for the engine to infer one from here — a script task belongs
+     * to the solution rather than to a person — so name one when the work
+     * shares state. `personalTasks` defaults its own.
+     */
+    lane?: string;
   }): ScriptTask;
 
   /**
@@ -1140,6 +1156,20 @@ interface PersonalTasks {
     payload?: Record<string, unknown>;
     runAt?: string;
     maxAttempts?: number;
+    /**
+     * What this must not run beside.
+     *
+     * **Defaults to the person.** Two prompts from one person otherwise
+     * become two runs interleaving turn for turn, each reading and
+     * overwriting the same `personalStorage` — which is a bug in essentially
+     * every solution that queues per-person work, so the queue holds it
+     * rather than leaving each caller to.
+     *
+     * Name your own for a finer lane (one conversation rather than one
+     * person), or pass `null` to opt out and let this person's tasks run in
+     * parallel.
+     */
+    lane?: string | null;
   }): ScriptTask;
 
   /** What this person has authorised, and where to send them if nothing. */
@@ -1194,6 +1224,11 @@ interface PersonalTasks {
     payload?: Record<string, unknown>;
     runAt?: string;
     maxAttempts?: number;
+    /**
+     * As `enqueue` above: defaults to the person, which is what stops two
+     * messages arriving a second apart from becoming two interleaved turns.
+     */
+    lane?: string | null;
   }): ScriptTask;
 
   /**

@@ -9983,7 +9983,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "list_tasks",
-            "Read a script's queued work: what is waiting to run, what is running now, and what failed with the error that failed it. A task that succeeded is not listed — its row is deleted when it completes, and what it did is in the script's log under its own invocation id. Use this to find out why background work is not happening.",
+            "Read a script's queued work: what is waiting to run, what is running now, and what failed with the error that failed it. A task that succeeded is not listed — its row is deleted when it completes, and what it did is in the script's log under its own invocation id. Use this to find out why background work is not happening: as well as a failure, the answer may be that the task is pending behind another in the same `lane`, since at most one task per lane runs at a time.",
             || {
                 json!({
                     "type": "object",

@@ -107,6 +107,19 @@ turned out to depend on neither, and on a decision rather than a mechanism.
   sender. Telegram and Slack sign; email does not. That is the script's job
   and the documentation says so rather than pretending otherwise.
 
+- **The queue has a lane key.** `script_tasks.lane` — at most one running
+  task per `(script, lane)`, the rest left pending. `personalTasks` defaults
+  it to the person, which is the correctness fix this file asked for rather
+  than a feature: every script queueing per-person work had the same
+  interleaving bug and had to work around it with a claimed-status table of
+  its own.
+
+  Holding the invariant took three pieces of the claim rather than the one
+  predicate this file predicted, because there are three separate ways two
+  tasks in a lane get claimed at once — a lane already busy, two in one
+  batch, and two workers at the batch boundary. Each has a test that fails
+  when its piece is removed. See `docs/SCRIPT_TASKS.md`.
+
 What follows is what the agent hit next.
 
 ## The blockers, in order
@@ -170,23 +183,20 @@ between the two, which would turn a silent minute into visible progress.
 The same limit applies to anything else that streams — an events API, a log
 tail on another service.
 
-### 5. The queue has no lane key
+### 5. ~~The queue has no lane key~~ — done
 
-`NewTask` carries `script_uri`, `handler_name`, `payload`, `run_at`,
-`max_attempts`, `enqueued_by`, `kind` and `run_as` (`tasks.rs:142`). Nothing
-says _this task must not run beside that one_, and claiming is
-`FOR UPDATE SKIP LOCKED` across whatever is due.
+See **What got built** above. Two limits are worth carrying forward.
 
-For an agent that is a correctness bug rather than a missing feature. Two
-prompts from one person become two runs interleaving turn for turn, each
-reading and overwriting the same `personalStorage` and the same notes. The
-script can work around it with a claimed-status table of its own, and the
-agent's list says to — but every script queueing per-person work has this same
-bug, and a lane key belongs to the queue rather than to each of its callers.
+A lane serialises **claiming**, not the work a handler does with what it
+reaches. Two tasks in one lane cannot run at once, but a task and a _request_
+still can — somebody typing on the agent's page while their queued turn runs
+is not something the queue can order. Solutions where that matters still need
+their own arrangement.
 
-Cloudflare's Agents SDK gets this free by making the session the unit of
-execution. Here it would be a column and a predicate on the claim: at most one
-running task per lane, others left pending.
+And a read-only delegation holds no `enqueue_tasks`, so it cannot chain
+tasks, so a long read-only run is not expressible. That is item 3's cost
+rather than this one's, but lanes are where it shows up: the natural way to
+do long per-person work is a chain in one lane.
 
 ### 6. Parallelism inside a turn
 
