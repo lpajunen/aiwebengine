@@ -590,6 +590,18 @@ impl GlobalSecurityConfig {
     }
 }
 
+/// One entry of a `fetchAll` list, as JavaScript writes it.
+///
+/// `{ url, options }` rather than the positional pair `fetch` takes, because
+/// a list of two-element arrays is the shape nobody reads back correctly six
+/// months later.
+#[derive(serde::Deserialize)]
+struct FetchRequestSpec {
+    url: String,
+    #[serde(default)]
+    options: crate::http_client::FetchOptions,
+}
+
 /// Why an API refused, when what it refused on was a capability.
 ///
 /// Names the capability rather than saying "insufficient permissions",
@@ -3044,6 +3056,11 @@ impl SecureGlobalContext {
         // account's credentials.
         let may_read_secrets = self.user_context.has_capability(&Capability::ReadSecrets);
 
+        // Clones for the parallel and streaming bindings below, which resolve
+        // secrets against the same person this one does.
+        let user_id_all = user_id_for_fetch.clone();
+        let user_id_stream = user_id_for_fetch.clone();
+
         // Create the fetch function (synchronous version)
         let fetch_fn = Function::new(
             ctx.clone(),
@@ -3135,6 +3152,219 @@ impl SecureGlobalContext {
         // that can be awaited, read as an object, or parsed as the string this
         // used to return.
         global.set("__hostFetch", fetch_fn)?;
+
+        // `__hostFetchAll` — several requests in flight at once.
+        //
+        // `fetch` is a synchronous host call, so `Promise.all` over three of
+        // them sequences them and the wall clock is the sum. For an agent
+        // running three tool calls that is the difference between fitting
+        // inside the execution budget and not.
+        //
+        // Same checks per request as a single `fetch`, because it *is* a
+        // single fetch per request — only on the blocking pool rather than
+        // on this thread. The capability gates are here rather than inside,
+        // so a refused batch costs no connections.
+        let script_uri_all = script_uri.to_string();
+        let user_ctx_all = self.user_context.clone();
+        let fetch_all = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, requests_json: String| -> JsResult<String> {
+                if !user_ctx_all.has_capability(&Capability::UseNetwork) {
+                    return Err(capability_error(
+                        "fetchAll",
+                        &Capability::UseNetwork,
+                        &user_ctx_all,
+                    ));
+                }
+
+                let described: Vec<FetchRequestSpec> = serde_json::from_str(&requests_json)
+                    .map_err(|e| {
+                        rquickjs::Error::new_from_js_message(
+                            "fetchAll",
+                            "requests",
+                            &format!("Invalid request list: {}", e),
+                        )
+                    })?;
+
+                // Checked across the whole batch before any of it is sent,
+                // for the reason a single `fetch` checks before sending: a
+                // template this execution may not resolve must not reach a
+                // third party as itself.
+                if !may_read_secrets
+                    && described
+                        .iter()
+                        .any(|request| crate::http_client::names_a_secret(&request.options))
+                {
+                    return Err(capability_error(
+                        "fetchAll",
+                        &Capability::ReadSecrets,
+                        &user_ctx_all,
+                    ));
+                }
+
+                let requests = described
+                    .into_iter()
+                    .map(|request| crate::http_client::ParallelRequest {
+                        url: request.url,
+                        options: request.options,
+                    })
+                    .collect();
+
+                // Each answer is its own envelope. One refused URL is an
+                // error in its own slot rather than a failed batch: the
+                // caller asked for several answers and has a use for the
+                // ones that arrived.
+                let client = crate::http_client::HttpClient::new().map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "fetchAll",
+                        "client_init",
+                        &format!("Failed to create HTTP client: {}", e),
+                    )
+                })?;
+
+                let answers: Vec<serde_json::Value> = client
+                    .fetch_all(requests, Some(&script_uri_all), user_id_all.as_deref())
+                    .into_iter()
+                    .map(|answer| match answer {
+                        Ok(response) => serde_json::json!({
+                            "ok": true,
+                            "response": serde_json::to_value(&response).unwrap_or_default(),
+                        }),
+                        Err(e) => serde_json::json!({
+                            "ok": false,
+                            "error": e.to_string(),
+                        }),
+                    })
+                    .collect();
+
+                Ok(serde_json::Value::Array(answers).to_string())
+            },
+        )?;
+        global.set("__hostFetchAll", fetch_all)?;
+
+        // `__hostFetchStreamStart` — a response read a piece at a time.
+        //
+        // What a buffered `fetch` cannot do: consume a model's token stream,
+        // an events endpoint, a log tail on another service. The connection
+        // stays open between host calls, held against this execution and
+        // dropped with it.
+        let script_uri_stream = script_uri.to_string();
+        let user_ctx_stream = self.user_context.clone();
+        let stream_start = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  url: String,
+                  options_json: Option<String>|
+                  -> JsResult<String> {
+                if !user_ctx_stream.has_capability(&Capability::UseNetwork) {
+                    return Err(capability_error(
+                        "fetchStream",
+                        &Capability::UseNetwork,
+                        &user_ctx_stream,
+                    ));
+                }
+
+                let options: crate::http_client::FetchOptions = match options_json {
+                    Some(json) => serde_json::from_str(&json).map_err(|e| {
+                        rquickjs::Error::new_from_js_message(
+                            "fetchStream",
+                            "options",
+                            &format!("Invalid fetch options: {}", e),
+                        )
+                    })?,
+                    None => Default::default(),
+                };
+
+                if !may_read_secrets && crate::http_client::names_a_secret(&options) {
+                    return Err(capability_error(
+                        "fetchStream",
+                        &Capability::ReadSecrets,
+                        &user_ctx_stream,
+                    ));
+                }
+
+                let client = crate::http_client::HttpClient::new().map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "fetchStream",
+                        "client_init",
+                        &format!("Failed to create HTTP client: {}", e),
+                    )
+                })?;
+
+                let stream = client
+                    .fetch_streaming(
+                        url,
+                        options,
+                        Some(&script_uri_stream),
+                        user_id_stream.as_deref(),
+                    )
+                    .map_err(|e| {
+                        rquickjs::Error::new_from_js_message(
+                            "fetchStream",
+                            "request_failed",
+                            &format!("Fetch error: {}", e),
+                        )
+                    })?;
+
+                let opening = serde_json::json!({
+                    "status": stream.status,
+                    "ok": stream.ok,
+                    "headers": stream.headers,
+                });
+
+                let id = crate::http_client::register_stream(stream).map_err(|e| {
+                    rquickjs::Error::new_from_js_message("fetchStream", "too_many", &e.to_string())
+                })?;
+
+                let mut opening = opening;
+                opening["streamId"] = serde_json::json!(id.to_string());
+                Ok(opening.to_string())
+            },
+        )?;
+        global.set("__hostFetchStreamStart", stream_start)?;
+
+        // Blocks until the next piece arrives, which is the point: the
+        // caller has asked for the next token and has nothing to do until it
+        // has one. An ended stream answers `done` rather than an error, so a
+        // loop over it terminates without a `try`.
+        let stream_read = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, stream_id: String| -> JsResult<String> {
+                let Ok(id) = stream_id.parse::<u64>() else {
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "fetchStream",
+                        "read",
+                        "that is not a stream id",
+                    ));
+                };
+
+                match crate::http_client::read_stream(id) {
+                    Ok(Some(chunk)) => Ok(serde_json::json!({
+                        "done": false,
+                        "value": chunk,
+                    })
+                    .to_string()),
+                    Ok(None) => Ok(serde_json::json!({ "done": true }).to_string()),
+                    Err(e) => Err(rquickjs::Error::new_from_js_message(
+                        "fetchStream",
+                        "read",
+                        &e.to_string(),
+                    )),
+                }
+            },
+        )?;
+        global.set("__hostFetchStreamRead", stream_read)?;
+
+        let stream_close = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, stream_id: String| -> JsResult<bool> {
+                Ok(stream_id
+                    .parse::<u64>()
+                    .map(crate::http_client::close_stream)
+                    .unwrap_or(false))
+            },
+        )?;
+        global.set("__hostFetchStreamClose", stream_close)?;
 
         // Compiled once per process and cached under a stable key, the way the
         // test prelude is. Installing it here covers every context that gets

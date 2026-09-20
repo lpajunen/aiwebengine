@@ -80,7 +80,7 @@ fn shared_test_client() -> Result<&'static reqwest::blocking::Client, HttpError>
 
 /// HTTP client for making external requests. Cheap to construct: the
 /// underlying reqwest client (connection pool) is shared process-wide.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct HttpClient {
     default_timeout: Duration,
     max_response_size: usize,
@@ -231,6 +231,82 @@ impl HttpClient {
         }
 
         Ok(BytesResponse { status, body, ok })
+    }
+
+    /// Begin a request and hand back the response before its body has
+    /// arrived.
+    ///
+    /// [`HttpClient::fetch`] reads the whole body before it returns anything,
+    /// which is right for an API call and wrong for anything that streams: a
+    /// model's token stream, an events endpoint, a log tail. A script could
+    /// not consume one at all, so an agent's page updated once per turn and a
+    /// turn was as long as the whole model call.
+    ///
+    /// Everything before the body is shared with `fetch` — the same URL and
+    /// DNS validation, the same manually-followed and re-validated redirects,
+    /// the same secret substitution — because a streaming path that quietly
+    /// acquired weaker checks than the buffered one is the failure this
+    /// client is arranged to prevent.
+    ///
+    /// One thing differs on purpose: it asks for **no content coding**.
+    /// `fetch` offers gzip and undoes it after reading the whole body, which
+    /// a stream cannot do — undoing a coding incrementally is a decoder and a
+    /// buffer of its own, and the endpoints that stream are not compressed in
+    /// practice. Asking for identity is the honest way to say that rather
+    /// than discovering it as `invalid utf8` halfway through a response.
+    pub fn fetch_streaming(
+        &self,
+        url: String,
+        options: FetchOptions,
+        script_uri: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Result<StreamingResponse, HttpError> {
+        let method = Method::from_str(&options.method.to_uppercase())
+            .map_err(|_| HttpError::InvalidMethod(options.method.clone()))?;
+
+        let mut headers = self.process_headers(options.headers, &url, script_uri, user_id)?;
+        headers.insert(
+            reqwest::header::ACCEPT_ENCODING,
+            reqwest::header::HeaderValue::from_static("identity"),
+        );
+
+        let timeout = options
+            .timeout_ms
+            .map(Duration::from_millis)
+            .unwrap_or(self.default_timeout);
+
+        debug!("Streaming URL: {} with method: {}", url, options.method);
+
+        let response = self.send_request(method, &url, headers, options.body, timeout)?;
+
+        let status = response.status().as_u16();
+        let ok = response.status().is_success();
+        let mut header_map: HashMap<String, String> = HashMap::new();
+        for (key, value) in response.headers() {
+            if let Ok(value) = value.to_str() {
+                header_map.insert(key.to_string(), value.to_string());
+            }
+        }
+
+        // The cap a buffered fetch applies to the whole body applies here to
+        // everything read over the life of the stream. A response with no
+        // end is the case it exists for.
+        if let Some(content_length) = response.content_length()
+            && content_length > self.max_response_size as u64
+        {
+            return Err(HttpError::ResponseTooLarge(content_length));
+        }
+
+        Ok(StreamingResponse {
+            status,
+            ok,
+            headers: header_map,
+            body: response,
+            pending: Vec::new(),
+            read_total: 0,
+            max_total: self.max_response_size,
+            finished: false,
+        })
     }
 
     /// Send a request, validating every redirect hop, and hand back the
@@ -651,6 +727,303 @@ fn read_capped(reader: impl std::io::Read, max_bytes: usize) -> Result<Vec<u8>, 
 /// failure.
 const SECRET_TEMPLATE_OPEN: &str = "{{secret:";
 const SECRET_TEMPLATE_CLOSE: &str = "}}";
+
+thread_local! {
+    /// The response streams this execution has open.
+    ///
+    /// Thread-local because a script runs on one blocking thread and a
+    /// stream is read across several host calls: the socket has to outlive
+    /// the call that opened it and die with the execution. `HostCallBudget`
+    /// is what marks that span, so its `Drop` empties this.
+    ///
+    /// Keyed by a counter rather than by anything a script chooses. An id a
+    /// script could name would be one it could guess, and a stream is a
+    /// readable socket — though the registry being per thread already means
+    /// a guess reaches only the guesser's own execution.
+    static OPEN_STREAMS: std::cell::RefCell<HashMap<u64, StreamingResponse>> =
+        std::cell::RefCell::new(HashMap::new());
+    static NEXT_STREAM_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+}
+
+/// How many response streams one execution may hold open at once.
+///
+/// Each is a socket held for as long as the execution lasts. A script
+/// reading two model responses side by side is reasonable; one opening
+/// streams in a loop and abandoning them is what this bounds.
+pub const MAX_OPEN_STREAMS: usize = 8;
+
+/// Register an open stream and hand back the id that reads it.
+pub fn register_stream(stream: StreamingResponse) -> Result<u64, HttpError> {
+    OPEN_STREAMS.with(|streams| {
+        let mut streams = streams.borrow_mut();
+        if streams.len() >= MAX_OPEN_STREAMS {
+            return Err(HttpError::RequestFailed(format!(
+                "this execution already has {} response streams open",
+                MAX_OPEN_STREAMS
+            )));
+        }
+        let id = NEXT_STREAM_ID.with(|next| {
+            let id = next.get();
+            next.set(id.saturating_add(1));
+            id
+        });
+        streams.insert(id, stream);
+        Ok(id)
+    })
+}
+
+/// Read the next piece of an open stream.
+///
+/// The stream is taken out of the registry for the read and put back after,
+/// because reading needs `&mut` and a `RefCell` held across a blocking
+/// network read would refuse every other borrow for the length of it. Taking
+/// it out also makes a re-entrant read — a script reading the same stream
+/// from inside a callback — answer "no such stream" instead of panicking on
+/// the borrow.
+pub fn read_stream(id: u64) -> Result<Option<String>, HttpError> {
+    let Some(mut stream) = OPEN_STREAMS.with(|streams| streams.borrow_mut().remove(&id)) else {
+        return Err(HttpError::RequestFailed(
+            "that response stream is not open".to_string(),
+        ));
+    };
+
+    let answer = stream.read_chunk();
+
+    // Put it back unless it is spent: a stream that ended or failed has
+    // nothing more to give, and leaving it registered would hold its socket
+    // until the execution ended.
+    if matches!(answer, Ok(Some(_))) {
+        OPEN_STREAMS.with(|streams| {
+            streams.borrow_mut().insert(id, stream);
+        });
+    }
+
+    answer
+}
+
+/// Close one stream early, for a caller that has read enough.
+pub fn close_stream(id: u64) -> bool {
+    OPEN_STREAMS.with(|streams| streams.borrow_mut().remove(&id).is_some())
+}
+
+/// Drop every stream this thread holds. Called when an execution ends.
+pub fn close_all_streams() {
+    OPEN_STREAMS.with(|streams| streams.borrow_mut().clear());
+}
+
+/// How many requests of one `fetchAll` are in flight at once.
+///
+/// Each one holds a thread from tokio's blocking pool for its round trip, so
+/// this is a claim on a resource every other blocking host call shares. Eight
+/// is past what an agent fanning out over tool calls needs and far short of
+/// what would starve the pool; a larger batch is run in waves rather than
+/// refused, since the caller's intent is legible and the only question is how
+/// fast it happens.
+pub const MAX_PARALLEL_FETCHES: usize = 8;
+
+/// One request of a parallel batch.
+pub struct ParallelRequest {
+    pub url: String,
+    pub options: FetchOptions,
+}
+
+/// Run several requests at once, answering in the order they were given.
+///
+/// `fetch` is a synchronous host call, so `Promise.all` over three of them
+/// sequences them: each holds an execution slot and a blocking thread for its
+/// whole round trip, and the wall clock is the sum. For an agent wanting to
+/// run three tool calls at once that is not an ergonomic complaint, it is the
+/// difference between fitting inside the execution budget and not.
+///
+/// This is the same `fetch` per request — the same validation, the same
+/// redirects, the same secret substitution — run on the blocking pool instead
+/// of on the caller's thread. One thread is blocked on the batch rather than
+/// one per request in series, and the wall clock becomes the slowest rather
+/// than the sum.
+///
+/// **The budget travels with the work.** Every host call reads its deadline
+/// from a thread-local, and a request handed to another thread would find
+/// none and take its own full timeout — so a script with two seconds left
+/// could start a thirty-second fetch. The remaining budget is read on the
+/// calling thread and armed again on each worker.
+///
+/// A failure is per request: one refused URL answers as an error in its own
+/// slot rather than failing the batch, because the caller asked for several
+/// answers and has a use for the ones that arrived.
+impl HttpClient {
+    pub fn fetch_all(
+        &self,
+        requests: Vec<ParallelRequest>,
+        script_uri: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Vec<Result<FetchResponse, HttpError>> {
+        let budget = crate::database::host_budget_remaining();
+        let script_uri = script_uri.map(str::to_string);
+        let user_id = user_id.map(str::to_string);
+
+        let mut answers = Vec::with_capacity(requests.len());
+
+        for wave in requests.chunks(MAX_PARALLEL_FETCHES) {
+            let handles: Vec<_> = wave
+                .iter()
+                .map(|request| {
+                    let url = request.url.clone();
+                    let options = request.options.clone();
+                    let script_uri = script_uri.clone();
+                    let user_id = user_id.clone();
+                    let deadline = budget.map(|remaining| std::time::Instant::now() + remaining);
+                    // *This* client, copied, rather than a fresh default one.
+                    // A batch that quietly used different settings from the
+                    // `fetch` beside it — a different size ceiling, different
+                    // address rules — would be the kind of divergence this
+                    // module is arranged to prevent.
+                    let client = *self;
+
+                    std::thread::spawn(move || {
+                        // Armed here, on this thread, for the reason above.
+                        // The guard restores what was there when it ends.
+                        let _budget = deadline.map(crate::database::bound_host_calls);
+                        client.fetch(url, options, script_uri.as_deref(), user_id.as_deref())
+                    })
+                })
+                .collect();
+
+            for handle in handles {
+                answers.push(match handle.join() {
+                    Ok(answer) => answer,
+                    // A panicked worker is reported as a failed request
+                    // rather than propagated: the other requests in the wave
+                    // have answers, and losing them to one thread's failure
+                    // would be the sequential behaviour this replaces.
+                    Err(_) => Err(HttpError::RequestFailed(
+                        "the request thread stopped unexpectedly".to_string(),
+                    )),
+                });
+            }
+        }
+
+        answers
+    }
+}
+
+/// A response being read a piece at a time.
+///
+/// Holds the open connection, so it lives between host calls rather than
+/// inside one. What that costs is stated where it is registered
+/// ([`crate::security::secure_globals`]): a stream nobody finishes reading
+/// holds a socket until the execution that opened it ends.
+pub struct StreamingResponse {
+    pub status: u16,
+    pub ok: bool,
+    pub headers: HashMap<String, String>,
+    body: reqwest::blocking::Response,
+    /// Bytes read that did not yet form whole characters.
+    ///
+    /// A chunk boundary falls wherever the network put it, which is
+    /// regularly in the middle of a multi-byte character. Decoding each read
+    /// on its own would replace those halves with `U+FFFD` — silently, and
+    /// most often on exactly the text a model is generating. So the tail
+    /// that is not yet a character is kept here and prepended to the next
+    /// read.
+    pending: Vec<u8>,
+    read_total: usize,
+    max_total: usize,
+    finished: bool,
+}
+
+/// How much is read from the socket per `read_chunk`.
+///
+/// A ceiling rather than a target: a read returns whatever has arrived, so a
+/// token stream yields a token at a time and a fast bulk response yields
+/// this much. Small enough that a chunk crosses into JavaScript promptly,
+/// large enough that a megabyte does not cost a thousand host calls.
+const STREAM_READ_BYTES: usize = 16 * 1024;
+
+impl StreamingResponse {
+    /// The next piece of the body, or `None` once there is no more.
+    ///
+    /// Blocks until something arrives, which is the point: the caller is a
+    /// script that has asked for the next token and has nothing else to do
+    /// until it has one.
+    pub fn read_chunk(&mut self) -> Result<Option<String>, HttpError> {
+        use std::io::Read;
+
+        if self.finished {
+            return Ok(None);
+        }
+
+        loop {
+            let mut buffer = [0u8; STREAM_READ_BYTES];
+            let read = self
+                .body
+                .read(&mut buffer)
+                .map_err(|e| HttpError::ResponseReadFailed(e.to_string()))?;
+
+            if read == 0 {
+                self.finished = true;
+                // Whatever is left cannot become a character now, so it is a
+                // truncated response rather than a boundary to wait on.
+                if self.pending.is_empty() {
+                    return Ok(None);
+                }
+                let tail = String::from_utf8_lossy(&self.pending).into_owned();
+                self.pending.clear();
+                return Ok(Some(tail));
+            }
+
+            self.read_total = self.read_total.saturating_add(read);
+            if self.read_total > self.max_total {
+                self.finished = true;
+                return Err(HttpError::ResponseTooLarge(self.read_total as u64));
+            }
+
+            self.pending.extend_from_slice(&buffer[..read]);
+
+            match take_valid_utf8(&mut self.pending) {
+                // Everything read so far is the tail of a character. Read
+                // again rather than answering with nothing, which a caller
+                // would have to tell apart from the end of the stream.
+                text if text.is_empty() => continue,
+                text => return Ok(Some(text)),
+            }
+        }
+    }
+}
+
+/// Split `buffer` at the end of its last whole character, returning the text
+/// and leaving the remainder behind.
+///
+/// The remainder is only ever the few bytes of a character split across two
+/// reads. A genuinely invalid sequence is not held back forever: it fails to
+/// decode, is not a valid prefix either, and is replaced where it stands.
+fn take_valid_utf8(buffer: &mut Vec<u8>) -> String {
+    match std::str::from_utf8(buffer) {
+        Ok(text) => {
+            let text = text.to_string();
+            buffer.clear();
+            text
+        }
+        Err(error) => {
+            let valid = error.valid_up_to();
+            match error.error_len() {
+                // An incomplete character at the end: keep it for the next
+                // read, which is what this function exists for.
+                None => {
+                    let text = String::from_utf8_lossy(&buffer[..valid]).into_owned();
+                    buffer.drain(..valid);
+                    text
+                }
+                // Genuinely invalid bytes. Waiting cannot fix them, so take
+                // everything and let the lossy decode mark the damage.
+                Some(_) => {
+                    let text = String::from_utf8_lossy(buffer).into_owned();
+                    buffer.clear();
+                    text
+                }
+            }
+        }
+    }
+}
 
 /// Whether this request would read a secret if it were sent.
 ///

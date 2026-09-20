@@ -82,6 +82,18 @@ pub struct HostCallBudget {
 impl Drop for HostCallBudget {
     fn drop(&mut self) {
         HOST_CALL_DEADLINE.with(|deadline| deadline.set(self.previous));
+        // An execution's open response streams end with it. They hold a
+        // socket each and live on this thread between host calls, and a
+        // blocking thread is pooled — so without this the next execution to
+        // land here would inherit them, and a script that opened a stream
+        // and never finished reading it would leak one per run.
+        //
+        // Only at the outermost guard: a nested execution — one script
+        // dispatching to the next — must not close the streams of the one
+        // that called it.
+        if self.previous.is_none() {
+            crate::http_client::close_all_streams();
+        }
     }
 }
 
@@ -101,6 +113,19 @@ fn remaining_host_budget() -> Option<Duration> {
         cell.get()
             .map(|deadline| deadline.saturating_duration_since(Instant::now()))
     })
+}
+
+/// What is left of the current execution's budget, for a caller that has to
+/// carry it somewhere else.
+///
+/// Every host call reads the deadline from *this thread*, which is right
+/// while the work happens on the thread the script is running on. Work that
+/// is handed to another thread — several fetches in flight at once — leaves
+/// that thread-local behind, and a request that found no budget would get
+/// its own full timeout rather than what the script has left. So the caller
+/// reads it here and arms it again over there with [`bound_host_calls`].
+pub fn host_budget_remaining() -> Option<Duration> {
+    remaining_host_budget()
 }
 
 /// `limit`, shortened to whatever remains of the execution budget.

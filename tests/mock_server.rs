@@ -65,7 +65,18 @@ impl MockServer {
             .route(
                 "/compressed/{coding}",
                 axum::routing::get(handle_compressed),
-            );
+            )
+            // Answers after `ms` milliseconds. What makes a parallel fetch
+            // measurable: three of these together take one delay, and three
+            // in series take three.
+            .route("/slow/{ms}", axum::routing::any(handle_slow))
+            // A chunked response that arrives in pieces over time, which is
+            // the shape a model's token stream has.
+            .route("/stream/{pieces}", axum::routing::any(handle_stream))
+            // A chunked response whose pieces split a multi-byte character
+            // down the middle — the boundary a naive decoder turns into
+            // U+FFFD.
+            .route("/stream-split", axum::routing::get(handle_stream_split));
 
         // Bind to random port
         let addr = SocketAddr::from(([127, 0, 0, 1], 0));
@@ -319,6 +330,56 @@ async fn handle_redirect_loop() -> Response {
         .header(header::LOCATION, "/redirect-loop")
         .body(Body::empty())
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// Answers after a delay, so a test can tell parallel from sequential.
+async fn handle_slow(Path(ms): Path<u64>) -> impl IntoResponse {
+    tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;
+    Json(json!({ "sleptMs": ms }))
+}
+
+/// A chunked body delivered in pieces with a gap between them.
+///
+/// The gap is what makes it a stream rather than a buffered body that
+/// happens to be sent in parts: a reader that only returns when the whole
+/// response has arrived cannot tell the difference without one.
+async fn handle_stream(Path(pieces): Path<usize>) -> impl IntoResponse {
+    let body = async_stream::stream! {
+        for index in 0..pieces {
+            tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+            yield Ok::<_, std::io::Error>(axum::body::Bytes::from(format!("piece-{} ", index)));
+        }
+    };
+
+    axum::response::Response::builder()
+        .status(200)
+        .header("content-type", "text/plain; charset=utf-8")
+        .body(axum::body::Body::from_stream(body))
+        .expect("a streaming response")
+}
+
+/// A body whose chunk boundaries fall inside multi-byte characters.
+///
+/// Each piece is one byte, so every character above ASCII is split across
+/// reads. Decoding a read on its own would replace each half with U+FFFD,
+/// silently and most often on exactly the text a model is generating.
+async fn handle_stream_split() -> impl IntoResponse {
+    // Three characters of three bytes each, plus one four-byte emoji.
+    let text = "日本語🙂";
+    let bytes: Vec<u8> = text.bytes().collect();
+
+    let body = async_stream::stream! {
+        for byte in bytes {
+            tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
+            yield Ok::<_, std::io::Error>(axum::body::Bytes::from(vec![byte]));
+        }
+    };
+
+    axum::response::Response::builder()
+        .status(200)
+        .header("content-type", "text/plain; charset=utf-8")
+        .body(axum::body::Body::from_stream(body))
+        .expect("a streaming response")
 }
 
 #[cfg(test)]

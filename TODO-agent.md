@@ -120,6 +120,28 @@ turned out to depend on neither, and on a decision rather than a mechanism.
   batch, and two workers at the batch boundary. Each has a test that fails
   when its piece is removed. See `docs/SCRIPT_TASKS.md`.
 
+- **`fetch` can run several at once, and can be read as it arrives.**
+  `fetchAll` and `fetchStream` (`http_client.rs`). These were listed apart
+  and are one change: both came from `fetch` being a single blocking host
+  call that did the whole request and returned a string.
+
+  `fetchAll` runs a batch on worker threads — the same `fetch` per request,
+  so validation and secret substitution cannot diverge — with positional
+  answers and per-request failures. The execution budget is read on the
+  calling thread and armed again on each worker, or a script with two
+  seconds left could have started a thirty-second request.
+
+  `fetchStream` hands back status and headers as they arrive and the body in
+  pieces, which is what makes a model's token stream consumable; bridged to
+  `sendStreamMessage` it is the silent minute becoming visible progress.
+  Bytes that do not yet form whole characters are kept between reads, since
+  a chunk boundary regularly splits one and decoding each read alone would
+  corrupt exactly the text a model generates.
+
+  It is **not** an event loop, and the distinction matters for what is left
+  below. A host call still blocks the script; what changed is how much one
+  blocked call can be waiting on. See `docs/FETCH_CONCURRENCY.md`.
+
 What follows is what the agent hit next.
 
 ## The blockers, in order
@@ -168,20 +190,10 @@ under a delegation — a queued personal task re-resolves the same grant — so 
 that constraint ever bites, the answer is a third scope rather than moving
 `enqueue_tasks` into the base.
 
-### 4. No streaming, in either direction
+### 4. ~~No streaming, in either direction~~ — done
 
-`fetch` buffers to `MAX_RESPONSE_SIZE` (`http_client.rs:29`, 10 MB) and hands
-back a string. A script cannot read an SSE or chunked response, so it cannot
-consume a model's token stream — an agent page updates per turn, and a turn is
-as long as the whole model call.
-
-The outbound half is already built: `stream_manager` and
-`routeRegistry.sendStreamMessage` will push to a person's open page today. What
-is missing is precisely a `fetch` that hands back a reader, and a bridge
-between the two, which would turn a silent minute into visible progress.
-
-The same limit applies to anything else that streams — an events API, a log
-tail on another service.
+See **What got built** above, and item 6 below: these were one piece of work
+rather than two.
 
 ### 5. ~~The queue has no lane key~~ — done
 
@@ -198,14 +210,22 @@ tasks, so a long read-only run is not expressible. That is item 3's cost
 rather than this one's, but lanes are where it shows up: the natural way to
 do long per-person work is a chain in one lane.
 
-### 6. Parallelism inside a turn
+### 6. ~~Parallelism inside a turn~~ — partly
 
-`fetch` is a synchronous host call. `Promise.all` over three of them sequences
-them, and each holds an execution slot, a blocking thread and possibly a
-database connection for its whole round trip. An agent that wants to run three
-tool calls at once cannot. (This is TODO.md's "async support" item seen from the
-agent side; noting it here because for an agent it is not ergonomics, it is
-wall-clock against a hard ceiling.)
+What this item asked for was three tool calls at once, and that is what
+`fetchAll` does.
+
+What it did **not** buy is general async. A host call still blocks the
+script, so a fetch cannot overlap with the script's own computation, a
+`setTimeout` still does not exist, and `await` is still sequencing sugar over
+work that has already finished. What changed is how much work one blocked
+call can be waiting on.
+
+The rest remains TODO.md's "async support" item, and it is a different and
+much larger change — an event loop under QuickJS with every host call
+rewritten to yield rather than block. Worth being plain that this did not do
+it: an agent fanning out over network calls is served, and one wanting to
+interleave computation with them is not.
 
 ### 7. MCP is POST-only
 

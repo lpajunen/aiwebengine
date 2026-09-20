@@ -1771,6 +1771,109 @@ declare function fetch(
   options?: FetchOptions,
 ): FetchResponse & PromiseLike<FetchResponse>;
 
+/** One request of a `fetchAll` batch. A bare string is a GET of that URL. */
+type ParallelFetchRequest = string | { url: string; options?: FetchOptions };
+
+/**
+ * Several requests at once.
+ *
+ * `Promise.all([fetch(a), fetch(b)])` gives the right answers and runs them
+ * one after another — each `fetch` has already finished by the time it
+ * returns, so the wall clock is the sum. That is fine for two quick calls and
+ * is the difference between fitting inside the execution budget and not for
+ * an agent running three tool calls.
+ *
+ * These run together: one thread waits on the batch rather than one per
+ * request in series, and the wall clock becomes the slowest rather than the
+ * sum. Each request gets the same validation, redirects and secret
+ * substitution a single `fetch` gets.
+ *
+ * Answers are **positional** — the nth answer belongs to the nth request,
+ * whatever order they arrived in.
+ *
+ * A failure is per request. A refused URL answers with `ok: false` and throws
+ * from *that* response when you read its body, so the answers that arrived
+ * are still usable. Check `ok` first, or let the throw happen where you touch
+ * the one that failed.
+ *
+ * More requests than the engine runs at once are run in waves rather than
+ * refused.
+ *
+ * @example
+ * const [weather, news, mail] = fetchAll([
+ *   "https://api.example.com/weather",
+ *   { url: "https://api.example.com/news", options: { method: "POST", body } },
+ *   "https://api.example.com/mail",
+ * ]);
+ * if (weather.ok) { use(weather.json()); }
+ */
+declare function fetchAll(requests: ParallelFetchRequest[]): FetchResponse[];
+
+/** What a `fetchStream` read answers with. */
+interface StreamChunk {
+  done: boolean;
+  /** Absent once `done`. */
+  value?: string;
+}
+
+/**
+ * A response read a piece at a time.
+ *
+ * Iterable, so the ordinary shape is a `for...of`. The connection stays open
+ * between reads and closes when the stream ends, when `close()` is called, or
+ * when the execution does.
+ */
+interface FetchStream {
+  status: number;
+  ok: boolean;
+  headers: Record<string, string>;
+  /** The next piece, blocking until one arrives. */
+  read(): StreamChunk;
+  /** Everything left, joined — for a caller that wanted the headers early. */
+  text(): string;
+  /** Give the socket back before the end. */
+  close(): boolean;
+  [Symbol.iterator](): Iterator<string>;
+}
+
+/**
+ * Begin a request and read its body as it arrives.
+ *
+ * `fetch` reads the whole body before it returns anything, so a script cannot
+ * consume a model's token stream: an agent's page updates once per turn, and
+ * a turn is as long as the whole model call. This hands back the status and
+ * headers as soon as they arrive and the body in pieces as they do — which,
+ * bridged to `routeRegistry.sendStreamMessage`, turns a silent minute into
+ * visible progress.
+ *
+ * Three things to know:
+ *
+ * - **A chunk is not a line and not an SSE event.** Boundaries fall wherever
+ *   the network put them. Reassembling whatever you are reading is the
+ *   caller's job, because only the caller knows what it is.
+ * - **No content coding is requested.** `fetch` offers gzip and undoes it
+ *   after reading the whole body, which a stream cannot do. Endpoints that
+ *   stream are not compressed in practice.
+ * - **Close what you stop reading.** An abandoned stream holds a socket until
+ *   the execution ends, and an execution may hold only a few at once.
+ *
+ * Multi-byte characters split across chunks are reassembled for you.
+ *
+ * @example
+ * const stream = fetchStream("https://api.example.com/v1/messages", {
+ *   method: "POST",
+ *   headers: { "Authorization": "Bearer {{secret:API_TOKEN}}" },
+ *   body: JSON.stringify({ stream: true, messages }),
+ * });
+ *
+ * let whole = "";
+ * for (const chunk of stream) {
+ *   whole += chunk;
+ *   routeRegistry.sendStreamMessage("answer", chunk);
+ * }
+ */
+declare function fetchStream(url: string, options?: FetchOptions): FetchStream;
+
 // ============================================================================
 // Database API (Script-Scoped Table Management)
 // ============================================================================
