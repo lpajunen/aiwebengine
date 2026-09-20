@@ -39,6 +39,30 @@ pub struct EvalRequest {
     pub timeout_ms: Option<u64>,
     /// Roll back the database writes the snippet makes. On by default.
     pub rollback: bool,
+    /// What the snippet is handed as `context.args`.
+    pub input: Option<Value>,
+    /// Who it runs as, as JavaScript sees it. `None` for the anonymous
+    /// context `/engine/eval` builds.
+    pub auth_context: Option<crate::auth::JsAuthContext>,
+    /// Which of the script's files to build its program from.
+    pub view: crate::source_view::SourceView,
+}
+
+impl EvalRequest {
+    /// An evaluation of `source` against `script_uri` as `user_context`, with
+    /// every optional part left at what `/engine/eval` asks for.
+    pub fn new(script_uri: String, source: String, user_context: UserContext) -> Self {
+        Self {
+            script_uri,
+            source,
+            user_context,
+            timeout_ms: None,
+            rollback: true,
+            input: None,
+            auth_context: None,
+            view: crate::source_view::SourceView::Live,
+        }
+    }
 }
 
 /// Everything one evaluation produced, plus the script it ran against.
@@ -83,6 +107,9 @@ pub fn eval_blocking(request: EvalRequest) -> EvalReport {
         user_context: request.user_context,
         timeout_ms: budget,
         rollback: request.rollback,
+        input: request.input,
+        auth_context: request.auth_context,
+        view: request.view,
     });
 
     EvalReport {

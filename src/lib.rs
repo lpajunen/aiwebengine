@@ -53,6 +53,7 @@ pub mod repository;
 pub mod revisions;
 pub mod route_index;
 pub mod safe_helpers;
+pub mod sandbox;
 pub mod scheduler;
 pub mod script_check;
 pub mod script_eval;

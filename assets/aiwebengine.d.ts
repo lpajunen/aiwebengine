@@ -2475,6 +2475,155 @@ interface Convert {
 
 // ============================================================================
 // Global Objects
+/**
+ * A capability, named the way `sandbox` names it.
+ *
+ * The list is closed: an unrecognised name is refused rather than ignored,
+ * because silently dropping one would hand code a context the script believed
+ * it had checked.
+ */
+type Capability =
+  | "read_scripts"
+  | "write_scripts"
+  | "delete_scripts"
+  | "read_assets"
+  | "write_assets"
+  | "delete_assets"
+  | "delete_logs"
+  | "view_logs"
+  | "manage_streams"
+  | "manage_graphql"
+  | "read_script_data"
+  | "write_script_data"
+  | "manage_script_database"
+  | "administer_engine"
+  | "use_network"
+  | "read_secrets"
+  | "write_secrets"
+  | "read_storage"
+  | "write_storage"
+  | "enqueue_tasks"
+  | "send_messages";
+
+/** One line the sub-execution wrote through `console`. */
+interface SandboxConsoleLine {
+  level: string;
+  message: string;
+  timestampMs: number;
+}
+
+/** What one narrowed sub-execution produced. */
+interface SandboxResult {
+  /**
+   * The value the source evaluated to, run through `JSON.stringify` and
+   * re-parsed. Absent when it has no JSON form — `undefined`, a function, a
+   * symbol — which `valueType` tells apart from a value that really was null.
+   */
+  value?: unknown;
+  /** `undefined`, `null`, `boolean`, `number`, `string`, `symbol`, `function`, `array`, `object`. */
+  valueType?: string;
+  /**
+   * What it printed, whether or not it succeeded. Usually the most useful
+   * part of a turn that failed.
+   */
+  console: SandboxConsoleLine[];
+  /** Lines dropped after the capture limit, so a truncated capture is not mistaken for the whole. */
+  consoleDropped: number;
+  /** False when the source threw or ran out of budget. */
+  ok: boolean;
+  /**
+   * Why it failed. Returned rather than thrown: code the model wrote that did
+   * not work is the *result* of the turn, not a failure of the loop that ran
+   * it, and an agent's next move is to feed this back rather than to unwind.
+   */
+  error?: string;
+  durationMs: number;
+  rolledBack: boolean;
+}
+
+interface SandboxRunOptions {
+  /**
+   * What the sub-execution may do. Must be a subset of what the calling turn
+   * holds — asking for more throws rather than quietly narrowing, since a
+   * script asking to keep something it never had has a bug.
+   *
+   * Omitted means *none*, not "everything I hold". A typo in the option name
+   * must not hand model-authored code the whole of the caller's authority.
+   */
+  capabilities?: Capability[];
+  /** Handed to the source as `context.args`. Must be JSON-serializable. */
+  input?: unknown;
+  /** Budget in milliseconds, clamped to the engine's own ceiling. */
+  timeoutMs?: number;
+  /**
+   * Roll the sub-execution's database writes back. Off by default, unlike
+   * `/engine/eval`: a turn that may not write holds no write capability,
+   * which is stronger than a transaction that undoes what it did.
+   */
+  rollback?: boolean;
+}
+
+/**
+ * Running part of this script with fewer capabilities than it holds.
+ *
+ * A `UserContext` otherwise only ever flows downward from the caller, so the
+ * smallest thing a script could run something with was everything it had.
+ * This is the way down: a second execution of this same script, in a context
+ * holding a chosen subset, with JSON the only thing that crosses between them.
+ *
+ * Two shapes it is for:
+ *
+ * **Code as the action** — the model writes JavaScript instead of emitting a
+ * tool call. Composition comes free and the tool list stops growing.
+ *
+ * **A plan mode that is enforced** — a planning turn runs holding the reads
+ * and none of the writes. The checks are underneath the JavaScript, so no
+ * arrangement of the transcript reaches past them.
+ *
+ * It costs a fresh runtime and one re-evaluation of the script's program per
+ * call: right for an agent turn, wrong for a loop.
+ *
+ * @example
+ * // A plan turn: everything readable, nothing writable.
+ * const plan = sandbox.run(modelWroteThis, {
+ *   capabilities: ["read_script_data", "read_storage", "read_assets"],
+ *   input: { question },
+ * });
+ * if (plan.error) {
+ *   // Feed the failure back to the model rather than throwing.
+ * }
+ *
+ * @example
+ * // Narrowing from whatever this turn happens to hold, rather than from a
+ * // hard-coded list that drifts as the vocabulary grows.
+ * const readOnly = sandbox.held().filter(c => c.startsWith("read_"));
+ * const out = sandbox.run(source, { capabilities: readOnly });
+ */
+interface Sandbox {
+  /**
+   * Evaluate `source` in this script's sandbox holding only what `options`
+   * names.
+   *
+   * The source runs after the script's own program and in the same realm as
+   * it, so it sees what the script defined — its helpers, and the bindings
+   * its entrypoint imported. It sees nothing of the calling turn: the two are
+   * separate contexts, and a value passed by reference would be a capability
+   * passed by reference.
+   *
+   * @throws TypeError if a capability name is not one, RangeError if
+   *   sub-executions are already nested as deep as they go, and a
+   *   SecurityError if the caller does not hold what it asked to keep. What
+   *   the *source* did comes back in the result instead.
+   */
+  run(source: string, options?: SandboxRunOptions): SandboxResult;
+
+  /** Every capability name the engine has. */
+  capabilities(): Capability[];
+
+  /** What the calling turn holds, sorted. The set a narrowing subtracts from. */
+  held(): Capability[];
+}
+
 // ============================================================================
 
 declare var routeRegistry: RouteRegistry;
@@ -2490,6 +2639,7 @@ declare var mcpRegistry: McpRegistry;
 declare var database: Database;
 declare var console: Console;
 declare var dispatcher: MessageDispatcher;
+declare var sandbox: Sandbox;
 declare var convert: Convert;
 
 // ============================================================================

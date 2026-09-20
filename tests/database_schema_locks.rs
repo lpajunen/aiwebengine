@@ -43,11 +43,13 @@ async fn eval(uri: &str, rollback: bool, source: &str) -> EvalReport {
     repository::upsert_script(uri, "function init() {}").expect("script should be stored");
 
     let request = EvalRequest {
-        script_uri: uri.to_string(),
-        source: source.to_string(),
-        user_context: UserContext::admin("schema-locks".to_string()),
         timeout_ms: Some(10_000),
         rollback,
+        ..EvalRequest::new(
+            uri.to_string(),
+            source.to_string(),
+            UserContext::admin("schema-locks".to_string()),
+        )
     };
 
     tokio::time::timeout(

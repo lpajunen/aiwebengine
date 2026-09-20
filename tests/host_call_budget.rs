@@ -44,11 +44,13 @@ async fn setup_pool() -> sqlx::PgPool {
 
 async fn eval(source: &str, timeout_ms: u64) -> EvalReport {
     let request = EvalRequest {
-        script_uri: SCRIPT_URI.to_string(),
-        source: source.to_string(),
-        user_context: UserContext::admin("host-budget".to_string()),
         timeout_ms: Some(timeout_ms),
         rollback: false,
+        ..EvalRequest::new(
+            SCRIPT_URI.to_string(),
+            source.to_string(),
+            UserContext::admin("host-budget".to_string()),
+        )
     };
 
     tokio::task::spawn_blocking(move || eval_blocking(request))

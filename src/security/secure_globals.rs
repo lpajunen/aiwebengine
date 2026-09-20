@@ -22,6 +22,9 @@ const CONSOLE_PRELUDE: &str = include_str!("../../assets/console_prelude.js");
 const STORAGE_PRELUDE: &str = include_str!("../../assets/storage_prelude.js");
 const TASKS_PRELUDE: &str = include_str!("../../assets/tasks_prelude.js");
 
+/// Builds `sandbox` over the host call that runs a narrowed sub-execution.
+const SANDBOX_PRELUDE: &str = include_str!("../../assets/sandbox_prelude.js");
+
 /// What `secretStorage`'s mutating methods answer in a delegated execution.
 ///
 /// Phrased as the other "Error: ..." strings on that object are, since the
@@ -37,7 +40,7 @@ const REQUEST_PRELUDE: &str = include_str!("../../assets/request_prelude.js");
 use crate::repository;
 use crate::scheduler;
 use crate::security::{
-    SecureOperations, SecurityAuditor, SecurityEventType, SecuritySeverity, UserContext,
+    Capability, SecureOperations, SecurityAuditor, SecurityEventType, SecuritySeverity, UserContext,
 };
 
 /// A `{"error": "..."}` answer, built by the serializer rather than by string
@@ -587,6 +590,44 @@ impl GlobalSecurityConfig {
     }
 }
 
+/// Why an API refused, when what it refused on was a capability.
+///
+/// Names the capability rather than saying "insufficient permissions",
+/// because the caller of a narrowed context is usually the script itself and
+/// the missing name is the whole of what it needs to know. And it says
+/// *narrowed* when the context was attenuated: an administrator's script
+/// being told it may not write a row is otherwise the most confusing message
+/// the engine produces, and the reason is that it asked for this.
+fn capability_refusal(api: &str, capability: &Capability, user: &UserContext) -> String {
+    if user.attenuated {
+        format!(
+            "{}: refused - this execution was narrowed and does not hold '{}'",
+            api,
+            capability.as_str()
+        )
+    } else {
+        format!(
+            "{}: refused - this caller does not hold '{}'",
+            api,
+            capability.as_str()
+        )
+    }
+}
+
+/// [`capability_refusal`] as a thrown JavaScript error, for the APIs that
+/// throw rather than returning an envelope.
+fn capability_error(
+    api: &'static str,
+    capability: &Capability,
+    user: &UserContext,
+) -> rquickjs::Error {
+    rquickjs::Error::new_from_js_message(
+        api,
+        "capability",
+        &capability_refusal(api, capability, user),
+    )
+}
+
 /// Reply for a registration call made outside the registration phase.
 ///
 /// Registration APIs stay callable everywhere so that top-level script code
@@ -661,6 +702,7 @@ impl SecureGlobalContext {
         // After the dispatcher: the queue's prelude installs `scriptTasks` and
         // also puts `post` on the dispatcher, which has to be there already.
         self.setup_task_functions(ctx, script_uri)?;
+        self.setup_sandbox_functions(ctx, script_uri)?;
 
         // Setup JSX factory functions for server-side HTML generation
         self.setup_jsx_functions(ctx)?;
@@ -684,6 +726,17 @@ impl SecureGlobalContext {
         let write_log = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, message: String, level: String| -> JsResult<String> {
+                // Capture before the capability check, not after it. The two
+                // are different channels: `ViewLogs` gates writing to the
+                // script's stored log, while capture hands the output back to
+                // whoever asked for this run — an `/engine/eval` caller, or a
+                // script that started a narrowed sub-execution. A planning
+                // turn holding no `view_logs` should still be able to show its
+                // caller what it printed; losing the output as well as the log
+                // line would make a narrowed turn silent for no reason anybody
+                // chose.
+                config_write.capture_console(&level, &message);
+
                 // Check capability
                 if let Err(e) =
                     user_ctx_write.require_capability(&crate::security::Capability::ViewLogs)
@@ -741,11 +794,6 @@ impl SecureGlobalContext {
                     message_len = message.len(),
                     "Secure writeLog called"
                 );
-
-                // Capture before the repository write, and independently of it:
-                // the write joins the caller's transaction and disappears with
-                // it on a rollback, which is the case capture exists for.
-                config_write.capture_console(&level, &message);
 
                 // Call actual repository function
                 repository::insert_log_message_in_context(
@@ -1068,9 +1116,16 @@ impl SecureGlobalContext {
         // what the `secrets` scope really gates is `fetch`'s substitution. This
         // is the smaller half of the same question: whether a script acting for
         // somebody who did not grant it may learn which keys they hold.
+        //
+        // Two separate narrowings meet here and both have to hold: what the
+        // absent person authorised, and what this execution holds. They answer
+        // different questions — "may this script act for them at all" and "was
+        // this turn given the credentials" — and an execution that is both
+        // delegated and attenuated is subject to each.
         let secrets_allowed = self
             .config
-            .allows_delegated(crate::delegation::Scope::Secrets);
+            .allows_delegated(crate::delegation::Scope::Secrets)
+            && self.user_context.has_capability(&Capability::ReadSecrets);
 
         // Managing a credential is refused outright in a delegated execution,
         // whatever was granted.
@@ -1081,7 +1136,26 @@ impl SecureGlobalContext {
         // would be doing something nobody was asked about — so this is a
         // decision about the surface rather than a scope, and there is no
         // checkbox that turns it on.
-        let may_manage_secrets = !self.config.is_delegated();
+        let may_manage_secrets = !self.config.is_delegated()
+            && self.user_context.has_capability(&Capability::WriteSecrets);
+
+        // Why it was refused, when it is. The two reasons are different enough
+        // that one message for both would mislead: a delegated execution is
+        // refused whatever it asks for, an attenuated one is refused because
+        // it asked to be.
+        let manage_refusal = if self.config.is_delegated() {
+            DELEGATED_SECRET_MANAGEMENT_REFUSAL.to_string()
+        } else {
+            format!(
+                "Error: {}",
+                capability_refusal(
+                    "secretStorage",
+                    &Capability::WriteSecrets,
+                    &self.user_context
+                )
+            )
+        };
+        let manage_refusal_set = manage_refusal.clone();
 
         let secret_storage_obj = rquickjs::Object::new(ctx.clone())?;
 
@@ -1112,7 +1186,7 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |ctx: rquickjs::Ctx<'_>, key: String, value: String| -> JsResult<String> {
                 if !may_manage_secrets {
-                    return Ok(DELEGATED_SECRET_MANAGEMENT_REFUSAL.to_string());
+                    return Ok(manage_refusal_set.clone());
                 }
                 let globals = ctx.globals();
                 let user_id = match get_auth_user_id(&globals) {
@@ -1173,7 +1247,7 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
                 if !may_manage_secrets {
-                    return Ok(DELEGATED_SECRET_MANAGEMENT_REFUSAL.to_string());
+                    return Ok(manage_refusal.clone());
                 }
                 let globals = ctx.globals();
                 let user_id = match get_auth_user_id(&globals) {
@@ -2958,6 +3032,18 @@ impl SecureGlobalContext {
             None
         };
 
+        // Checked inside the call rather than by withholding `__hostFetch`:
+        // the prelude defines `fetch` on top of it and a missing global would
+        // be a `ReferenceError` naming an engine-private name, where a script
+        // that is not allowed out wants to hear that and catch it.
+        let user_ctx_fetch = self.user_context.clone();
+        // Whether a `{{secret:...}}` template in this request may be resolved.
+        // Withheld separately from the network itself, because "may call an
+        // API" and "may use the key" are different grants: model-authored code
+        // that may fetch a public endpoint should not thereby reach the
+        // account's credentials.
+        let may_read_secrets = self.user_context.has_capability(&Capability::ReadSecrets);
+
         // Create the fetch function (synchronous version)
         let fetch_fn = Function::new(
             ctx.clone(),
@@ -2965,6 +3051,14 @@ impl SecureGlobalContext {
                   url: String,
                   options_json: Option<String>|
                   -> JsResult<String> {
+                if !user_ctx_fetch.has_capability(&Capability::UseNetwork) {
+                    return Err(capability_error(
+                        "fetch",
+                        &Capability::UseNetwork,
+                        &user_ctx_fetch,
+                    ));
+                }
+
                 // Parse options from JSON string
                 let options: crate::http_client::FetchOptions = if let Some(json_str) = options_json
                 {
@@ -2978,6 +3072,23 @@ impl SecureGlobalContext {
                 } else {
                     Default::default()
                 };
+
+                // A template this execution may not resolve is refused, not
+                // sent as itself: a request carrying the literal
+                // `{{secret:...}}` in an `Authorization` header is a
+                // credential-shaped string going to a third party, and the
+                // 401 that comes back explains nothing. This differs from a
+                // missing delegation scope on purpose — there the person is
+                // absent and falling back to the script's own key is the
+                // weaker position, here the caller asked to hold less and
+                // should hear that it does.
+                if !may_read_secrets && crate::http_client::names_a_secret(&options) {
+                    return Err(capability_error(
+                        "fetch",
+                        &Capability::ReadSecrets,
+                        &user_ctx_fetch,
+                    ));
+                }
 
                 tracing::debug!("Fetching URL: {} from script: {}", url, script_uri_owned);
 
@@ -3562,14 +3673,12 @@ impl SecureGlobalContext {
                     script_uri_query, table_name
                 );
 
-                if user_ctx_query
-                    .require_capability(&crate::security::Capability::UseScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database operations\"}"
-                            .to_string(),
-                    );
+                if !user_ctx_query.has_capability(&Capability::ReadScriptData) {
+                    return Ok(error_answer(capability_refusal(
+                        "database",
+                        &Capability::ReadScriptData,
+                        &user_ctx_query,
+                    )));
                 }
 
                 let filters_arg: Option<String> = match optional_arg(filters, "filters") {
@@ -3643,14 +3752,12 @@ impl SecureGlobalContext {
                     script_uri_insert, table_name
                 );
 
-                if user_ctx_insert
-                    .require_capability(&crate::security::Capability::UseScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database operations\"}"
-                            .to_string(),
-                    );
+                if !user_ctx_insert.has_capability(&Capability::WriteScriptData) {
+                    return Ok(error_answer(capability_refusal(
+                        "database",
+                        &Capability::WriteScriptData,
+                        &user_ctx_insert,
+                    )));
                 }
 
                 // Parse data from JSON string
@@ -3688,14 +3795,12 @@ impl SecureGlobalContext {
                     script_uri_update, table_name, id
                 );
 
-                if user_ctx_update
-                    .require_capability(&crate::security::Capability::UseScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database operations\"}"
-                            .to_string(),
-                    );
+                if !user_ctx_update.has_capability(&Capability::WriteScriptData) {
+                    return Ok(error_answer(capability_refusal(
+                        "database",
+                        &Capability::WriteScriptData,
+                        &user_ctx_update,
+                    )));
                 }
 
                 // Parse data from JSON string
@@ -3730,14 +3835,12 @@ impl SecureGlobalContext {
                     script_uri_delete, table_name, id
                 );
 
-                if user_ctx_delete
-                    .require_capability(&crate::security::Capability::UseScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database operations\"}"
-                            .to_string(),
-                    );
+                if !user_ctx_delete.has_capability(&Capability::WriteScriptData) {
+                    return Ok(error_answer(capability_refusal(
+                        "database",
+                        &Capability::WriteScriptData,
+                        &user_ctx_delete,
+                    )));
                 }
 
                 match crate::repository::delete_row(&script_uri_delete, &table_name, id) {
@@ -3764,14 +3867,12 @@ impl SecureGlobalContext {
                     script_uri_upsert, table_name
                 );
 
-                if user_ctx_upsert
-                    .require_capability(&crate::security::Capability::UseScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database operations\"}"
-                            .to_string(),
-                    );
+                if !user_ctx_upsert.has_capability(&Capability::WriteScriptData) {
+                    return Ok(error_answer(capability_refusal(
+                        "database",
+                        &Capability::WriteScriptData,
+                        &user_ctx_upsert,
+                    )));
                 }
 
                 // key_columns is a JSON array of strings, or a single string
@@ -3827,14 +3928,12 @@ impl SecureGlobalContext {
                     script_uri_dw, table_name
                 );
 
-                if user_ctx_dw
-                    .require_capability(&crate::security::Capability::UseScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database operations\"}"
-                            .to_string(),
-                    );
+                if !user_ctx_dw.has_capability(&Capability::WriteScriptData) {
+                    return Ok(error_answer(capability_refusal(
+                        "database",
+                        &Capability::WriteScriptData,
+                        &user_ctx_dw,
+                    )));
                 }
 
                 let filters_map = match serde_json::from_str::<
@@ -3870,14 +3969,12 @@ impl SecureGlobalContext {
                     script_uri_lease, table_name, lease_id
                 );
 
-                if user_ctx_lease
-                    .require_capability(&crate::security::Capability::UseScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database operations\"}"
-                            .to_string(),
-                    );
+                if !user_ctx_lease.has_capability(&Capability::WriteScriptData) {
+                    return Ok(error_answer(capability_refusal(
+                        "database",
+                        &Capability::WriteScriptData,
+                        &user_ctx_lease,
+                    )));
                 }
 
                 match crate::repository::acquire_lease(
@@ -4000,14 +4097,12 @@ impl SecureGlobalContext {
                     script_uri_graphql, table_name
                 );
 
-                if user_ctx_graphql
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database operations\"}"
-                            .to_string(),
-                    );
+                if !user_ctx_graphql.has_capability(&Capability::ManageScriptDatabase) {
+                    return Ok(error_answer(capability_refusal(
+                        "database",
+                        &Capability::ManageScriptDatabase,
+                        &user_ctx_graphql,
+                    )));
                 }
 
                 // Parse options (default: ScriptInternal visibility)
@@ -4448,6 +4543,35 @@ impl SecureGlobalContext {
         let global = ctx.globals();
         let script_uri_owned = script_uri.to_string();
 
+        // What this execution may do with the store. An unnarrowed one holds
+        // both, which is every context that existed before attenuation did.
+        //
+        // Reads are withheld by answering `available()` with false, which is
+        // the prelude's existing "there is no store for you" path: a
+        // deliberate `getItem` throws `SecurityError` and a property probe
+        // stays quiet, which is the line the prelude already draws for a
+        // personal store with nobody signed in. Writes are withheld by
+        // answering the envelope the prelude throws, so a refused write fails
+        // where it was written rather than silently doing nothing.
+        let may_read_storage = self.user_context.has_capability(&Capability::ReadStorage);
+        let may_write_storage = self.user_context.has_capability(&Capability::WriteStorage);
+        let read_denial = capability_refusal(
+            "scriptStorage",
+            &Capability::ReadStorage,
+            &self.user_context,
+        );
+        let write_denial = Self::storage_failure(
+            "SecurityError",
+            &capability_refusal(
+                "scriptStorage",
+                &Capability::WriteStorage,
+                &self.user_context,
+            ),
+        );
+        let write_denial_set = write_denial.clone();
+        let write_denial_remove = write_denial.clone();
+        let write_denial_clear = write_denial;
+
         // The Rust half of `scriptStorage`. Every method here answers with a
         // value rather than with prose about one: `null` where the browser's
         // `Storage` answers `null`, and — on the write paths — either nothing
@@ -4483,6 +4607,10 @@ impl SecureGlobalContext {
                     script_uri_set, key
                 );
 
+                if !may_write_storage {
+                    return Ok(Some(write_denial_set.clone()));
+                }
+
                 if key.trim().is_empty() {
                     return Ok(Some(Self::storage_failure(
                         "SyntaxError",
@@ -4501,15 +4629,18 @@ impl SecureGlobalContext {
         let script_uri_remove = script_uri_owned.clone();
         let remove_item = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<()> {
+            move |_ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<Option<String>> {
                 debug!(
                     "scriptStorage.removeItem called for script {} with key: {}",
                     script_uri_remove, key
                 );
+                if !may_write_storage {
+                    return Ok(Some(write_denial_remove.clone()));
+                }
                 // Whether the key was there is not something `removeItem`
                 // reports, in the browser or here.
                 crate::repository::remove_script_properties_item(&script_uri_remove, &key);
-                Ok(())
+                Ok(None)
             },
         )?;
         host.set("removeItem", remove_item)?;
@@ -4519,6 +4650,9 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Option<String>> {
                 debug!("scriptStorage.clear called for script {}", script_uri_clear);
+                if !may_write_storage {
+                    return Ok(Some(write_denial_clear.clone()));
+                }
                 match crate::repository::clear_script_properties(&script_uri_clear) {
                     Ok(()) => Ok(None),
                     Err(e) => Ok(Some(Self::storage_write_failure(&e))),
@@ -4531,6 +4665,9 @@ impl SecureGlobalContext {
         let keys = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Vec<String>> {
+                if !may_read_storage {
+                    return Ok(Vec::new());
+                }
                 Ok(crate::repository::list_script_properties_keys(
                     &script_uri_keys,
                 ))
@@ -4538,11 +4675,26 @@ impl SecureGlobalContext {
         )?;
         host.set("keys", keys)?;
 
-        // Always available: script storage belongs to the script, not to a
-        // user, so there is nobody who could be missing.
-        let available =
-            Function::new(ctx.clone(), move |_ctx: rquickjs::Ctx<'_>| -> bool { true })?;
+        // Available whenever this execution may read it: script storage
+        // belongs to the script rather than to a user, so there is nobody who
+        // could be missing, and the only thing left to be missing is the
+        // capability.
+        let available = Function::new(ctx.clone(), move |_ctx: rquickjs::Ctx<'_>| -> bool {
+            may_read_storage
+        })?;
         host.set("available", available)?;
+
+        // Why it is unavailable, when the reason is a narrowing rather than a
+        // missing person. The prelude prefers this to its own wording, so a
+        // script hears "does not hold 'read_storage'" instead of being told to
+        // log in when logging in would not help.
+        let denial = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> Option<String> {
+                (!may_read_storage).then(|| read_denial.clone())
+            },
+        )?;
+        host.set("denial", denial)?;
 
         global.set("__hostScriptStorage", host)?;
 
@@ -4570,9 +4722,31 @@ impl SecureGlobalContext {
         // reads as "nobody is signed in": the same `SecurityError` a background
         // task with no person at all already gets, rather than a new failure
         // mode for a script to learn.
+        // Two narrowings again, as in `setup_secrets_functions`: what the
+        // absent person authorised, and what this execution holds. A
+        // delegated *and* attenuated task is subject to each.
         let storage_allowed = self
             .config
-            .allows_delegated(crate::delegation::Scope::PersonalStorage);
+            .allows_delegated(crate::delegation::Scope::PersonalStorage)
+            && self.user_context.has_capability(&Capability::ReadStorage);
+        let may_write_personal = self.user_context.has_capability(&Capability::WriteStorage);
+        let read_denial = capability_refusal(
+            "personalStorage",
+            &Capability::ReadStorage,
+            &self.user_context,
+        );
+        let write_denial = Self::storage_failure(
+            "SecurityError",
+            &capability_refusal(
+                "personalStorage",
+                &Capability::WriteStorage,
+                &self.user_context,
+            ),
+        );
+        let write_denial_set = write_denial.clone();
+        let write_denial_remove = write_denial.clone();
+        let write_denial_clear = write_denial;
+        let may_read_personal = self.user_context.has_capability(&Capability::ReadStorage);
 
         // The Rust half of `personalStorage`. It differs from script storage in
         // one way that matters: without an authenticated user there is no store
@@ -4610,6 +4784,10 @@ impl SecureGlobalContext {
                     script_uri_set, key
                 );
 
+                if !may_write_personal {
+                    return Ok(Some(write_denial_set.clone()));
+                }
+
                 let Some(user_id) = Self::delegated_user_id(&ctx, storage_allowed) else {
                     return Ok(Some(Self::storage_failure(
                         "SecurityError",
@@ -4645,6 +4823,9 @@ impl SecureGlobalContext {
                     "personalStorage.removeItem called for script {} with key: {}",
                     script_uri_remove, key
                 );
+                if !may_write_personal {
+                    return Ok(Some(write_denial_remove.clone()));
+                }
                 let Some(user_id) = Self::delegated_user_id(&ctx, storage_allowed) else {
                     return Ok(Some(Self::storage_failure(
                         "SecurityError",
@@ -4665,6 +4846,9 @@ impl SecureGlobalContext {
                     "personalStorage.clear called for script {}",
                     script_uri_clear
                 );
+                if !may_write_personal {
+                    return Ok(Some(write_denial_clear.clone()));
+                }
                 let Some(user_id) = Self::delegated_user_id(&ctx, storage_allowed) else {
                     return Ok(Some(Self::storage_failure(
                         "SecurityError",
@@ -4698,6 +4882,18 @@ impl SecureGlobalContext {
             Self::delegated_user_id(&ctx, storage_allowed).is_some()
         })?;
         host.set("available", available)?;
+
+        // Only a narrowing is reported here. A store that is unavailable
+        // because nobody is signed in keeps the prelude's own wording, which
+        // is the accurate one for that case and the one scripts already
+        // match on.
+        let denial = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> Option<String> {
+                (!may_read_personal).then(|| read_denial.clone())
+            },
+        )?;
+        host.set("denial", denial)?;
 
         global.set("__hostPersonalStorage", host)?;
 
@@ -4986,6 +5182,25 @@ impl SecureGlobalContext {
                     ));
                 }
 
+                // Queueing is how an execution outlives itself: a task runs
+                // later, in script context, holding what the script holds
+                // rather than what this turn was narrowed to. So a turn that
+                // may not write must not be able to queue a write for
+                // afterwards — that is the whole of the loophole, and it is
+                // closed here rather than at claim time because the narrowing
+                // is a fact about this execution and nothing in the row
+                // remembers it.
+                if !user_enqueue.has_capability(&Capability::EnqueueTasks) {
+                    return Ok(Self::task_failure(
+                        "SecurityError",
+                        &capability_refusal(
+                            "scriptTasks.enqueue",
+                            &Capability::EnqueueTasks,
+                            &user_enqueue,
+                        ),
+                    ));
+                }
+
                 let options: serde_json::Value = match serde_json::from_str(&options_json) {
                     Ok(options) => options,
                     Err(e) => {
@@ -5058,11 +5273,26 @@ impl SecureGlobalContext {
         host.set("enqueue", enqueue)?;
 
         let config_cancel = self.config.clone();
+        let user_cancel = self.user_context.clone();
         let cancel = Function::new(ctx.clone(), move |task_id: String| -> JsResult<String> {
             if config_cancel.is_dry_run() {
                 return Ok(Self::task_failure(
                     "DryRunError",
                     "scriptTasks.cancel: nothing was cancelled - this is a dry run",
+                ));
+            }
+
+            // Cancelling is changing the queue, so it takes the same
+            // capability enqueueing does. A narrowed turn that could delete
+            // work the script had accepted would be a write by another name.
+            if !user_cancel.has_capability(&Capability::EnqueueTasks) {
+                return Ok(Self::task_failure(
+                    "SecurityError",
+                    &capability_refusal(
+                        "scriptTasks.cancel",
+                        &Capability::EnqueueTasks,
+                        &user_cancel,
+                    ),
                 ));
             }
 
@@ -5118,6 +5348,7 @@ impl SecureGlobalContext {
         // rather than queueing work that will be abandoned later.
         let script_uri_personal = script_uri.to_string();
         let config_personal = self.config.clone();
+        let user_personal_enqueue = self.user_context.clone();
         let personal_enqueue = Function::new(
             ctx.clone(),
             move |ctx: rquickjs::Ctx<'_>, options_json: String| -> JsResult<String> {
@@ -5125,6 +5356,20 @@ impl SecureGlobalContext {
                     return Ok(Self::task_failure(
                         "DryRunError",
                         "personalTasks.enqueue: nothing was enqueued - this is a dry run",
+                    ));
+                }
+
+                // As `scriptTasks.enqueue`: work queued now runs later under
+                // what the grant allows, which is not what this turn was
+                // narrowed to.
+                if !user_personal_enqueue.has_capability(&Capability::EnqueueTasks) {
+                    return Ok(Self::task_failure(
+                        "SecurityError",
+                        &capability_refusal(
+                            "personalTasks.enqueue",
+                            &Capability::EnqueueTasks,
+                            &user_personal_enqueue,
+                        ),
                     ));
                 }
 
@@ -5307,6 +5552,243 @@ impl SecureGlobalContext {
         }
     }
 
+    /// The Rust half of `sandbox` — [`crate::sandbox`].
+    ///
+    /// One host call that runs a whole second execution of this script, in a
+    /// context holding a chosen subset of what this one holds. What makes
+    /// that affordable is that nothing here is new: `evaluate_snippet` already
+    /// evaluates caller-authored source against a script's program with a
+    /// caller-chosen `UserContext`, and `dispatcher.sendMessage` already
+    /// builds a nested runtime from inside a running host call. This is those
+    /// two facts put together and pointed at the calling script itself.
+    fn setup_sandbox_functions(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
+        let global = ctx.globals();
+        let host = rquickjs::Object::new(ctx.clone())?;
+
+        let script_uri_run = script_uri.to_string();
+        let user_run = self.user_context.clone();
+        let config_run = self.config.clone();
+        let run = Function::new(
+            ctx.clone(),
+            move |ctx: rquickjs::Ctx<'_>, options_json: String| -> JsResult<String> {
+                if config_run.is_dry_run() {
+                    // A sub-execution runs real code against live data, and
+                    // only its database writes are undone. A check that
+                    // deploys nothing must not set that in motion, for the
+                    // reason `dispatcher.sendMessage` must not.
+                    return Ok(Self::sandbox_failure(
+                        "DryRunError",
+                        "sandbox.run: nothing was run - this is a dry run",
+                    ));
+                }
+
+                let options: serde_json::Value = match serde_json::from_str(&options_json) {
+                    Ok(options) => options,
+                    Err(e) => {
+                        return Ok(Self::sandbox_failure(
+                            "TypeError",
+                            &format!("sandbox.run: options are not valid JSON: {}", e),
+                        ));
+                    }
+                };
+
+                let source = options
+                    .get("source")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if source.trim().is_empty() {
+                    return Ok(Self::sandbox_failure(
+                        "TypeError",
+                        "sandbox.run: there is no source to run",
+                    ));
+                }
+
+                let requested: Vec<String> = match options.get("capabilities") {
+                    Some(serde_json::Value::Array(names)) => {
+                        let mut parsed = Vec::with_capacity(names.len());
+                        for name in names {
+                            match name.as_str() {
+                                Some(name) => parsed.push(name.to_string()),
+                                None => {
+                                    return Ok(Self::sandbox_failure(
+                                        "TypeError",
+                                        "sandbox.run: every capability must be named by a string",
+                                    ));
+                                }
+                            }
+                        }
+                        parsed
+                    }
+                    // An omitted list is the empty one, not "everything I
+                    // hold". Defaulting the other way would make a typo in
+                    // the option name — `capability`, `caps` — silently hand
+                    // model-authored code the whole of the caller's
+                    // authority, which is the one mistake this API exists to
+                    // make impossible.
+                    None | Some(serde_json::Value::Null) => Vec::new(),
+                    Some(_) => {
+                        return Ok(Self::sandbox_failure(
+                            "TypeError",
+                            "sandbox.run: capabilities must be an array of names",
+                        ));
+                    }
+                };
+
+                let narrowed = match crate::sandbox::narrow(&user_run, &requested) {
+                    Ok(narrowed) => narrowed,
+                    Err(refusal) => {
+                        let name = match refusal {
+                            crate::sandbox::Refusal::UnknownCapability(_) => "TypeError",
+                            _ => "SecurityError",
+                        };
+                        return Ok(Self::sandbox_failure(
+                            name,
+                            &format!("sandbox.run: {}", refusal),
+                        ));
+                    }
+                };
+
+                // Held for the whole sub-execution: the budget stops a
+                // runaway one, and this stops a chain of them from exhausting
+                // the native stack before the budget notices.
+                let _depth = match crate::sandbox::DepthGuard::enter() {
+                    Ok(guard) => guard,
+                    Err(depth) => {
+                        return Ok(Self::sandbox_failure(
+                            "RangeError",
+                            &format!("sandbox.run: {}", crate::sandbox::Refusal::TooDeep(depth)),
+                        ));
+                    }
+                };
+
+                let report = crate::script_eval::eval_blocking(crate::script_eval::EvalRequest {
+                    timeout_ms: options.get("timeoutMs").and_then(|value| value.as_u64()),
+                    // Off by default here, on by default at `/engine/eval`.
+                    // There a caller is inspecting a deployment and should
+                    // leave no trace; here a turn that may write is being run
+                    // because its writes are wanted, and one that may not is
+                    // already stopped by holding no write capability.
+                    rollback: options
+                        .get("rollback")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
+                    input: options.get("input").cloned(),
+                    // The person carries through. Attenuation says what may be
+                    // done, not who is doing it, so `personalStorage` and
+                    // `{{secret:...}}` go on resolving against the same
+                    // account — a narrower part of their data rather than
+                    // nobody's.
+                    auth_context: Self::sandbox_auth_context(&ctx),
+                    // The files the caller is running, not head: a pinned
+                    // script's sub-execution must be built from the revision
+                    // it serves.
+                    view: crate::deployments::serving_view(&script_uri_run),
+                    ..crate::script_eval::EvalRequest::new(script_uri_run.clone(), source, narrowed)
+                });
+
+                Ok(Self::sandbox_ok(serde_json::json!({
+                    "value": report.outcome.value,
+                    "valueType": report.outcome.value_type,
+                    "console": report.outcome.console,
+                    "consoleDropped": report.outcome.console_dropped,
+                    "durationMs": report.outcome.duration_ms,
+                    "rolledBack": report.outcome.rolled_back,
+                    "error": report.outcome.error,
+                    "ok": report.ok,
+                })))
+            },
+        )?;
+        host.set("run", run)?;
+
+        // Every name there is, and what this execution holds of them. A
+        // script builds its narrowed set by subtracting from the second
+        // rather than by writing out a list that drifts as the vocabulary
+        // grows.
+        let all = Function::new(ctx.clone(), move |_ctx: rquickjs::Ctx<'_>| -> String {
+            serde_json::json!(
+                Capability::all()
+                    .iter()
+                    .map(|capability| capability.as_str())
+                    .collect::<Vec<_>>()
+            )
+            .to_string()
+        })?;
+        host.set("capabilities", all)?;
+
+        let user_held = self.user_context.clone();
+        let held = Function::new(ctx.clone(), move |_ctx: rquickjs::Ctx<'_>| -> String {
+            let mut names: Vec<&str> = user_held
+                .capabilities
+                .iter()
+                .map(|capability| capability.as_str())
+                .collect();
+            // A `HashSet` has no order and this is read by scripts, so sort
+            // it: a list that shuffles between calls is one nobody can
+            // usefully compare or log.
+            names.sort_unstable();
+            serde_json::json!(names).to_string()
+        })?;
+        host.set("held", held)?;
+
+        global.set("__hostSandbox", host)?;
+
+        crate::bytecode::eval_program(ctx, "engine://sandbox-prelude", SANDBOX_PRELUDE).map_err(
+            |e| {
+                rquickjs::Error::new_from_js_message(
+                    "sandbox",
+                    "prelude",
+                    &format!("sandbox prelude failed to load: {}", e),
+                )
+            },
+        )?;
+
+        debug!("sandbox initialized for script: {}", script_uri);
+        Ok(())
+    }
+
+    /// The person the sub-execution runs as, read from the calling context
+    /// rather than from the [`UserContext`].
+    ///
+    /// Those two carry different things and both are needed:
+    /// `UserContext.user_id` is who the engine authorizes, while
+    /// `context.request.auth` is what JavaScript reads — and
+    /// `personalStorage`, `secretStorage` and `personalTasks` all resolve
+    /// against the second. A sub-execution that dropped it would lose the
+    /// person as well as the capabilities.
+    ///
+    /// The role flags carry through unchanged, because attenuation does not
+    /// change who somebody is. A narrowed turn belonging to an administrator
+    /// still reads `isAdmin`, and is still refused at every gate it no longer
+    /// holds — the refusal is the enforcement, not the flag.
+    fn sandbox_auth_context(ctx: &rquickjs::Ctx<'_>) -> Option<crate::auth::JsAuthContext> {
+        let context: rquickjs::Object = ctx.globals().get("context").ok()?;
+        let request: rquickjs::Object = context.get("request").ok()?;
+        let auth: rquickjs::Object = request.get("auth").ok()?;
+
+        Some(crate::auth::JsAuthContext {
+            user_id: auth.get("userId").ok().flatten(),
+            email: auth.get("email").ok().flatten(),
+            name: auth.get("name").ok().flatten(),
+            provider: auth.get("provider").ok().flatten(),
+            is_authenticated: auth.get("isAuthenticated").unwrap_or_default(),
+            is_admin: auth.get("isAdmin").unwrap_or_default(),
+            is_editor: auth.get("isEditor").unwrap_or_default(),
+        })
+    }
+
+    /// The envelope shape `sandbox_prelude.js` unwraps. Flatter than the
+    /// task one because a sandbox result is already an object with its own
+    /// `error` field, and nesting a second `error` beside it would be two
+    /// different failures spelled the same way.
+    fn sandbox_ok(result: serde_json::Value) -> String {
+        serde_json::json!({ "ok": true, "result": result }).to_string()
+    }
+
+    fn sandbox_failure(name: &str, message: &str) -> String {
+        serde_json::json!({ "ok": false, "name": name, "message": message }).to_string()
+    }
+
     /// Setup message dispatcher functions for inter-script communication
     fn setup_dispatcher_functions(
         &self,
@@ -5420,6 +5902,20 @@ impl SecureGlobalContext {
                     return Ok(format!(
                         "dispatcher.sendMessage: '{}' not dispatched - this is a dry run",
                         message_type
+                    ));
+                }
+
+                // A listener runs under the sending caller's context, so a
+                // narrowed execution that dispatches hands the listener
+                // exactly what it holds itself — the narrowing follows the
+                // message rather than being escaped by it. This gate is the
+                // other half: whether the narrowed turn may set anything in
+                // motion at all.
+                if !user_ctx_send.has_capability(&Capability::SendMessages) {
+                    return Ok(capability_refusal(
+                        "dispatcher.sendMessage",
+                        &Capability::SendMessages,
+                        &user_ctx_send,
                     ));
                 }
 

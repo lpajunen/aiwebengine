@@ -34,11 +34,13 @@ const STUB: &str = r#"
 async fn eval(uri: &str, source: &str) -> EvalReport {
     repository::upsert_script(uri, "function init() {}").expect("script should be stored");
     let request = EvalRequest {
-        script_uri: uri.to_string(),
-        source: format!("{}\n{}", STUB, source),
-        user_context: UserContext::admin("console-shape".to_string()),
         timeout_ms: Some(10_000),
         rollback: true,
+        ..EvalRequest::new(
+            uri.to_string(),
+            format!("{}\n{}", STUB, source),
+            UserContext::admin("console-shape".to_string()),
+        )
     };
     tokio::task::spawn_blocking(move || eval_blocking(request))
         .await
@@ -526,11 +528,13 @@ async fn the_real_host_call_still_accepts_a_formatted_line() {
     repository::upsert_script("test://console-shape/real", "function init() {}")
         .expect("script should be stored");
     let request = EvalRequest {
-        script_uri: "test://console-shape/real".to_string(),
-        source: r#"console.log("row", { id: 1 }); "written""#.to_string(),
-        user_context: UserContext::admin("console-shape".to_string()),
         timeout_ms: Some(10_000),
         rollback: true,
+        ..EvalRequest::new(
+            "test://console-shape/real".to_string(),
+            r#"console.log("row", { id: 1 }); "written""#.to_string(),
+            UserContext::admin("console-shape".to_string()),
+        )
     };
     let report = tokio::task::spawn_blocking(move || eval_blocking(request))
         .await

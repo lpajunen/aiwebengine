@@ -4214,11 +4214,9 @@ pub async fn eval_route(
     }
 
     let report = crate::script_eval::ScriptEvaluator::run(crate::script_eval::EvalRequest {
-        script_uri: uri,
-        source,
-        user_context: user,
         timeout_ms,
         rollback,
+        ..crate::script_eval::EvalRequest::new(uri, source, user)
     })
     .await;
 
@@ -10365,11 +10363,9 @@ fn tool_eval_script(args: &Value, user: &UserContext) -> Value {
     let timeout_ms = args.get("timeoutMs").and_then(Value::as_u64);
 
     let report = crate::script_eval::eval_blocking(crate::script_eval::EvalRequest {
-        script_uri: uri.to_string(),
-        source: source.to_string(),
-        user_context: user.clone(),
         timeout_ms,
         rollback,
+        ..crate::script_eval::EvalRequest::new(uri.to_string(), source.to_string(), user.clone())
     });
 
     let mut body = report.to_json();

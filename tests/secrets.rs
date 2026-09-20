@@ -101,6 +101,7 @@ fn user_without_capabilities(user_id: &str) -> UserContext {
         user_id: Some(user_id.to_string()),
         is_authenticated: true,
         capabilities: HashSet::<Capability>::new(),
+        attenuated: false,
     }
 }
 

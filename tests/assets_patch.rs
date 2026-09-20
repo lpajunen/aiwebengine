@@ -420,6 +420,7 @@ async fn read_access_alone_cannot_patch_an_asset() {
         capabilities: [Capability::ReadScripts, Capability::ReadAssets]
             .into_iter()
             .collect(),
+        attenuated: false,
     };
 
     let result = aiwebengine::engine_api::patch_asset_authorized(

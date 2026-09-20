@@ -652,6 +652,22 @@ fn read_capped(reader: impl std::io::Read, max_bytes: usize) -> Result<Vec<u8>, 
 const SECRET_TEMPLATE_OPEN: &str = "{{secret:";
 const SECRET_TEMPLATE_CLOSE: &str = "}}";
 
+/// Whether this request would read a secret if it were sent.
+///
+/// The capability layer asks before calling, so a context holding
+/// `use_network` but not `read_secrets` is refused rather than having its
+/// template resolved. It reads the same constant [`substitute_secrets`] does,
+/// so the two cannot come to disagree about what a template looks like — and
+/// it is deliberately over-eager in the one direction that is safe: an
+/// unclosed `{{secret:` is a request that would error anyway.
+pub fn names_a_secret(options: &FetchOptions) -> bool {
+    options.headers.as_ref().is_some_and(|headers| {
+        headers
+            .values()
+            .any(|value| value.contains(SECRET_TEMPLATE_OPEN))
+    })
+}
+
 /// Replace every `{{secret:NAME}}` in one header value with what `resolve`
 /// answers for `NAME`, and report which names were used.
 ///

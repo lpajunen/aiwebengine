@@ -32,13 +32,15 @@ const RACERS: usize = 10;
 
 fn run(uri: &str, source: &str) -> EvalReport {
     eval_blocking(EvalRequest {
-        script_uri: uri.to_string(),
-        source: source.to_string(),
         // Committed, not rolled back: an eval-wide rollback would hold every
         // racer inside one transaction, which is the opposite of the point.
         rollback: false,
-        user_context: UserContext::admin("concurrency".to_string()),
         timeout_ms: Some(30_000),
+        ..EvalRequest::new(
+            uri.to_string(),
+            source.to_string(),
+            UserContext::admin("concurrency".to_string()),
+        )
     })
 }
 

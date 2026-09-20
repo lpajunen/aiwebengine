@@ -70,6 +70,7 @@ async fn list_users_denied_for_unauthenticated_holder_of_the_admin_capability() 
         capabilities: [Capability::AdministerEngine, Capability::ReadScripts]
             .into_iter()
             .collect(),
+        attenuated: false,
     };
 
     assert!(matches!(

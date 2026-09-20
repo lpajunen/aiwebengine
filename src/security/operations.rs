@@ -253,6 +253,7 @@ mod tests {
             user_id: None,
             is_authenticated: false,
             capabilities: std::collections::HashSet::new(), // No capabilities
+            attenuated: false,
         };
 
         let request = UpsertScriptRequest {
@@ -277,6 +278,7 @@ mod tests {
             capabilities: [crate::security::Capability::WriteScripts]
                 .into_iter()
                 .collect(),
+            attenuated: false,
         };
         let request2 = UpsertScriptRequest {
             script_name: "test2".to_string(),

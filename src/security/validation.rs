@@ -59,10 +59,19 @@ pub enum Capability {
     ViewLogs,
     ManageStreams,
     ManageGraphQL,
-    /// Read and write rows in a script's tables: the data operations a script
-    /// performs while serving an ordinary request, so every authenticated user
-    /// holds it.
-    UseScriptDatabase,
+    /// Read rows from a script's tables.
+    ///
+    /// Split from [`Capability::WriteScriptData`], which used to share one
+    /// name with it. While they were one capability a read-only execution was
+    /// not expressible at all: the same value gated `query` and `delete`, so
+    /// the narrowest context that could read a table could also empty it.
+    ReadScriptData,
+    /// Insert, update, or delete rows in a script's tables.
+    ///
+    /// Every tier that reads also writes, so splitting the two changes nothing
+    /// about who may do what. It exists to be taken away — see
+    /// [`super::capabilities::UserContext::attenuated`].
+    WriteScriptData,
     /// Change a script's schema — create or drop tables, columns, and indexes.
     /// Editing the shape of a solution's data, so it belongs to the editor
     /// tier, not to the people using the solution.
@@ -72,6 +81,47 @@ pub enum Capability {
     /// in for it, which conflated deleting your own script with administering
     /// everyone's.
     AdministerEngine,
+
+    // The rest of this enum names what a *script* does while it runs, rather
+    // than what a person may do to a solution. Each of these gated nothing
+    // before attenuation existed: `fetch`, `secretStorage` and
+    // `personalStorage` were reachable from any context that had them
+    // installed, which for `fetch` is every context there is.
+    //
+    // They are held by every tier that could already do the thing, so adding
+    // them took nothing away from anybody. They exist so that a sub-execution
+    // can be given less — a planning turn that may read and not write, or
+    // model-authored code that may compute and not call out.
+    /// Make outbound HTTP requests with `fetch`.
+    ///
+    /// The one an agent restricts first: without it, model-authored code
+    /// cannot reach an API, spend tokens, or exfiltrate what it was shown.
+    UseNetwork,
+    /// Read this script's secrets, and resolve `{{secret:...}}` in a `fetch`.
+    ///
+    /// Withholding it does not downgrade the lookup the way a missing
+    /// delegation scope does — a template that cannot be resolved is an error,
+    /// because silently sending a request with the literal `{{secret:...}}` in
+    /// a header is worse than not sending it.
+    ReadSecrets,
+    /// Store or remove this script's secrets.
+    WriteSecrets,
+    /// Read a person's `personalStorage`, or the script's own `scriptStorage`.
+    ReadStorage,
+    /// Write or clear either of those.
+    WriteStorage,
+    /// Enqueue and cancel durable tasks (`scriptTasks`, `personalTasks`).
+    ///
+    /// Queueing work is how an execution outlives itself, so a context that
+    /// may not write must not be able to queue a write for later.
+    EnqueueTasks,
+    /// Dispatch a message to another script's listeners
+    /// (`dispatcher.sendMessage`).
+    ///
+    /// A listener runs under the *sending* caller's context, so this is
+    /// narrowing that follows the message: a restricted execution that
+    /// dispatches hands the listener what it holds itself.
+    SendMessages,
 }
 
 /// Comprehensive input validator - ALL VALIDATION IN RUST

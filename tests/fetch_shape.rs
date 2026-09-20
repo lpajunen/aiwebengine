@@ -61,11 +61,13 @@ const STUB: &str = r#"
 async fn eval(uri: &str, source: &str) -> EvalReport {
     repository::upsert_script(uri, "function init() {}").expect("script should be stored");
     let request = EvalRequest {
-        script_uri: uri.to_string(),
-        source: source.to_string(),
-        user_context: UserContext::admin("fetch-shape".to_string()),
         timeout_ms: Some(10_000),
         rollback: true,
+        ..EvalRequest::new(
+            uri.to_string(),
+            source.to_string(),
+            UserContext::admin("fetch-shape".to_string()),
+        )
     };
     tokio::task::spawn_blocking(move || eval_blocking(request))
         .await

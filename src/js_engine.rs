@@ -3169,6 +3169,30 @@ pub struct EvalParams {
     pub timeout_ms: u64,
     /// Roll back the database writes the snippet makes. On by default.
     pub rollback: bool,
+    /// What the snippet is handed as `context.args`.
+    ///
+    /// A snippet has no parameter list — it is a program, not a function — so
+    /// an argument has to arrive somewhere a program can read. `context.args`
+    /// is where a GraphQL resolver's arguments already arrive, so a script
+    /// reading it is reading something it knows.
+    pub input: Option<JsonValue>,
+    /// Who the snippet runs as, as JavaScript sees it.
+    ///
+    /// `None` builds the anonymous context an `/engine/eval` gets. A
+    /// sub-execution passes its parent's, because `personalStorage` and
+    /// `secretStorage` resolve against `context.request.auth.userId` rather
+    /// than against the [`UserContext`] — so a narrowed turn that dropped this
+    /// would lose the person as well as the capabilities, and a plan turn
+    /// would read nobody's storage instead of a smaller part of theirs.
+    pub auth_context: Option<crate::auth::JsAuthContext>,
+    /// Which of the script's files the program is built from.
+    ///
+    /// [`crate::source_view::SourceView::Live`] for an `/engine/eval`, which
+    /// evaluates against head. A sub-execution passes
+    /// [`crate::deployments::serving_view`], so the code it runs beside is the
+    /// code its caller is running rather than a newer head the caller has
+    /// never executed.
+    pub view: crate::source_view::SourceView,
 }
 
 /// What one evaluation produced.
@@ -3253,7 +3277,11 @@ pub fn evaluate_snippet(params: &EvalParams) -> EvalOutcome {
     // Bundle before arming the interrupt deadline, as every other entry point
     // does: on a cold cache this fetches and transpiles every module the script
     // imports, which must not be charged to the budget meant for the snippet.
-    let prepared = match module_loader::prepare_executable_program(&params.script_uri, &content) {
+    let prepared = match module_loader::prepare_executable_program_in(
+        &params.script_uri,
+        &content,
+        &params.view,
+    ) {
         Ok(prepared) => prepared,
         Err(e) => fail_early!(format!("Failed to bundle script: {}", e)),
     };
@@ -3364,11 +3392,23 @@ fn run_snippet(
             return Err(Box::new(outcome));
         }
 
-        match JsHandlerContextBuilder::new(HandlerInvocationKind::Eval)
+        let mut builder = JsHandlerContextBuilder::new(HandlerInvocationKind::Eval)
             .with_script_metadata(params.script_uri.clone(), "eval")
-            .with_invocation_id(invocation_id.clone())
-            .build(ctx)
-        {
+            .with_invocation_id(invocation_id.clone());
+        if let Some(auth) = params.auth_context.clone() {
+            // Paired with an empty request, as the delegated-task path pairs
+            // them: `context.request` is where the auth object hangs, so an
+            // identity with no request to hang it on is one `personalStorage`
+            // and `secretStorage` cannot find.
+            builder = builder
+                .with_request(JsRequestContext::default())
+                .with_auth_context(auth);
+        }
+        if let Some(input) = params.input.clone() {
+            builder = builder.with_args(input);
+        }
+
+        match builder.build(ctx) {
             // Set before the program runs: its top level can already reach for
             // `context`, exactly as a test module's can.
             Ok(handler_context) => {

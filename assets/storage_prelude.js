@@ -79,10 +79,17 @@
     // reads through a property are how the language pokes at any object, and
     // answer as if the store were empty. Nothing probes an object by writing
     // to it, so every write throws whichever way it was spelled.
+    // A store can be unavailable for two different reasons, and telling a
+    // script the wrong one costs it the fix. With nobody signed in, logging
+    // in is the answer and the wording below says so. When the execution was
+    // narrowed — a planning turn, model-authored code — logging in changes
+    // nothing, and the host says which capability is missing instead. It
+    // answers `null` whenever its own wording is not the better one.
     function requireAvailable() {
       if (!host.available()) {
+        var denied = host.denial();
         throw new DOMException(
-          name + " requires an authenticated user",
+          denied || name + " requires an authenticated user",
           "SecurityError",
         );
       }

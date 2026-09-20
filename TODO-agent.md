@@ -35,44 +35,49 @@ worth keeping because the remaining items lean on them.
   per-person key.
 
 Those four are what let the agent's run move out of the browser and into the
-engine. What follows is what it hit next.
+engine.
+
+The fifth is the one this file called the largest, and it took the shape below
+because the two halves of it turned out to be one piece of work.
+
+- **A script can run with fewer capabilities than it holds.** `sandbox.run`
+  (`sandbox.rs`, `assets/sandbox_prelude.js`) — a sub-execution of the same
+  script in a context holding a chosen subset, with JSON the only thing that
+  crosses. Both open questions this file named are answered: attenuation is
+  **scoped to the call** rather than permanent, and the reduced context is
+  proved to the things that check it **by construction** — a separate QuickJS
+  context cannot be handed a function by its parent, which is the leak a
+  push/pop mask over the running context could not close.
+
+  The mechanism was nearly free: `evaluate_snippet` already ran caller-authored
+  source against a script's program with a caller-chosen `UserContext`,
+  `dispatcher.sendMessage` already built a nested runtime inside a running host
+  call, nested budgets were already clamped to the parent's remaining time, and
+  a nested rollback was already a `SAVEPOINT`. What the work actually consisted
+  of was **item 3** — the vocabulary. Attenuating the old `Capability` enum
+  bought nothing an agent cares about: `fetch` was gated by nothing at all,
+  `secretStorage` and `personalStorage` only by a delegation scope, and reads
+  and writes of a script's tables shared one name, so read-only was
+  inexpressible. The enum now names what a script _does_ as well as what a
+  person may do to a solution — `use_network`, `read_secrets`/`write_secrets`,
+  `read_storage`/`write_storage`, `enqueue_tasks`, `send_messages`, and
+  `read_script_data`/`write_script_data` — each with the check that enforces
+  it, and each held by every tier that could already do the thing, so adding
+  them took nothing away. See `docs/CAPABILITY_ATTENUATION.md`.
+
+What follows is what the agent hit next.
 
 ## The blockers, in order
 
-### 1. A script cannot run with fewer capabilities than it holds
+### 1. ~~A script cannot run with fewer capabilities than it holds~~ — done
 
-This is the largest one, and it is new: it did not surface until the agent had
-tools worth restricting.
-
-`UserContext` carries `capabilities: HashSet<Capability>`
-(`capabilities.rs:8`), built by one of four fixed constructors and inherited by
-everything the execution does. It only ever flows downward from the caller.
-There is no way for a script to say _run this next part holding less than I do_.
-
-Two things want exactly that, and neither is reachable without it.
-
-**Code as the action.** The most interesting shape an agent can take here is
-the model writing JavaScript rather than emitting a tool call, because the
-composition comes free and the tool list stops growing. Every other project
-adopting that pattern has to build a sandbox first. This engine _is_ one. What
-is missing is the ability to evaluate model-authored code in a sub-context
-holding a chosen subset — `eval_script` exists, but as an administrator's
-engine endpoint, not as something a script can call on itself with **less**
-than it has.
-
-**A plan mode that is enforced rather than offered.** Every harness that ships
-one — Claude Code, Cline, Cursor — implements it as a filtered tool list plus a
-prompt asking the model nicely. None can actually enforce read-only. This
-engine could, because capabilities are checked under the JavaScript rather than
-inside the agent loop: a planning turn would simply run in a context holding
-the reads and none of the writes, and no amount of cleverness in the transcript
-reaches past it. Without this primitive, a plan mode written in a script is
-exactly as weak as everybody else's.
-
-The structural part looks small — a `UserContext` with an arbitrary subset is
-already representable. The design work is the surface: what a script may ask
-for, whether attenuation is permanent for the execution or scoped to a call,
-and how the reduced context is proved to the things that check it.
+See **What got built** above. The one thing worth carrying forward is what it
+costs: a sub-execution is a fresh runtime and one re-evaluation of the script's
+program, which is right for an agent turn and wrong for a loop. Narrow once
+around the turn, not once around each tool call. If that ever becomes the
+binding constraint, the answer is a cheaper way to build the same isolation
+rather than a mask over the running context — the leak that ruled a mask out
+does not get better with optimisation.
 
 ### 2. A script cannot enqueue work for anyone but its caller
 
@@ -103,16 +108,20 @@ whether a grant is enough on its own or whether delegation needs to name the
 channel identity it may be triggered by. Deciding that badly makes a webhook
 into a way to spend other people's tokens.
 
-### 3. The scope vocabulary has nouns and no verbs
+### 3. The scope vocabulary has nouns and no verbs — half done
 
-`Scope` is `PersonalStorage` and `Secrets` (`delegation.rs:67`) — two nouns,
-naming _what_ a delegation reaches. Nothing names _what it may do with it_.
+`Scope` is still `PersonalStorage` and `Secrets` (`delegation.rs:67`) — two
+nouns, naming _what_ a delegation reaches. Nothing names _what it may do with
+it_.
 
-The file's own comment states the rule this has to respect: each value gates
-something real, and adding a name without adding the check that enforces it
-would be a promise the engine does not keep. So this is not a matter of
-extending an enum. A read-only scope needs an enforcement point, which is item
-1; that is why these two are one piece of work approached from opposite ends.
+The enforcement point this was waiting on now exists: `Capability` has the
+verbs (item 1), and every one of them is checked. What is left is the
+narrower job of connecting the two — letting a **grant** say "may read, may
+not write" and having `delegation::resolve` hand back a context attenuated to
+it, rather than the fixed `authenticated` cap it returns today. The rule the
+file's own comment states still governs: a scope nothing checks is a promise
+the engine does not keep, and now there is something for each new scope to
+check against.
 
 Two things want it. A **plan approved in advance** — which is what a delegation
 grant already is for background work, except that it cannot currently say "may

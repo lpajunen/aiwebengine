@@ -194,6 +194,7 @@ async fn host_bindings_reject_an_unauthenticated_holder_of_delete_scripts() {
         capabilities: [Capability::DeleteScripts, Capability::ReadScripts]
             .into_iter()
             .collect(),
+        attenuated: false,
     };
 
     assert!(matches!(

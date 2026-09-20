@@ -37,11 +37,13 @@ async fn eval_against_table(uri: &str, source: &str) -> EvalReport {
     );
 
     let request = EvalRequest {
-        script_uri: uri.to_string(),
-        source: prepared,
-        user_context: UserContext::admin("database-binding".to_string()),
         timeout_ms: Some(10_000),
         rollback: false,
+        ..EvalRequest::new(
+            uri.to_string(),
+            prepared,
+            UserContext::admin("database-binding".to_string()),
+        )
     };
     tokio::task::spawn_blocking(move || eval_blocking(request))
         .await

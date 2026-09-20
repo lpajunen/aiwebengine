@@ -48,11 +48,13 @@ fn eval(script_uri: &str, source: &str) -> EvalReport {
 
 fn eval_with(script_uri: &str, source: &str, rollback: bool) -> EvalReport {
     eval_blocking(EvalRequest {
-        script_uri: script_uri.to_string(),
-        source: source.to_string(),
-        user_context: UserContext::admin("evaluator".to_string()),
         timeout_ms: None,
         rollback,
+        ..EvalRequest::new(
+            script_uri.to_string(),
+            source.to_string(),
+            UserContext::admin("evaluator".to_string()),
+        )
     })
 }
 
@@ -410,11 +412,13 @@ async fn a_runaway_snippet_is_stopped_by_the_budget() {
 
     let started = std::time::Instant::now();
     let report = eval_blocking(EvalRequest {
-        script_uri: uri.to_string(),
-        source: "while (true) {}".to_string(),
-        user_context: UserContext::admin("evaluator".to_string()),
         timeout_ms: Some(300),
         rollback: true,
+        ..EvalRequest::new(
+            uri.to_string(),
+            "while (true) {}".to_string(),
+            UserContext::admin("evaluator".to_string()),
+        )
     });
 
     assert!(!report.ok);
@@ -436,12 +440,14 @@ async fn a_requested_budget_cannot_exceed_the_engines_own() {
     let ceiling = aiwebengine::script_eval::default_eval_timeout_ms();
     let started = std::time::Instant::now();
     let report = eval_blocking(EvalRequest {
-        script_uri: uri.to_string(),
-        source: "while (true) {}".to_string(),
-        user_context: UserContext::admin("evaluator".to_string()),
         // Asking for an hour must not buy an hour of a blocking thread.
         timeout_ms: Some(3_600_000),
         rollback: true,
+        ..EvalRequest::new(
+            uri.to_string(),
+            "while (true) {}".to_string(),
+            UserContext::admin("evaluator".to_string()),
+        )
     });
 
     assert!(!report.ok);

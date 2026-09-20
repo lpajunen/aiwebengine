@@ -35,6 +35,7 @@ fn create_user_with_capabilities(user_id: &str, caps: Vec<Capability>) -> UserCo
         user_id: Some(user_id.to_string()),
         is_authenticated: true,
         capabilities: caps.into_iter().collect(),
+        attenuated: false,
     }
 }
 
