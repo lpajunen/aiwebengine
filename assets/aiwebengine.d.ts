@@ -1062,6 +1062,15 @@ interface ScriptTasks {
 /**
  * What this person has authorised this script to do as them.
  */
+/**
+ * What a person can authorise a script to do as them while they are away.
+ *
+ * Two nouns and a verb. The nouns say whose things are in scope;
+ * `"write"` says the run may change them rather than only read them — without
+ * it a delegated run holds no write capability at all.
+ */
+type DelegationScope = "personal_storage" | "secrets" | "write";
+
 interface DelegationState {
   /** False when nobody is signed in; nothing can be delegated then. */
   authenticated: boolean;
@@ -1069,7 +1078,7 @@ interface DelegationState {
   granted: boolean;
   expired?: boolean;
   expiresAt?: string;
-  scopes?: ("personal_storage" | "secrets")[];
+  scopes?: DelegationScope[];
   /** Where to send them to authorise it. Absent when nobody is signed in. */
   consentUrl?: string;
 }
@@ -1136,8 +1145,116 @@ interface PersonalTasks {
   /** What this person has authorised, and where to send them if nothing. */
   authorization(): DelegationState;
 
+  /**
+   * Queue work to run as the person a message came **from**.
+   *
+   * The only way an execution with nobody signed in can act as anybody, and
+   * so the way an agent reaches the places people already are: an inbound
+   * Telegram or Slack webhook has no session, so `enqueue` above has nobody
+   * to act as.
+   *
+   * A script never names a person here. It names a sender as the channel
+   * reports them, and the engine resolves that through the links people have
+   * consented to on `/auth/delegate`. An unlinked sender resolves to nobody
+   * and nothing runs, so a script that trusts the wrong field in a request
+   * body can be made to claim the wrong *sender* — not to name a different
+   * account, and not to enumerate one.
+   *
+   * **Verify the message before calling this.** Telegram and Slack sign
+   * their webhooks; email largely does not. Checking that signature is the
+   * script's job, and the engine cannot do it for you — a handler that takes
+   * the sender straight from an unauthenticated body is a way for anyone who
+   * can reach the route to spend that person's budget.
+   *
+   * @throws SecurityError if nobody has linked that sender, or the person
+   *   has not authorised this script, or that authorisation has expired.
+   *   Check `sender()` first to reply with the link instead.
+   * @throws RangeError if this sender has queued too much too quickly.
+   *
+   * @example
+   * // A Telegram webhook, after checking the secret token Telegram sends.
+   * const from = String(update.message.from.id);
+   * const who = personalTasks.sender({ channel: "telegram", identity: from });
+   * if (!who.granted) {
+   *   return reply(`Authorise me first: ${who.linkUrl}`);
+   * }
+   * personalTasks.enqueueFrom({
+   *   channel: "telegram",
+   *   identity: from,
+   *   handler: "runTurn",
+   *   payload: { text: update.message.text },
+   * });
+   */
+  enqueueFrom(options: {
+    /** Where the message came from: a short slug, lower-cased by the engine. */
+    channel: string;
+    /** The sender as that channel names them. Compared exactly. */
+    identity: string;
+    handler: string;
+    payload?: Record<string, unknown>;
+    runAt?: string;
+    maxAttempts?: number;
+  }): ScriptTask;
+
+  /**
+   * Whether a sender is linked and still authorised. A read.
+   *
+   * Deliberately never answers with the account's id: everything a script
+   * can do for that person goes through `enqueueFrom`, which names the
+   * sender, and an id here would end up in whatever the bot logs or echoes
+   * back into the chat.
+   */
+  sender(options: { channel: string; identity: string }): SenderState;
+
+  /**
+   * Mint the one URL that links this sender to whoever opens it, and
+   * **reply with it into that sender's own chat**.
+   *
+   * The URL carries a single-use token rather than the sender's name, and
+   * that is the security of the whole scheme. A link that named the sender
+   * would be one anybody could construct for anybody — and linking somebody
+   * else's id before they do does not merely squat on it, it *intercepts*
+   * them: every message they send the bot would be processed as the
+   * squatter's turn, with their text landing in the squatter's storage.
+   *
+   * Being able to read the sender's messages is the only evidence of
+   * ownership the engine can have, so posting this link anywhere that sender
+   * cannot read gives exactly that away.
+   *
+   * Minting invalidates any link still outstanding for the same sender, so
+   * call it where a bot decides to send one — not in a loop that polls
+   * `sender()`.
+   *
+   * @throws TypeError if the sender is not usable, RangeError if this sender
+   *   has asked too often, SecurityError in a turn that may not write.
+   */
+  inviteLink(options: { channel: string; identity: string }): LinkInvitation;
+
   cancel(taskId: string): boolean;
   get(taskId: string): ScriptTask | null;
+}
+
+/** What `personalTasks.sender()` answers. */
+interface SenderState {
+  /** Whether anybody has linked this sender to this script. */
+  linked: boolean;
+  /** True only if it is linked *and* that person's grant is live. */
+  granted: boolean;
+  expired?: boolean;
+  scopes?: DelegationScope[];
+  /** The pair as the engine normalised it — the channel is lower-cased. */
+  channel: string;
+  identity: string;
+}
+
+/** What `personalTasks.inviteLink()` answers. */
+interface LinkInvitation {
+  /** Send this into the sender's own chat, and nowhere else. */
+  linkUrl: string;
+  channel: string;
+  identity: string;
+  /** How long it stays usable. */
+  expiresInMinutes: number;
 }
 
 // ============================================================================

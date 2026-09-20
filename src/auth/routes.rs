@@ -933,6 +933,10 @@ fn account_notice_message(code: &str) -> &'static str {
         }
         "delegation_declined" => "Nothing was authorised.",
         "delegation_missing" => "There was nothing to withdraw.",
+        "sender_unlinked" => {
+            "That sender can no longer start work for you. The app can still act for you \
+             otherwise — withdraw it above to stop that too."
+        }
         _ => "Done.",
     }
 }
@@ -1191,7 +1195,11 @@ fn render_sessions(csrf_token: &str, sessions: &[crate::security::SessionSummary
 /// Rendered beside the sessions and for the same reason: a background job
 /// acting as you is the same question as a session acting as you, and the
 /// place people look for "what is currently able to act as me" is one place.
-fn render_delegations(csrf_token: &str, grants: &[crate::delegation::Grant]) -> String {
+fn render_delegations(
+    csrf_token: &str,
+    grants: &[crate::delegation::Grant],
+    links: &[crate::delegation::ChannelIdentity],
+) -> String {
     if grants.is_empty() {
         return String::new();
     }
@@ -1225,6 +1233,48 @@ fn render_delegations(csrf_token: &str, grants: &[crate::delegation::Grant]) -> 
                 format!("expired {}", page_timestamp_utc(grant.expires_at))
             };
 
+            // The senders that can set this one going, each unlinkable on
+            // its own. Shown under the grant rather than in a list of their
+            // own because a link means nothing without the grant above it,
+            // and reading them apart would invite withdrawing the wrong one.
+            let senders = links
+                .iter()
+                .filter(|link| link.script_uri == grant.script_uri)
+                .map(|link| {
+                    format!(
+                        r#"<li>
+                    <div>
+                        <span class="where">{identity}</span>
+                        <span class="when">can start this on {channel}</span>
+                    </div>
+                    <form method="post" action="/auth/delegations/unlink">
+                        <input type="hidden" name="csrf_token" value="{csrf}">
+                        <input type="hidden" name="script" value="{script_value}">
+                        <input type="hidden" name="channel" value="{channel_value}">
+                        <input type="hidden" name="identity" value="{identity_value}">
+                        <button type="submit">Unlink</button>
+                    </form>
+                </li>"#,
+                        identity = html_escape::encode_text(&link.identity),
+                        channel = html_escape::encode_text(&link.channel),
+                        identity_value = html_attribute(&link.identity),
+                        channel_value = html_attribute(&link.channel),
+                        script_value = html_attribute(&link.script_uri),
+                        csrf = html_attribute(csrf_token),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n                ");
+
+            let senders = if senders.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n            <ul class=\"sessions\">\n                {}\n            </ul>",
+                    senders
+                )
+            };
+
             format!(
                 r#"<li>
                 <div>
@@ -1236,12 +1286,13 @@ fn render_delegations(csrf_token: &str, grants: &[crate::delegation::Grant]) -> 
                     <input type="hidden" name="script" value="{script_value}">
                     <button type="submit">Withdraw</button>
                 </form>
-            </li>"#,
+            </li>{senders}"#,
                 script = html_escape::encode_text(&grant.script_uri),
                 script_value = html_attribute(&grant.script_uri),
                 scopes = scopes,
                 when = when,
                 csrf = html_attribute(csrf_token),
+                senders = senders,
             )
         })
         .collect::<Vec<_>>()
@@ -1250,7 +1301,7 @@ fn render_delegations(csrf_token: &str, grants: &[crate::delegation::Grant]) -> 
     format!(
         r#"<h2>Apps acting for you</h2>
         <p class="explain">These can work on your behalf while you are away. Withdrawing one stops
-        it and cancels whatever it had queued.</p>
+        it, cancels whatever it had queued, and unlinks every sender that could start it.</p>
         <ul class="sessions">
             {rows}
         </ul>"#,
@@ -1268,6 +1319,20 @@ pub struct DelegateParams {
     /// Where to send the person once they have decided. Only a path on this
     /// engine, so the form cannot be used to bounce somebody off-site.
     redirect: Option<String>,
+    /// An invitation to link a sender, minted by a script in reply to a
+    /// message it received (`delegation::invite_link`).
+    ///
+    /// A token rather than the sender itself, and that is the security of
+    /// the whole scheme: `?channel=telegram&identity=12345` would be a URL
+    /// anybody could construct for anybody, and linking somebody else's
+    /// sender before they do intercepts their messages. The token is
+    /// delivered into the sender's own chat, so reaching this page for a
+    /// sender means being able to read that sender's messages.
+    ///
+    /// It rides along with the grant so that the person approves "this app,
+    /// these scopes, triggered by this sender" as one decision rather than
+    /// being asked a second question whose stakes they cannot judge.
+    link: Option<String>,
 }
 
 /// Ask somebody to authorise a script to act for them.
@@ -1299,9 +1364,36 @@ pub async fn delegate_page(
     let user_agent = client_ip::user_agent_from_headers(&headers);
     let host = get_request_host(&headers);
 
-    let Some(script) = params.script.filter(|s| !s.trim().is_empty()) else {
-        return (StatusCode::BAD_REQUEST, "A script must be named").into_response();
+    // The invitation, read before anything else, because it is what names
+    // the script when the URL does not. A link a bot sends into a chat
+    // carries only the token — the sender is deliberately not in it — so
+    // insisting on `?script=` here would refuse every real invitation.
+    //
+    // Reading never spends: the sign-in redirect, the back button and a
+    // reload all reach this before anybody has agreed to anything.
+    let invitation = match params.link.as_deref() {
+        Some(token) => crate::delegation::peek_invite(token).await,
+        None => None,
     };
+
+    // The query string wins when it names one, so the page shows what the
+    // URL asked for; the invitation fills in when it does not.
+    let script = match params.script.clone().filter(|s| !s.trim().is_empty()) {
+        Some(named) => named,
+        None => match invitation.as_ref() {
+            Some((for_script, _, _)) => for_script.clone(),
+            None => {
+                return (StatusCode::BAD_REQUEST, "A script must be named").into_response();
+            }
+        },
+    };
+
+    // Which makes this the place the two are held to each other: an
+    // invitation naming a different script than the page is showing is
+    // dropped rather than honoured. The token carries its own script
+    // precisely so that editing the query string cannot point one at a
+    // different solution.
+    let invitation = invitation.filter(|(for_script, _, _)| *for_script == script);
 
     let token =
         session_token_from_headers(&headers, &config.session_cookie_name).unwrap_or_default();
@@ -1317,7 +1409,14 @@ pub async fn delegate_page(
     let Some(session) = session else {
         // Back here after signing in, so the script's link works for somebody
         // whose session has aged out.
-        let here = crate::delegation::consent_url(&script);
+        // Carrying the invitation through the sign-in, so somebody arriving
+        // from a chat with no session does not lose what they came to link.
+        // The token is not spent by being shown, so it survives the round
+        // trip.
+        let here = match params.link.as_deref() {
+            Some(token) => crate::delegation::link_url(token),
+            None => crate::delegation::consent_url(&script),
+        };
         return Redirect::to(&format!(
             "/auth/login?redirect={}",
             urlencoding::encode(&here)
@@ -1357,6 +1456,53 @@ pub async fn delegate_page(
         .collect::<Vec<_>>()
         .join("\n                ");
 
+    // The sender, when one came along, and who already holds it.
+    //
+    // A pair already linked to somebody else is shown rather than silently
+    // dropped: the person is about to press a button that will not do what
+    // the page implies, and "another account has this" is the only useful
+    // thing to say.
+    let sender = invitation.map(|(_, channel, identity)| (channel, identity));
+    let sender_owner = match &sender {
+        Some((channel, identity)) => crate::delegation::resolve_channel(&script, channel, identity)
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
+
+    let (sender_note, sender_fields) = match &sender {
+        None => (String::new(), String::new()),
+        // Linked to somebody else: say so, and carry no fields, so pressing
+        // the button records the grant and attempts no link.
+        Some(_)
+            if sender_owner
+                .as_deref()
+                .is_some_and(|owner| owner != session.user_id) =>
+        {
+            (
+                r#"<p class="explain">Another account has already linked this sender to this app,
+        so it cannot be linked to yours. Authorising below still works; messages from that
+        sender will not reach you.</p>"#
+                    .to_string(),
+                String::new(),
+            )
+        }
+        Some((channel, identity)) => (
+            format!(
+                r#"<p class="explain">It will also be able to start work for you when
+        <strong>{identity}</strong> messages it on <strong>{channel}</strong>. Only that sender,
+        and only this app.</p>"#,
+                identity = html_escape::encode_text(identity),
+                channel = html_escape::encode_text(channel),
+            ),
+            format!(
+                r#"<input type="hidden" name="link" value="{link}">"#,
+                link = html_attribute(params.link.as_deref().unwrap_or_default()),
+            ),
+        ),
+    };
+
     let html = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -1375,10 +1521,12 @@ pub async fn delegate_page(
         <p class="explain">It can already do these things while you are using it. This lets it
         carry on after you close the page — for example to finish something long, or to check
         for you on a schedule. You can withdraw it at any time from your account page.</p>
+        {sender_note}
         <form method="post" action="/auth/delegate">
             <input type="hidden" name="csrf_token" value="{csrf}">
             <input type="hidden" name="script" value="{script_value}">
             <input type="hidden" name="redirect" value="{redirect}">
+            {sender_fields}
             {checkboxes}
             <label class="scope">Stop after
                 <select name="days">
@@ -1401,6 +1549,8 @@ pub async fn delegate_page(
         redirect = html_attribute(params.redirect.as_deref().unwrap_or(ACCOUNT_PATH)),
         csrf = html_attribute(&csrf_token),
         checkboxes = checkboxes,
+        sender_note = sender_note,
+        sender_fields = sender_fields,
     );
 
     html_page_response(html, &nonce)
@@ -1541,7 +1691,16 @@ pub async fn account_page(
     // there should be one place to look. A listing that fails is left out
     // rather than failing the page.
     let delegations = match crate::delegation::list_for_user(&session.user_id).await {
-        Ok(grants) => render_delegations(&csrf_token, &grants),
+        Ok(grants) => {
+            // A links listing that fails leaves the grants rendered without
+            // them, for the same reason the grants listing failing leaves the
+            // page without the section: half an account page is better than
+            // none, and the part that is shown is accurate.
+            let links = crate::delegation::list_channels_for_user(&session.user_id)
+                .await
+                .unwrap_or_default();
+            render_delegations(&csrf_token, &grants, &links)
+        }
         Err(e) => {
             tracing::error!("Could not list delegations for an account page: {}", e);
             String::new()
@@ -2924,6 +3083,9 @@ pub struct DelegateRequest {
     pub days: Option<i64>,
     pub csrf_token: Option<String>,
     pub redirect: Option<String>,
+    /// The invitation the consent page carried, when somebody arrived from a
+    /// chat. Spent here, so it links once and no more.
+    pub link: Option<String>,
 }
 
 /// Which scopes the person ticked.
@@ -2968,6 +3130,20 @@ fn scopes_from_body(style: RequestStyle, body: &[u8]) -> Vec<crate::delegation::
 #[derive(Debug, Deserialize, Default)]
 pub struct RevokeDelegationRequest {
     pub script: Option<String>,
+    pub csrf_token: Option<String>,
+    pub redirect: Option<String>,
+}
+
+/// What a person posted to unlink one sender, leaving the grant alone.
+///
+/// Separate from withdrawing, because they are different decisions: "stop
+/// this app acting for me" and "stop *that* sender being able to start it".
+/// Somebody who changed phone number wants the second and not the first.
+#[derive(Debug, Deserialize, Default)]
+pub struct UnlinkSenderRequest {
+    pub script: Option<String>,
+    pub channel: Option<String>,
+    pub identity: Option<String>,
     pub csrf_token: Option<String>,
     pub redirect: Option<String>,
 }
@@ -3067,12 +3243,50 @@ pub async fn delegate_route(
             crate::auth::error::AuthError::Internal("could not record the authorisation".into())
         })?;
 
+    // The link, if one came with it. After the grant rather than before,
+    // because a link without a grant authorises nothing and would be a row
+    // saying a sender may trigger work that does not exist.
+    //
+    // A refusal here does not fail the request. The person came to authorise
+    // an app and that happened; the pair being taken by another account is
+    // something the page already warned about, and turning it into a 500
+    // would throw away a grant they meant to give. It is reported in the
+    // answer instead.
+    let linked = match request.link.as_deref() {
+        // Spent here and nowhere else. Single use, so a link forwarded on
+        // after it has been used links nothing, and the delete that reads it
+        // is what stops two browsers racing on the same one.
+        Some(token) => match crate::delegation::spend_invite(token).await {
+            // An invitation for a different script than the form names is
+            // refused rather than honoured: the token carries its own script
+            // precisely so the two cannot be made to disagree.
+            Some((for_script, channel, identity)) if for_script == script => {
+                match crate::delegation::bind_channel(&session.user_id, script, &channel, &identity)
+                    .await
+                {
+                    Ok(_) => true,
+                    Err(refusal) => {
+                        tracing::warn!(
+                            script = %script,
+                            "Could not link a sender alongside a delegation: {}",
+                            refusal
+                        );
+                        false
+                    }
+                }
+            }
+            _ => false,
+        },
+        None => false,
+    };
+
     Ok(delegation_answer(
         style,
         request.redirect.as_deref(),
         "delegation_granted",
         serde_json::json!({
             "granted": true,
+            "linked": linked,
             "script": grant.script_uri,
             "scopes": grant.scopes.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
             "expiresAt": grant.expires_at.to_rfc3339(),
@@ -3158,6 +3372,99 @@ pub async fn revoke_delegation_route(
             "delegation_missing"
         },
         serde_json::json!({ "withdrawn": withdrawn }),
+    ))
+}
+
+/// Stop one sender being able to start this person's delegated work, leaving
+/// the grant itself alone.
+#[utoipa::path(
+    post,
+    path = "/auth/delegations/unlink",
+    tags = ["Authentication"],
+    responses(
+        (status = 200, description = "Whether anything was unlinked"),
+        (status = 302, description = "Form post; redirected back with a notice"),
+        (status = 401, description = "No session"),
+    )
+)]
+pub async fn unlink_sender_route(
+    State(auth_manager): State<Arc<AuthManager>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, AuthErrorResponse> {
+    let (request, style) = parse_auth_body::<UnlinkSenderRequest>(&headers, &body);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
+    let config = auth_manager.config();
+
+    let token = session_token_from_headers(&headers, &config.session_cookie_name)
+        .ok_or(crate::auth::error::AuthError::AuthenticationRequired)?;
+    let session = auth_manager
+        .get_session(
+            &token,
+            &ip_addr,
+            &user_agent,
+            get_request_host(&headers).as_deref(),
+        )
+        .await
+        .map_err(|_| crate::auth::error::AuthError::AuthenticationRequired)?;
+
+    if require_session_form_csrf(
+        &auth_manager,
+        style,
+        request.csrf_token.as_deref(),
+        &session.user_id,
+        true,
+    )
+    .await
+    .is_err()
+    {
+        return Ok(redirect_to_form_with_error(
+            &crate::auth::error::AuthError::CsrfValidationFailed,
+            request.redirect.as_deref().or(Some(ACCOUNT_PATH)),
+        ));
+    }
+
+    let script = request
+        .script
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    // Scoped to the caller's own user id inside the statement, as the grant
+    // revocation is: another account's link is not addressable from here
+    // however this is called.
+    // Unlinking names the pair directly rather than through an invitation,
+    // and needs no proof of owning the sender: the delete is scoped to the
+    // caller's own user id, so the worst a made-up pair does is match
+    // nothing. Requiring a token here would mean somebody could only unlink
+    // a sender they could still receive messages from, which is backwards —
+    // losing access to the chat is the commonest reason to want this.
+    let sender = match (request.channel.as_deref(), request.identity.as_deref()) {
+        (Some(channel), Some(identity)) => {
+            crate::delegation::normalize_channel(channel, identity).ok()
+        }
+        _ => None,
+    };
+
+    let unlinked = match (script, sender) {
+        (Some(script), Some((channel, identity))) => {
+            crate::delegation::unbind_channel(&session.user_id, script, &channel, &identity)
+                .await
+                .unwrap_or(false)
+        }
+        _ => false,
+    };
+
+    Ok(delegation_answer(
+        style,
+        request.redirect.as_deref(),
+        if unlinked {
+            "sender_unlinked"
+        } else {
+            "delegation_missing"
+        },
+        serde_json::json!({ "unlinked": unlinked }),
     ))
 }
 
@@ -5126,6 +5433,7 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
         .route("/sessions/revoke", post(revoke_session_route))
         .route("/delegate", get(delegate_page).post(delegate_route))
         .route("/delegations/revoke", post(revoke_delegation_route))
+        .route("/delegations/unlink", post(unlink_sender_route))
         .route("/logout", get(logout).post(logout))
         .route("/refresh", post(refresh_session))
         .route("/status", get(auth_status))

@@ -141,6 +141,20 @@ pub enum RateLimitKey {
     /// authenticated operation, and the account is what the budget should
     /// follow across whatever network the caller is on.
     GitSync(String),
+    /// Delegated work started by an inbound message, per sender.
+    ///
+    /// The only budget in the engine whose spender is chosen by whoever sends
+    /// the message rather than by whoever holds the account. A webhook is
+    /// reachable by anyone, so without this a linked sender is a way to run
+    /// somebody's agent in a loop — and an agent turn is a model call, which
+    /// is somebody's money.
+    ///
+    /// Keyed by the binding rather than by the account on purpose. Either way
+    /// an attacker who knows a linked sender can spend that person's budget,
+    /// because the trigger is attacker-controllable by definition; keying it
+    /// this way at least keeps the damage to the one channel rather than
+    /// stopping every other way that person's agent runs.
+    ChannelTrigger(String),
     /// Rate limit by endpoint/resource
     Endpoint(String),
     /// Rate limit by user and endpoint combination
@@ -159,6 +173,7 @@ impl RateLimitKey {
             RateLimitKey::LoginFailure(account) => format!("login_failure:{}", account),
             RateLimitKey::ClientRegistration(ip) => format!("client_registration:{}", ip),
             RateLimitKey::GitSync(user) => format!("git_sync:{}", user),
+            RateLimitKey::ChannelTrigger(binding) => format!("channel_trigger:{}", binding),
             RateLimitKey::Endpoint(endpoint) => format!("endpoint:{}", endpoint),
             RateLimitKey::UserEndpoint(user_id, endpoint) => {
                 format!("user_endpoint:{}:{}", user_id, endpoint)
@@ -292,6 +307,23 @@ impl RateLimiter {
             RateLimitConfig {
                 max_tokens: 60,
                 refill_rate: 1.0 / 10.0,
+                window_duration: Duration::hours(1),
+                burst_allowance: 0,
+                enabled: true,
+            },
+        );
+
+        // Delegated work started by one linked sender. Thirty to start with,
+        // then one more every thirty seconds: a person having a conversation
+        // with an agent over Telegram never reaches it, and a caller replaying
+        // a webhook stops within the minute. Deliberately tighter than the
+        // budgets above, because each of these is a model call somebody else
+        // pays for.
+        configs.insert(
+            "channel_trigger".to_string(),
+            RateLimitConfig {
+                max_tokens: 30,
+                refill_rate: 1.0 / 30.0,
                 window_duration: Duration::hours(1),
                 burst_allowance: 0,
                 enabled: true,
@@ -504,6 +536,7 @@ impl RateLimiter {
             RateLimitKey::LoginFailure(_) => "login_failure",
             RateLimitKey::ClientRegistration(_) => "client_registration",
             RateLimitKey::GitSync(_) => "git_sync",
+            RateLimitKey::ChannelTrigger(_) => "channel_trigger",
             RateLimitKey::Endpoint(_) => "endpoint",
             RateLimitKey::UserEndpoint(_, _) => "user",
             RateLimitKey::IpEndpoint(_, _) => "ip",

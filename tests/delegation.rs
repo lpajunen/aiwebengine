@@ -699,6 +699,681 @@ async fn a_read_only_grant_stops_a_delegated_task_from_writing() {
     );
 }
 
+// ============================================================================
+// Work started by an inbound message
+// ============================================================================
+//
+// An inbound webhook arrives with nobody signed in, so there is no session,
+// so there is no person — which is what put every channel an agent might
+// live on out of reach. What closes that is a link: the person says which
+// sender may set their delegated work going, and the script names the sender
+// rather than the person.
+//
+// These cover the boundary that decision creates. The engine cannot verify
+// that a message really came from a sender — that is the script's job, and
+// the documentation says so — so what it *can* enforce is everything else:
+// an unlinked sender reaches nobody, a linked sender reaches exactly one
+// person, a grant is still required, and withdrawing either half stops it.
+
+/// A webhook handler, with nobody signed in, running work as the person a
+/// message came from. The whole point of the feature.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_linked_sender_can_start_work_with_nobody_signed_in() {
+    setup_env().await;
+    let user_id = a_user("linked").await;
+    let script_uri = "test://delegation/linked";
+
+    repository::upsert_script(
+        script_uri,
+        r#"
+        function work(context) {
+          personalStorage.setItem("heard", context.meta.task.payload.text);
+        }
+        "#,
+    )
+    .expect("script should store");
+
+    delegation::grant(
+        &user_id,
+        script_uri,
+        &[Scope::PersonalStorage, Scope::Write],
+        Duration::days(1),
+    )
+    .await
+    .expect("granted");
+    delegation::bind_channel(&user_id, script_uri, "telegram", "12345")
+        .await
+        .expect("linked");
+
+    // What the webhook handler would do: resolve the sender, enqueue as them.
+    let resolved = delegation::resolve_channel(script_uri, "telegram", "12345")
+        .await
+        .expect("lookup")
+        .expect("the sender is linked");
+    assert_eq!(resolved, user_id);
+
+    let task = tasks::enqueue(NewTask {
+        payload: json!({ "text": "hello from the chat" }),
+        // Nobody asked as themselves: this is the shape `enqueueFrom` builds.
+        enqueued_by: None,
+        ..personal_task(script_uri, "work", &user_id)
+    })
+    .await
+    .expect("accepted");
+    tasks::run_due_now("test-worker").await;
+
+    assert!(
+        tasks::get(task.task_id).await.expect("lookup").is_none(),
+        "the task should have succeeded"
+    );
+    assert_eq!(
+        repository::get_user_properties_item(script_uri, &user_id, "heard").as_deref(),
+        Some("hello from the chat"),
+        "the work should have run as the person the message came from"
+    );
+}
+
+/// The refusal that matters most: a sender nobody linked is nobody. This is
+/// what stops a script naming a person it has no message from, and what
+/// makes a buggy handler unable to reach past the sender it was given.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unlinked_sender_resolves_to_nobody() {
+    setup_env().await;
+    let user_id = a_user("unlinked").await;
+    let script_uri = "test://delegation/unlinked";
+
+    // A live grant, and no link. A grant alone must not be enough — it says
+    // the app may act while they are away, not that anyone who can reach the
+    // app's routes may choose when.
+    delegation::grant(&user_id, script_uri, &Scope::all(), Duration::days(1))
+        .await
+        .expect("granted");
+
+    assert_eq!(
+        delegation::resolve_channel(script_uri, "telegram", "12345")
+            .await
+            .expect("lookup"),
+        None,
+        "a grant without a link reaches nobody"
+    );
+}
+
+/// A link is per script. Being reachable on one solution says nothing about
+/// another, exactly as the grant does not carry across.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_does_not_carry_to_another_script() {
+    setup_env().await;
+    let user_id = a_user("per-script").await;
+    let linked = "test://delegation/link-here";
+    let other = "test://delegation/link-elsewhere";
+
+    delegation::bind_channel(&user_id, linked, "telegram", "12345")
+        .await
+        .expect("linked");
+
+    assert_eq!(
+        delegation::resolve_channel(other, "telegram", "12345")
+            .await
+            .expect("lookup"),
+        None,
+    );
+}
+
+/// Two accounts cannot claim one sender on one script: the engine would have
+/// no way to say which of them a message is from. The second is refused
+/// rather than allowed to replace the first, because silently moving a
+/// binding is a takeover.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sender_belongs_to_at_most_one_account_per_script() {
+    setup_env().await;
+    let first = a_user("claimant-one").await;
+    let second = a_user("claimant-two").await;
+    let script_uri = "test://delegation/contested";
+
+    assert!(
+        delegation::bind_channel(&first, script_uri, "telegram", "12345")
+            .await
+            .expect("the first claim should be recorded")
+    );
+
+    assert_eq!(
+        delegation::bind_channel(&second, script_uri, "telegram", "12345")
+            .await
+            .unwrap_err(),
+        delegation::ChannelRefusal::TakenByAnother,
+    );
+
+    assert_eq!(
+        delegation::resolve_channel(script_uri, "telegram", "12345")
+            .await
+            .expect("lookup")
+            .as_deref(),
+        Some(first.as_str()),
+        "the first claim stands"
+    );
+}
+
+/// Re-linking your own sender is not an error. A person who authorises the
+/// same app twice from the same chat should not see a failure.
+#[tokio::test(flavor = "multi_thread")]
+async fn linking_your_own_sender_again_is_not_an_error() {
+    setup_env().await;
+    let user_id = a_user("relink").await;
+    let script_uri = "test://delegation/relink";
+
+    assert!(
+        delegation::bind_channel(&user_id, script_uri, "telegram", "12345")
+            .await
+            .expect("first")
+    );
+    assert!(
+        !delegation::bind_channel(&user_id, script_uri, "telegram", "12345")
+            .await
+            .expect("second"),
+        "nothing new was written, and that is not a failure"
+    );
+}
+
+/// The channel is folded and the sender is not, end to end through the
+/// store — so a handler that reports `Telegram` finds what was linked as
+/// `telegram`, and one that reports a differently-cased Slack id does not.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_is_found_by_a_folded_channel_and_an_exact_sender() {
+    setup_env().await;
+    let user_id = a_user("folding").await;
+    let script_uri = "test://delegation/folding";
+
+    delegation::bind_channel(&user_id, script_uri, "Telegram", "U123aBc")
+        .await
+        .expect("linked");
+
+    let (channel, identity) = delegation::normalize_channel("TELEGRAM", "U123aBc").expect("usable");
+    assert_eq!(
+        delegation::resolve_channel(script_uri, &channel, &identity)
+            .await
+            .expect("lookup")
+            .as_deref(),
+        Some(user_id.as_str()),
+    );
+
+    let (channel, identity) = delegation::normalize_channel("telegram", "u123abc").expect("usable");
+    assert_eq!(
+        delegation::resolve_channel(script_uri, &channel, &identity)
+            .await
+            .expect("lookup"),
+        None,
+        "a different sender is a different sender"
+    );
+}
+
+/// Withdrawing the grant takes the links with it. A link that outlived its
+/// grant would come back to life the next time that person authorised the
+/// script for some unrelated reason.
+#[tokio::test(flavor = "multi_thread")]
+async fn withdrawing_a_grant_unlinks_its_senders() {
+    setup_env().await;
+    let user_id = a_user("withdraw-links").await;
+    let script_uri = "test://delegation/withdraw-links";
+
+    delegation::grant(&user_id, script_uri, &Scope::all(), Duration::days(1))
+        .await
+        .expect("granted");
+    delegation::bind_channel(&user_id, script_uri, "telegram", "12345")
+        .await
+        .expect("linked");
+
+    delegation::revoke(&user_id, script_uri)
+        .await
+        .expect("withdrawn");
+
+    assert_eq!(
+        delegation::resolve_channel(script_uri, "telegram", "12345")
+            .await
+            .expect("lookup"),
+        None,
+        "the sender should no longer reach anybody"
+    );
+    assert!(
+        delegation::list_channels_for_user(&user_id)
+            .await
+            .expect("listing")
+            .is_empty()
+    );
+}
+
+/// And "sign out everywhere" reaches them too, for the reason it reaches
+/// the grants: this runs when an account's roles change, its realm narrows,
+/// or it is deleted, and a session list cannot show a sender that can start
+/// background work.
+#[tokio::test(flavor = "multi_thread")]
+async fn revoking_everything_unlinks_every_sender() {
+    setup_env().await;
+    let user_id = a_user("revoke-all-links").await;
+
+    for script_uri in ["test://delegation/all-a", "test://delegation/all-b"] {
+        delegation::grant(&user_id, script_uri, &Scope::all(), Duration::days(1))
+            .await
+            .expect("granted");
+        delegation::bind_channel(&user_id, script_uri, "telegram", "12345")
+            .await
+            .expect("linked");
+    }
+
+    delegation::revoke_all(&user_id).await.expect("revoked");
+
+    assert!(
+        delegation::list_channels_for_user(&user_id)
+            .await
+            .expect("listing")
+            .is_empty()
+    );
+}
+
+/// Unlinking one sender leaves the grant alone. Somebody who changed phone
+/// number wants that and not a withdrawal, and the two are separate buttons
+/// on the account page because they are separate decisions.
+#[tokio::test(flavor = "multi_thread")]
+async fn unlinking_a_sender_leaves_the_grant_standing() {
+    setup_env().await;
+    let user_id = a_user("unlink-one").await;
+    let script_uri = "test://delegation/unlink-one";
+
+    delegation::grant(&user_id, script_uri, &Scope::all(), Duration::days(1))
+        .await
+        .expect("granted");
+    delegation::bind_channel(&user_id, script_uri, "telegram", "old")
+        .await
+        .expect("linked");
+    delegation::bind_channel(&user_id, script_uri, "telegram", "new")
+        .await
+        .expect("linked");
+
+    assert!(
+        delegation::unbind_channel(&user_id, script_uri, "telegram", "old")
+            .await
+            .expect("unlinked")
+    );
+
+    assert_eq!(
+        delegation::resolve_channel(script_uri, "telegram", "old")
+            .await
+            .expect("lookup"),
+        None
+    );
+    assert_eq!(
+        delegation::resolve_channel(script_uri, "telegram", "new")
+            .await
+            .expect("lookup")
+            .as_deref(),
+        Some(user_id.as_str()),
+        "the other sender is untouched"
+    );
+    assert!(
+        delegation::get(&user_id, script_uri)
+            .await
+            .expect("lookup")
+            .is_some(),
+        "the grant itself should still stand"
+    );
+}
+
+/// One account cannot unlink another's sender, however the call is spelled:
+/// the delete is scoped to the caller in the statement rather than by a
+/// check before it.
+#[tokio::test(flavor = "multi_thread")]
+async fn unlinking_is_scoped_to_your_own_links() {
+    setup_env().await;
+    let owner = a_user("link-owner").await;
+    let outsider = a_user("link-outsider").await;
+    let script_uri = "test://delegation/link-scoped";
+
+    delegation::bind_channel(&owner, script_uri, "telegram", "12345")
+        .await
+        .expect("linked");
+
+    assert!(
+        !delegation::unbind_channel(&outsider, script_uri, "telegram", "12345")
+            .await
+            .expect("the statement should run and match nothing")
+    );
+    assert_eq!(
+        delegation::resolve_channel(script_uri, "telegram", "12345")
+            .await
+            .expect("lookup")
+            .as_deref(),
+        Some(owner.as_str()),
+    );
+}
+
+/// The JavaScript surface, driven the way a webhook drives it: an anonymous
+/// request with no session at all, which is the context every one of these
+/// arrives in.
+///
+/// Three things in one handler, because they are the three answers a bot
+/// needs and getting any of them wrong is the whole feature: an unknown
+/// sender gets a link to send them, a known one gets work queued as the
+/// person, and neither needed anybody to be signed in.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_webhook_with_no_session_reaches_the_person_a_message_came_from() {
+    setup_env().await;
+    let user_id = a_user("webhook").await;
+    let script_uri = "test://delegation/webhook";
+
+    repository::upsert_script(
+        script_uri,
+        r#"
+        function hook(context) {
+          const stranger = personalTasks.sender({
+            channel: "telegram", identity: "99999",
+          });
+          const known = personalTasks.sender({
+            channel: "telegram", identity: "12345",
+          });
+          // What a bot replies to an unknown sender with — into that
+          // sender's own chat, which is what proves they own it.
+          const invite = personalTasks.inviteLink({
+            channel: "telegram", identity: "99999",
+          });
+
+          let queued = null;
+          let refused = null;
+          try {
+            queued = personalTasks.enqueueFrom({
+              channel: "telegram",
+              identity: "12345",
+              handler: "runTurn",
+              payload: { text: "from the chat" },
+            }).taskId;
+          } catch (e) {
+            refused = String(e.message || e);
+          }
+
+          let strangerRefused = null;
+          try {
+            personalTasks.enqueueFrom({
+              channel: "telegram", identity: "99999", handler: "runTurn",
+            });
+          } catch (e) {
+            strangerRefused = String(e.message || e);
+          }
+
+          return {
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              strangerLinked: stranger.linked,
+              strangerLink: invite.linkUrl,
+              knownGranted: known.granted,
+              queued: queued !== null,
+              refused,
+              strangerRefused,
+            }),
+          };
+        }
+
+        function runTurn(context) {
+          personalStorage.setItem("turn", context.meta.task.payload.text);
+        }
+        "#,
+    )
+    .expect("script should store");
+
+    delegation::grant(
+        &user_id,
+        script_uri,
+        &[Scope::PersonalStorage, Scope::Write],
+        Duration::days(1),
+    )
+    .await
+    .expect("granted");
+    delegation::bind_channel(&user_id, script_uri, "telegram", "12345")
+        .await
+        .expect("linked");
+
+    let response = tokio::task::spawn_blocking(move || {
+        js_engine::execute_script_for_request_secure(js_engine::RequestExecutionParams {
+            script_uri: script_uri.to_string(),
+            handler_name: "hook".to_string(),
+            path: "/hooks/telegram".to_string(),
+            method: "POST".to_string(),
+            query_params: None,
+            url: None,
+            form_data: None,
+            raw_body: None,
+            headers: Default::default(),
+            // Nobody signed in. This is the context the whole feature is for.
+            user_context: aiwebengine::security::UserContext::anonymous(),
+            auth_context: None,
+            route_params: None,
+            uploaded_files: None,
+            request_id: None,
+            route_pattern: None,
+        })
+    })
+    .await
+    .expect("no panic")
+    .expect("the handler should answer");
+
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.body).expect("the handler answers JSON");
+
+    assert_eq!(
+        body["refused"],
+        json!(null),
+        "the linked sender should work"
+    );
+    assert_eq!(body["queued"], json!(true));
+    assert_eq!(body["knownGranted"], json!(true));
+
+    // The unknown one gets a page to send them to rather than a person.
+    assert_eq!(body["strangerLinked"], json!(false));
+    let invitation = body["strangerLink"].as_str().unwrap_or_default();
+    assert!(
+        invitation.starts_with("/auth/delegate?link=lnk_"),
+        "an unknown sender should be answered with an invitation: {}",
+        invitation
+    );
+    // The sender is not in the URL, and that is the point: a link that named
+    // it would be one anybody could construct for anybody.
+    assert!(
+        !invitation.contains("99999"),
+        "an invitation must not name the sender it is for: {}",
+        invitation
+    );
+    assert!(
+        body["strangerRefused"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("nobody has linked that sender"),
+        "an unknown sender must not reach anybody: {}",
+        body["strangerRefused"]
+    );
+
+    // And the queued work really does act as the person.
+    tasks::run_due_now("test-worker").await;
+    assert_eq!(
+        repository::get_user_properties_item(script_uri, &user_id, "turn").as_deref(),
+        Some("from the chat"),
+        "the turn should have run as the person the message came from"
+    );
+}
+
+/// The invitation is what stops a stranger linking somebody else's sender,
+/// and the harm it prevents is interception rather than squatting: bind a
+/// victim's chat id before they do, and every message they send that bot is
+/// processed as *your* turn, with their text landing in your storage.
+///
+/// So the only way to the consent page for a sender is a token a script
+/// minted in reply to a message from it — which means being able to read
+/// that sender's messages.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invitation_is_needed_and_is_spent_once() {
+    setup_env().await;
+    let script_uri = "test://delegation/invitation";
+
+    let url = delegation::invite_link(script_uri, "telegram", "12345")
+        .await
+        .expect("minted");
+    let token = url
+        .strip_prefix("/auth/delegate?link=")
+        .expect("the URL carries the token")
+        .to_string();
+
+    // Reading it does not spend it: the sign-in redirect, the back button
+    // and a reload all reach the page before anybody has agreed to anything.
+    for _ in 0..3 {
+        assert_eq!(
+            delegation::peek_invite(&token).await,
+            Some((
+                script_uri.to_string(),
+                "telegram".to_string(),
+                "12345".to_string()
+            )),
+        );
+    }
+
+    assert_eq!(
+        delegation::spend_invite(&token).await,
+        Some((
+            script_uri.to_string(),
+            "telegram".to_string(),
+            "12345".to_string()
+        )),
+    );
+
+    // Single use. A link forwarded on after somebody used it links nothing,
+    // and two browsers racing on one cannot both bind.
+    assert_eq!(delegation::spend_invite(&token).await, None);
+    assert_eq!(delegation::peek_invite(&token).await, None);
+}
+
+/// A guessed token is nothing. The sender is not in the URL, so there is
+/// nothing to construct one from.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invented_invitation_names_nothing() {
+    setup_env().await;
+    assert_eq!(delegation::peek_invite("lnk_not-a-real-token").await, None);
+    assert_eq!(delegation::spend_invite("").await, None);
+}
+
+/// Minting again invalidates the link already sent. That is what somebody
+/// re-requesting a link expects, and it bounds the table at one live row per
+/// sender rather than one per message.
+#[tokio::test(flavor = "multi_thread")]
+async fn minting_again_replaces_the_link_already_outstanding() {
+    setup_env().await;
+    let script_uri = "test://delegation/remint";
+
+    let first = delegation::invite_link(script_uri, "telegram", "12345")
+        .await
+        .expect("minted");
+    let second = delegation::invite_link(script_uri, "telegram", "12345")
+        .await
+        .expect("minted again");
+    assert_ne!(first, second, "each invitation is its own secret");
+
+    let stale = first
+        .strip_prefix("/auth/delegate?link=")
+        .expect("the URL carries the token");
+    assert_eq!(
+        delegation::peek_invite(stale).await,
+        None,
+        "the earlier link should have stopped working"
+    );
+
+    let live = second
+        .strip_prefix("/auth/delegate?link=")
+        .expect("the URL carries the token");
+    assert!(delegation::peek_invite(live).await.is_some());
+}
+
+/// An invitation names its own script, so one minted by a chatty solution
+/// cannot be redeemed against a different one by editing the form.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invitation_is_bound_to_the_script_that_minted_it() {
+    setup_env().await;
+    let minted_by = "test://delegation/invite-mine";
+
+    let url = delegation::invite_link(minted_by, "telegram", "12345")
+        .await
+        .expect("minted");
+    let token = url
+        .strip_prefix("/auth/delegate?link=")
+        .expect("the URL carries the token");
+
+    let (for_script, _, _) = delegation::peek_invite(token).await.expect("readable");
+    assert_eq!(
+        for_script, minted_by,
+        "the consent page compares this against the script it is showing"
+    );
+}
+
+/// A link is not a grant. Somebody who unlinked their chat still has the
+/// app authorised, and somebody whose authorisation lapsed cannot be
+/// triggered however well-known their sender is.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_without_a_live_grant_starts_nothing() {
+    setup_env().await;
+    let user_id = a_user("lapsed-link").await;
+    let script_uri = "test://delegation/lapsed-link";
+
+    repository::upsert_script(
+        script_uri,
+        r#"
+        function hook(context) {
+          try {
+            personalTasks.enqueueFrom({
+              channel: "telegram", identity: "12345", handler: "runTurn",
+            });
+            return { status: 200, body: "queued", contentType: "text/plain" };
+          } catch (e) {
+            return { status: 200, body: String(e.message || e), contentType: "text/plain" };
+          }
+        }
+        function runTurn() {}
+        "#,
+    )
+    .expect("script should store");
+
+    // Linked, and authorised until a minute ago.
+    delegation::bind_channel(&user_id, script_uri, "telegram", "12345")
+        .await
+        .expect("linked");
+    delegation::grant(&user_id, script_uri, &Scope::all(), Duration::minutes(-1))
+        .await
+        .expect("granted");
+
+    let response = tokio::task::spawn_blocking(move || {
+        js_engine::execute_script_for_request_secure(js_engine::RequestExecutionParams {
+            script_uri: script_uri.to_string(),
+            handler_name: "hook".to_string(),
+            path: "/hooks/telegram".to_string(),
+            method: "POST".to_string(),
+            query_params: None,
+            url: None,
+            form_data: None,
+            raw_body: None,
+            headers: Default::default(),
+            user_context: aiwebengine::security::UserContext::anonymous(),
+            auth_context: None,
+            route_params: None,
+            uploaded_files: None,
+            request_id: None,
+            route_pattern: None,
+        })
+    })
+    .await
+    .expect("no panic")
+    .expect("the handler should answer");
+
+    let body = String::from_utf8_lossy(&response.body).to_string();
+    assert!(
+        body.contains("has expired"),
+        "a lapsed grant must not be startable by a linked sender: {}",
+        body
+    );
+}
+
 /// `Utc` is used by the lapse test through sqlx; this keeps the import honest.
 #[allow(dead_code)]
 fn _uses_utc() -> chrono::DateTime<Utc> {

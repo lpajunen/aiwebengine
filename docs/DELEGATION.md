@@ -116,6 +116,146 @@ None of this narrows an ordinary request. A person acting for themselves _is_
 the person, so there is no grant to hold them to — the scopes only ever take
 things away, and only from work running while they are absent.
 
+## Who may set it going: linked senders
+
+A grant answers "may this app act for me". It does not answer "who gets to
+decide when". For work the app starts itself — a schedule, a job it queued
+during your own visit — those are the same question. For an **inbound
+webhook** they are not: a Telegram or Slack message arrives with nobody
+signed in, and whoever sent it chooses the moment and the payload.
+
+That is the gap that kept an agent off every channel people actually use.
+There is no session, so there is no person, so there was nothing to enqueue
+against.
+
+### A script names a sender, never a person
+
+The obvious fix — let a script name the user id it wants to act as — is the
+wrong one. Anyone who can reach a webhook could then try to start anybody's
+agent, and one script that trusted the wrong field in a request body would be
+a way to spend other people's money.
+
+So the person also has to say **which sender** may trigger their work, and the
+script names that sender rather than the account:
+
+```javascript
+// A Telegram webhook, after checking the secret token Telegram sends.
+const from = String(update.message.from.id);
+
+const who = personalTasks.sender({ channel: "telegram", identity: from });
+if (!who.granted) {
+  // Minted here, and replied with *into that chat* — see below.
+  const invite = personalTasks.inviteLink({
+    channel: "telegram",
+    identity: from,
+  });
+  return reply(`Authorise me first: ${invite.linkUrl}`);
+}
+
+personalTasks.enqueueFrom({
+  channel: "telegram",
+  identity: from,
+  handler: "runTurn",
+  payload: { text: update.message.text },
+});
+```
+
+The engine resolves `{channel, identity}` through the links people have
+consented to. An unlinked sender resolves to nobody and nothing runs. There is
+no user id anywhere in that code, which is the property worth having: a
+handler that trusts the wrong field can be made to claim the wrong **sender**,
+and not to name a different account, and not to enumerate one.
+
+`sender()` deliberately never answers with the account's id either —
+everything a script can do for that person goes through `enqueueFrom`, and an
+id would end up in whatever the bot logs or echoes back into the chat.
+
+### The link is a token, not a name
+
+The consent page cannot take `?channel=telegram&identity=12345`. That URL is
+one anybody can construct for anybody, so linking would be first come, first
+served on a guessable string — and the harm there is not squatting but
+**interception**. Bind a victim's chat id to your own account before they do,
+and every message they send that bot is processed as _your_ turn, with their
+text landing in _your_ storage.
+
+So `inviteLink()` mints a single-use token, expiring in fifteen minutes, and
+the URL carries only that. The sender is not in it. A script mints one in
+reply to a message it actually received and sends it into that chat, which
+means **reaching the consent page for a sender requires being able to read
+that sender's messages** — the only evidence of ownership the engine can have,
+and the one a query parameter could never carry.
+
+Two consequences worth knowing:
+
+- **Reply with the link into the sender's own chat, and nowhere else.**
+  Posting it anywhere they cannot read gives away exactly the thing it
+  proves.
+- **Minting again invalidates the link already sent.** That is what somebody
+  re-requesting one expects, and it bounds the table at one live row per
+  sender. So call it where a bot decides to send a link, not in a loop that
+  polls `sender()`.
+
+Reading a token does not spend it — the sign-in redirect, the back button and
+a reload all reach the page before anybody has agreed to anything. Consenting
+spends it, in the statement that reads it, so two browsers racing on one link
+cannot both bind.
+
+Unlinking needs no token. The delete is scoped to the caller's own account, so
+a made-up pair matches nothing — and requiring proof there would mean you
+could only unlink a sender you could still receive messages from, which is
+backwards: losing access to the chat is the commonest reason to want it.
+
+### What the engine cannot do
+
+**Verify the message really came from that sender.** Telegram and Slack sign
+their webhooks; email largely does not. Checking that signature is the
+script's job, and no amount of schema can do it — a handler that reads the
+sender straight from an unauthenticated body is a way for anyone who can reach
+the route to start that person's agent.
+
+This is said here rather than papered over, because it is the one part of the
+chain the engine does not hold.
+
+### The rules around a link
+
+**Both halves are required.** A link says which sender may trigger; the grant
+says whether there is anything to trigger. `enqueueFrom` checks both, at the
+moment of the call, exactly as the task worker re-checks the grant when it
+runs.
+
+**One sender is at most one person per script.** Two accounts claiming the
+same Telegram id would be a question the engine cannot answer, so the second
+is refused — and refused rather than allowed to replace the first, since
+silently moving a binding is a takeover. With invitations in place this is a
+backstop rather than the defence: reaching the page at all takes a token from
+that sender's chat.
+
+**The channel is folded, the sender is not.** `Telegram` and `telegram` are
+the same place, because the slug is one the solution chose. A Slack user id is
+case-sensitive and belongs to the far end, so folding it would make two
+senders look like one.
+
+**Consent is one decision.** The invitation resolves at `/auth/delegate`,
+which shows "it will also be able to start work for you when _12345_ messages
+it on _telegram_" beside the scopes. The person approves the app, the scopes
+and the trigger together, rather than being asked a second question whose
+stakes they have no way to judge.
+
+**Triggers are budgeted.** `RateLimitKey::ChannelTrigger` — thirty, then one
+every thirty seconds, per link. It is the only budget in the engine whose
+spender is chosen by whoever sends the message, and each spend is a model call
+somebody else pays for. Keying it by the link rather than by the account
+does not stop an attacker who knows a linked sender from exhausting it — the
+trigger is attacker-controllable by definition — but it keeps the damage to
+that one channel.
+
+**Unlinking and withdrawing are separate.** Somebody who changed phone number
+wants the first. Both are buttons on `/auth/account`, under the app they
+belong to, and withdrawing the grant unlinks every sender with it — a link
+that outlived its grant would come back to life the next time that person
+authorised the script for some unrelated reason.
+
 ## Re-read, never carried forward
 
 A task records _who_ it runs as and nothing else. Every capability it gets is

@@ -366,10 +366,26 @@ pub async fn revoke(user_id: &str, script_uri: &str) -> Result<bool, sqlx::Error
     let removed = result.rows_affected() > 0;
     if removed {
         let cancelled = crate::tasks::cancel_delegated(user_id, Some(script_uri)).await;
+        // The senders that could set this work going go with it. A binding
+        // that outlived its grant would be a row saying somebody may trigger
+        // a delegation that no longer exists — harmless today, since the
+        // enqueue checks the grant, and exactly the kind of leftover that
+        // silently comes back to life when the person authorises the script
+        // again for some unrelated reason.
+        let unlinked = sqlx::query(
+            "DELETE FROM script_channel_identities WHERE user_id = $1 AND script_uri = $2",
+        )
+        .bind(user_id)
+        .bind(script_uri)
+        .execute(db.pool())
+        .await
+        .map(|done| done.rows_affected())
+        .unwrap_or_default();
         debug!(
             user = %user_id,
             script = %script_uri,
             cancelled = cancelled.unwrap_or(0),
+            unlinked = unlinked,
             "Delegation revoked"
         );
     }
@@ -394,8 +410,416 @@ pub async fn revoke_all(user_id: &str) -> Result<u64, sqlx::Error> {
         .execute(db.pool())
         .await?;
 
+    // Every sender that could set any of it going, for the same reason: this
+    // runs when an account's roles change, its realm narrows, or it is
+    // deleted, and "everything that can act as you is gone" has to include
+    // the ways to start it.
+    let _ = sqlx::query("DELETE FROM script_channel_identities WHERE user_id = $1")
+        .bind(user_id)
+        .execute(db.pool())
+        .await;
+
     let _ = crate::tasks::cancel_delegated(user_id, None).await;
     Ok(result.rows_affected())
+}
+
+// ============================================================================
+// Which sender may set a person's delegated work going
+// ============================================================================
+
+/// The longest a channel slug or a sender's identity may be.
+///
+/// Both arrive from a script, which got them from a request body, so both are
+/// attacker-shaped. Neither is ever interpreted — they are compared — so the
+/// cap is about what is worth storing rather than about safety.
+const MAX_CHANNEL_CHARS: usize = 64;
+const MAX_IDENTITY_CHARS: usize = 256;
+
+/// A sender that may trigger one person's delegated work on one script.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelIdentity {
+    pub user_id: String,
+    pub script_uri: String,
+    pub channel: String,
+    pub identity: String,
+    pub granted_at: DateTime<Utc>,
+}
+
+impl ChannelIdentity {
+    fn from_row(row: &sqlx::postgres::PgRow) -> Self {
+        Self {
+            user_id: row.get("user_id"),
+            script_uri: row.get("script_uri"),
+            channel: row.get("channel"),
+            identity: row.get("identity"),
+            granted_at: row.get("granted_at"),
+        }
+    }
+}
+
+/// Why a binding could not be recorded or used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChannelRefusal {
+    /// The channel slug or the identity is empty, or longer than the cap.
+    Unusable(&'static str),
+    /// Somebody else has already bound this sender on this script.
+    ///
+    /// Refused rather than replaced: moving a binding from one account to
+    /// another is a takeover, and the engine has no way to tell which of two
+    /// claimants really owns a Telegram id. The cost is that a squatter can
+    /// stop the rightful owner from binding — which buys the squatter
+    /// nothing, since triggers then run as *them*, spending their budget and
+    /// reading their storage — so it is a nuisance to be unpicked by an
+    /// administrator rather than a way in.
+    TakenByAnother,
+}
+
+impl std::fmt::Display for ChannelRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChannelRefusal::Unusable(why) => write!(f, "{}", why),
+            ChannelRefusal::TakenByAnother => write!(
+                f,
+                "another account has already linked that sender to this script"
+            ),
+        }
+    }
+}
+
+/// Normalise and bound the pair a caller gave.
+///
+/// The channel is lower-cased, because it is a slug the solution chooses and
+/// `Telegram` and `telegram` are the same place. The identity is not, because
+/// it belongs to the far end: a Slack user id is case-sensitive, and folding
+/// it would make two senders look like one.
+pub fn normalize_channel(
+    channel: &str,
+    identity: &str,
+) -> Result<(String, String), ChannelRefusal> {
+    let channel = channel.trim().to_lowercase();
+    let identity = identity.trim().to_string();
+
+    if channel.is_empty() {
+        return Err(ChannelRefusal::Unusable("the channel cannot be empty"));
+    }
+    if identity.is_empty() {
+        return Err(ChannelRefusal::Unusable("the sender cannot be empty"));
+    }
+    if channel.chars().count() > MAX_CHANNEL_CHARS {
+        return Err(ChannelRefusal::Unusable("that channel name is too long"));
+    }
+    if identity.chars().count() > MAX_IDENTITY_CHARS {
+        return Err(ChannelRefusal::Unusable("that sender id is too long"));
+    }
+
+    Ok((channel, identity))
+}
+
+/// Record that this sender may trigger this person's delegated work.
+///
+/// Answers `true` when something was written and `false` when this same
+/// person had already bound it, so a person re-consenting is not an error.
+pub async fn bind_channel(
+    user_id: &str,
+    script_uri: &str,
+    channel: &str,
+    identity: &str,
+) -> Result<bool, ChannelRefusal> {
+    let (channel, identity) = normalize_channel(channel, identity)?;
+
+    let Some(db) = crate::database::get_global_database() else {
+        return Err(ChannelRefusal::Unusable("the engine has no database"));
+    };
+
+    // `DO NOTHING` rather than `DO UPDATE`, so a row belonging to somebody
+    // else survives and is reported below. An upsert here would be the
+    // takeover this is meant to refuse.
+    let inserted = sqlx::query(
+        r#"
+        INSERT INTO script_channel_identities (user_id, script_uri, channel, identity)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (script_uri, channel, identity) DO NOTHING
+        "#,
+    )
+    .bind(user_id)
+    .bind(script_uri)
+    .bind(&channel)
+    .bind(&identity)
+    .execute(db.pool())
+    .await
+    .map_err(|e| {
+        warn!(script = %script_uri, error = %e, "Could not record a channel identity");
+        ChannelRefusal::Unusable("the link could not be recorded")
+    })?;
+
+    if inserted.rows_affected() > 0 {
+        debug!(user = %user_id, script = %script_uri, channel = %channel, "Channel identity linked");
+        return Ok(true);
+    }
+
+    // Nothing was written, so the row exists. Whose is it?
+    match resolve_channel(script_uri, &channel, &identity).await {
+        Ok(Some(owner)) if owner == user_id => Ok(false),
+        _ => Err(ChannelRefusal::TakenByAnother),
+    }
+}
+
+/// Who this sender is, on this script.
+///
+/// The whole of what a script may ask. It cannot ask for a person by id,
+/// which is the point: a script that trusted the wrong field in a request
+/// body can then claim to be the wrong *sender*, and not to be a different
+/// person — an unbound sender resolves to nobody and nothing runs.
+pub async fn resolve_channel(
+    script_uri: &str,
+    channel: &str,
+    identity: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    let Some(db) = crate::database::get_global_database() else {
+        return Ok(None);
+    };
+
+    let row = sqlx::query(
+        r#"
+        SELECT user_id
+        FROM script_channel_identities
+        WHERE script_uri = $1 AND channel = $2 AND identity = $3
+        "#,
+    )
+    .bind(script_uri)
+    .bind(channel)
+    .bind(identity)
+    .fetch_optional(db.pool())
+    .await?;
+
+    Ok(row.map(|row| row.get("user_id")))
+}
+
+/// Every sender this person has linked, for the account page.
+pub async fn list_channels_for_user(user_id: &str) -> Result<Vec<ChannelIdentity>, sqlx::Error> {
+    let Some(db) = crate::database::get_global_database() else {
+        return Ok(Vec::new());
+    };
+
+    let rows = sqlx::query(
+        r#"
+        SELECT user_id, script_uri, channel, identity, granted_at
+        FROM script_channel_identities
+        WHERE user_id = $1
+        ORDER BY granted_at DESC
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(db.pool())
+    .await?;
+
+    Ok(rows.iter().map(ChannelIdentity::from_row).collect())
+}
+
+/// Unlink one sender. Scoped to `user_id` in the statement rather than by a
+/// check before it, so another account's binding is not something this can
+/// delete however it is called.
+pub async fn unbind_channel(
+    user_id: &str,
+    script_uri: &str,
+    channel: &str,
+    identity: &str,
+) -> Result<bool, sqlx::Error> {
+    let Some(db) = crate::database::get_global_database() else {
+        return Ok(false);
+    };
+
+    let result = sqlx::query(
+        r#"
+        DELETE FROM script_channel_identities
+        WHERE user_id = $1 AND script_uri = $2 AND channel = $3 AND identity = $4
+        "#,
+    )
+    .bind(user_id)
+    .bind(script_uri)
+    .bind(channel)
+    .bind(identity)
+    .execute(db.pool())
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// How long a link invitation lasts.
+///
+/// Short, because it is delivered into a chat the person is looking at and
+/// used within the minute. Long enough to survive being asked to sign in
+/// first, which is the slowest legitimate path through it.
+pub const LINK_TOKEN_MINUTES: i64 = 15;
+
+/// Marks a link invitation apart at a glance, as `rt_` marks a refresh token.
+const LINK_TOKEN_PREFIX: &str = "lnk_";
+
+fn generate_link_token() -> String {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    let bytes: [u8; 32] = rand::random();
+    format!("{}{}", LINK_TOKEN_PREFIX, URL_SAFE_NO_PAD.encode(bytes))
+}
+
+/// Only the hash is stored. Engine-generated entropy rather than a password,
+/// so no salt and no work factor — the `oauth_refresh_tokens` reasoning.
+fn hash_link_token(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(token.as_bytes()))
+}
+
+/// Invite somebody to link this sender, and hand back the one URL that does
+/// it.
+///
+/// This is the load-bearing part of the whole scheme, and the reason the
+/// consent page cannot simply take `?channel=&identity=`. Such a URL is one
+/// anybody can construct for anybody, which would make linking first come
+/// first served on a guessable string — and the harm there is not squatting
+/// but **interception**: bind somebody else's Telegram id to your own account
+/// before they do, and every message they send that bot is processed as your
+/// turn, with their text landing in your storage.
+///
+/// A script mints this in response to a message it actually received and
+/// replies into that chat. So reaching the consent page for a sender means
+/// being able to read that sender's messages, which is the only evidence of
+/// ownership the engine can have and the one a query parameter cannot carry.
+///
+/// Minting replaces whatever was outstanding for the same sender. That bounds
+/// the table at one live row per sender, and makes asking for a new link
+/// invalidate the old one — which is the behaviour somebody re-requesting a
+/// link expects anyway.
+pub async fn invite_link(
+    script_uri: &str,
+    channel: &str,
+    identity: &str,
+) -> Result<String, ChannelRefusal> {
+    let (channel, identity) = normalize_channel(channel, identity)?;
+
+    let Some(db) = crate::database::get_global_database() else {
+        return Err(ChannelRefusal::Unusable("the engine has no database"));
+    };
+
+    let token = generate_link_token();
+    let expires_at = Utc::now() + Duration::minutes(LINK_TOKEN_MINUTES);
+
+    let mut tx = db.pool().begin().await.map_err(|e| {
+        warn!(script = %script_uri, error = %e, "Could not begin a link invitation");
+        ChannelRefusal::Unusable("the link could not be created")
+    })?;
+
+    // Expired rows go with it. An unredeemed token is litter rather than a
+    // liability, but litter nobody collects is still a growing table, and
+    // this is the moment somebody is already paying for a write.
+    let _ = sqlx::query("DELETE FROM script_channel_link_tokens WHERE expires_at <= NOW()")
+        .execute(&mut *tx)
+        .await;
+
+    sqlx::query(
+        r#"
+        DELETE FROM script_channel_link_tokens
+        WHERE script_uri = $1 AND channel = $2 AND identity = $3
+        "#,
+    )
+    .bind(script_uri)
+    .bind(&channel)
+    .bind(&identity)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| {
+        warn!(script = %script_uri, error = %e, "Could not clear an earlier link invitation");
+        ChannelRefusal::Unusable("the link could not be created")
+    })?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO script_channel_link_tokens
+            (token_hash, script_uri, channel, identity, expires_at)
+        VALUES ($1, $2, $3, $4, $5)
+        "#,
+    )
+    .bind(hash_link_token(&token))
+    .bind(script_uri)
+    .bind(&channel)
+    .bind(&identity)
+    .bind(expires_at)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| {
+        warn!(script = %script_uri, error = %e, "Could not record a link invitation");
+        ChannelRefusal::Unusable("the link could not be created")
+    })?;
+
+    tx.commit().await.map_err(|e| {
+        warn!(script = %script_uri, error = %e, "Could not commit a link invitation");
+        ChannelRefusal::Unusable("the link could not be created")
+    })?;
+
+    Ok(link_url(&token))
+}
+
+/// What an invitation names, without spending it.
+///
+/// The consent page reads it to show the person which sender they are about
+/// to link. Reading must not spend: a page that consumed the token on display
+/// would break the sign-in redirect, the back button and the reload, all of
+/// which happen before anybody has agreed to anything.
+pub async fn peek_invite(token: &str) -> Option<(String, String, String)> {
+    let db = crate::database::get_global_database()?;
+
+    let row = sqlx::query(
+        r#"
+        SELECT script_uri, channel, identity
+        FROM script_channel_link_tokens
+        WHERE token_hash = $1 AND expires_at > NOW()
+        "#,
+    )
+    .bind(hash_link_token(token))
+    .fetch_optional(db.pool())
+    .await
+    .ok()
+    .flatten()?;
+
+    Some((
+        row.get("script_uri"),
+        row.get("channel"),
+        row.get("identity"),
+    ))
+}
+
+/// Spend an invitation, answering what it named.
+///
+/// Single use, and deleted in the statement that reads it, so two browsers
+/// racing on the same link cannot both bind — the second finds nothing.
+pub async fn spend_invite(token: &str) -> Option<(String, String, String)> {
+    let db = crate::database::get_global_database()?;
+
+    let row = sqlx::query(
+        r#"
+        DELETE FROM script_channel_link_tokens
+        WHERE token_hash = $1 AND expires_at > NOW()
+        RETURNING script_uri, channel, identity
+        "#,
+    )
+    .bind(hash_link_token(token))
+    .fetch_optional(db.pool())
+    .await
+    .ok()
+    .flatten()?;
+
+    Some((
+        row.get("script_uri"),
+        row.get("channel"),
+        row.get("identity"),
+    ))
+}
+
+/// Where an invitation sends somebody.
+///
+/// The token is the whole of it: it names the script and the sender, so
+/// there is nothing else to put in the URL and nothing in it a person could
+/// usefully change.
+pub fn link_url(token: &str) -> String {
+    format!("/auth/delegate?link={}", urlencoding::encode(token))
 }
 
 /// Where to send somebody to authorise a script.
@@ -676,6 +1100,67 @@ mod tests {
         assert!(context.has_capability(&Capability::ReadScriptData));
         assert!(!context.has_capability(&Capability::WriteScriptData));
         assert_eq!(context.user_id.as_deref(), Some("u1"));
+    }
+
+    #[test]
+    fn a_channel_is_folded_and_a_sender_is_not() {
+        let (channel, identity) = normalize_channel("  Telegram ", " U123aBc ").expect("usable");
+        // The channel is a slug the solution chose, so `Telegram` and
+        // `telegram` are the same place.
+        assert_eq!(channel, "telegram");
+        // The identity belongs to the far end. A Slack id is case-sensitive,
+        // and folding it would make two senders look like one.
+        assert_eq!(identity, "U123aBc");
+    }
+
+    #[test]
+    fn an_empty_or_oversized_sender_is_refused() {
+        assert!(matches!(
+            normalize_channel("", "1"),
+            Err(ChannelRefusal::Unusable(_))
+        ));
+        assert!(matches!(
+            normalize_channel("telegram", "   "),
+            Err(ChannelRefusal::Unusable(_))
+        ));
+        assert!(matches!(
+            normalize_channel(&"c".repeat(MAX_CHANNEL_CHARS + 1), "1"),
+            Err(ChannelRefusal::Unusable(_))
+        ));
+        assert!(matches!(
+            normalize_channel("telegram", &"9".repeat(MAX_IDENTITY_CHARS + 1)),
+            Err(ChannelRefusal::Unusable(_))
+        ));
+    }
+
+    /// The URL carries the token and nothing else. Naming the sender in it
+    /// is precisely what would make linking somebody else's chat possible,
+    /// so this asserts the absence rather than the encoding.
+    #[test]
+    fn a_link_url_carries_only_its_token() {
+        let url = link_url("lnk_abc-123");
+        assert_eq!(url, "/auth/delegate?link=lnk_abc-123");
+    }
+
+    /// And a token that needs escaping is escaped, since it reaches the
+    /// page as a query parameter like any other.
+    #[test]
+    fn a_link_url_encodes_its_token() {
+        assert!(link_url("a+b/c=").contains("link=a%2Bb%2Fc%3D"));
+    }
+
+    /// Two invitations are two secrets. Minting is what replaces one, not
+    /// the token happening to repeat.
+    #[test]
+    fn each_invitation_is_its_own_secret() {
+        let first = generate_link_token();
+        let second = generate_link_token();
+        assert_ne!(first, second);
+        assert!(first.starts_with(LINK_TOKEN_PREFIX));
+        // Stored hashed, so a copy of the table is not a set of usable links.
+        assert_ne!(hash_link_token(&first), first);
+        assert_eq!(hash_link_token(&first), hash_link_token(&first));
+        assert_ne!(hash_link_token(&first), hash_link_token(&second));
     }
 
     /// Changing a credential is refused outright in a delegated execution,

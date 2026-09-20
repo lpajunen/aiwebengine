@@ -37,8 +37,9 @@ worth keeping because the remaining items lean on them.
 Those four are what let the agent's run move out of the browser and into the
 engine.
 
-The fifth and sixth are the two this file called one piece of work approached
-from opposite ends, and so they were.
+The three below are the ones that followed. The first two this file called
+one piece of work approached from opposite ends, and so they were; the third
+turned out to depend on neither, and on a decision rather than a mechanism.
 
 - **A script can run with fewer capabilities than it holds.** `sandbox.run`
   (`sandbox.rs`, `assets/sandbox_prelude.js`) — a sub-execution of the same
@@ -77,6 +78,35 @@ from opposite ends, and so they were.
   which restores rather than widens: the page those people saw offered "read
   and change". See `docs/DELEGATION.md`.
 
+- **A script can enqueue work for a person it is not serving.**
+  `personalTasks.enqueueFrom` and `script_channel_identities`
+  (`delegation.rs`) — which is what an inbound webhook needed, since one
+  arrives with nobody signed in.
+
+  The mechanism was the small half, as this file predicted. The decision was
+  the work, and it came out as: **a grant is not enough on its own.** A grant
+  says an app may act for somebody; it does not say that whoever can reach
+  the app's public routes may choose when and with what payload. So a person
+  also links the sender that may trigger them, and a script names
+  `{channel, identity}` rather than an account — there is no user id in the
+  API at all. An unlinked sender resolves to nobody, so a handler that trusts
+  the wrong field in a request body can be made to claim the wrong _sender_,
+  and not to name a different account or enumerate one.
+
+  Linking itself takes an invitation rather than a URL naming the sender,
+  which was the second decision and nearly went the wrong way. A guessable
+  `?channel=&identity=` link would have made binding first come first served
+  — and the harm there is interception rather than squatting: bind a
+  victim's chat id before they do and every message they send the bot
+  becomes your turn, with their text in your storage. So a script mints a
+  single-use token in reply to a message it received and replies into that
+  chat, which makes "can read that sender's messages" the price of reaching
+  the consent page.
+
+  What the engine still cannot do is verify the message came from that
+  sender. Telegram and Slack sign; email does not. That is the script's job
+  and the documentation says so rather than pretending otherwise.
+
 What follows is what the agent hit next.
 
 ## The blockers, in order
@@ -91,34 +121,18 @@ binding constraint, the answer is a cheaper way to build the same isolation
 rather than a mask over the running context — the leak that ruled a mask out
 does not get better with optimisation.
 
-### 2. A script cannot enqueue work for anyone but its caller
+### 2. ~~A script cannot enqueue work for anyone but its caller~~ — done
 
-`personalTasks.enqueue` sets `run_as: Some(user_id)` from the calling person's
-auth (`secure_globals.rs:5211`), and the worker resolves that person's grant
-again when the task is claimed (`tasks.rs:735`, `delegation.rs:341`). Both
-halves are right. The gap is that the only person a script can name is the one
-making the request.
+See **What got built** above. What is left of this item is the part that was
+always script work: normalising a message, running the turn, replying on the
+same channel. The engine's half — a way to name a person it is not serving,
+and a defensible answer to who may do the naming — is there.
 
-This is what blocks the whole of the channels idea — an agent reachable from
-Telegram, email, Slack, the places people already are, which is the single
-biggest thing missing from an in-engine agent. **An inbound webhook arrives
-with nobody signed in.** There is no session, so there is no person, so there
-is nothing to enqueue against, and every downstream piece — normalising the
-message, running the turn, replying on the same channel — is script work sitting
-behind this.
-
-What makes it tractable is that `run_as` already exists on the row and the
-grant is already re-checked at claim time. The missing piece is narrow: a way
-to enqueue against a person the script names rather than the one it is serving,
-with the engine verifying a live grant for that person at enqueue time the same
-way it does at claim time.
-
-The security question is the real work, and it is not the mechanism. Anyone who
-can reach a webhook could try to start somebody else's agent, so the script has
-to establish that this sender is that account — and the engine has to decide
-whether a grant is enough on its own or whether delegation needs to name the
-channel identity it may be triggered by. Deciding that badly makes a webhook
-into a way to spend other people's tokens.
+One thing to hold on to. The engine gates the _link_ and the _grant_, and
+cannot gate the **authenticity** of the message. A solution on a channel that
+signs its webhooks should check the signature; on one that does not, the link
+is the only thing between an inbound message and somebody's budget, and a
+solution should treat a channel like email accordingly.
 
 ### 3. ~~The scope vocabulary has nouns and no verbs~~ — done
 

@@ -101,6 +101,59 @@
       return unwrap(host.authorization());
     },
 
+    // The same queue, acting as the person a message came *from* — which is
+    // the only way an execution with nobody signed in can act as anybody.
+    //
+    // A script names the sender, never a person: the engine resolves
+    // {channel, identity} through the links people have consented to. So the
+    // worst a script that trusts the wrong field in a request body can do is
+    // claim the wrong sender, and an unlinked sender resolves to nobody.
+    //
+    // Verifying the message really came from that sender is the script's
+    // job. Telegram and Slack sign their webhooks; check the signature
+    // before calling this, because the engine cannot.
+    enqueueFrom: function (options) {
+      if (options === null || typeof options !== "object") {
+        throw new TypeError(
+          "personalTasks.enqueueFrom requires an options object",
+        );
+      }
+      return unwrap(host.enqueueFrom(JSON.stringify(options)));
+    },
+
+    // Whether a sender is linked and still authorised:
+    // {linked, granted, expired, scopes, channel, identity}. A read.
+    //
+    // Never the account's id — everything a script can do for that person
+    // goes through `enqueueFrom`, which names the sender, and an id here
+    // would end up in whatever the bot logs or echoes back to the chat.
+    sender: function (options) {
+      if (options === null || typeof options !== "object") {
+        throw new TypeError("personalTasks.sender requires an options object");
+      }
+      return unwrap(host.sender(JSON.stringify(options)));
+    },
+
+    // Mint the one URL that links this sender, to reply with into that
+    // sender's own chat: {linkUrl, channel, identity, expiresInMinutes}.
+    //
+    // Reply with it *there* and nowhere else. The URL carries a token rather
+    // than the sender's name, which is what stops somebody linking an id
+    // that is not theirs — and linking somebody else's id before they do
+    // would intercept their messages, not merely squat on them. Posting the
+    // link anywhere the sender cannot read gives that away.
+    //
+    // Minting invalidates any link outstanding for the same sender, so this
+    // belongs where a bot decides to send one, not in a polling loop.
+    inviteLink: function (options) {
+      if (options === null || typeof options !== "object") {
+        throw new TypeError(
+          "personalTasks.inviteLink requires an options object",
+        );
+      }
+      return unwrap(host.inviteLink(JSON.stringify(options)));
+    },
+
     cancel: function (taskId) {
       return unwrap(host.cancel(String(taskId)));
     },

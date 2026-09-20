@@ -174,6 +174,7 @@ What a script may spend is worth knowing before writing one: each invocation get
         auth::routes::delegate_page,
         auth::routes::delegate_route,
         auth::routes::revoke_delegation_route,
+        auth::routes::unlink_sender_route,
         auth::routes::start_login,
         auth::routes::oauth_callback,
         auth::routes::logout,
