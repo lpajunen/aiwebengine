@@ -223,10 +223,12 @@ async fn a_delegated_task_reaches_the_persons_own_storage() {
     .expect("script should store");
     repository::clear_log_messages(script_uri).expect("logs should clear");
 
+    // The noun says *whose* storage is in scope; the verb says it may be
+    // changed. This test is about the first, so it grants both.
     delegation::grant(
         &user_id,
         script_uri,
-        &[Scope::PersonalStorage],
+        &[Scope::PersonalStorage, Scope::Write],
         Duration::days(1),
     )
     .await
@@ -420,10 +422,12 @@ async fn storage_consent_alone_does_not_hand_over_the_persons_secrets() {
     repository::set_user_secret_item(script_uri, &user_id, "THEIR_KEY", "sk-private")
         .expect("the person's secret should store");
 
+    // The noun says *whose* storage is in scope; the verb says it may be
+    // changed. This test is about the first, so it grants both.
     delegation::grant(
         &user_id,
         script_uri,
-        &[Scope::PersonalStorage],
+        &[Scope::PersonalStorage, Scope::Write],
         Duration::days(1),
     )
     .await
@@ -606,6 +610,92 @@ async fn an_ordinary_request_is_narrowed_by_no_scope() {
         repository::get_user_properties_item(script_uri, &user_id, "touched").as_deref(),
         Some("by the request"),
         "an ordinary request should still reach its own storage"
+    );
+}
+
+/// The verb, end to end: a real delegated task, running under a grant that
+/// did not say "change things", is refused at every write it tries and left
+/// with the reads it needs.
+///
+/// This is the "plan approved in advance" the vocabulary could not express —
+/// a person authorising an app to go away and work out what to do, without
+/// authorising it to do the thing. It is enforced under the JavaScript, at
+/// the same gate every other caller meets, so the handler cannot arrange its
+/// way past it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_grant_stops_a_delegated_task_from_writing() {
+    setup_env().await;
+    let user_id = a_user("read-only").await;
+    let script_uri = "test://delegation/read-only";
+
+    repository::upsert_script(
+        script_uri,
+        r#"
+        function work(context) {
+          // Reading is the floor: without it there would be nothing to
+          // consent to. Personal storage is in scope because the noun was
+          // granted, and readable because reading is always granted.
+          const seen = personalStorage.getItem("note");
+          if (seen !== "left earlier") {
+            throw new Error("a read-only grant should still read: " + seen);
+          }
+
+          // Every write there is, each refused in the way that surface
+          // reports refusals.
+          try {
+            personalStorage.setItem("note", "changed");
+            throw new Error("storage was writable");
+          } catch (e) {
+            if (String(e.message).indexOf("write_storage") < 0) { throw e; }
+          }
+
+          const wrote = database.insert("notes", JSON.stringify({ body: "x" })).json();
+          if (!wrote.error || wrote.error.indexOf("write_script_data") < 0) {
+            throw new Error("the database was writable: " + JSON.stringify(wrote));
+          }
+
+          try {
+            scriptTasks.enqueue({ handler: "work", payload: {} });
+            throw new Error("the queue was reachable");
+          } catch (e) {
+            if (String(e.message).indexOf("enqueue_tasks") < 0) { throw e; }
+          }
+
+          console.log("read-only run finished");
+        }
+        "#,
+    )
+    .expect("script should store");
+
+    repository::set_user_properties_item(script_uri, &user_id, "note", "left earlier")
+        .expect("the person's note should store");
+
+    // The noun without the verb: reach my data, do not change it.
+    delegation::grant(
+        &user_id,
+        script_uri,
+        &[Scope::PersonalStorage],
+        Duration::days(1),
+    )
+    .await
+    .expect("granted");
+
+    let task = tasks::enqueue(personal_task(script_uri, "work", &user_id))
+        .await
+        .expect("accepted");
+    tasks::run_due_now("test-worker").await;
+
+    let outcome = tasks::get(task.task_id).await.expect("lookup");
+    assert!(
+        outcome.is_none(),
+        "every refusal should have been the expected one: {:?}",
+        outcome.and_then(|task| task.last_error)
+    );
+
+    assert_eq!(
+        repository::get_user_properties_item(script_uri, &user_id, "note").as_deref(),
+        Some("left earlier"),
+        "the refused write must not have landed"
     );
 }
 

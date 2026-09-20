@@ -200,7 +200,10 @@ function actTurn(plan) {
 
 - [Delegation](DELEGATION.md) — what a person authorised a script to do as them
   while they are away. That narrows by consent; this narrows by choice, and an
-  execution that is both is subject to each.
+  execution that is both is subject to each. Its `write` scope is built on this
+  page's machinery: a grant without it resolves to an attenuated context
+  holding no write capability, which is why the two were one piece of work
+  approached from opposite ends.
 - [Script Limits](SCRIPT_LIMITS.md) — what one script may _spend_, as opposed
   to what it may reach.
 - [Script Eval](SCRIPT_EVAL.md) — the same evaluation machinery, as an

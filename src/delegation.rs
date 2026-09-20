@@ -49,7 +49,7 @@ use chrono::{DateTime, Duration, Utc};
 use sqlx::Row;
 use tracing::{debug, warn};
 
-use crate::security::UserContext;
+use crate::security::{Capability, UserContext};
 
 /// How long a grant lasts when the person does not choose.
 pub const DEFAULT_DURATION_DAYS: i64 = 30;
@@ -63,13 +63,45 @@ pub const MAX_DURATION_DAYS: i64 = 90;
 /// list of things the engine can currently do as somebody who is not here —
 /// adding a name without adding the check that enforces it would be a promise
 /// the engine does not keep.
+///
+/// # Two nouns and a verb
+///
+/// [`Scope::PersonalStorage`] and [`Scope::Secrets`] name *what* a delegation
+/// reaches — which of the person's things are in scope at all. For a long
+/// time they were the whole vocabulary, and nothing named *what it may do
+/// with them*, so every grant was a grant to change as well as to read.
+///
+/// [`Scope::Write`] is the verb, and it could not exist until there was
+/// somewhere to enforce it. A read-only scope needs a read-only context, and
+/// a `UserContext` had no way to hold less than a tier until
+/// [`crate::security::UserContext::attenuated`] — which is why this and
+/// capability attenuation are one piece of work approached from opposite
+/// ends.
+///
+/// The two kinds are enforced differently and deliberately so. A noun is
+/// checked where the person's thing is reached
+/// ([`crate::security::secure_globals::GlobalSecurityConfig::allows_delegated`]),
+/// and answers as though that thing were not there — the refusal a script
+/// already handles for "nobody is signed in", rather than a new failure mode.
+/// The verb is a capability, so it is checked by the same gate that checks
+/// every other caller, underneath the JavaScript, at every write there is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Scope {
-    /// Read and write this person's `personalStorage` for this script.
+    /// Reach this person's `personalStorage` for this script.
+    ///
+    /// Reaching is not changing: writing it also takes [`Scope::Write`].
     PersonalStorage,
     /// Resolve this person's secrets in `fetch` — their API key rather than
     /// the script's.
     Secrets,
+    /// Change things, rather than only reading them.
+    ///
+    /// Without it a delegated run holds no write capability at all: not the
+    /// script's tables, not either storage, not the queue, not the message
+    /// dispatcher. That is the "plan approved in advance" this vocabulary
+    /// could not express — a person authorising an app to go away and *work
+    /// out* what to do, without authorising it to do the thing.
+    Write,
 }
 
 impl Scope {
@@ -77,6 +109,7 @@ impl Scope {
         match self {
             Scope::PersonalStorage => "personal_storage",
             Scope::Secrets => "secrets",
+            Scope::Write => "write",
         }
     }
 
@@ -84,6 +117,7 @@ impl Scope {
         match value.trim() {
             "personal_storage" => Some(Scope::PersonalStorage),
             "secrets" => Some(Scope::Secrets),
+            "write" => Some(Scope::Write),
             _ => None,
         }
     }
@@ -92,14 +126,98 @@ impl Scope {
     /// person deciding, not for the developer asking.
     pub fn describe(self) -> &'static str {
         match self {
-            Scope::PersonalStorage => "Read and change the data this app keeps for you",
+            Scope::PersonalStorage => "Read the data this app keeps for you",
             Scope::Secrets => "Use the API keys you have given this app",
+            Scope::Write => "Change things, not just read them",
         }
     }
 
-    pub fn all() -> [Scope; 2] {
-        [Scope::PersonalStorage, Scope::Secrets]
+    /// What this scope adds to the delegated context.
+    ///
+    /// Empty for the nouns: they decide whether the person's own things are
+    /// in scope, which is a question about *whose* data rather than about
+    /// what may be done to it, and is answered at the two surfaces that reach
+    /// it rather than by a capability.
+    pub fn capabilities(self) -> &'static [Capability] {
+        match self {
+            Scope::PersonalStorage | Scope::Secrets => &[],
+            Scope::Write => &[
+                Capability::WriteScriptData,
+                Capability::WriteStorage,
+                // Queueing and dispatching are both "set something in motion
+                // that outlives this run". Neither can escalate — a queued
+                // personal task re-resolves this same grant, and a listener
+                // runs under the sending context — so what they are refused
+                // for is the plainer reason: a person who ticked nothing but
+                // "read" would not expect the app to have started anything.
+                //
+                // The cost is real and worth naming: work longer than one
+                // budget is a chain of tasks, so a read-only delegation
+                // cannot be a long one. If that turns out to matter the
+                // answer is another scope, not a hole in this one.
+                Capability::EnqueueTasks,
+                Capability::SendMessages,
+            ],
+        }
     }
+
+    pub fn all() -> [Scope; 3] {
+        [Scope::PersonalStorage, Scope::Secrets, Scope::Write]
+    }
+}
+
+/// What every live delegation holds, whatever was ticked.
+///
+/// Reading is the floor rather than a grant, because a delegation that could
+/// not read would have nothing to act on and there would be no point
+/// consenting to it. So this is `authenticated` minus the writes, and the
+/// scopes add back from there.
+///
+/// Three of these are worth the sentence:
+///
+/// `UseNetwork` is here because a delegated run that cannot call out is a
+/// delegated run that cannot do the thing people delegate — check a feed,
+/// ask a model. Making it a scope would be a separate decision with its own
+/// checkbox, and a defensible one; it is not this change.
+///
+/// `ReadSecrets` gates secrets in general, where [`Scope::Secrets`] gates
+/// *this person's* secrets specifically. Without it here, a grant that did
+/// not mention secrets could not use even the script's own key, which is a
+/// narrowing nobody asked for.
+///
+/// `ManageStreams` is how a background run tells the person what it did. A
+/// read-only delegation that could not report back would be mute, and the
+/// message is not a change to anything.
+fn base_capabilities() -> Vec<Capability> {
+    vec![
+        Capability::ReadScripts,
+        Capability::ReadAssets,
+        Capability::ViewLogs,
+        Capability::ManageStreams,
+        Capability::ReadScriptData,
+        Capability::ReadStorage,
+        Capability::ReadSecrets,
+        Capability::UseNetwork,
+    ]
+}
+
+/// The context a run under `scopes` acts with.
+///
+/// Two narrowings, in order. The tier is capped at
+/// [`UserContext::authenticated`] however much the person holds, because
+/// background work has no business authoring a solution and a delegated task
+/// must not be the way to get a context that can. Then the capabilities are
+/// attenuated to what was actually consented to, which is what makes a
+/// read-only grant read-only rather than merely described as one.
+///
+/// Attenuating rather than intersecting by hand matters: the cap already
+/// happened, so this can only take more away.
+pub fn context_for(user_id: &str, scopes: &[Scope]) -> UserContext {
+    let mut keep = base_capabilities();
+    for scope in scopes {
+        keep.extend_from_slice(scope.capabilities());
+    }
+    UserContext::authenticated(user_id.to_string()).attenuated(keep)
 }
 
 /// A grant as stored.
@@ -338,6 +456,8 @@ impl Delegated {
 /// The tier is capped at `authenticated` however much the person holds: a
 /// background job has no business authoring a solution, and a delegated task
 /// belonging to an administrator should not be the way to get one that does.
+/// Then [`context_for`] narrows that cap to what the grant actually says, so
+/// a grant without [`Scope::Write`] holds no write capability at all.
 pub async fn resolve(user_id: &str, script_uri: &str) -> Result<Delegated, Refusal> {
     let grant = match get(user_id, script_uri).await {
         Ok(Some(grant)) => grant,
@@ -360,7 +480,7 @@ pub async fn resolve(user_id: &str, script_uri: &str) -> Result<Delegated, Refus
     };
 
     Ok(Delegated {
-        user_context: UserContext::authenticated(user_id.to_string()),
+        user_context: context_for(user_id, &grant.scopes),
         grant,
         email: user.email.clone(),
         name: user.name.clone(),
@@ -454,5 +574,121 @@ mod tests {
             delegated.capabilities.len() < editor.capabilities.len(),
             "the delegated tier should be narrower than the authoring one"
         );
+    }
+
+    /// The verb, and the whole reason it exists: a grant that did not say
+    /// "change things" produces a context that holds no write at all.
+    #[test]
+    fn a_grant_without_the_verb_can_read_and_cannot_write() {
+        let context = context_for("u1", &[Scope::PersonalStorage, Scope::Secrets]);
+
+        for readable in [
+            Capability::ReadScriptData,
+            Capability::ReadStorage,
+            Capability::ReadSecrets,
+            Capability::ReadScripts,
+            Capability::ReadAssets,
+            // The two that are here so a read-only run is neither blind nor
+            // mute: it can still call out, and still tell the person what it
+            // found.
+            Capability::UseNetwork,
+            Capability::ManageStreams,
+        ] {
+            assert!(
+                context.has_capability(&readable),
+                "a delegation has to be able to {:?}",
+                readable
+            );
+        }
+
+        for denied in [
+            Capability::WriteScriptData,
+            Capability::WriteStorage,
+            Capability::EnqueueTasks,
+            Capability::SendMessages,
+        ] {
+            assert!(
+                !context.has_capability(&denied),
+                "a grant that did not say 'write' must not hold {:?}",
+                denied
+            );
+        }
+    }
+
+    /// And with the verb, it holds what a delegation held before the verb
+    /// existed — with one deliberate exception. This is the assertion the
+    /// migration rests on: adding `write` to a stored grant restores it to
+    /// what its owner agreed to rather than to something new.
+    ///
+    /// The exception is `WriteSecrets`, and it changes no behaviour. The
+    /// surface already refused credential management in a delegated
+    /// execution outright, whatever was granted — the consent page offers to
+    /// let an app *use* your keys, and rotating or deleting one while you are
+    /// away is not using it. So the old context held a capability that
+    /// nothing would honour, and now it does not hold it: the rule is stated
+    /// in one more place rather than in a different way.
+    #[test]
+    fn a_grant_with_the_verb_holds_what_a_delegation_always_held() {
+        let context = context_for("u1", &Scope::all());
+        let before = UserContext::authenticated("u1".to_string());
+
+        for capability in &before.capabilities {
+            if *capability == Capability::WriteSecrets {
+                assert!(
+                    !context.has_capability(capability),
+                    "the one capability a delegation never honoured should not be held"
+                );
+                continue;
+            }
+            assert!(
+                context.has_capability(capability),
+                "granting every scope must not be narrower than the old fixed tier: {:?}",
+                capability
+            );
+        }
+    }
+
+    /// The cap comes first and attenuation second, so no combination of
+    /// scopes reaches past what an ordinary request holds. A scope whose
+    /// capability list grew to include something authoring would be
+    /// intersected away rather than granted.
+    #[test]
+    fn no_combination_of_scopes_exceeds_an_ordinary_request() {
+        let context = context_for("u1", &Scope::all());
+        let ordinary = UserContext::authenticated("u1".to_string());
+
+        for capability in &context.capabilities {
+            assert!(
+                ordinary.has_capability(capability),
+                "a delegation reached past an ordinary request: {:?}",
+                capability
+            );
+        }
+        assert!(context.attenuated);
+    }
+
+    /// Ticking nothing is still a grant — the narrowest useful one, which is
+    /// "act as me, read what you need, touch nothing of mine".
+    #[test]
+    fn a_grant_with_no_scopes_can_still_read() {
+        let context = context_for("u1", &[]);
+
+        assert!(context.has_capability(&Capability::ReadScriptData));
+        assert!(!context.has_capability(&Capability::WriteScriptData));
+        assert_eq!(context.user_id.as_deref(), Some("u1"));
+    }
+
+    /// Changing a credential is refused outright in a delegated execution,
+    /// so no scope may hand it over by listing the capability.
+    #[test]
+    fn no_scope_grants_writing_a_credential() {
+        for scope in Scope::all() {
+            assert!(
+                !scope.capabilities().contains(&Capability::WriteSecrets),
+                "{:?} must not offer what the surface refuses outright",
+                scope
+            );
+        }
+        assert!(!context_for("u1", &Scope::all()).has_capability(&Capability::WriteSecrets));
     }
 }

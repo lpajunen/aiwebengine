@@ -1200,8 +1200,14 @@ fn render_delegations(csrf_token: &str, grants: &[crate::delegation::Grant]) -> 
     let rows = grants
         .iter()
         .map(|grant| {
+            // The consent page cannot produce this — ticking nothing there
+            // is a refusal, and withdraws instead — so an empty row means a
+            // grant recorded some other way. "Nothing" would still be the
+            // wrong word for it: reading is the floor of a delegation, and
+            // what this row actually authorises is a run that can read and
+            // change nothing.
             let scopes = if grant.scopes.is_empty() {
-                "nothing".to_string()
+                "read only".to_string()
             } else {
                 grant
                     .scopes
@@ -5271,6 +5277,44 @@ mod delegate_body_tests {
     #[test]
     fn a_json_body_with_no_scopes_is_a_refusal_too() {
         assert!(scopes_from_body(RequestStyle::Json, br#"{"script":"x"}"#).is_empty());
+    }
+
+    /// The verb posts like any other box. Worth its own test because it is
+    /// the one scope whose absence has to mean something — a form that
+    /// dropped it would silently record read-only where the person ticked
+    /// "change things", and a form that invented it would do the reverse.
+    #[test]
+    fn the_write_box_posts_like_any_other() {
+        assert_eq!(
+            scopes_from_body(
+                RequestStyle::Form,
+                b"csrf_token=t&script=x&scope=personal_storage&scope=write&days=30",
+            ),
+            vec![Scope::PersonalStorage, Scope::Write]
+        );
+
+        // Not ticked is read-only, not absent.
+        assert_eq!(
+            scopes_from_body(RequestStyle::Form, b"script=x&scope=personal_storage"),
+            vec![Scope::PersonalStorage]
+        );
+    }
+
+    /// Every scope the consent page renders is one the endpoint can read
+    /// back. The page is built from `Scope::all()` and the endpoint parses by
+    /// name, so a value whose `as_str` and `parse` disagreed would render a
+    /// checkbox that silently did nothing when ticked.
+    #[test]
+    fn every_box_the_page_renders_round_trips_through_the_endpoint() {
+        for scope in Scope::all() {
+            let body = format!("script=x&scope={}", scope.as_str());
+            assert_eq!(
+                scopes_from_body(RequestStyle::Form, body.as_bytes()),
+                vec![scope],
+                "the page renders {:?} but the endpoint does not read it back",
+                scope
+            );
+        }
     }
 }
 

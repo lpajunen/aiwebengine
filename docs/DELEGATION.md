@@ -27,20 +27,68 @@ credential or a person's storage had to run inside that person's request.
 The fix is not to widen the background context. Background work holding
 somebody's API key is a real grant, and a grant has to answer four questions.
 
-**What.** A fixed vocabulary — currently "read and change the data this app
-keeps for you" (`personal_storage`) and "use the API keys you have given this
-app" (`secrets`). Each names something the engine actually gates on, at the
-surface it names:
+**What.** A fixed vocabulary of two nouns and a verb. Each names something the
+engine actually gates on, at the surface it names:
 
-| Scope              | Reaches                                                            |
-| ------------------ | ------------------------------------------------------------------ |
-| `personal_storage` | `personalStorage` for that person                                  |
-| `secrets`          | their key in a `{{secret:...}}` header, and `secretStorage.exists` |
+| Scope              | Kind | Reaches                                                            |
+| ------------------ | ---- | ------------------------------------------------------------------ |
+| `personal_storage` | noun | `personalStorage` for that person                                  |
+| `secrets`          | noun | their key in a `{{secret:...}}` header, and `secretStorage.exists` |
+| `write`            | verb | changing anything at all                                           |
+
+The nouns say **whose things** are in scope. The verb says **what may be done
+with them**, and until capability attenuation existed there was nowhere to
+enforce it, so every grant was a grant to change as well as to read.
 
 A scope not ticked is not granted. A grant covering only `personal_storage`
 reaches that person's storage and _not_ their secrets, and the refusal is the
 one a script already handles — the same answer it gets when nobody is signed
 in, rather than a new failure mode.
+
+### Reading is the floor; `write` is the grant
+
+Without `write`, a delegated run holds no write capability at all: not the
+script's tables, not either storage, not the queue, not the message
+dispatcher. That is the **plan approved in advance** — a person authorising an
+app to go away and work out what to do, without authorising it to do the
+thing.
+
+It is enforced as a capability rather than as a scope check, which means it is
+the same gate every other caller meets, underneath the JavaScript, at every
+write there is. A handler cannot arrange its way past it.
+
+What a read-only delegation keeps is everything it needs to be worth
+consenting to:
+
+- **reading** — the script, its assets, its tables, both stores;
+- **the network**, because a delegated run that cannot call out cannot check a
+  feed or ask a model, which is most of what people delegate;
+- **streams**, because a background run that could not report back would be
+  mute, and a progress message changes nothing.
+
+And what it loses beyond the obvious writes is worth naming: **the queue**.
+Work longer than one budget is a chain of tasks, so a read-only delegation
+cannot be a long one. Neither queueing nor dispatching can actually escalate —
+a queued personal task re-resolves this same grant, and a listener runs under
+the sending context — but a person who ticked nothing except "read" would not
+expect the app to have started anything, and that is the reading the checkbox
+has to keep.
+
+The two kinds of scope are enforced in two different places on purpose. A noun
+is checked where the person's thing is reached, and answers as though that
+thing were not there. The verb is a capability and refuses at the gate.
+Refusals therefore arrive in whichever way that API already reports failure:
+`scriptTasks` throws, `database` answers `{ error }`, the stores raise a
+`DOMException`. Each names the capability that was missing.
+
+### Grants made before the verb existed
+
+A migration adds `write` to every grant that predates it, which is not a
+widening. The consent page those people saw offered "Read and change the data
+this app keeps for you", so changing is what they agreed to. Leaving them
+alone would have narrowed live delegations to something nobody chose, and a
+background job that quietly stops writing is the worst way to learn about a
+vocabulary change. From here the page asks the question separately.
 
 **Changing a credential is refused outright**, whatever was granted. The page
 offers to let an app _use_ the keys you have given it, and storing, replacing

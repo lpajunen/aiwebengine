@@ -37,8 +37,8 @@ worth keeping because the remaining items lean on them.
 Those four are what let the agent's run move out of the browser and into the
 engine.
 
-The fifth is the one this file called the largest, and it took the shape below
-because the two halves of it turned out to be one piece of work.
+The fifth and sixth are the two this file called one piece of work approached
+from opposite ends, and so they were.
 
 - **A script can run with fewer capabilities than it holds.** `sandbox.run`
   (`sandbox.rs`, `assets/sandbox_prelude.js`) — a sub-execution of the same
@@ -64,6 +64,18 @@ because the two halves of it turned out to be one piece of work.
   `read_script_data`/`write_script_data` — each with the check that enforces
   it, and each held by every tier that could already do the thing, so adding
   them took nothing away. See `docs/CAPABILITY_ATTENUATION.md`.
+
+- **A delegation can say "may read, may not write".** `Scope::Write`
+  (`delegation.rs`) — the verb the vocabulary did not have, and could not have
+  had before there was somewhere to enforce it. `resolve` no longer returns a
+  fixed `authenticated` tier: it caps there and then attenuates to what the
+  grant says, so a grant without the verb holds no write capability at all.
+  The nouns keep their own mechanism, because the two answer different
+  questions — a noun says whose things are in scope and answers as though
+  they were not there, a verb is a capability and refuses at the gate every
+  other caller meets. A migration adds `write` to grants that predate it,
+  which restores rather than widens: the page those people saw offered "read
+  and change". See `docs/DELEGATION.md`.
 
 What follows is what the agent hit next.
 
@@ -108,27 +120,26 @@ whether a grant is enough on its own or whether delegation needs to name the
 channel identity it may be triggered by. Deciding that badly makes a webhook
 into a way to spend other people's tokens.
 
-### 3. The scope vocabulary has nouns and no verbs — half done
+### 3. ~~The scope vocabulary has nouns and no verbs~~ — done
 
-`Scope` is still `PersonalStorage` and `Secrets` (`delegation.rs:67`) — two
-nouns, naming _what_ a delegation reaches. Nothing names _what it may do with
-it_.
+See **What got built** above. Of the two things this item said wanted it, one
+is delivered and one is only half:
 
-The enforcement point this was waiting on now exists: `Capability` has the
-verbs (item 1), and every one of them is checked. What is left is the
-narrower job of connecting the two — letting a **grant** say "may read, may
-not write" and having `delegation::resolve` hand back a context attenuated to
-it, rather than the fixed `authenticated` cap it returns today. The rule the
-file's own comment states still governs: a scope nothing checks is a promise
-the engine does not keep, and now there is something for each new scope to
-check against.
+A **plan approved in advance** is what `Scope::Write` is — a grant that
+authorises an app to go away and work out what to do without authorising it to
+do the thing.
 
-Two things want it. A **plan approved in advance** — which is what a delegation
-grant already is for background work, except that it cannot currently say "may
-read, may not write". And **input from a stranger**: once channels exist, a
-message from an unknown sender should resolve to a narrower context than the
-same words typed by the account owner on their own page, and a scope that can
-express the difference is how that gets written down rather than remembered.
+**Input from a stranger** still needs item 2. The scope that expresses the
+difference now exists, so "this sender resolves to a narrower context than the
+account owner typing the same words" is writable down; what is missing is a
+way to have a stranger's message reach a person's delegation at all.
+
+One cost is worth carrying forward: a read-only grant holds no `enqueue_tasks`,
+and work longer than one budget is a chain of tasks, so a read-only delegation
+cannot be a long one. Neither queueing nor dispatching can actually escalate
+under a delegation — a queued personal task re-resolves the same grant — so if
+that constraint ever bites, the answer is a third scope rather than moving
+`enqueue_tasks` into the base.
 
 ### 4. No streaming, in either direction
 
