@@ -4497,7 +4497,15 @@ async fn db_query_table(
     }
 
     // Bind parameters
-    let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
+    // Not cached, deliberately. A script's table grows a column whenever the
+    // script says so, and this statement names every column — `SELECT *`,
+    // `RETURNING *` — so a new one changes its result type. Postgres refuses to
+    // run a cached plan whose result type has changed, and sqlx does not evict
+    // the statement when it does: the connection holding it fails this query
+    // from then on, and the error reaches the script as something it will read
+    // as an empty table. Caching a plan over a schema the caller may change is
+    // unsound however rarely it bites.
+    let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str())).persistent(false);
     for value in &bound {
         sql_query = bind_value(sql_query, value)?;
     }
@@ -4546,7 +4554,15 @@ async fn db_insert_row(
         placeholders.join(", ")
     );
 
-    let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
+    // Not cached, deliberately. A script's table grows a column whenever the
+    // script says so, and this statement names every column — `SELECT *`,
+    // `RETURNING *` — so a new one changes its result type. Postgres refuses to
+    // run a cached plan whose result type has changed, and sqlx does not evict
+    // the statement when it does: the connection holding it fails this query
+    // from then on, and the error reaches the script as something it will read
+    // as an empty table. Caching a plan over a schema the caller may change is
+    // unsound however rarely it bites.
+    let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str())).persistent(false);
     for value in &bound {
         sql_query = bind_value(sql_query, value)?;
     }
@@ -4602,7 +4618,15 @@ async fn db_update_row(
         param_count
     );
 
-    let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
+    // Not cached, deliberately. A script's table grows a column whenever the
+    // script says so, and this statement names every column — `SELECT *`,
+    // `RETURNING *` — so a new one changes its result type. Postgres refuses to
+    // run a cached plan whose result type has changed, and sqlx does not evict
+    // the statement when it does: the connection holding it fails this query
+    // from then on, and the error reaches the script as something it will read
+    // as an empty table. Caching a plan over a schema the caller may change is
+    // unsound however rarely it bites.
+    let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str())).persistent(false);
     for value in &bound {
         sql_query = bind_value(sql_query, value)?;
     }
@@ -4733,7 +4757,15 @@ async fn db_upsert_row(
         )
     };
 
-    let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
+    // Not cached, deliberately. A script's table grows a column whenever the
+    // script says so, and this statement names every column — `SELECT *`,
+    // `RETURNING *` — so a new one changes its result type. Postgres refuses to
+    // run a cached plan whose result type has changed, and sqlx does not evict
+    // the statement when it does: the connection holding it fails this query
+    // from then on, and the error reaches the script as something it will read
+    // as an empty table. Caching a plan over a schema the caller may change is
+    // unsound however rarely it bites.
+    let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str())).persistent(false);
     for value in &bound {
         sql_query = bind_value(sql_query, value)?;
     }
