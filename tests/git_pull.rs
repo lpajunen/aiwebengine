@@ -612,6 +612,118 @@ async fn force_re_applies_a_repository_that_has_not_moved() {
     assert_eq!(forced.scripts[0].revision, None);
 }
 
+/// A pull that wrote nothing still says the two now agree.
+///
+/// `record_sync` keeps the previous watermark when a pull records no revision,
+/// so the engine went on reporting `ahead` after a pull had just confirmed the
+/// content matches. Invisible while only the engine API wrote assets — every
+/// write moved head, and the next pull moved the watermark with it. A script
+/// writing its own asset records a revision too, so head can move for reasons
+/// the repository knows nothing about: write a skill, delete it again, and the
+/// content agrees while the number does not.
+///
+/// What the pull *wrote* is still reported as nothing, which is the other half
+/// of this: forcing the work is not the same as inventing a change.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pull_that_writes_nothing_still_moves_the_watermark() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[("main.ts", "function init() {}")])
+        .await
+        .expect("fixture should start");
+
+    let uri = &script_uri("git-watermark.ts");
+    clear(uri);
+
+    pull_with(github.client(), &puller(), request("git-watermark"))
+        .await
+        .expect("first pull should succeed");
+
+    // Head moves for a reason the repository has nothing to do with, the way
+    // an agent writing itself a skill and thinking better of it would. Done
+    // through the asset API rather than by running a snippet, because
+    // `execute_script_secure` stores the source it runs — which would change
+    // the root as well and make the forced pull a real change rather than the
+    // no-op this test is about.
+    let encoded = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode("scratch")
+    };
+    let admin = UserContext::admin("watermark".to_string());
+    tokio::task::spawn_blocking({
+        let (admin, uri, encoded) = (admin.clone(), uri.to_string(), encoded.clone());
+        move || {
+            aiwebengine::engine_api::upsert_asset_authorized(
+                &admin,
+                &uri,
+                "scratch.txt",
+                "text/plain",
+                &encoded,
+            )
+        }
+    })
+    .await
+    .expect("no panic")
+    .expect("the write should land");
+
+    let drifted = aiwebengine::git_sync::status_with(github.client(), uri)
+        .await
+        .expect("status should read");
+    assert_eq!(
+        drifted.state,
+        aiwebengine::git_sync::SyncState::Ahead,
+        "a write the repository does not have is drift"
+    );
+
+    // Put the content back, so the engine and the repository agree again on
+    // everything but the revision number.
+    tokio::task::spawn_blocking({
+        let (admin, uri) = (admin.clone(), uri.to_string());
+        move || {
+            aiwebengine::engine_api::delete_asset_authorized(&admin, &uri, "scratch.txt")
+                .unwrap_or_else(|_| panic!("the delete should be authorized"))
+        }
+    })
+    .await
+    .expect("no panic");
+
+    let forced = pull_with(
+        github.client(),
+        &puller(),
+        PullRequest {
+            repo: "lpajunen/solution".to_string(),
+            branch: None,
+            prefix: Some("git-watermark".to_string()),
+            force: true,
+        },
+    )
+    .await
+    .expect("forced pull should succeed");
+
+    assert!(
+        !forced.scripts[0].changed,
+        "identical content changes nothing; got written={} deleted={} unchanged={} revision={:?}",
+        forced.scripts[0].written,
+        forced.scripts[0].deleted,
+        forced.scripts[0].unchanged,
+        forced.scripts[0].revision
+    );
+    assert_eq!(
+        forced.scripts[0].revision, None,
+        "the report says what the pull wrote, which is nothing"
+    );
+
+    let settled = aiwebengine::git_sync::status_with(github.client(), uri)
+        .await
+        .expect("status should read");
+    assert_eq!(
+        settled.state,
+        aiwebengine::git_sync::SyncState::InSync,
+        "a pull that confirmed the content agrees should stop reporting drift"
+    );
+}
+
 /// The shortcut has to be about this end as well as the remote. A pull that
 /// would compose different URIs than the recorded ones is not up to date,
 /// however still the repository has been — which is exactly the case that made

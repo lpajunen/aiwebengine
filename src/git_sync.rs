@@ -1116,7 +1116,35 @@ fn write_script(
         .count();
 
     let changed = outcome.changed();
+    // What this pull wrote. `None` when it changed nothing, and reported as
+    // such: forcing the work is not the same as inventing a change.
     let revision = outcome.revision;
+
+    // Where the engine now *stands* relative to the repository, which is a
+    // different question and was being answered with the first one.
+    //
+    // A pull that wrote nothing left this `None`, and `record_sync` keeps the
+    // old watermark rather than clearing it — so the engine went on reporting
+    // `ahead` after a pull had just confirmed the two agree. Invisible while
+    // nothing but the engine API wrote assets, because every write moved head
+    // and the next pull moved the watermark with it. A script writing its own
+    // asset now records a revision too, so head can move without the
+    // repository having anything to do with it: write a skill, delete it
+    // again, and the content matches while the number does not.
+    //
+    // The condition is not "forced" but "the pull wrote nothing", which is
+    // the stronger statement and the one that makes this safe: if the pull
+    // applied cleanly and changed no file, the engine's files *are* the
+    // repository's files, whatever happened in between. Forcing is simply the
+    // usual way to reach that state deliberately.
+    let watermark = match revision {
+        Some(revision) => Some(revision),
+        // `None` again if the history cannot be read, which leaves the old
+        // behaviour rather than inventing a watermark.
+        None => crate::database::run_blocking(crate::revisions::head(script_uri))
+            .ok()
+            .flatten(),
+    };
     let action = outcome
         .action
         .unwrap_or(crate::engine_api::UpsertAction::Updated);
@@ -1127,7 +1155,7 @@ fn write_script(
         branch,
         commit,
         uri_base,
-        revision,
+        watermark,
         user.user_id.as_deref(),
     ))
     .map_err(|e| SyncError::Storage(format!("Could not record the sync: {}", e)))?;
