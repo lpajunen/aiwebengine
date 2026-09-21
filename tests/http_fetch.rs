@@ -617,6 +617,86 @@ async fn test_fetch_secret_inside_a_header_value() {
     mock.shutdown().await;
 }
 
+/// The whole path, for a secret that lives in the URL rather than a header.
+///
+/// The Telegram Bot API is why this is allowed at all: it takes its token in
+/// the path and offers no header to carry it, so "headers only" put that whole
+/// class of API out of reach. What keeps it safe is that the template carries
+/// the scheme and host, so every check runs against a string with no
+/// credential in it — and that is what the unit tests beside `resolve_url`
+/// pin. This one proves the byte actually arrives.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fetch_secret_inside_a_url_path() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+
+    use aiwebengine::repository;
+    setup_env().await;
+
+    let script_uri = "test://http-fetch-url-secret";
+    let _ = repository::set_script_secret_item(script_uri, "bot_token", "12345:AAbbCC");
+
+    // Shaped like Telegram's: the token sits between two fixed segments.
+    let url = mock.url("/path/bot{{secret:bot_token}}");
+
+    let result = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        client.fetch(
+            url,
+            FetchOptions {
+                method: "GET".to_string(),
+                headers: None,
+                body: None,
+                timeout_ms: None,
+            },
+            Some(script_uri),
+            None,
+        )
+    })
+    .await
+    .expect("Task panicked");
+
+    let _ = repository::remove_script_secret_item(script_uri, "bot_token");
+
+    let response = result.expect("a secret in the path should resolve");
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        response.body, "bot12345:AAbbCC",
+        "the secret should arrive in the path, with its surrounding text intact"
+    );
+    assert!(
+        !response.body.contains("{{secret:"),
+        "no template text should reach the far end: {}",
+        response.body
+    );
+
+    mock.shutdown().await;
+}
+
+/// A URL naming a secret is refused when the execution may not read one.
+///
+/// The capability check reads the URL as well as the headers. Forgetting that
+/// would be the whole of the hole: a context holding `use_network` and not
+/// `read_secrets` would have its URL resolved because nothing asked.
+#[tokio::test]
+async fn test_a_url_template_is_refused_without_read_secrets() {
+    use aiwebengine::http_client::names_a_secret;
+
+    let bare = FetchOptions {
+        method: "GET".to_string(),
+        headers: None,
+        body: None,
+        timeout_ms: None,
+    };
+
+    assert!(names_a_secret(
+        "https://api.telegram.org/bot{{secret:t}}/sendMessage",
+        &bare
+    ));
+    assert!(!names_a_secret("https://example.com/plain", &bare));
+}
+
 #[tokio::test]
 async fn test_fetch_missing_secret_error() {
     let mock = MockServer::start()

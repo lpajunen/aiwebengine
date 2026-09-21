@@ -3099,7 +3099,7 @@ impl SecureGlobalContext {
                 // absent and falling back to the script's own key is the
                 // weaker position, here the caller asked to hold less and
                 // should hear that it does.
-                if !may_read_secrets && crate::http_client::names_a_secret(&options) {
+                if !may_read_secrets && crate::http_client::names_a_secret(&url, &options) {
                     return Err(capability_error(
                         "fetch",
                         &Capability::ReadSecrets,
@@ -3191,9 +3191,9 @@ impl SecureGlobalContext {
                 // template this execution may not resolve must not reach a
                 // third party as itself.
                 if !may_read_secrets
-                    && described
-                        .iter()
-                        .any(|request| crate::http_client::names_a_secret(&request.options))
+                    && described.iter().any(|request| {
+                        crate::http_client::names_a_secret(&request.url, &request.options)
+                    })
                 {
                     return Err(capability_error(
                         "fetchAll",
@@ -3275,7 +3275,7 @@ impl SecureGlobalContext {
                     None => Default::default(),
                 };
 
-                if !may_read_secrets && crate::http_client::names_a_secret(&options) {
+                if !may_read_secrets && crate::http_client::names_a_secret(&url, &options) {
                     return Err(capability_error(
                         "fetchStream",
                         &Capability::ReadSecrets,

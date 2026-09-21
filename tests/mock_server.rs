@@ -60,6 +60,10 @@ impl MockServer {
                 axum::routing::get(handle_response_headers),
             )
             .route("/status/{code}", axum::routing::get(handle_status))
+            // Answers with the path segment it was given, which is how a test
+            // sees what actually arrived in the URL rather than what was
+            // intended to. `{{secret:...}}` in a path is proved by this.
+            .route("/path/{tail}", axum::routing::get(handle_path))
             .route("/redirect/{n}", axum::routing::any(handle_redirect))
             .route("/redirect-loop", axum::routing::get(handle_redirect_loop))
             .route(
@@ -288,6 +292,10 @@ async fn handle_response_headers(
     });
 
     (response_headers, Json(body))
+}
+
+async fn handle_path(axum::extract::Path(tail): axum::extract::Path<String>) -> String {
+    tail
 }
 
 async fn handle_status(axum::extract::Path(code): axum::extract::Path<u16>) -> Response {

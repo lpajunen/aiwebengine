@@ -151,8 +151,21 @@ impl HttpClient {
         let method = Method::from_str(&options.method.to_uppercase())
             .map_err(|_| HttpError::InvalidMethod(options.method.clone()))?;
 
+        // The URL first, so what follows logs the template rather than the
+        // credential. `display` is what every line below writes down.
+        let resolved = resolve_url(&url, script_uri, user_id)?;
+        for secret_id in &resolved.names {
+            info!(
+                secret_id = %secret_id,
+                url = %resolved.display,
+                script_uri = ?script_uri,
+                "Secret accessed in fetch URL"
+            );
+        }
+
         // Process headers and inject secrets
-        let mut headers = self.process_headers(options.headers, &url, script_uri, user_id)?;
+        let mut headers =
+            self.process_headers(options.headers, &resolved.display, script_uri, user_id)?;
 
         // Offer the codings we can undo. A caller that named its own is left
         // alone — some APIs answer `406` unless the request carries a
@@ -172,9 +185,21 @@ impl HttpClient {
             .map(Duration::from_millis)
             .unwrap_or(self.default_timeout);
 
-        debug!("Fetching URL: {} with method: {}", url, options.method);
+        debug!(
+            "Fetching URL: {} with method: {}",
+            resolved.display, options.method
+        );
 
-        let response = self.send_request(method, &url, headers, options.body, timeout)?;
+        let response = self
+            .send_request(
+                method,
+                &resolved.target,
+                headers,
+                options.body,
+                timeout,
+                &resolved,
+            )
+            .map_err(|e| resolved.scrub_error(e))?;
         self.convert_response(response)
     }
 
@@ -206,7 +231,24 @@ impl HttpClient {
 
         debug!("Fetching URL as bytes: {}", url);
 
-        let response = self.send_request(Method::GET, url, headers, None, self.default_timeout)?;
+        // No URL resolution here on purpose: this path's callers build their
+        // own URLs (`git_sync` does) rather than taking one from a script, so
+        // a template would be a bug rather than a feature. `plain` carries no
+        // secrets and so scrubs nothing.
+        let plain = ResolvedUrl {
+            target: url.to_string(),
+            display: url.to_string(),
+            names: Vec::new(),
+            values: Vec::new(),
+        };
+        let response = self.send_request(
+            Method::GET,
+            url,
+            headers,
+            None,
+            self.default_timeout,
+            &plain,
+        )?;
 
         let status = response.status().as_u16();
         let ok = response.status().is_success();
@@ -264,7 +306,18 @@ impl HttpClient {
         let method = Method::from_str(&options.method.to_uppercase())
             .map_err(|_| HttpError::InvalidMethod(options.method.clone()))?;
 
-        let mut headers = self.process_headers(options.headers, &url, script_uri, user_id)?;
+        let resolved = resolve_url(&url, script_uri, user_id)?;
+        for secret_id in &resolved.names {
+            info!(
+                secret_id = %secret_id,
+                url = %resolved.display,
+                script_uri = ?script_uri,
+                "Secret accessed in fetch URL"
+            );
+        }
+
+        let mut headers =
+            self.process_headers(options.headers, &resolved.display, script_uri, user_id)?;
         headers.insert(
             reqwest::header::ACCEPT_ENCODING,
             reqwest::header::HeaderValue::from_static("identity"),
@@ -275,9 +328,21 @@ impl HttpClient {
             .map(Duration::from_millis)
             .unwrap_or(self.default_timeout);
 
-        debug!("Streaming URL: {} with method: {}", url, options.method);
+        debug!(
+            "Streaming URL: {} with method: {}",
+            resolved.display, options.method
+        );
 
-        let response = self.send_request(method, &url, headers, options.body, timeout)?;
+        let response = self
+            .send_request(
+                method,
+                &resolved.target,
+                headers,
+                options.body,
+                timeout,
+                &resolved,
+            )
+            .map_err(|e| resolved.scrub_error(e))?;
 
         let status = response.status().as_u16();
         let ok = response.status().is_success();
@@ -323,6 +388,10 @@ impl HttpClient {
         headers: HeaderMap,
         body: Option<String>,
         timeout: Duration,
+        // What must not appear in anything this function writes down. A
+        // redirect resolves against a URL that may carry a credential, and
+        // the hop is logged.
+        resolved: &ResolvedUrl,
     ) -> Result<reqwest::blocking::Response, HttpError> {
         if !self.manual_redirects {
             // Test mode: single request through the redirect-following client
@@ -400,7 +469,11 @@ impl HttpClient {
                 current_headers.remove(reqwest::header::WWW_AUTHENTICATE);
             }
 
-            debug!("Following redirect ({}) to {}", status.as_u16(), next_url);
+            debug!(
+                "Following redirect ({}) to {}",
+                status.as_u16(),
+                resolved.scrub(next_url.as_str())
+            );
             current_url = next_url;
         }
 
@@ -540,7 +613,8 @@ impl HttpClient {
 
         if let Some(headers) = headers {
             for (key, value) in headers {
-                let (final_value, secrets_used) = substitute_secrets(&key, &value, |name| {
+                let where_ = format!("header '{}'", key);
+                let (final_value, secrets_used) = substitute_secrets(&where_, &value, |name| {
                     // Look up secret from database: user_secrets first, then
                     // script_secrets. Environment variables and config files
                     // are never consulted.
@@ -1033,12 +1107,17 @@ fn take_valid_utf8(buffer: &mut Vec<u8>) -> String {
 /// so the two cannot come to disagree about what a template looks like — and
 /// it is deliberately over-eager in the one direction that is safe: an
 /// unclosed `{{secret:` is a request that would error anyway.
-pub fn names_a_secret(options: &FetchOptions) -> bool {
-    options.headers.as_ref().is_some_and(|headers| {
-        headers
-            .values()
-            .any(|value| value.contains(SECRET_TEMPLATE_OPEN))
-    })
+pub fn names_a_secret(url: &str, options: &FetchOptions) -> bool {
+    // The URL is checked as well as the headers, and forgetting it here would
+    // be the whole of the hole: a context holding `use_network` but not
+    // `read_secrets` would have its URL template resolved because nothing
+    // asked, which is exactly the check this function exists to make.
+    url.contains(SECRET_TEMPLATE_OPEN)
+        || options.headers.as_ref().is_some_and(|headers| {
+            headers
+                .values()
+                .any(|value| value.contains(SECRET_TEMPLATE_OPEN))
+        })
 }
 
 /// Replace every `{{secret:NAME}}` in one header value with what `resolve`
@@ -1068,12 +1147,16 @@ pub fn names_a_secret(options: &FetchOptions) -> bool {
 /// template text is sent as it stands rather than standing for a second
 /// lookup.
 ///
-/// Only header values. A URL is not substituted, and deliberately: a URL is
+/// Used for header values and, through [`resolve_url`], for the path of a
+/// URL. The URL case was refused outright until an API that leaves no choice
+/// turned up: the Telegram Bot API puts its token in the path and offers no
+/// header to carry it, so "headers only" meant "not reachable from this
+/// engine at all". What made that refusal right is still true — a URL is
 /// written to the audit line [`HttpClient::process_headers`] emits, to this
-/// engine's logs and to the far end's access log, which is the one place a
-/// credential should never appear.
+/// engine's logs and to the far end's access log — so the rule is narrower
+/// now rather than gone. [`resolve_url`] is what narrows it.
 fn substitute_secrets(
-    header_name: &str,
+    where_: &str,
     value: &str,
     mut resolve: impl FnMut(&str) -> Option<String>,
 ) -> Result<(String, Vec<String>), HttpError> {
@@ -1096,16 +1179,16 @@ fn substitute_secrets(
         // value may hold a secret that resolved before the malformed one.
         let Some(close) = after_open.find(SECRET_TEMPLATE_CLOSE) else {
             return Err(HttpError::InvalidHeader(format!(
-                "header '{}' opens a {}...{} template that is never closed",
-                header_name, SECRET_TEMPLATE_OPEN, SECRET_TEMPLATE_CLOSE
+                "{} opens a {}...{} template that is never closed",
+                where_, SECRET_TEMPLATE_OPEN, SECRET_TEMPLATE_CLOSE
             )));
         };
 
         let name = after_open[..close].trim();
         if name.is_empty() {
             return Err(HttpError::InvalidHeader(format!(
-                "header '{}' has a {}...{} template naming no secret",
-                header_name, SECRET_TEMPLATE_OPEN, SECRET_TEMPLATE_CLOSE
+                "{} has a {}...{} template naming no secret",
+                where_, SECRET_TEMPLATE_OPEN, SECRET_TEMPLATE_CLOSE
             )));
         }
 
@@ -1122,6 +1205,189 @@ fn substitute_secrets(
             }
         }
     }
+}
+
+/// A URL with its `{{secret:...}}` templates resolved, beside the template it
+/// came from.
+///
+/// The template is what anything that *writes the URL down* uses — the audit
+/// line, the debug log, an error handed back to a script — and the resolved
+/// form goes to reqwest and nowhere else.
+///
+/// That split is only trustworthy because of the invariant [`resolve_url`]
+/// enforces: **a secret may change the path, the query and the fragment, and
+/// may not change the origin.** So the URL in the log names the host that was
+/// actually contacted. Without it the log would be a guess, which is worse
+/// than the credential-in-the-log problem this whole arrangement exists to
+/// avoid — a wrong audit line is believed.
+struct ResolvedUrl {
+    /// Carries the credential. For reqwest, and for nothing that is recorded.
+    target: String,
+    /// The template. Safe to log, to put in an error, to return to a script.
+    display: String,
+    /// Which secrets were read, for the audit line.
+    names: Vec<String>,
+    /// What they resolved to, so anything derived from `target` can be
+    /// scrubbed before it is written down.
+    values: Vec<String>,
+}
+
+/// Written by hand rather than derived, and that is the point of it.
+///
+/// A derived `Debug` would print `target` and `values` — the resolved URL and
+/// the credential inside it — into whatever formatted this struct, which is
+/// the failure the rest of this type exists to prevent. Anything that wants to
+/// show a URL wants `display`.
+impl std::fmt::Debug for ResolvedUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedUrl")
+            .field("display", &self.display)
+            .field("names", &self.names)
+            .field("secrets", &self.values.len())
+            .finish()
+    }
+}
+
+impl ResolvedUrl {
+    /// Whether any secret was involved at all.
+    fn is_plain(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    /// Replace every resolved secret in `text` with a marker.
+    ///
+    /// The backstop for text derived from `target` rather than written by us:
+    /// a reqwest transport error quotes the URL it was given, and a redirect
+    /// resolves against it. Cheap, and it costs nothing when no secret was
+    /// used.
+    fn scrub(&self, text: &str) -> String {
+        if self.is_plain() {
+            return text.to_string();
+        }
+        let mut out = text.to_string();
+        for value in &self.values {
+            // An empty secret would match everywhere and replace nothing
+            // usefully; a stored empty value is a configuration mistake rather
+            // than something to defend against here.
+            if value.is_empty() {
+                continue;
+            }
+            out = out.replace(value.as_str(), "{{secret}}");
+        }
+        out
+    }
+
+    /// The same, for an error on its way back to a script.
+    fn scrub_error(&self, error: HttpError) -> HttpError {
+        if self.is_plain() {
+            return error;
+        }
+        match error {
+            HttpError::InvalidUrl(s) => HttpError::InvalidUrl(self.scrub(&s)),
+            HttpError::InvalidUrlScheme(s) => HttpError::InvalidUrlScheme(self.scrub(&s)),
+            HttpError::BlockedUrl(s) => HttpError::BlockedUrl(self.scrub(&s)),
+            HttpError::RequestFailed(s) => HttpError::RequestFailed(self.scrub(&s)),
+            HttpError::InvalidHeader(s) => HttpError::InvalidHeader(self.scrub(&s)),
+            // The rest carry no text that a URL could have reached.
+            other => other,
+        }
+    }
+}
+
+/// Resolve `{{secret:...}}` in a URL, refusing anything that would move the
+/// request somewhere else.
+///
+/// Substituting into a URL was refused outright for a good reason: a URL ends
+/// up in three logs the credential has no business being in. The Telegram Bot
+/// API is the case that made the refusal untenable rather than merely strict —
+/// `https://api.telegram.org/bot<token>/sendMessage`, with no header form — so
+/// "headers only" meant a whole class of API was unreachable from a script.
+///
+/// What makes this safe is that the *template* already carries the scheme and
+/// the host. So every check this client makes about where a request may go
+/// runs against a string with no credential in it, the log lines keep using
+/// that string, and the resolved form exists only long enough to be sent.
+///
+/// The origin check is what holds it together. A secret whose value contains
+/// `/`, `?` or `#` can only add path, query or fragment — none of those move
+/// the host — but a template like `https://{{secret:x}}/` would, and a stored
+/// value is not necessarily one the script's author chose. Refusing on a
+/// changed origin means the displayed URL cannot lie about where the request
+/// went, which is the property the audit line is for.
+fn resolve_url(
+    url: &str,
+    script_uri: Option<&str>,
+    user_id: Option<&str>,
+) -> Result<ResolvedUrl, HttpError> {
+    resolve_url_with(url, |name| {
+        // user_secrets first, then script_secrets. Environment variables and
+        // config files are never consulted, as everywhere else here.
+        crate::repository::resolve_secret_db(script_uri.unwrap_or(""), name, user_id)
+    })
+}
+
+/// The whole of [`resolve_url`] except where the secrets come from.
+///
+/// Split out so the rules above can be tested without a database behind them:
+/// the origin check and the redaction are the parts worth pinning, and neither
+/// has anything to do with where a value was stored.
+fn resolve_url_with(
+    url: &str,
+    mut resolve: impl FnMut(&str) -> Option<String>,
+) -> Result<ResolvedUrl, HttpError> {
+    if !url.contains(SECRET_TEMPLATE_OPEN) {
+        return Ok(ResolvedUrl {
+            target: url.to_string(),
+            display: url.to_string(),
+            names: Vec::new(),
+            values: Vec::new(),
+        });
+    }
+
+    let mut values = Vec::new();
+    let (target, names) = substitute_secrets("the URL", url, |name| {
+        let found = resolve(name);
+        if let Some(value) = &found {
+            values.push(value.clone());
+        }
+        found
+    })
+    // `substitute_secrets` reports a malformed template as a header problem,
+    // which is what it is everywhere else it is called. Here it is a URL
+    // problem, and "Invalid header: the URL opens ..." would send somebody
+    // looking in the wrong place.
+    .map_err(|e| match e {
+        HttpError::InvalidHeader(detail) => HttpError::InvalidUrl(detail),
+        other => other,
+    })?;
+
+    // Both sides parsed, and compared as origins rather than as text: the
+    // template's `{` and `}` are percent-encoded by the parser, so comparing
+    // the strings would report a difference that is not one.
+    let template_parsed = Url::parse(url)
+        .map_err(|e| HttpError::InvalidUrl(format!("{} (before substitution)", e)))?;
+    let target_parsed = Url::parse(&target).map_err(|_| {
+        // Deliberately not quoting the parse error: it would contain the URL
+        // it failed on, which by here has the secret in it.
+        HttpError::InvalidUrl("the URL is not valid once its secret is substituted".to_string())
+    })?;
+
+    if template_parsed.scheme() != target_parsed.scheme()
+        || template_parsed.host_str() != target_parsed.host_str()
+        || template_parsed.port_or_known_default() != target_parsed.port_or_known_default()
+    {
+        return Err(HttpError::BlockedUrl(
+            "a secret in a URL may fill in the path, and may not change the scheme, host or port"
+                .to_string(),
+        ));
+    }
+
+    Ok(ResolvedUrl {
+        target,
+        display: url.to_string(),
+        names,
+        values,
+    })
 }
 
 /// Validate a caller-supplied URL the way a request through [`HttpClient`]
@@ -1273,6 +1539,206 @@ mod tests {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         move |name: &str| known.get(name).cloned()
+    }
+
+    // ---- a secret in the URL --------------------------------------------
+    //
+    // The rule these pin: a secret may fill in the path, and the URL that is
+    // written down stays the template. Telegram is why this exists — its Bot
+    // API takes the token in the path and offers no header for it.
+
+    #[test]
+    fn a_url_with_no_template_is_left_alone() {
+        let resolved = resolve_url_with("https://example.com/x", resolver(&[])).expect("plain");
+        assert_eq!(resolved.target, "https://example.com/x");
+        assert_eq!(resolved.display, "https://example.com/x");
+        assert!(resolved.is_plain());
+    }
+
+    #[test]
+    fn a_secret_fills_in_the_path() {
+        let resolved = resolve_url_with(
+            "https://api.telegram.org/bot{{secret:tg}}/sendMessage",
+            resolver(&[("tg", "12345:AAbbCC")]),
+        )
+        .expect("resolved");
+
+        assert_eq!(
+            resolved.target,
+            "https://api.telegram.org/bot12345:AAbbCC/sendMessage"
+        );
+        assert_eq!(resolved.names, vec!["tg".to_string()]);
+    }
+
+    #[test]
+    fn what_gets_written_down_is_the_template() {
+        let resolved = resolve_url_with(
+            "https://api.telegram.org/bot{{secret:tg}}/sendMessage",
+            resolver(&[("tg", "12345:AAbbCC")]),
+        )
+        .expect("resolved");
+
+        // The audit line, the debug log and any error use this.
+        assert_eq!(
+            resolved.display,
+            "https://api.telegram.org/bot{{secret:tg}}/sendMessage"
+        );
+        assert!(!resolved.display.contains("AAbbCC"));
+    }
+
+    #[test]
+    fn a_secret_may_not_change_the_host() {
+        // Refused twice over, which is worth knowing. The origin check below
+        // would catch it, but this never reaches the origin check: a `{` is
+        // not legal in a host, so the *template* fails to parse. The host
+        // position cannot be templated at all.
+        let error = resolve_url_with(
+            "https://{{secret:where}}/path",
+            resolver(&[("where", "evil.example.com")]),
+        )
+        .expect_err("a moved origin is refused");
+
+        assert!(!error.to_string().contains("evil.example.com"));
+    }
+
+    #[test]
+    fn a_secret_may_not_change_the_port() {
+        let error = resolve_url_with(
+            "https://example.com:443{{secret:rest}}",
+            resolver(&[("rest", ":8443/x")]),
+        )
+        .expect_err("a moved port is refused");
+
+        // Whichever way it is caught, the refusal must not quote the value.
+        assert!(!error.to_string().contains("8443"));
+    }
+
+    #[test]
+    fn nothing_a_secret_can_hold_moves_the_request() {
+        // The property, over the ways a secret might try to leave the origin
+        // it was written against. Every one is refused, and no refusal quotes
+        // the value.
+        //
+        // Worth recording what this exercise showed: the origin check in
+        // `resolve_url_with` is a backstop that nothing here reaches. A `{` is
+        // not legal in an authority, so a template with a secret anywhere at
+        // or before the host fails to parse *as a template* — and once the
+        // secret sits after the first `/`, it is in the path, where `@`, `..`
+        // and `:` are ordinary characters that move nothing. The check stays
+        // because "no input I thought of" is a weaker guarantee than a check,
+        // and it is two comparisons.
+        let hostile = [
+            ("https://{{secret:x}}/p", "evil.example.com"),
+            ("https://example.com{{secret:x}}/p", "@evil.example.com"),
+            ("https://example.com:443{{secret:x}}", ":8443/p"),
+            ("https://ex{{secret:x}}ample.com/p", "@evil.example.com#"),
+        ];
+
+        for (template, value) in hostile {
+            let error = resolve_url_with(template, resolver(&[("x", value)]))
+                .expect_err(&format!("{} should be refused", template));
+            assert!(
+                !error.to_string().contains(value),
+                "{} leaked its secret: {}",
+                template,
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn a_secret_in_the_path_stays_in_the_path() {
+        // The other half of the same property: characters that would matter
+        // in an authority are inert once the secret is past the first slash.
+        let resolved = resolve_url_with(
+            "https://example.com/{{secret:x}}/end",
+            resolver(&[("x", "a@b:1/../c")]),
+        )
+        .expect("the origin has not moved");
+
+        let parsed = Url::parse(&resolved.target).expect("valid");
+        assert_eq!(parsed.host_str(), Some("example.com"));
+        assert_eq!(parsed.scheme(), "https");
+    }
+
+    #[test]
+    fn a_value_carrying_slashes_only_deepens_the_path() {
+        let resolved = resolve_url_with(
+            "https://example.com/{{secret:p}}/end",
+            resolver(&[("p", "a/b/c")]),
+        )
+        .expect("still the same origin");
+        assert_eq!(resolved.target, "https://example.com/a/b/c/end");
+    }
+
+    #[test]
+    fn a_missing_secret_names_the_secret_and_not_the_url() {
+        let error = resolve_url_with("https://example.com/{{secret:absent}}", resolver(&[]))
+            .expect_err("unresolvable");
+        match error {
+            HttpError::SecretNotFound(name) => assert_eq!(name, "absent"),
+            other => panic!("expected SecretNotFound, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn an_unclosed_template_in_a_url_says_so_without_naming_a_header() {
+        let error = resolve_url_with("https://example.com/{{secret:oops", resolver(&[]))
+            .expect_err("unclosed");
+        let text = error.to_string();
+        assert!(text.contains("the URL"), "got {}", text);
+        // Reported as a URL problem. It used to say "Invalid header", which
+        // sends somebody looking in the wrong place entirely.
+        assert!(text.starts_with("Invalid URL"), "got {}", text);
+    }
+
+    #[test]
+    fn scrubbing_takes_the_value_out_of_anything_derived() {
+        let resolved = resolve_url_with(
+            "https://api.telegram.org/bot{{secret:tg}}/sendMessage",
+            resolver(&[("tg", "12345:AAbbCC")]),
+        )
+        .expect("resolved");
+
+        // What a reqwest transport error looks like: it quotes the URL it was
+        // handed, which is the resolved one.
+        let leaked =
+            "error sending request for url (https://api.telegram.org/bot12345:AAbbCC/sendMessage)";
+        let scrubbed = resolved.scrub(leaked);
+        assert!(!scrubbed.contains("AAbbCC"), "got {}", scrubbed);
+        assert!(scrubbed.contains("{{secret}}"), "got {}", scrubbed);
+    }
+
+    #[test]
+    fn scrubbing_reaches_the_error_a_script_is_handed() {
+        let resolved = resolve_url_with(
+            "https://api.telegram.org/bot{{secret:tg}}/sendMessage",
+            resolver(&[("tg", "12345:AAbbCC")]),
+        )
+        .expect("resolved");
+
+        let scrubbed = resolved.scrub_error(HttpError::RequestFailed(
+            "failed to connect to https://api.telegram.org/bot12345:AAbbCC/sendMessage".to_string(),
+        ));
+        assert!(!scrubbed.to_string().contains("AAbbCC"));
+    }
+
+    #[test]
+    fn a_plain_url_scrubs_nothing_and_costs_nothing() {
+        let resolved = resolve_url_with("https://example.com/x", resolver(&[])).expect("plain");
+        assert_eq!(resolved.scrub("anything at all"), "anything at all");
+    }
+
+    #[test]
+    fn the_capability_check_sees_a_template_in_the_url() {
+        // The hole this closes: a context holding `use_network` but not
+        // `read_secrets` would otherwise have its URL resolved unasked.
+        let bare = FetchOptions::default();
+        assert!(names_a_secret(
+            "https://api.telegram.org/bot{{secret:tg}}/x",
+            &bare
+        ));
+        assert!(!names_a_secret("https://example.com/x", &bare));
     }
 
     #[test]
