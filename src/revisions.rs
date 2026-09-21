@@ -38,6 +38,17 @@ pub enum Origin {
     Revert,
     /// Written by the engine at startup rather than by a caller.
     Bootstrap,
+    /// Written by a script itself, through `assetStorage` from inside the
+    /// sandbox.
+    ///
+    /// Distinguished for the reason `GitPull` is: the question a history
+    /// answers is "why is my edit not there any more", and "a script wrote
+    /// this" is a different answer from "somebody called the API". It became
+    /// worth having when an agent gained the ability to write its own skills
+    /// — before that, the only thing on this path was a solution managing its
+    /// own assets, and afterwards it is model-authored content that a person
+    /// may well want to read back or undo.
+    Sandbox,
     /// Replayed from a git repository the script is synced with.
     ///
     /// Worth distinguishing from `Batch` even though a pull writes through the
@@ -57,6 +68,7 @@ impl Origin {
             Origin::Script => "script",
             Origin::Revert => "revert",
             Origin::Bootstrap => "bootstrap",
+            Origin::Sandbox => "sandbox",
             Origin::GitPull => "git_pull",
         }
     }

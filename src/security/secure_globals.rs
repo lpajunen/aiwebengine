@@ -1036,7 +1036,32 @@ impl SecureGlobalContext {
                     script_uri: script_uri_owned.clone(),
                 };
                 match repository::upsert_asset(asset) {
-                    Ok(_) => Ok(format!("Asset '{}' upserted successfully", uri)),
+                    Ok(_) => {
+                        // A write here is a write to the script, and every
+                        // other path that changes a script's files records
+                        // what it consisted of afterwards. This one did not,
+                        // which meant an asset written from JavaScript had no
+                        // history, could not be reverted, and did not move the
+                        // git binding off `in_sync` — so a pull deleted it
+                        // with nothing having said it was there.
+                        //
+                        // Harmless while the only writer was a solution
+                        // managing its own files. Not harmless once an agent
+                        // can write its own skills, which is model-authored
+                        // content somebody may well want to read back or undo.
+                        //
+                        // Recorded after the write and not instead of it: a
+                        // history that cannot be written is worth less than
+                        // the content, so `record_blocking` reports failure
+                        // rather than propagating it and the write still
+                        // stands.
+                        crate::revisions::record_blocking(
+                            &script_uri_asset,
+                            crate::revisions::Origin::Sandbox,
+                            user_ctx_upsert_asset.user_id.as_deref(),
+                        );
+                        Ok(format!("Asset '{}' upserted successfully", uri))
+                    }
                     Err(e) => Ok(format!("Error upserting asset: {}", e)),
                 }
             },
@@ -1096,7 +1121,17 @@ impl SecureGlobalContext {
                 );
 
                 match repository::delete_asset(&script_uri_delete_asset, &uri) {
-                    true => Ok(format!("Asset '{}' deleted successfully", uri)),
+                    true => {
+                        // The same gap as `upsertAsset` above, and the one
+                        // most worth closing: after a removal nothing else in
+                        // the engine still holds the content.
+                        crate::revisions::record_blocking(
+                            &script_uri_delete_asset,
+                            crate::revisions::Origin::Delete,
+                            user_ctx_delete_asset.user_id.as_deref(),
+                        );
+                        Ok(format!("Asset '{}' deleted successfully", uri))
+                    }
                     false => Ok(format!("Asset '{}' not found", uri)),
                 }
             },

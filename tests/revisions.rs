@@ -167,6 +167,116 @@ async fn each_write_records_the_next_revision() {
     assert_eq!(head, Some(second), "the newest write is head");
 }
 
+/// A script writing its own asset records a revision, the same as every other
+/// path that changes a script's files.
+///
+/// It did not, and the gap was invisible in exactly the way that matters: an
+/// asset written from JavaScript had no history, could not be reverted, and —
+/// because `get_git_status` compares head against the revision last synced —
+/// did not move the binding off `in_sync`. So a git pull deleted it for not
+/// being in the repository, with nothing anywhere having recorded that it was
+/// ever there.
+///
+/// Harmless while the only writer was a solution managing its own files.
+/// Not harmless once an agent can write its own skills.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_writing_its_own_asset_records_a_revision() {
+    setup_env().await;
+    let uri = "test://revisions/from-the-sandbox";
+    deploy(uri, "function init() {}").await;
+
+    let before = revisions::head(uri).await.expect("head should read");
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode("a skill body");
+    let source = format!(
+        r#"assetStorage.upsertAsset("skills/written/SKILL.md", "text/markdown", "{}");"#,
+        encoded
+    );
+    let wrote = tokio::task::spawn_blocking({
+        let (uri, source) = (uri.to_string(), source.clone());
+        move || aiwebengine::js_engine::execute_script_secure(&uri, &source, admin())
+    })
+    .await
+    .expect("the write should not panic");
+    assert!(wrote.success, "the script should run: {:?}", wrote.error);
+
+    let after = revisions::head(uri).await.expect("head should read");
+    assert!(
+        after > before,
+        "a sandbox write should advance head: {:?} did not follow {:?}",
+        after,
+        before
+    );
+
+    // The content is in the manifest, not merely the revision number.
+    let revision = after.expect("head should name a revision");
+    let files = revisions::files(uri, revision)
+        .await
+        .expect("the manifest should read")
+        .expect("the revision should have a manifest");
+    assert!(
+        files.iter().any(|f| f.uri == "skills/written/SKILL.md"),
+        "the written asset should be in the revision it produced: {:?}",
+        files
+    );
+}
+
+/// And removing one does too, which is the half most worth having: after a
+/// delete nothing else in the engine still holds the content.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_deleting_its_own_asset_records_a_revision() {
+    setup_env().await;
+    let uri = "test://revisions/sandbox-delete";
+    deploy(uri, "function init() {}").await;
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode("temporary");
+    let write = format!(
+        r#"assetStorage.upsertAsset("scratch.txt", "text/plain", "{}");"#,
+        encoded
+    );
+    let written = tokio::task::spawn_blocking({
+        let (uri, source) = (uri.to_string(), write);
+        move || aiwebengine::js_engine::execute_script_secure(&uri, &source, admin())
+    })
+    .await
+    .expect("no panic");
+    assert!(written.success);
+
+    let after_write = revisions::head(uri).await.expect("head should read");
+
+    let removed = tokio::task::spawn_blocking({
+        let uri = uri.to_string();
+        move || {
+            aiwebengine::js_engine::execute_script_secure(
+                &uri,
+                r#"assetStorage.deleteAsset("scratch.txt");"#,
+                admin(),
+            )
+        }
+    })
+    .await
+    .expect("no panic");
+    assert!(removed.success);
+
+    let after_delete = revisions::head(uri).await.expect("head should read");
+    assert!(
+        after_delete > after_write,
+        "a sandbox delete should advance head: {:?} did not follow {:?}",
+        after_delete,
+        after_write
+    );
+
+    let files = revisions::files(uri, after_delete.expect("a revision"))
+        .await
+        .expect("the manifest should read")
+        .expect("the revision should have a manifest");
+    assert!(
+        !files.iter().any(|f| f.uri == "scratch.txt"),
+        "the deleted asset should be gone from the manifest it produced: {:?}",
+        files
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn writing_the_same_content_again_records_nothing() {
     setup_env().await;
