@@ -366,7 +366,8 @@ pub fn execute_mcp_prompt(
     arguments: serde_json::Value,
     auth_context: Option<crate::auth::JsAuthContext>,
     user_context: crate::security::UserContext,
-) -> Result<serde_json::Value, String> {
+    exchange: crate::mcp_elicitation::Exchange,
+) -> Result<PromptOutcome, String> {
     debug!(
         "Executing MCP prompt: {} with args: {:?}",
         prompt_name, arguments
@@ -393,16 +394,17 @@ pub fn execute_mcp_prompt(
     });
 
     // Execute the JavaScript handler
-    let result = crate::js_engine::execute_mcp_prompt_handler(
+    let outcome = crate::js_engine::execute_mcp_prompt_handler(
         &script_uri,
         &handler_function,
         context,
         auth_context,
         user_context,
+        exchange,
     )?;
 
-    debug!("MCP prompt '{}' executed successfully", prompt_name);
-    Ok(result)
+    debug!("MCP prompt '{}' executed", prompt_name);
+    Ok(outcome)
 }
 
 /// Execute an MCP completion by calling the prompt's JavaScript handler in completion mode
@@ -442,19 +444,32 @@ pub fn execute_mcp_completion(
     });
 
     // Execute the JavaScript handler in completion mode
-    let result = crate::js_engine::execute_mcp_prompt_handler(
+    // Completion runs the same handler in a different mode, and deliberately
+    // unattended: `completion/complete` is an autocomplete on a half-typed
+    // argument, and the specification does not permit `input_required` on it.
+    let outcome = crate::js_engine::execute_mcp_prompt_handler(
         &script_uri,
         &handler_function,
         context,
         auth_context,
         user_context,
+        crate::mcp_elicitation::Exchange::unattended(),
     )?;
 
-    debug!(
-        "MCP completion for prompt '{}' executed successfully",
-        prompt_name
-    );
-    Ok(result)
+    match outcome {
+        Outcome::Complete(result) => {
+            debug!(
+                "MCP completion for prompt '{}' executed successfully",
+                prompt_name
+            );
+            Ok(result)
+        }
+        // Unreachable by construction — the exchange above says nobody can be
+        // asked, so `mcp.ask` throws rather than recording anything — but the
+        // handler is shared with `prompts/get` and saying so beats a panic if
+        // that ever stops being true.
+        Outcome::InputRequired(_) => Err("a completion handler cannot ask for input".to_string()),
+    }
 }
 
 /// Wall-clock slack the dispatcher's backstop allows on top of whatever ceiling
@@ -479,18 +494,28 @@ pub fn tool_call_backstop_ms(tool_name: &str) -> u64 {
 }
 
 /// Execute an MCP tool by calling its JavaScript handler
-/// What a tool call produced: an answer, or a question for the caller.
+/// What a call produced: an answer, or a question for the caller.
 ///
 /// A handler that asks produces no result at all — the specification's Multi
 /// Round-Trip Requests pattern ends the call, and the client starts a fresh one
 /// carrying the answer. So this is an enum rather than a result with an
 /// optional field: the two outcomes have nothing in common to merge.
-pub enum ToolOutcome {
-    /// The handler returned. The string is its JSON.
-    Complete(String),
+///
+/// Generic because the specification permits `input_required` on `tools/call`,
+/// `prompts/get` and `resources/read`, and the engine serves the first two.
+/// They differ only in what a *finished* call hands back.
+pub enum Outcome<T> {
+    /// The handler returned.
+    Complete(T),
     /// The handler asked for something before it could finish.
     InputRequired(crate::mcp_elicitation::Asked),
 }
+
+/// A tool's result is its handler's JSON, still a string.
+pub type ToolOutcome = Outcome<String>;
+
+/// A prompt's result is parsed, because the engine reads its `messages`.
+pub type PromptOutcome = Outcome<serde_json::Value>;
 
 pub fn execute_mcp_tool(
     tool_name: &str,

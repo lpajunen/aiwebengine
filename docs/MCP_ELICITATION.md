@@ -141,16 +141,35 @@ simply closed a dialog.
 
 **Form mode only.** `mode: "url"` — the out-of-band flow for credentials and
 third-party OAuth, where the answer must not pass through the client at all — is
-a separate piece of work. Its anti-phishing requirement, that the server prove
-the person who opened the URL is the person the elicitation was minted for, is
-the dance `script_channel_link_tokens` already does for channel linking, and it
-should reuse that rather than grow a second one. Until then, form mode **must
-not** be used for passwords, API keys, tokens or payment details; the
-specification forbids it and the engine does not police it.
+a separate piece of work, and a larger one than it looks.
 
-**`tools/call` only.** The specification also permits `input_required` on
-`prompts/get` and `resources/read`. The engine serves the first and not the
-second, and prompts can follow once the tool path has proved itself.
+It was worth expecting `script_channel_link_tokens` to be the answer to its
+anti-phishing requirement, since both are "a URL only one particular person may
+complete". They are not the same problem. A link token exists because a Telegram
+sender _is not an account_: there is no identity to compare against, so holding
+the token — which arrived in a chat only that sender can read — is the only
+evidence of ownership the engine can have. A URL-mode elicitation is minted for
+somebody who authenticated to `/mcp`, so there is a real identity on both ends,
+and the check is a comparison rather than a token: the browser opening the URL
+must carry a session for the same account. That is stronger, because a token can
+be forwarded to the victim of exactly the attack the requirement is about and a
+session cannot.
+
+What URL mode does need is the thing the rest of this file is arranged to avoid:
+**server-side state**. The specification says so outright — the server holds the
+third-party tokens, so it is stateful. The out-of-band interaction completes
+against the engine rather than the client, so its result has nowhere to live but
+a table, and `requestState` can only carry a reference to it. That is a
+departure worth deciding on deliberately rather than arriving at.
+
+Until it exists, form mode **must not** be used for passwords, API keys, tokens
+or payment details; the specification forbids it and the engine does not police
+it.
+
+**`resources/read`.** The specification permits `input_required` on
+`tools/call`, `prompts/get` and `resources/read`. The first two work — a prompt
+that needs a parameter has the same problem a tool does, and asks the same way.
+The engine serves no resources, so the third is not a gap.
 
 **Sampling and roots.** Both are deprecated as of `2026-07-28` and are not
 implemented. Asking the caller's model to generate something is not available;

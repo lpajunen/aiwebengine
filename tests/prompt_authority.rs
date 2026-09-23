@@ -37,9 +37,20 @@ function init(context) {
 "#;
 
 fn verdict_for(user_context: UserContext) -> String {
-    let result =
-        mcp::execute_mcp_prompt("promptAuthority", serde_json::json!({}), None, user_context)
-            .expect("the prompt should be answered");
+    // Unattended: this prompt is about which authority the handler runs with,
+    // not about elicitation, so there is nobody to ask and nothing to answer.
+    let outcome = mcp::execute_mcp_prompt(
+        "promptAuthority",
+        serde_json::json!({}),
+        None,
+        user_context,
+        aiwebengine::mcp_elicitation::Exchange::unattended(),
+    )
+    .expect("the prompt should be answered");
+
+    let mcp::Outcome::Complete(result) = outcome else {
+        panic!("this prompt does not ask for input");
+    };
 
     result["messages"][0]["content"]["text"]
         .as_str()

@@ -260,6 +260,39 @@ pub fn client_can_elicit(client_capabilities: Option<&Value>) -> bool {
     }
 }
 
+/// Build the exchange a call should run under, from what the request carried.
+///
+/// One function for `tools/call` and `prompts/get` because the rule has to be
+/// the same for both: state is opened against the call presenting it, and only
+/// then do this round's answers join the ones it was carrying. Two copies of
+/// that would eventually disagree about the order, and the order is what stops
+/// a client's `inputResponses` being read as state it never proved.
+pub fn exchange_for(
+    request_state: Option<&str>,
+    input_responses: Option<&Value>,
+    principal: &str,
+    host: &str,
+    call: &str,
+    args_digest: &str,
+    can_ask: bool,
+) -> Result<Exchange, StateRejected> {
+    let (mut answers, memo) = match request_state {
+        None => (Map::new(), Map::new()),
+        Some(state) => open(state, principal, host, call, args_digest)?,
+    };
+
+    // What the person said this time joins what they said before. After the
+    // state is opened, never before: these arrive unsealed, so they may only
+    // add to an exchange the caller has already proved it owns.
+    if let Some(responses) = input_responses.and_then(|value| value.as_object()) {
+        for (key, value) in responses {
+            answers.insert(key.clone(), value.clone());
+        }
+    }
+
+    Ok(Exchange::new(answers, memo, can_ask))
+}
+
 /// One tool call's side of an exchange: what is known coming in, and what the
 /// handler asked for on the way out.
 #[derive(Debug, Default)]

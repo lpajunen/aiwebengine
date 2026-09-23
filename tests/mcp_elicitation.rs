@@ -30,6 +30,34 @@ function init() {
     type: "object",
     properties: {}
   }), "neverAsks");
+
+  mcpRegistry.registerPrompt(
+    "pick_a_project",
+    "A prompt that needs to know which project",
+    JSON.stringify([]),
+    "pickAProject"
+  );
+}
+
+// The specification permits input_required on prompts/get as well, and a
+// prompt template that needs a parameter has the same problem a tool does.
+function pickAProject(context) {
+  if (context.args && context.args.mode === "completion") {
+    return { completion: { values: [] } };
+  }
+  if (!mcp.canAsk()) {
+    return { messages: [{ role: "user", content: { type: "text", text: "default project" } }] };
+  }
+  var answer = mcp.ask({
+    message: "Which project?",
+    schema: {
+      type: "object",
+      properties: { project: { type: "string" } },
+      required: ["project"]
+    }
+  });
+  var chosen = (answer.content || {}).project || "none";
+  return { messages: [{ role: "user", content: { type: "text", text: "project: " + chosen } }] };
 }
 
 function askAThing(context) {
@@ -318,6 +346,60 @@ async fn a_tool_that_does_not_ask_answers_as_it_always_did() -> anyhow::Result<(
     assert!(
         answered["result"]["requestState"].is_null(),
         "nothing to carry, so nothing is minted"
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+/// A prompt asks the same way a tool does.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_prompt_can_ask_too() -> anyhow::Result<()> {
+    let (server, http, url) = server().await?;
+
+    let ask = |extra: Value| {
+        let mut params = json!({
+            "name": "pick_a_project",
+            "arguments": {},
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": { "elicitation": { "form": {} } }
+            }
+        });
+        if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+            for (key, value) in extra {
+                params.insert(key.clone(), value.clone());
+            }
+        }
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "prompts/get", "params": params })
+    };
+
+    let asked = post(&http, &url, &ask(json!({}))).await?;
+    assert_eq!(
+        asked["result"]["resultType"], "input_required",
+        "prompts/get is on the specification's list too: {asked}"
+    );
+    let state = asked["result"]["requestState"]
+        .as_str()
+        .expect("asked, so there is state");
+    let key = asked["result"]["inputRequests"]
+        .as_object()
+        .and_then(|requests| requests.keys().next().cloned())
+        .expect("one request");
+
+    let answered = post(
+        &http,
+        &url,
+        &ask(json!({
+            "requestState": state,
+            "inputResponses": { key: { "action": "accept", "content": { "project": "atlas" } } }
+        })),
+    )
+    .await?;
+    assert_eq!(answered["result"]["resultType"], "complete");
+    assert_eq!(
+        answered["result"]["messages"][0]["content"]["text"], "project: atlas",
+        "the answer reaches the prompt handler: {answered}"
     );
 
     server.shutdown().await;

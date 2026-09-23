@@ -2711,7 +2711,8 @@ pub fn execute_mcp_prompt_handler(
     arguments: serde_json::Value,
     auth_context: Option<crate::auth::JsAuthContext>,
     user_context: UserContext,
-) -> Result<serde_json::Value, String> {
+    exchange: crate::mcp_elicitation::Exchange,
+) -> Result<crate::mcp::PromptOutcome, String> {
     let script_uri_owned = script_uri.to_string();
     let handler_function_owned = handler_function.to_string();
     let arguments_owned = arguments.clone();
@@ -2760,6 +2761,8 @@ pub fn execute_mcp_prompt_handler(
     if let Err(e) = setup_exec {
         return Err(format!("Prompt handler execution failed: {}", e));
     }
+
+    let guard = crate::mcp_elicitation::ExchangeGuard::install(exchange);
 
     let result_exec = call_and_settle(
         &rt,
@@ -2810,7 +2813,16 @@ pub fn execute_mcp_prompt_handler(
         },
     );
 
-    result_exec.map_err(|e| format!("Prompt handler execution failed: {}", e))
+    // Read before judging the result, for the reason the tool path does: a
+    // handler that asks ends by throwing, and the outcome is what it recorded.
+    let exchange = guard.finish();
+    if let Some(asked) = exchange.into_asked() {
+        return Ok(crate::mcp::Outcome::InputRequired(asked));
+    }
+
+    result_exec
+        .map(crate::mcp::Outcome::Complete)
+        .map_err(|e| format!("Prompt handler execution failed: {}", e))
 }
 
 /// Execute an MCP tool handler function.

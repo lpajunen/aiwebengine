@@ -304,13 +304,22 @@ endpoint, and the engine had to, because a legacy client has no fall-forward.
    and the caching hint needs — a client comparing a cached list against the
    next one must not see a change that is only iteration order.
 
-3. ~~**MRTR, and with it elicitation.**~~ Done for form mode on `tools/call`,
-   which was the prize: a script's tool asking the person a question mid-run,
+3. ~~**MRTR, and with it elicitation.**~~ Done for form mode on `tools/call`
+   and `prompts/get`, which was the prize: a script's tool asking the person a question mid-run,
    over plain POST. `mcp.ask` / `mcp.canAsk` / `mcp.once` are the surface,
-   `mcp_elicitation.rs` is the engine half, and the design and its two open
-   edges are in `docs/MCP_ELICITATION.md`. Still to come: URL mode (which
-   should reuse `script_channel_link_tokens` rather than grow a second consent
-   dance) and `prompts/get`.
+   `mcp_elicitation.rs` is the engine half, and the design is in
+   `docs/MCP_ELICITATION.md`.
+
+   URL mode is what is left, and this item's guess about it was wrong:
+   `script_channel_link_tokens` is _not_ the model. A link token exists because
+   a channel sender is not an account, so holding the token is the only evidence
+   of ownership there can be; a URL-mode elicitation is minted for somebody who
+   authenticated to `/mcp`, so the check is a comparison of authenticated
+   subjects, which is stronger than a token that could be forwarded to the very
+   person the attack targets. What URL mode does need is server-side state — the
+   specification is explicit that a server doing it is stateful — which is the
+   one thing the rest of MRTR is arranged to avoid, and is a decision rather
+   than an implementation detail.
 
    This item said the missing piece was "a JS surface for a handler to suspend
    on", and named `tasks.rs` as the closest model. Both were wrong, and wrong in

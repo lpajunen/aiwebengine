@@ -2482,44 +2482,31 @@ async fn setup_routes(
                 // for this call, and has not lapsed. Every refusal answers the
                 // same way: naming which check failed tells whoever is probing
                 // how to pass it.
-                let carried = match params.request_state.as_deref() {
-                    None => Some((serde_json::Map::new(), serde_json::Map::new())),
-                    Some(state) => match mcp_elicitation::open(
-                        state,
-                        &principal,
-                        &canonical_host,
-                        &params.name,
-                        &args_digest,
-                    ) {
-                        Ok(opened) => Some(opened),
-                        Err(reason) => {
-                            warn!(
-                                "MCP tool '{}': refusing the request state presented with it ({:?})",
-                                params.name, reason
-                            );
-                            None
-                        }
-                    },
-                };
-                let Some((mut answers, memo)) = carried else {
-                    return axum::response::Json(serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "error": {
-                            "code": -32602,
-                            "message": "Invalid params: requestState is not valid for this request"
-                        },
-                        "id": rpc_request.id
-                    }));
-                };
-
-                // What the person said this time joins what they said before.
-                if let Some(responses) = params.input_responses.as_ref().and_then(|v| v.as_object())
-                {
-                    for (key, value) in responses {
-                        answers.insert(key.clone(), value.clone());
+                let exchange = match mcp_elicitation::exchange_for(
+                    params.request_state.as_deref(),
+                    params.input_responses.as_ref(),
+                    &principal,
+                    &canonical_host,
+                    &params.name,
+                    &args_digest,
+                    can_ask,
+                ) {
+                    Ok(exchange) => exchange,
+                    Err(reason) => {
+                        warn!(
+                            "MCP tool '{}': refusing the request state presented with it ({:?})",
+                            params.name, reason
+                        );
+                        return axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "error": {
+                                "code": -32602,
+                                "message": "Invalid params: requestState is not valid for this request"
+                            },
+                            "id": rpc_request.id
+                        }));
                     }
-                }
-                let exchange = mcp_elicitation::Exchange::new(answers, memo, can_ask);
+                };
 
                 // A tool runs JavaScript to completion — a script-registered
                 // handler, or the engine's own test runner — which is CPU-bound
@@ -2756,6 +2743,10 @@ async fn setup_routes(
                 struct PromptGetParams {
                     name: String,
                     arguments: Option<serde_json::Value>,
+                    #[serde(rename = "inputResponses")]
+                    input_responses: Option<serde_json::Value>,
+                    #[serde(rename = "requestState")]
+                    request_state: Option<String>,
                 }
 
                 let params: PromptGetParams = match rpc_request.params {
@@ -2795,8 +2786,90 @@ async fn setup_routes(
                     .map(|session| create_js_auth_context_from_session(Some(session)));
                 let user_context = create_user_context_from_session(mcp_session.as_ref());
 
-                match mcp::execute_mcp_prompt(&params.name, arguments, auth_context, user_context) {
-                    Ok(result) => {
+                // A prompt may ask too: the specification permits
+                // `input_required` on `prompts/get` as well as `tools/call`,
+                // and a prompt that needs a parameter from the person has the
+                // same problem a tool does.
+                let principal = mcp_session
+                    .as_ref()
+                    .map(|session| session.user_id.clone())
+                    .unwrap_or_else(|| "anonymous".to_string());
+                let can_ask = era_is_modern
+                    && mcp_elicitation::client_can_elicit(client_capabilities.as_ref());
+                let args_digest = mcp_elicitation::digest_arguments(&params.name, &arguments);
+
+                let exchange = match mcp_elicitation::exchange_for(
+                    params.request_state.as_deref(),
+                    params.input_responses.as_ref(),
+                    &principal,
+                    &canonical_host,
+                    &params.name,
+                    &args_digest,
+                    can_ask,
+                ) {
+                    Ok(exchange) => exchange,
+                    Err(reason) => {
+                        warn!(
+                            "MCP prompt '{}': refusing the request state presented with it ({:?})",
+                            params.name, reason
+                        );
+                        return axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "error": {
+                                "code": -32602,
+                                "message": "Invalid params: requestState is not valid for this request"
+                            },
+                            "id": rpc_request.id
+                        }));
+                    }
+                };
+
+                match mcp::execute_mcp_prompt(
+                    &params.name,
+                    arguments,
+                    auth_context,
+                    user_context,
+                    exchange,
+                ) {
+                    Ok(mcp::Outcome::InputRequired(asked)) => {
+                        match mcp_elicitation::seal(
+                            &principal,
+                            &canonical_host,
+                            &params.name,
+                            &args_digest,
+                            asked.answers,
+                            asked.memo,
+                        ) {
+                            Ok(request_state) => axum::response::Json(serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": rpc_request.id,
+                                "result": {
+                                    "resultType": "input_required",
+                                    "inputRequests": asked.requests,
+                                    "requestState": request_state,
+                                    "_meta": {
+                                        mcp::META_SERVER_INFO: mcp::server_info()
+                                    }
+                                }
+                            })),
+                            Err(e) => {
+                                error!(
+                                    "MCP prompt '{}' asked for input but its state could not be \
+                                     sealed: {}",
+                                    params.name, e
+                                );
+                                axum::response::Json(serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "id": rpc_request.id,
+                                    "error": {
+                                        "code": -32603,
+                                        "message": format!("Could not carry the exchange: {}", e)
+                                    }
+                                }))
+                            }
+                        }
+                    }
+                    Ok(mcp::Outcome::Complete(result)) => {
                         // The handler should return an object with a "messages" array
                         axum::response::Json(serde_json::json!({
                             "jsonrpc": "2.0",
