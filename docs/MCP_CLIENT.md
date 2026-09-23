@@ -7,8 +7,11 @@ The MCP Client module enables AIWebEngine scripts to connect to external Model C
 ## Features
 
 - **Protocol Support**: JSON-RPC 2.0 over HTTP/HTTPS
-- **Protocol Version**: 2025-11-25 (with backward compatibility)
-- **Caching**: 1-hour TTL cache for tool lists (max 5 servers with LRU eviction)
+- **Protocol Era**: `2026-07-28` where the server says it speaks it, the
+  `initialize` handshake where it does not — learned per server by one
+  `server/discover` probe, not assumed
+- **Caching**: the server's own `ttlMs` where it offers one, else 1 hour; max 5
+  servers with LRU eviction
 - **Security**: Secret-based authentication with zero-exposure to JavaScript
 - **Capabilities**: every call requires both `use_network` and `read_secrets`
 - **Error Handling**: Distinguishes between network/auth errors (exceptions) and protocol errors (error objects)
@@ -197,7 +200,11 @@ const tools2 = client.listTools();
 
 Cache behavior:
 
-- **TTL**: 1 hour (3600 seconds)
+- **TTL**: the `ttlMs` the server's `tools/list` result asked for, clamped to at
+  most 1 hour; 1 hour when the server named none. Every revision before
+  `2026-07-28` names none, so that is the common case — but the engine's own
+  `/mcp` publishes 60 seconds, and a client that ignored it would take an hour
+  to notice a newly deployed script's tools.
 - **Max servers**: 5 concurrent MCP servers
 - **Eviction**: LRU (Least Recently Used)
 - **Per-server**: Each server URL has its own cache entry
@@ -249,7 +256,8 @@ console.log(`Found ${issues.length} open issues`);
 The client works with any MCP server that implements:
 
 - JSON-RPC 2.0 over HTTP/HTTPS
-- Protocol version 2025-11-25 (or compatible)
+- `2026-07-28`, or any revision that answers `initialize` (2025-11-25 and
+  earlier). A dual-era server is served under the modern rules.
 - Bearer token authentication (via `Authorization` header)
 
 ### Known Compatible Servers

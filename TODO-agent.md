@@ -417,10 +417,26 @@ long-lived POST-response stream that replaced the `GET` endpoint, and it is what
 covers the case that drove the original complaint — but it is where progress
 notifications during a long tool call would live.
 
-`mcp_client.rs` is also still legacy: the engine speaks `2025-11-25` when
-calling _out_ to other MCP servers. That keeps working, since a conforming
-server is dual-era or older, but the client half is where item 9's `iss`
-validation has to land, so the two are worth doing together.
+`mcp_client.rs` is dual-era now too, and the argument for doing it was not
+conformance. It sent `initialize`, ignored whether that worked, and then sent
+`tools/list` with no `_meta` — which is fine against every server that is legacy
+or dual-era, and fails wholesale against one that implements `2026-07-28` alone,
+with nothing to fall forward to. That is the mirror of the problem the server
+half solved by staying dual-era.
+
+The era is **learned rather than assumed**: one `server/discover`, which a
+modern server MUST implement and a legacy one does not, cached per server URL.
+Every failure means legacy — an error, a transport failure, a version we do not
+implement — because guessing legacy at a modern server costs one refused
+request, while guessing modern at a legacy one breaks a working integration.
+The legacy handshake moved into that probe, so it happens once per server
+rather than before every listing; it was always decorative, since the transport
+is stateless and its result was discarded.
+
+The tool cache now takes the server's own `ttlMs` rather than a hardcoded hour,
+clamped at an hour so the far end cannot pin this process's memory. That
+asymmetry was the quieter half of the same problem: the engine's server arm has
+published sixty seconds since item 7 landed, and its client arm ignored it.
 
 Two things this item recorded as fixes still hold, for changed reasons.
 
