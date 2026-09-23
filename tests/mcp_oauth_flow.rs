@@ -558,10 +558,15 @@ async fn redeeming_a_refresh_token_rotates_it() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Presenting a spent token cannot be told apart from a replay, so the whole
-/// rotation chain goes — including the successor, which is the copy the
-/// legitimate client is holding. Losing a session is the right outcome when the
-/// alternative is not knowing who else has one.
+/// Presenting a spent token is a replay once the chain has moved on — and the
+/// whole rotation family goes, including the successor the legitimate client is
+/// holding. Losing a session is the right outcome when the alternative is not
+/// knowing who else has one.
+///
+/// But in the first seconds after a redemption, with nothing later spent, the
+/// better explanation is a client that never received its successor — a crash
+/// between the two writes, or two jobs that started together. Both halves are
+/// here, in the order a client meets them.
 #[tokio::test(flavor = "multi_thread")]
 async fn replaying_a_spent_refresh_token_revokes_the_chain() -> anyhow::Result<()> {
     let server = TestServer::start_with_auth().await?;
@@ -574,14 +579,38 @@ async fn replaying_a_spent_refresh_token_revokes_the_chain() -> anyhow::Result<(
     let (_, refreshed) = refresh_with(&client, &flow.client_id, &first_refresh).await?;
     let second_refresh = field(&refreshed, "refresh_token")?;
 
+    // The client never stored `second_refresh` and comes back with the only
+    // token it has, moments later. Nothing later in the family has been spent,
+    // so this is a retry rather than a replay.
+    let (retried, retry_body) = refresh_with(&client, &flow.client_id, &first_refresh).await?;
+    assert_eq!(
+        retried,
+        reqwest::StatusCode::OK,
+        "a retry inside the window, with the chain unmoved, is not a replay: {}",
+        retry_body
+    );
+
+    // Now the client that did receive the successor uses it, which moves the
+    // chain past the token above.
+    let (advanced, advanced_body) = refresh_with(&client, &flow.client_id, &second_refresh).await?;
+    assert_eq!(
+        advanced,
+        reqwest::StatusCode::OK,
+        "the successor is still live: {}",
+        advanced_body
+    );
+    let third_refresh = field(&advanced_body, "refresh_token")?;
+
+    // Same token, same few seconds — but somebody is advancing the rotation
+    // while this presenter holds an earlier link. That is the theft signal.
     let (replayed, _) = refresh_with(&client, &flow.client_id, &first_refresh).await?;
     assert_eq!(
         replayed,
         reqwest::StatusCode::BAD_REQUEST,
-        "a token that was already spent must not be redeemable again"
+        "a spent token presented after the chain moved on must be refused"
     );
 
-    let (successor, _) = refresh_with(&client, &flow.client_id, &second_refresh).await?;
+    let (successor, _) = refresh_with(&client, &flow.client_id, &third_refresh).await?;
     assert_eq!(
         successor,
         reqwest::StatusCode::BAD_REQUEST,

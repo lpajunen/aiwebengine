@@ -57,7 +57,6 @@ cp .env.example .env-production
 
 # Set all secrets via environment (NEVER in files!)
 export APP_AUTH__JWT_SECRET="$(openssl rand -base64 48)"
-export APP_SECURITY__API_KEY="$(openssl rand -hex 32)"
 export APP_SECURITY__CSRF_KEY="$(openssl rand -base64 32)"
 export APP_SECURITY__SESSION_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 export APP_REPOSITORY__DATABASE_URL="postgresql://user:pass@host/db"
@@ -77,7 +76,6 @@ make docker-prod
 | Variable                                     | Purpose             | How to Generate           |
 | -------------------------------------------- | ------------------- | ------------------------- |
 | `APP_AUTH__JWT_SECRET`                       | JWT signing key     | `openssl rand -base64 48` |
-| `APP_SECURITY__API_KEY`                      | API authentication  | `openssl rand -hex 32`    |
 | `APP_SECURITY__CSRF_KEY`                     | CSRF protection     | `openssl rand -base64 32` |
 | `APP_SECURITY__SESSION_ENCRYPTION_KEY`       | Session encryption  | `openssl rand -base64 32` |
 | `APP_REPOSITORY__DATABASE_URL`               | Database connection | Manual setup              |

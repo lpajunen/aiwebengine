@@ -120,7 +120,6 @@ pub struct AuthManager {
     host_providers: HashMap<(String, String), Arc<Box<dyn OAuth2Provider>>>,
     session_manager: Arc<AuthSessionManager>,
     security_context: Arc<AuthSecurityContext>,
-    api_key: Option<String>,
 }
 
 const SESSION_REFRESH_WINDOW_SECONDS: i64 = 300;
@@ -155,7 +154,6 @@ impl AuthManager {
         config: AuthManagerConfig,
         session_manager: Arc<AuthSessionManager>,
         security_context: Arc<AuthSecurityContext>,
-        api_key: Option<String>,
     ) -> Self {
         Self {
             config,
@@ -163,7 +161,6 @@ impl AuthManager {
             host_providers: HashMap::new(),
             session_manager,
             security_context,
-            api_key,
         }
     }
 
@@ -1068,30 +1065,6 @@ impl AuthManager {
             .await
     }
 
-    /// Validate API key
-    ///
-    /// # Arguments
-    /// * `api_key` - API key to validate
-    ///
-    /// # Returns
-    /// true if API key is valid
-    pub fn validate_api_key(&self, api_key: &str) -> bool {
-        if let Some(configured_key) = &self.api_key {
-            // Use constant time comparison to prevent timing attacks
-            use subtle::ConstantTimeEq;
-            let configured_bytes = configured_key.as_bytes();
-            let provided_bytes = api_key.as_bytes();
-
-            if configured_bytes.len() != provided_bytes.len() {
-                return false;
-            }
-
-            configured_bytes.ct_eq(provided_bytes).into()
-        } else {
-            false
-        }
-    }
-
     /// Refresh an OAuth2 access token
     ///
     /// # Arguments
@@ -1202,7 +1175,7 @@ mod tests {
             encryption,
         ));
 
-        AuthManager::new(config, auth_session_mgr, security_context, None)
+        AuthManager::new(config, auth_session_mgr, security_context)
     }
 
     #[tokio::test]

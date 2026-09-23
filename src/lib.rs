@@ -1145,12 +1145,7 @@ async fn initialize_auth_manager(
     };
 
     // Create auth manager
-    let mut auth_manager = AuthManager::new(
-        manager_config,
-        auth_session_manager,
-        security_context,
-        security_config.api_key.clone(),
-    );
+    let mut auth_manager = AuthManager::new(manager_config, auth_session_manager, security_context);
 
     // Extra hostnames this engine answers to; each gets its own provider
     // instance so a login there completes there.
@@ -2235,28 +2230,38 @@ async fn setup_routes(
                 // MCP initialization - negotiate protocol version and capabilities
                 info!("MCP: Initialize request received");
 
-                // Extract protocol version from params
+                // Answer with the client's own version when we speak it. This
+                // used to read the field into a discarded binding and reply
+                // `2024-11-05` whatever was asked, which told every client that
+                // the engine predated the transport it was talking over.
                 let params = rpc_request.params.unwrap_or(serde_json::json!({}));
-                let _client_version = params
-                    .get("protocolVersion")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("2024-11-05");
-
-                // We support 2024-11-05 as our primary version
-                let supported_version = "2024-11-05";
+                let negotiated = mcp::negotiate_protocol_version(
+                    params.get("protocolVersion").and_then(|v| v.as_str()),
+                );
 
                 axum::response::Json(serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": rpc_request.id,
                     "result": {
-                        "protocolVersion": supported_version,
+                        "protocolVersion": negotiated,
                         "capabilities": {
+                            // `listChanged` is false because there is nothing
+                            // that could ever send the notification: it travels
+                            // server-to-client, `/mcp` answers a POST and holds
+                            // no stream, and `grep` finds no emitter. Claiming
+                            // it told a conforming client to cache the tool list
+                            // and wait to be told otherwise — which is exactly
+                            // wrong here, since scripts register tools at
+                            // runtime and the list genuinely does change. False
+                            // makes a client re-list instead of trusting a
+                            // promise the engine cannot keep.
                             "tools": {
-                                "listChanged": true
+                                "listChanged": false
                             },
                             "prompts": {
-                                "listChanged": true
+                                "listChanged": false
                             },
+                            // Honest: `completion/complete` is handled below.
                             "completions": {}
                         },
                         "serverInfo": {

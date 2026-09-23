@@ -209,7 +209,6 @@ redirect_uri = "http://localhost:3000/auth/callback/google"
 ```bash
 # Generate secrets
 export APP_AUTH__JWT_SECRET="$(openssl rand -base64 48)"
-export APP_SECURITY__API_KEY="$(openssl rand -hex 32)"
 
 # CSRF and session encryption keys (32 bytes base64)
 # These must be identical across all instances in a clustered deployment
@@ -290,7 +289,6 @@ cp .env.example .env-staging
 
 # 2. Set environment variables (not .env file!)
 export APP_AUTH__JWT_SECRET="$(openssl rand -base64 48)"
-export APP_SECURITY__API_KEY="$(openssl rand -hex 32)"
 export APP_SECURITY__CSRF_KEY="$(openssl rand -base64 32)"
 export APP_SECURITY__SESSION_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 
@@ -423,11 +421,6 @@ export APP_AUTH__JWT_SECRET="$(aws secretsmanager get-secret-value \
   --secret-id aiwebengine/jwt-secret \
   --query SecretString --output text)"
 
-# API Key
-export APP_SECURITY__API_KEY="$(aws secretsmanager get-secret-value \
-  --secret-id aiwebengine/api-key \
-  --query SecretString --output text)"
-
 # Database URL
 export APP_REPOSITORY__DATABASE_URL="$(aws secretsmanager get-secret-value \
   --secret-id aiwebengine/database-url \
@@ -458,7 +451,6 @@ sudo nano /etc/aiwebengine/production.env
 
 # Add variables (without 'export')
 APP_AUTH__JWT_SECRET=...
-APP_SECURITY__API_KEY=...
 # etc.
 
 # Secure the file

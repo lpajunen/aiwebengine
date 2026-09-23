@@ -513,22 +513,6 @@ export APP_AUTH__JWT_SECRET="generated-secret-here"
 - Unique per environment
 - Rotate regularly (see [Secret Rotation](#secret-rotation))
 
-#### API Key
-
-Used to protect endpoints from unauthorized access.
-
-**Generate:**
-
-```bash
-openssl rand -hex 32
-```
-
-**Configure:**
-
-```bash
-export APP_SECURITY__API_KEY="generated-key-here"
-```
-
 #### Database Password
 
 **Generate:**

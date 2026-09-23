@@ -31,8 +31,9 @@ worth keeping because the remaining items lean on them.
   from any phase, with attempts, backoff and a visible state, surviving `init()`
   because a task is an event rather than a declaration.
 - **The secret template anywhere in a header value**
-  (`http_client.rs:652`), which put every bearer-token API back in reach of a
-  per-person key.
+  (`http_client.rs:617`), which put every bearer-token API back in reach of a
+  per-person key — and since extended to the URL _path_, for the APIs that put
+  the key in the route rather than in a header, without letting it reach a log.
 
 Those four are what let the agent's run move out of the browser and into the
 engine.
@@ -227,29 +228,96 @@ rewritten to yield rather than block. Worth being plain that this did not do
 it: an agent fanning out over network calls is served, and one wanting to
 interleave computation with them is not.
 
-### 7. MCP is POST-only
+### 7. MCP is POST-only — the correctness half is done
 
-`/mcp` is `axum::routing::post(mcp_handler)` (`lib.rs:2708`). No SSE transport,
-so:
+`/mcp` is `axum::routing::post(mcp_handler)` (`lib.rs:2715`, `:2764`). Still no
+event-stream response, so still no progress notifications during a long tool
+call, no **elicitation**, and no server→client **sampling** — which remains the
+interesting one, because with it a script's MCP tool could ask the _calling_
+agent's model instead of the engine holding an API key at all. That is the
+cleanest answer to "who pays for the tokens": the caller does, with their own
+client, and the engine never sees a credential.
 
-- no progress notifications during a long tool call,
-- no server→client **sampling**, which is the interesting one: with it, a
-  script's MCP tool could ask the _calling_ agent's model instead of the engine
-  holding an API key at all. That is the cleanest answer to "who pays for the
-  tokens" — the caller does, with their own client, and the engine never sees a
-  credential.
-- no elicitation, so a tool cannot ask the person a question mid-run.
+Three things this item had wrong or did not say.
 
-### 8. No non-interactive credential
+**It is smaller than "no SSE transport" implies.** Streamable HTTP requires a
+server to answer `POST` and leaves the `GET` stream _optional_ — a `405` to a
+`GET /mcp`, which is what `routing::post` already returns, is conformant rather
+than a gap. What sampling and elicitation actually need is permission for one
+POST _response_ to be `text/event-stream`, so server→client requests can travel
+on it before the final result. That is a handler-shaped change rather than a
+transport-shaped one, and it does not need a standing channel or session
+management. The item was filed at the wrong size, and the right size moves it
+up rather than down.
 
-There is no client-credentials grant and no static API key, so an external
-agent has to complete a browser OAuth flow once and then live on refresh
-tokens. For an agent running on someone's laptop that is fine; for one running
-in CI it is a genuine obstacle.
+**The engine was lying to clients about `listChanged`, and that is now fixed.**
+`initialize` advertised `"listChanged": true` for both tools and prompts while
+`grep` found no emitter anywhere in `src/` — the notification travels
+server-to-client and there is no stream to carry it. A conforming client
+therefore cached the tool list and waited to be told otherwise, which is exactly
+backwards here: scripts register tools at runtime, so the list is one of the few
+that genuinely does change. Both now advertise `false`, which makes a client
+re-list instead of trusting a promise the engine cannot keep. When a response
+can be a stream, this flips back — and by then it will be true.
 
-The engine's stance here — nothing unattended, the credential always belongs to
-somebody present — is deliberate and stated in `git_sync`'s design. It just
-collides with agents, and it is worth deciding on purpose which side wins.
+**The protocol version was pinned, and that is now fixed.** `initialize` read
+the client's `protocolVersion` into a discarded binding and answered
+`2024-11-05` unconditionally — the pre-Streamable-HTTP revision — while
+`mcp_client.rs` has the engine speaking `2025-11-25` as a _client_, so the two
+halves of one codebase disagreed about what year it was.
+`mcp::negotiate_protocol_version` now answers the client's own version when it
+is one of `SUPPORTED_PROTOCOL_VERSIONS`, the newest we speak when it is not, and
+the oldest to a client that names none — because omitting the field predates the
+field.
+
+What is left of this item is the stream, and with it sampling and elicitation.
+
+### 8. No non-interactive credential — the stance held, the rotation fixed
+
+**The decision was made on purpose, and the stance won.** Nothing unattended;
+the credential always belongs to somebody present. There is no
+client-credentials grant and no static API key, and an external agent still
+completes a browser OAuth flow once and then lives on refresh tokens.
+
+What changed is that living on refresh tokens no longer punishes exactly the
+clients the stance leaves holding them. This item's own argument for the grant
+was the weak one — refreshing re-issues with a fresh `max_session_age`
+(`auth/routes.rs:5394`), so an agent that runs monthly never expires, and
+expiry was never the obstacle. The real one was rotation: `redeem` was
+single-use with **family revocation on replay**, so a crash between the server
+spending a token and the client storing its successor, or two CI jobs sharing
+one stored token and starting together, killed the whole chain. Recovery is a
+human at a browser — which an unattended agent by definition does not have. The
+cost of the replay rule fell entirely on the clients that could not pay it.
+
+So a spent token is now forgiven for `REPLAY_GRACE_SECS` (30) seconds, and only
+while the chain has not moved on: if any _later_ token in the family has itself
+been spent, the presenter is behind a rotation somebody else is advancing, which
+is the theft signal rather than a retry, and the family still goes. The window
+is anchored to the first redemption — the write is `COALESCE(consumed_at, now)`
+rather than an assignment — so replaying every twenty seconds cannot hold a
+token alive. Each of the three pieces has a test that fails when it is removed.
+The detection this table exists for survives; what it stopped doing is firing on
+its own clients.
+
+Two loose ends made the engine look like it had half-started the grant, and both
+are closed:
+
+- `security.api_key` was parsed (`config.rs`), threaded into `AuthManager`
+  (`lib.rs`), and `validate_api_key` had **no callers** — the same class as
+  `cors_allowed_origins` and `enable_security_headers` before they were wired,
+  a setting an operator could set to no effect, and here one that reads as a
+  machine credential the engine does not have. Deleted rather than wired: the
+  stance above is the reason it has no callers.
+- `client_registration.rs` accepted `client_credentials` in `grant_types` while
+  the token endpoint answered `unsupported_grant_type` to it, so a client could
+  register for a grant it could never exercise and find out one request later,
+  from a refusal naming the wrong end. Registration now refuses it, which says
+  so while the client is still choosing what to be.
+
+If this is ever revisited, the question to answer first is not transport but
+whose roles and realm a userless token carries — that, rather than the grant
+mechanics, is what the engine has no answer for.
 
 ## What external agents already have
 

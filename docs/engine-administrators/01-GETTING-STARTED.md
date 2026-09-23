@@ -160,9 +160,6 @@ nano .env
 # JWT Secret (generate with: openssl rand -base64 48)
 export APP_AUTH__JWT_SECRET="your-generated-secret-here"
 
-# API Key (generate with: openssl rand -hex 32)
-export APP_SECURITY__API_KEY="your-generated-api-key-here"
-
 # Google OAuth
 export APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID="your-client-id.apps.googleusercontent.com"
 export APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET="your-client-secret"

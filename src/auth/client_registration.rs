@@ -377,12 +377,19 @@ impl ClientRegistrationManager {
             )));
         }
 
-        // Validate grant_types
+        // Validate grant_types.
+        //
+        // `client_credentials` is deliberately not here, though it used to be.
+        // The token endpoint answers `unsupported_grant_type` to it, so
+        // accepting it at registration let a client record a grant it could
+        // never exercise and find out one request later — and the refusal it
+        // then met named the grant rather than the registration, which is the
+        // wrong end to debug from. The engine has no userless credential on
+        // purpose: a token carries somebody's roles and realm, and there is no
+        // answer yet to whose they would be. Refusing here says so at the point
+        // where the client is still choosing what to be.
         for grant_type in &request.grant_types {
-            if !matches!(
-                grant_type.as_str(),
-                "authorization_code" | "refresh_token" | "client_credentials"
-            ) {
+            if !matches!(grant_type.as_str(), "authorization_code" | "refresh_token") {
                 return Err(AuthError::ConfigError(format!(
                     "Unsupported grant_type: {}",
                     grant_type

@@ -113,9 +113,6 @@ export APP_REPOSITORY__MAX_CONNECTIONS="50"
 #### Security
 
 ```bash
-# API key for endpoint authentication
-export APP_SECURITY__API_KEY="$(openssl rand -hex 32)"
-
 # Enable CORS
 export APP_SECURITY__ENABLE_CORS="true"
 
@@ -208,7 +205,6 @@ source .env && cargo run
 APP_AUTH__JWT_SECRET=your-jwt-secret-here
 APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID=your-client-id
 APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET=your-client-secret
-APP_SECURITY__API_KEY=your-api-key
 ```
 
 ### Array Values in Environment Variables
@@ -395,13 +391,11 @@ enable_security_headers = true               # Enable security headers
 content_security_policy = "default-src 'self'" # Content Security Policy
 max_request_body_bytes = 1048576            # Max request body size (bytes, 1MB)
 session_encryption_key = "${APP_SECURITY__SESSION_ENCRYPTION_KEY}"  # Base64-encoded 32-byte key
-api_key = "${APP_SECURITY__API_KEY}"        # API key (override with env var!)
 ```
 
 **Environment overrides:**
 
 ```bash
-export APP_SECURITY__API_KEY="$(openssl rand -hex 32)"
 export APP_SECURITY__CSRF_KEY="$(openssl rand -base64 32)"
 export APP_SECURITY__SESSION_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 export APP_SECURITY__CORS_ALLOWED_ORIGINS='["https://yourdomain.com"]'
@@ -540,7 +534,6 @@ cp .env.example .env-production
 
 # Use secret management system
 export APP_AUTH__JWT_SECRET="$(aws secretsmanager get-secret-value --secret-id jwt-secret --query SecretString --output text)"
-export APP_SECURITY__API_KEY="$(aws secretsmanager get-secret-value --secret-id api-key --query SecretString --output text)"
 export APP_SECURITY__CSRF_KEY="$(aws secretsmanager get-secret-value --secret-id csrf-key --query SecretString --output text)"
 export APP_SECURITY__SESSION_ENCRYPTION_KEY="$(aws secretsmanager get-secret-value --secret-id session-key --query SecretString --output text)"
 export APP_REPOSITORY__DATABASE_URL="postgresql://user:$(cat /secrets/db-pass)@db.prod.example.com/aiwebengine"
@@ -723,7 +716,6 @@ enable_security_headers = true
 content_security_policy = "default-src 'self'; script-src 'self'; style-src 'self'"
 max_request_body_bytes = 10485760
 session_encryption_key = "${APP_SECURITY__SESSION_ENCRYPTION_KEY}"
-api_key = "${APP_SECURITY__API_KEY}"
 
 [auth]
 jwt_secret = "${APP_AUTH__JWT_SECRET}"
@@ -744,7 +736,6 @@ scopes = ["openid", "email", "profile"]
 
 [secrets]
 # All secrets via environment variables in production!
-api_key = "${APP_SECURITY__API_KEY}"
 require_https = true
 
 [auth]

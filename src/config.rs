@@ -491,11 +491,6 @@ pub struct SecurityConfig {
     /// Example (env): APP_SECURITY__SECRET_ENCRYPTION_KEY
     #[serde(default)]
     pub secret_encryption_key: Option<String>,
-
-    /// Optional API key for machine-to-machine authentication (e.g. MCP)
-    /// Example (env): APP_SECURITY__API_KEY
-    #[serde(default)]
-    pub api_key: Option<String>,
 }
 
 /// Whether a configured secret is one nobody chose.
@@ -689,7 +684,6 @@ impl Default for SecurityConfig {
             strict_ip_validation: false,
             session_encryption_key: None,
             secret_encryption_key: None,
-            api_key: None,
         }
     }
 }

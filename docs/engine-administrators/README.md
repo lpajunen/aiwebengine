@@ -69,7 +69,6 @@ cp .env.example .env-production
 
 # 2. Set secrets via environment (NEVER in files!)
 export APP_AUTH__JWT_SECRET="$(openssl rand -base64 48)"
-export APP_SECURITY__API_KEY="$(openssl rand -hex 32)"
 export APP_SECURITY__CSRF_KEY="$(openssl rand -base64 32)"
 export APP_SECURITY__SESSION_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 

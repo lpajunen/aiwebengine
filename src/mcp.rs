@@ -515,3 +515,98 @@ pub fn execute_mcp_tool(
     // Parse the result as JSON
     serde_json::from_str(&result).map_err(|e| format!("Failed to parse tool result as JSON: {}", e))
 }
+
+/// The protocol versions this engine's MCP server implements, newest first.
+///
+/// The server used to answer `2024-11-05` unconditionally and drop whatever the
+/// client had asked for, which is not a negotiation — a client speaking a later
+/// revision was told the server only knew the first one, and the engine's own
+/// MCP *client* meanwhile speaks [`crate::mcp_client`]'s version, so the two
+/// halves of the same codebase disagreed about what year it was.
+///
+/// Everything listed here is a revision whose transport requirements a
+/// POST-only server meets: Streamable HTTP requires `POST` and leaves the `GET`
+/// stream optional, which is why answering `405` to a `GET /mcp` is conformant
+/// rather than a gap. What the engine does not implement is the *optional* half
+/// — a response that is an event stream, and with it server-initiated requests
+/// — and no version on this list requires it.
+pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
+    &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// Pick the protocol version to answer an `initialize` with.
+///
+/// The rule the specification states: answer with the client's own version if
+/// it is one we speak, and otherwise with the newest we do, leaving the client
+/// to decide whether it can continue. A client that names nothing predates the
+/// field, so it gets the oldest revision on the list rather than the newest —
+/// guessing high at something that did not say is how a client ends up sent
+/// capabilities it has no parser for.
+pub fn negotiate_protocol_version(requested: Option<&str>) -> &'static str {
+    let Some(requested) = requested else {
+        return SUPPORTED_PROTOCOL_VERSIONS
+            .last()
+            .copied()
+            .unwrap_or("2024-11-05");
+    };
+
+    SUPPORTED_PROTOCOL_VERSIONS
+        .iter()
+        .find(|supported| **supported == requested)
+        .copied()
+        .unwrap_or_else(|| {
+            SUPPORTED_PROTOCOL_VERSIONS
+                .first()
+                .copied()
+                .unwrap_or("2024-11-05")
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_version_we_speak_is_answered_with_itself() {
+        for version in SUPPORTED_PROTOCOL_VERSIONS {
+            assert_eq!(
+                negotiate_protocol_version(Some(version)),
+                *version,
+                "a client that names a version we support must hear it back"
+            );
+        }
+    }
+
+    #[test]
+    fn a_version_we_do_not_speak_falls_back_to_the_newest_we_do() {
+        assert_eq!(
+            negotiate_protocol_version(Some("2099-01-01")),
+            SUPPORTED_PROTOCOL_VERSIONS[0],
+            "a client from the future is told the most recent thing we know"
+        );
+        assert_eq!(negotiate_protocol_version(Some("")), "2025-11-25");
+    }
+
+    #[test]
+    fn a_client_that_names_nothing_gets_the_oldest() {
+        assert_eq!(
+            negotiate_protocol_version(None),
+            "2024-11-05",
+            "omitting the field predates it, so answer the revision that predates it too"
+        );
+    }
+
+    #[test]
+    fn the_list_is_ordered_newest_first_and_has_no_duplicates() {
+        let mut sorted = SUPPORTED_PROTOCOL_VERSIONS.to_vec();
+        sorted.sort_unstable();
+        sorted.reverse();
+        assert_eq!(
+            sorted, SUPPORTED_PROTOCOL_VERSIONS,
+            "the fallbacks above read the ends of this list, so its order is load-bearing"
+        );
+
+        let mut unique = SUPPORTED_PROTOCOL_VERSIONS.to_vec();
+        unique.dedup();
+        assert_eq!(unique.len(), SUPPORTED_PROTOCOL_VERSIONS.len());
+    }
+}
