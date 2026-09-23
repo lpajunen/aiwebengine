@@ -236,7 +236,7 @@ rewritten to yield rather than block. Worth being plain that this did not do
 it: an agent fanning out over network calls is served, and one wanting to
 interleave computation with them is not.
 
-### 7. MCP is POST-only — which the 2026-07-28 revision made the right shape
+### 7. MCP is POST-only — the revision caught up with, bar MRTR
 
 `/mcp` is `axum::routing::post(mcp_handler)` (`lib.rs:2715`, `:2764`), and the
 handler dispatches `initialize`, `notifications/initialized`, `tools/list`,
@@ -281,50 +281,76 @@ land on any of them. `2026-07-28` removes `initialize`/`notifications/initialize
 and the `Mcp-Session-Id` header and makes the protocol stateless; the engine had
 no session affinity to give up.
 
-The work, smallest first, because each step is useful without the next:
+Four of the five steps below are done. `/mcp` is now a **dual-era** server: a
+request carrying `io.modelcontextprotocol/protocolVersion` in its `params._meta`
+is served statelessly under `2026-07-28`, and an `initialize` selects a legacy
+revision exactly as before. The specification allows serving both on one
+endpoint, and the engine had to, because a legacy client has no fall-forward.
 
-1. **`resultType` on every result.** Required on all results in the new
-   revision, and clients **MUST** read its absence from an older server as
-   `"complete"`. Adding `"resultType": "complete"` to the arms in `lib.rs` is
-   safe against every version the engine already speaks, and it is the
-   precondition for anything below.
+1. ~~**`resultType` on every result.**~~ Done. `mcp::complete` stamps
+   `"complete"` and adds `_meta.serverInfo`, which with no handshake is the only
+   place a client learns who answered. Applied to legacy answers too: a `Result`
+   has always been an open map, so the field is allowed in every revision the
+   engine speaks, and older clients are required to read its absence as
+   `"complete"` anyway. `initialize` is the one exemption — `resultType` belongs
+   to an era that has no `initialize`.
 
-2. **`ttlMs` and `cacheScope` on `tools/list` and `prompts/list`**
-   (`lib.rs:2285`, `:2471`), which the new `CacheableResult` requires. This is
-   the honest form of the thing `listChanged` was lying about — see below. A
-   freshness hint fits a tool list that scripts rebuild at runtime, where a
-   promise to notify never could; `cacheScope` has to be `"private"`, because
-   `list_tools_for_host` already filters by host and by `native_allowed`, so two
-   callers do not see the same list and a shared intermediary must not treat one
-   answer as everyone's. The specification also asks for a deterministic order,
-   which `mcp.rs:274` should then guarantee rather than leave to iteration.
+2. ~~**`ttlMs` and `cacheScope` on the list arms.**~~ Done, sixty seconds and
+   `private`. Private is not a default: `list_tools_for_host` filters by host
+   _and_ by `server.management_hosts`, so two callers genuinely do not see the
+   same list and a shared intermediary treating one answer as everyone's would
+   hand a script host the management tools. `list_tools_for_host` and
+   `list_prompts_for_host` now sort by name, which the specification asks for
+   and the caching hint needs — a client comparing a cached list against the
+   next one must not see a change that is only iteration order.
 
-3. **MRTR, and with it elicitation.** The prize, and reachable now: a script's
-   tool can ask the person a question mid-run over plain POST. It needs
+3. **MRTR, and with it elicitation.** The one still open, and the prize: a
+   script's tool asking the person a question mid-run, over plain POST. Needs
    `resultType: "input_required"` with `inputRequests`, a `requestState` the
-   engine mints and reads back, and a JS surface for a handler to suspend on —
-   which is the part that wants design, since a host call blocks the script
-   (item 6) and "return a question and be re-entered with its answer" is a
-   different shape from `await`. Closest existing model is `tasks.rs`: work that
+   engine mints and reads back, and a JS surface for a handler to suspend on.
+   That last part is the design question — a host call blocks the script (item
+   6), so "return a question and be re-entered with its answer" is a different
+   shape from `await`, and the closest existing model is `tasks.rs`: work that
    outlives the call that started it, keyed so it can be resumed.
+   `mcp::complete` already leaves a handler's own `resultType` alone, so the
+   stamping does not have to change when this lands.
 
-4. **`2026-07-28` itself.** `SUPPORTED_PROTOCOL_VERSIONS` (`mcp.rs:533`) tops
-   out at `2025-11-25` and `mcp_client.rs:30` speaks the same as a client, so
-   both are one revision behind. This is not a string edit: the new revision
-   carries the protocol version and client capabilities per request in `_meta`
-   (`io.modelcontextprotocol/protocolVersion`, `.../clientCapabilities`),
-   removes the handshake the engine's `initialize` arm _is_, and requires a
-   `server/discover` RPC advertising supported versions, capabilities and
-   identity. `negotiate_protocol_version` (`mcp.rs:544`) keeps its shape — the
-   rule is unchanged — while what calls it moves. Requests also carry
-   `Mcp-Method` and `Mcp-Name` headers so a gateway can route without parsing
-   the body.
+4. ~~**`2026-07-28` itself.**~~ Done. `MODERN_PROTOCOL_VERSIONS` and
+   `LEGACY_PROTOCOL_VERSIONS` split what `SUPPORTED_PROTOCOL_VERSIONS` used to
+   flatten, because the two are reachable over different shapes and a version
+   offered over the wrong one is worse than not offering it:
+   `negotiate_protocol_version` reads the legacy list only, since a client that
+   sent `initialize` cannot be speaking a revision that deleted it.
+   `server/discover` is implemented (servers **MUST**), `classify_era` decides
+   from the request rather than the method name, an unimplemented version gets
+   `-32022` carrying what we do speak, a modern request that declares no
+   `clientCapabilities` gets `-32602` — "I have none" and "I did not say" being
+   different claims — and `Mcp-Method` is checked against the body, `-32020` if
+   they disagree.
+
+   Two judgements in there worth revisiting if they prove wrong.
+   `server/discover` is exempt from the version check, because refusing to say
+   what we speak on the grounds that the asker guessed wrong makes a client
+   probe for the answer it came to be told. And `supportedVersions` names the
+   modern revisions only: the engine answers `initialize` and will go on doing
+   so, but a version a client puts in `_meta` has to be one whose rules `_meta`
+   is part of.
 
 5. **The tasks extension**, if long-running agent work over MCP is wanted.
-   Tasks left the core for `io.modelcontextprotocol/tasks`, polling through
-   `tasks/get` with a new `tasks/update` for client-to-server input, and servers
-   may hand back a task handle unsolicited. The engine has the durable half of
-   this already in `tasks.rs`; what it lacks is the MCP-facing mapping.
+   Unstarted. `io.modelcontextprotocol/tasks`, polling through `tasks/get` with
+   `tasks/update` for client-to-server input. The engine has the durable half in
+   `tasks.rs`; what it lacks is the MCP-facing mapping.
+
+Still untouched, and deliberately: `subscriptions/listen`. It is the opt-in
+long-lived POST-response stream that replaced the `GET` endpoint, and it is what
+`listChanged` would need to become true again. Nothing wants it yet — `ttlMs`
+covers the case that drove the original complaint — but it is where progress
+notifications during a long tool call would live.
+
+`mcp_client.rs` is also still legacy: the engine speaks `2025-11-25` when
+calling _out_ to other MCP servers. That keeps working, since a conforming
+server is dual-era or older, but the client half is where item 9's `iss`
+validation has to land, so the two are worth doing together.
 
 Two things this item recorded as fixes still hold, for changed reasons.
 

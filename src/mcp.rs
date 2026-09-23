@@ -275,7 +275,7 @@ pub async fn list_tools_for_host(host: &str, native_allowed: bool) -> Vec<McpToo
     let tools = list_tools();
     let host_scripts = crate::route_index::scripts_for_host(host).await;
 
-    tools
+    let mut tools: Vec<McpTool> = tools
         .into_iter()
         .filter(|tool| {
             if tool.script_uri == NATIVE_TOOL_URI {
@@ -287,7 +287,13 @@ pub async fn list_tools_for_host(host: &str, native_allowed: bool) -> Vec<McpToo
                 None => true,
             }
         })
-        .collect()
+        .collect();
+    // A stable order, which the specification asks for and [`LIST_CACHE_TTL_MS`]
+    // now depends on: a client caching this list compares it against the next
+    // one, and a registry whose iteration order moves would look like a change
+    // on every poll. It also keeps an LLM's prompt cache warm across turns.
+    tools.sort_by(|a, b| a.name.cmp(&b.name));
+    tools
 }
 
 /// The prompts a client connecting on `host` should see. Filtered like
@@ -295,12 +301,16 @@ pub async fn list_tools_for_host(host: &str, native_allowed: bool) -> Vec<McpToo
 pub async fn list_prompts_for_host(host: &str) -> Vec<McpPrompt> {
     let prompts = list_prompts();
     let Some(allowed) = crate::route_index::scripts_for_host(host).await else {
+        let mut prompts = prompts;
+        prompts.sort_by(|a, b| a.name.cmp(&b.name));
         return prompts;
     };
-    prompts
+    let mut prompts: Vec<McpPrompt> = prompts
         .into_iter()
         .filter(|prompt| allowed.contains(&prompt.script_uri))
-        .collect()
+        .collect();
+    prompts.sort_by(|a, b| a.name.cmp(&b.name));
+    prompts
 }
 
 /// Whether a tool may be called from `host`.
@@ -516,22 +526,98 @@ pub fn execute_mcp_tool(
     serde_json::from_str(&result).map_err(|e| format!("Failed to parse tool result as JSON: {}", e))
 }
 
-/// The protocol versions this engine's MCP server implements, newest first.
+/// Versions reachable through the `initialize` handshake, newest first.
+///
+/// The specification calls these **legacy**: a client opens with `initialize`,
+/// the server answers with one version, and everything after that is scoped to
+/// the session that established. `2025-11-25` is the last of them.
+pub const LEGACY_PROTOCOL_VERSIONS: &[&str] =
+    &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// Versions reachable statelessly, each request naming its own, newest first.
+///
+/// The specification calls these **modern**. `2026-07-28` removed the
+/// `initialize`/`notifications/initialized` handshake and the `Mcp-Session-Id`
+/// header outright: every request carries its protocol version and the client's
+/// capabilities in [`META_PROTOCOL_VERSION`] and [`META_CLIENT_CAPABILITIES`],
+/// and a server answers each one without reference to any that came before.
+///
+/// That is the shape `/mcp` already had. The engine has no session header, its
+/// route index is keyed `(host, path, method)`, and instances stay in step over
+/// LISTEN/NOTIFY — a request could always land on any of them. What the
+/// revision took away is something this engine never had.
+pub const MODERN_PROTOCOL_VERSIONS: &[&str] = &["2026-07-28"];
+
+/// Every version this engine's MCP server implements, newest first.
+///
+/// Modern first, then legacy, which is also newest-first overall — a test holds
+/// that, because the fallbacks below read the ends of the sub-lists and a
+/// version appearing in the wrong one would be offered over a transport that
+/// cannot carry it.
 ///
 /// The server used to answer `2024-11-05` unconditionally and drop whatever the
 /// client had asked for, which is not a negotiation — a client speaking a later
 /// revision was told the server only knew the first one, and the engine's own
 /// MCP *client* meanwhile speaks [`crate::mcp_client`]'s version, so the two
 /// halves of the same codebase disagreed about what year it was.
+pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
+    "2026-07-28",
+    "2025-11-25",
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05",
+];
+
+/// `_meta` key carrying the protocol version of a single request. Required on
+/// every modern request.
+pub const META_PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
+
+/// `_meta` key carrying the client's capabilities. Required on every modern
+/// request: a server **MUST NOT** rely on a capability the client did not name.
+pub const META_CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
+
+/// `_meta` key carrying the client's name and version. Optional, and
+/// self-reported — for display and logs, never for a decision.
+pub const META_CLIENT_INFO: &str = "io.modelcontextprotocol/clientInfo";
+
+/// `_meta` key the server identifies itself under on every result, which is how
+/// a client learns who answered without a handshake to have learned it from.
+pub const META_SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
+
+/// The `Mcp-Method` header names the method in the body, so a gateway can route
+/// and meter without parsing JSON.
+pub const HEADER_MCP_METHOD: &str = "mcp-method";
+
+/// `HeaderMismatch`: a routing header disagrees with the body it travelled
+/// with. In the reserved range, so it means only this.
+pub const ERROR_HEADER_MISMATCH: i32 = -32020;
+
+/// `UnsupportedProtocolVersion`: the request named a version this server does
+/// not implement. Its `data` carries what we do, so one round trip is enough
+/// for the client to choose again.
+pub const ERROR_UNSUPPORTED_PROTOCOL_VERSION: i32 = -32022;
+
+/// How long a client may reuse a list result before asking again.
 ///
-/// Everything listed here is a revision whose transport requirements a
-/// POST-only server meets: Streamable HTTP requires `POST` and leaves the `GET`
-/// stream optional, which is why answering `405` to a `GET /mcp` is conformant
-/// rather than a gap. What the engine does not implement is the *optional* half
-/// — a response that is an event stream, and with it server-initiated requests
-/// — and no version on this list requires it.
-pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
-    &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+/// This is the honest form of what `listChanged` was claiming. A script
+/// registers its tools when it runs, so the list genuinely changes underneath a
+/// client — but the notification saying so travels server-to-client, and a POST
+/// response has nothing to carry it. A promise the engine cannot keep made a
+/// conforming client cache forever; a freshness hint makes it come back.
+///
+/// Sixty seconds is short enough that a newly deployed tool shows up while
+/// somebody is still looking for it, and long enough to spare the engine a
+/// `tools/list` per turn.
+pub const LIST_CACHE_TTL_MS: u64 = 60_000;
+
+/// Which caches may hold a list result.
+///
+/// `private` rather than `public`, and not as a default: [`list_tools_for_host`]
+/// filters by host *and* by whether the engine's own tools are allowed on it
+/// (`server.management_hosts`), so two callers genuinely do not see the same
+/// list. A shared intermediary treating one answer as everyone's would hand a
+/// script host the management tools.
+pub const LIST_CACHE_SCOPE: &str = "private";
 
 /// Pick the protocol version to answer an `initialize` with.
 ///
@@ -541,24 +627,187 @@ pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
 /// field, so it gets the oldest revision on the list rather than the newest —
 /// guessing high at something that did not say is how a client ends up sent
 /// capabilities it has no parser for.
+///
+/// This reads [`LEGACY_PROTOCOL_VERSIONS`] and not [`SUPPORTED_PROTOCOL_VERSIONS`],
+/// which is the whole subtlety: a client that sent `initialize` cannot be
+/// speaking a modern revision, because modern revisions have no `initialize`.
+/// Answering one here would name a version whose rules neither side is
+/// following.
 pub fn negotiate_protocol_version(requested: Option<&str>) -> &'static str {
+    let newest = || {
+        LEGACY_PROTOCOL_VERSIONS
+            .first()
+            .copied()
+            .unwrap_or("2024-11-05")
+    };
+
     let Some(requested) = requested else {
-        return SUPPORTED_PROTOCOL_VERSIONS
+        return LEGACY_PROTOCOL_VERSIONS
             .last()
             .copied()
             .unwrap_or("2024-11-05");
     };
 
-    SUPPORTED_PROTOCOL_VERSIONS
+    LEGACY_PROTOCOL_VERSIONS
         .iter()
         .find(|supported| **supported == requested)
         .copied()
-        .unwrap_or_else(|| {
-            SUPPORTED_PROTOCOL_VERSIONS
-                .first()
-                .copied()
-                .unwrap_or("2024-11-05")
-        })
+        .unwrap_or_else(newest)
+}
+
+/// Which era a request is speaking, decided by the request alone.
+///
+/// A dual-era server picks its behaviour from how the client opens, and the
+/// specification says what to look at: a request carrying modern per-request
+/// `_meta` is served statelessly, an `initialize` selects legacy semantics.
+/// Nothing here consults connection state, because there is none to consult.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Era {
+    /// The request named a protocol version in its `_meta`.
+    Modern { version: String },
+    /// No per-request version: either `initialize` itself, or a call made
+    /// inside a session an `initialize` established.
+    Legacy,
+}
+
+/// Read a request's `_meta` field, wherever `params` happens to be absent.
+fn request_meta(params: Option<&serde_json::Value>) -> Option<&serde_json::Value> {
+    params?.get("_meta")
+}
+
+/// Classify a request by the presence of a per-request protocol version.
+///
+/// Deliberately not by method name. A modern client calls `tools/list` exactly
+/// as a legacy one does, and the only thing separating them is the `_meta` the
+/// modern one carries — which is the point of the revision: the request says
+/// what it is, rather than the server remembering.
+pub fn classify_era(params: Option<&serde_json::Value>) -> Era {
+    match request_meta(params)
+        .and_then(|meta| meta.get(META_PROTOCOL_VERSION))
+        .and_then(|version| version.as_str())
+    {
+        Some(version) => Era::Modern {
+            version: version.to_string(),
+        },
+        None => Era::Legacy,
+    }
+}
+
+/// Whether a modern request named a version this server implements.
+pub fn supports_modern_version(version: &str) -> bool {
+    MODERN_PROTOCOL_VERSIONS.contains(&version)
+}
+
+/// Whether a modern request declared the client capabilities it must.
+///
+/// The value is not inspected — an empty object is a complete declaration,
+/// meaning "I have none of the optional client features". What matters is that
+/// the client said so, because a server **MUST NOT** rely on a capability that
+/// was never declared, and absence and "declared empty" are different claims.
+pub fn declares_client_capabilities(params: Option<&serde_json::Value>) -> bool {
+    request_meta(params)
+        .and_then(|meta| meta.get(META_CLIENT_CAPABILITIES))
+        .is_some()
+}
+
+/// The client's self-reported name, for logs. Never a decision input.
+pub fn client_name(params: Option<&serde_json::Value>) -> Option<String> {
+    request_meta(params)?
+        .get(META_CLIENT_INFO)?
+        .get("name")?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// How the engine names itself, on `server/discover` and in every result's
+/// `_meta`.
+pub fn server_info() -> serde_json::Value {
+    serde_json::json!({
+        "name": "aiwebengine",
+        "version": env!("CARGO_PKG_VERSION"),
+    })
+}
+
+/// Stamp a result object as a finished answer.
+///
+/// Every result in the modern revision carries a `resultType`, and `"complete"`
+/// is the ordinary one — `"input_required"` is the other, which is what an MRTR
+/// elicitation will return once the engine has one. Applied to legacy answers
+/// too, deliberately: a `Result` has always been an open map (`[key: string]:
+/// unknown`), so the extra field is allowed in every revision the engine
+/// speaks, and one code path is worth more here than a saved field. Clients on
+/// older revisions are required to read its absence as `"complete"` anyway, so
+/// nothing can misread its presence.
+///
+/// `_meta.serverInfo` rides along for the same reason it exists: with no
+/// handshake there is nowhere else for a client to learn who answered.
+pub fn complete(result: serde_json::Value) -> serde_json::Value {
+    let mut result = result;
+    if let Some(object) = result.as_object_mut() {
+        object
+            .entry("resultType")
+            .or_insert_with(|| serde_json::json!("complete"));
+        let meta = object
+            .entry("_meta")
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(meta) = meta.as_object_mut() {
+            meta.entry(META_SERVER_INFO).or_insert_with(server_info);
+        }
+    }
+    result
+}
+
+/// The `server/discover` result: what we speak, what we can do, who we are.
+///
+/// `supportedVersions` names the modern revisions only. The engine answers
+/// `initialize` too and will go on doing so, but a version a client would put
+/// in `_meta` has to be one whose rules `_meta` is part of; offering
+/// `2025-11-25` here would invite a client to name a revision that has no
+/// per-request metadata and then send it some.
+pub fn discover_result(native_tools_allowed: bool) -> serde_json::Value {
+    complete(serde_json::json!({
+        "supportedVersions": MODERN_PROTOCOL_VERSIONS,
+        "capabilities": {
+            "tools": {},
+            "prompts": {},
+            "completions": {},
+        },
+        "instructions": if native_tools_allowed {
+            "Scripts hosted by this engine register tools and prompts at runtime, \
+             and this host also exposes the engine's own management tools. Call \
+             tools/list rather than caching a list across deployments; results \
+             carry a ttlMs saying how long they stay good."
+        } else {
+            "Scripts hosted by this engine register tools and prompts at runtime. \
+             Call tools/list rather than caching a list across deployments; \
+             results carry a ttlMs saying how long they stay good."
+        },
+        "ttlMs": LIST_CACHE_TTL_MS,
+        "cacheScope": LIST_CACHE_SCOPE,
+    }))
+}
+
+/// The refusal a modern request naming an unimplemented version gets.
+///
+/// Carries what we do implement, so the client chooses again from fact rather
+/// than probing. This is also the error that identifies the engine as a modern
+/// server to a dual-era client deciding whether to fall back to `initialize`.
+pub fn unsupported_version_error(
+    id: Option<serde_json::Value>,
+    requested: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": ERROR_UNSUPPORTED_PROTOCOL_VERSION,
+            "message": "Unsupported protocol version",
+            "data": {
+                "supported": MODERN_PROTOCOL_VERSIONS,
+                "requested": requested,
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -566,8 +815,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_version_we_speak_is_answered_with_itself() {
-        for version in SUPPORTED_PROTOCOL_VERSIONS {
+    fn a_legacy_version_we_speak_is_answered_with_itself() {
+        for version in LEGACY_PROTOCOL_VERSIONS {
             assert_eq!(
                 negotiate_protocol_version(Some(version)),
                 *version,
@@ -577,13 +826,28 @@ mod tests {
     }
 
     #[test]
-    fn a_version_we_do_not_speak_falls_back_to_the_newest_we_do() {
+    fn a_version_we_do_not_speak_falls_back_to_the_newest_legacy_one() {
         assert_eq!(
             negotiate_protocol_version(Some("2099-01-01")),
-            SUPPORTED_PROTOCOL_VERSIONS[0],
+            LEGACY_PROTOCOL_VERSIONS[0],
             "a client from the future is told the most recent thing we know"
         );
         assert_eq!(negotiate_protocol_version(Some("")), "2025-11-25");
+    }
+
+    #[test]
+    fn initialize_never_answers_with_a_modern_version() {
+        // The subtlety worth a test of its own: a client that sent
+        // `initialize` cannot be speaking a revision that deleted it, so
+        // naming one back would agree on rules neither side is following.
+        for version in MODERN_PROTOCOL_VERSIONS {
+            let answered = negotiate_protocol_version(Some(version));
+            assert!(
+                LEGACY_PROTOCOL_VERSIONS.contains(&answered),
+                "initialize answered {answered}, which has no initialize"
+            );
+        }
+        assert!(LEGACY_PROTOCOL_VERSIONS.contains(&negotiate_protocol_version(None)));
     }
 
     #[test]
@@ -596,17 +860,138 @@ mod tests {
     }
 
     #[test]
-    fn the_list_is_ordered_newest_first_and_has_no_duplicates() {
-        let mut sorted = SUPPORTED_PROTOCOL_VERSIONS.to_vec();
-        sorted.sort_unstable();
-        sorted.reverse();
-        assert_eq!(
-            sorted, SUPPORTED_PROTOCOL_VERSIONS,
-            "the fallbacks above read the ends of this list, so its order is load-bearing"
-        );
+    fn the_lists_are_ordered_newest_first_and_do_not_overlap() {
+        for list in [
+            SUPPORTED_PROTOCOL_VERSIONS,
+            MODERN_PROTOCOL_VERSIONS,
+            LEGACY_PROTOCOL_VERSIONS,
+        ] {
+            let mut sorted = list.to_vec();
+            sorted.sort_unstable();
+            sorted.reverse();
+            assert_eq!(
+                sorted, list,
+                "the fallbacks read the ends of these lists, so their order is load-bearing"
+            );
+            let mut unique = list.to_vec();
+            unique.dedup();
+            assert_eq!(unique.len(), list.len(), "a version listed twice");
+        }
 
-        let mut unique = SUPPORTED_PROTOCOL_VERSIONS.to_vec();
-        unique.dedup();
-        assert_eq!(unique.len(), SUPPORTED_PROTOCOL_VERSIONS.len());
+        // The whole is exactly the two halves, so a version added to one of
+        // them cannot go missing from what the engine claims to speak.
+        let halves: Vec<&str> = MODERN_PROTOCOL_VERSIONS
+            .iter()
+            .chain(LEGACY_PROTOCOL_VERSIONS.iter())
+            .copied()
+            .collect();
+        assert_eq!(
+            halves, SUPPORTED_PROTOCOL_VERSIONS,
+            "every supported version belongs to exactly one era"
+        );
+    }
+
+    /// A request is modern because it says so, not because of its method.
+    #[test]
+    fn an_era_is_read_from_the_request_rather_than_the_method() {
+        let modern = serde_json::json!({
+            "_meta": {
+                META_PROTOCOL_VERSION: "2026-07-28",
+                META_CLIENT_CAPABILITIES: {}
+            }
+        });
+        assert_eq!(
+            classify_era(Some(&modern)),
+            Era::Modern {
+                version: "2026-07-28".to_string()
+            }
+        );
+        assert!(declares_client_capabilities(Some(&modern)));
+
+        // The same method with no per-request version is a call inside a
+        // session some `initialize` established.
+        let legacy = serde_json::json!({ "name": "some_tool" });
+        assert_eq!(classify_era(Some(&legacy)), Era::Legacy);
+        assert_eq!(classify_era(None), Era::Legacy);
+    }
+
+    #[test]
+    fn capabilities_declared_empty_are_declared() {
+        // "I have none" and "I did not say" are different claims, and only the
+        // second is malformed — so the check is for the field, not its content.
+        let said_none = serde_json::json!({
+            "_meta": { META_PROTOCOL_VERSION: "2026-07-28", META_CLIENT_CAPABILITIES: {} }
+        });
+        let said_nothing = serde_json::json!({
+            "_meta": { META_PROTOCOL_VERSION: "2026-07-28" }
+        });
+        assert!(declares_client_capabilities(Some(&said_none)));
+        assert!(!declares_client_capabilities(Some(&said_nothing)));
+    }
+
+    #[test]
+    fn only_modern_versions_are_offered_to_a_modern_client() {
+        assert!(supports_modern_version("2026-07-28"));
+        for legacy in LEGACY_PROTOCOL_VERSIONS {
+            assert!(
+                !supports_modern_version(legacy),
+                "{legacy} has no per-request metadata, so it cannot be named in some"
+            );
+        }
+
+        let refusal = unsupported_version_error(Some(serde_json::json!(1)), "1900-01-01");
+        assert_eq!(refusal["error"]["code"], ERROR_UNSUPPORTED_PROTOCOL_VERSION);
+        assert_eq!(refusal["error"]["data"]["requested"], "1900-01-01");
+        assert_eq!(
+            refusal["error"]["data"]["supported"],
+            serde_json::json!(MODERN_PROTOCOL_VERSIONS),
+            "the refusal has to carry enough for the client to choose again"
+        );
+    }
+
+    #[test]
+    fn a_result_is_stamped_complete_and_says_who_answered() {
+        let stamped = complete(serde_json::json!({ "tools": [] }));
+        assert_eq!(stamped["resultType"], "complete");
+        assert_eq!(stamped["_meta"][META_SERVER_INFO]["name"], "aiwebengine");
+        assert_eq!(stamped["tools"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn stamping_never_overwrites_what_a_handler_already_said() {
+        // The MRTR arm to come returns `input_required`, and a handler that
+        // set its own `_meta` means it. Neither may be clobbered on the way out.
+        let interim = complete(serde_json::json!({
+            "resultType": "input_required",
+            "_meta": { "com.example/trace": "abc" }
+        }));
+        assert_eq!(interim["resultType"], "input_required");
+        assert_eq!(interim["_meta"]["com.example/trace"], "abc");
+        assert_eq!(
+            interim["_meta"][META_SERVER_INFO]["name"], "aiwebengine",
+            "and the server still identifies itself alongside"
+        );
+    }
+
+    #[test]
+    fn discover_answers_what_a_client_needs_before_anything_else() {
+        let discovered = discover_result(true);
+        assert_eq!(discovered["resultType"], "complete");
+        assert_eq!(
+            discovered["supportedVersions"],
+            serde_json::json!(MODERN_PROTOCOL_VERSIONS)
+        );
+        assert!(discovered["capabilities"]["tools"].is_object());
+        assert_eq!(discovered["_meta"][META_SERVER_INFO]["name"], "aiwebengine");
+        assert_eq!(discovered["cacheScope"], LIST_CACHE_SCOPE);
+
+        // A host that does not carry the engine's own tools must not be
+        // described as though it did.
+        let scripts_only = discover_result(false);
+        let described = scripts_only["instructions"].as_str().unwrap_or_default();
+        assert!(
+            !described.contains("management tools"),
+            "instructions described tools this host does not serve: {described}"
+        );
     }
 }

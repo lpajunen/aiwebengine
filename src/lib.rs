@@ -443,7 +443,7 @@ pub fn get_rust_openapi_spec() -> String {
                     "post": {
                         "tags": ["MCP"],
                         "summary": "Model Context Protocol endpoint",
-                        "description": "JSON-RPC 2.0 endpoint implementing the Model Context Protocol for AI tool integration. Supports methods: initialize, notifications/initialized, tools/list, tools/call, prompts/list, prompts/get, completion/complete.",
+                        "description": "JSON-RPC 2.0 endpoint implementing the Model Context Protocol for AI tool integration. Dual-era: a request carrying io.modelcontextprotocol/protocolVersion in its params._meta is served statelessly under 2026-07-28, and an initialize handshake selects a legacy revision (2025-11-25 and earlier). Supports methods: server/discover, initialize, notifications/initialized, tools/list, tools/call, prompts/list, prompts/get, completion/complete.",
                         "requestBody": {
                             "required": true,
                             "content": {
@@ -2174,6 +2174,13 @@ async fn setup_routes(
         // against the Host header itself rather than the canonicalised host —
         // a management host need not be one of the hosts scripts publish on.
         let native_tools_allowed = engine_api::is_management_host(raw_host.as_deref());
+        // `Mcp-Method` lets a gateway route and meter without parsing the body.
+        // Read it before the body is taken, so the two can be compared.
+        let routed_method = req
+            .headers()
+            .get(mcp::HEADER_MCP_METHOD)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
 
         let body_bytes = match axum::body::to_bytes(req.into_body(), max_request_body).await {
             Ok(bytes) => bytes,
@@ -2225,9 +2232,81 @@ async fn setup_routes(
             }));
         }
 
+        // A gateway that routed on `Mcp-Method` and a body that says something
+        // else cannot both be right, and guessing which to believe is how a
+        // request gets metered as one thing and executed as another.
+        if let Some(routed) = routed_method
+            .as_deref()
+            .filter(|routed| *routed != rpc_request.method)
+        {
+            return axum::response::Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": mcp::ERROR_HEADER_MISMATCH,
+                    "message": format!(
+                        "Mcp-Method header says {routed}, body says {}",
+                        rpc_request.method
+                    )
+                },
+                "id": rpc_request.id
+            }));
+        }
+
+        // Which era this request is speaking. `server/discover` is exempt from
+        // the version check below: its entire purpose is to answer "what do you
+        // speak", and refusing to say so because the asker guessed wrong would
+        // make a client probe for an answer it came to be told. Every other
+        // modern method is held to the version it named.
+        let era = mcp::classify_era(rpc_request.params.as_ref());
+        if let mcp::Era::Modern { version } = &era {
+            if rpc_request.method != "server/discover" {
+                if !mcp::supports_modern_version(version) {
+                    return axum::response::Json(mcp::unsupported_version_error(
+                        rpc_request.id,
+                        version,
+                    ));
+                }
+                // Required on every modern request. A server must not rely on a
+                // capability the client never declared, and "declared none" and
+                // "did not say" are different claims — so this checks that the
+                // field is there, not what is in it.
+                if !mcp::declares_client_capabilities(rpc_request.params.as_ref()) {
+                    return axum::response::Json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32602,
+                            "message": format!(
+                                "Invalid params: {} is required on every {version} request",
+                                mcp::META_CLIENT_CAPABILITIES
+                            )
+                        },
+                        "id": rpc_request.id
+                    }));
+                }
+            }
+            if let Some(name) = mcp::client_name(rpc_request.params.as_ref()) {
+                debug!("MCP: {name} speaking {version}");
+            }
+        }
+
         match rpc_request.method.as_str() {
+            "server/discover" => {
+                // Servers MUST implement this. It is also the probe a dual-era
+                // client uses to find out the engine is not a legacy server.
+                axum::response::Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": rpc_request.id,
+                    "result": mcp::discover_result(native_tools_allowed)
+                }))
+            }
             "initialize" => {
-                // MCP initialization - negotiate protocol version and capabilities
+                // The legacy handshake, kept because the engine is a dual-era
+                // server: `2026-07-28` removed `initialize`, and a client that
+                // sends one is telling us it speaks a revision that still has
+                // it. Answered under that revision's rules throughout — which
+                // is why this is the one arm whose result is not run through
+                // `mcp::complete`: `resultType` belongs to an era that has no
+                // `initialize`, and `serverInfo` already has a home here.
                 info!("MCP: Initialize request received");
 
                 // Answer with the client's own version when we speak it. This
@@ -2254,7 +2333,11 @@ async fn setup_routes(
                             // wrong here, since scripts register tools at
                             // runtime and the list genuinely does change. False
                             // makes a client re-list instead of trusting a
-                            // promise the engine cannot keep.
+                            // promise the engine cannot keep. The modern era
+                            // answers this properly rather than by omission:
+                            // `mcp::LIST_CACHE_TTL_MS` says how long a list
+                            // stays good, which is the thing a client can act
+                            // on without anyone having to push.
                             "tools": {
                                 "listChanged": false
                             },
@@ -2299,9 +2382,11 @@ async fn setup_routes(
                 axum::response::Json(serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": rpc_request.id,
-                    "result": {
-                        "tools": tools_list
-                    }
+                    "result": mcp::complete(serde_json::json!({
+                        "tools": tools_list,
+                        "ttlMs": mcp::LIST_CACHE_TTL_MS,
+                        "cacheScope": mcp::LIST_CACHE_SCOPE
+                    }))
                 }))
             }
             "tools/call" => {
@@ -2430,10 +2515,10 @@ async fn setup_routes(
                         axum::response::Json(serde_json::json!({
                             "jsonrpc": "2.0",
                             "id": rpc_request.id,
-                            "result": {
+                            "result": mcp::complete(serde_json::json!({
                                 "content": content,
                                 "isError": false
-                            }
+                            }))
                         }))
                     }
                     Err(e) => {
@@ -2459,10 +2544,10 @@ async fn setup_routes(
                             axum::response::Json(serde_json::json!({
                                 "jsonrpc": "2.0",
                                 "id": rpc_request.id,
-                                "result": {
+                                "result": mcp::complete(serde_json::json!({
                                     "content": content,
                                     "isError": true
-                                }
+                                }))
                             }))
                         }
                     }
@@ -2485,9 +2570,11 @@ async fn setup_routes(
                 axum::response::Json(serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": rpc_request.id,
-                    "result": {
-                        "prompts": prompts_list
-                    }
+                    "result": mcp::complete(serde_json::json!({
+                        "prompts": prompts_list,
+                        "ttlMs": mcp::LIST_CACHE_TTL_MS,
+                        "cacheScope": mcp::LIST_CACHE_SCOPE
+                    }))
                 }))
             }
             "prompts/get" => {
@@ -2540,7 +2627,7 @@ async fn setup_routes(
                         axum::response::Json(serde_json::json!({
                             "jsonrpc": "2.0",
                             "id": rpc_request.id,
-                            "result": result
+                            "result": mcp::complete(result)
                         }))
                     }
                     Err(e) => {
@@ -2656,9 +2743,9 @@ async fn setup_routes(
                         axum::response::Json(serde_json::json!({
                             "jsonrpc": "2.0",
                             "id": rpc_request.id,
-                            "result": {
+                            "result": mcp::complete(serde_json::json!({
                                 "completion": result
-                            }
+                            }))
                         }))
                     }
                     Err(e) => {
