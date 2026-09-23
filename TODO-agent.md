@@ -192,6 +192,21 @@ difference now exists, so "this sender resolves to a narrower context than the
 account owner typing the same words" is writable down; what is missing is a
 way to have a stranger's message reach a person's delegation at all.
 
+One thing this item did not name, and should have. The vocabulary it fixed is a
+vocabulary of **verbs**, and a verb has no destination in it: `use_network` said
+"may call the network" and therefore "may call anything". So the scope that
+expresses "this sender resolves to a narrower context" could say what the run
+may _do_ and not where it may _go_ — and exfiltration needs no write capability,
+so a read-only delegation could still put what it read into a URL. That is now
+`sandbox.run`'s `hosts`, checked on every redirect hop and on `McpClient` too.
+It is deliberately not a capability name: `use_network:api.example.com` would
+have made the set no longer a set of verbs and every `has_capability` call a
+parse. See `docs/CAPABILITY_ATTENUATION.md`.
+
+A delegation grant has no host dimension yet, and it is worth being plain that
+this did not add one. A person granting a script the right to act for them says
+what it may do and not who it may talk to, which is the same gap one level up.
+
 One cost is worth carrying forward: a read-only grant holds no `enqueue_tasks`,
 and work longer than one budget is a chain of tasks, so a read-only delegation
 cannot be a long one. Neither queueing nor dispatching can actually escalate
