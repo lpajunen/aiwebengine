@@ -524,12 +524,24 @@ The engine is the authorization server here (`auth/routes.rs:3724`,
 `REGISTRATION_PATH`, and `client_registration.rs:237`), so this is its call to
 make.
 
-**RFC 9207 `iss`, in both directions.** An authorization server **SHOULD**
-return `iss` on the authorization response, and a client **MUST** validate a
-present `iss` against the recorded issuer before redeeming the code. The engine
-is both: `grep` finds no `iss` on the authorize response today, and
-`mcp_client.rs` is the half that has to do the validating. Worth doing together
-so the two halves do not drift the way `protocolVersion` did.
+**RFC 9207 `iss`.** ~~In both directions.~~ The server half is done: the
+authorization response now carries `iss`, on the code redirect **and on the
+error redirect**, because an attacker who can choose which server a browser
+reaches can choose to make it fail, and an error returned through the redirect
+URI is as confusable as a code. The issuer named is the one for the host the
+flow actually ran on rather than the default base URL — every configured host is
+its own authorization server here (RFC 8414 §3.3), so naming the default would
+put an issuer in the response that the client's own discovery document
+contradicts, which is exactly the confusion the parameter exists to prevent. The
+test reads the issuer out of that document rather than composing it, since the
+property under test is that the two agree.
+
+This item said `mcp_client.rs` was the half that had to do the validating, and
+that was wrong: that client authenticates with a stored secret and runs no
+authorization code flow, so there is no `iss` reaching it to validate. The
+client-side **MUST** lands on whoever writes an OAuth client for the engine to
+_be_, which is not this module and does not exist yet. Worth knowing before
+somebody goes looking for the missing half.
 
 **Credentials keyed by issuer.** A client **MUST** key persisted credentials by
 the issuer identifier, **MUST NOT** reuse them against a different authorization

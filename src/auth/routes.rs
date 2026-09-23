@@ -74,11 +74,26 @@ struct AuthorizationCodeData {
 pub struct OAuth2State {
     auth_manager: Arc<AuthManager>,
     pool: PgPool,
+    /// Which issuer this engine is, per host.
+    ///
+    /// Here because RFC 9207 puts the issuer identifier in every authorization
+    /// *response*, not only in the discovery document — so the endpoint that
+    /// answers has to know its own name, and on a multi-host deployment that
+    /// name depends on the host the flow is running on.
+    metadata: Arc<MetadataConfig>,
 }
 
 impl OAuth2State {
-    pub fn new(auth_manager: Arc<AuthManager>, pool: PgPool) -> Self {
-        Self { auth_manager, pool }
+    pub fn new(
+        auth_manager: Arc<AuthManager>,
+        pool: PgPool,
+        metadata: Arc<MetadataConfig>,
+    ) -> Self {
+        Self {
+            auth_manager,
+            pool,
+            metadata,
+        }
     }
 }
 
@@ -3922,7 +3937,17 @@ enum AuthorizeRejection {
 }
 
 impl AuthorizeRejection {
-    fn into_response(self) -> Response {
+    /// Render the refusal, naming the issuer on the ones that go back to the
+    /// client.
+    ///
+    /// RFC 9207 puts `iss` on the authorization *response*, and an error
+    /// returned through the redirect URI is one — which matters more than it
+    /// sounds, because the attack the parameter exists to stop works by mixing
+    /// up which authorization server a response came from, and an attacker
+    /// choosing between servers can choose to send an error. The direct arm
+    /// gets none: nothing is being redirected, so there is nothing to confuse
+    /// it with.
+    fn into_response(self, issuer: &str) -> Response {
         match self {
             AuthorizeRejection::Direct {
                 status,
@@ -3947,6 +3972,7 @@ impl AuthorizeRejection {
                 if let Some(state) = state {
                     url = append_query_param(&url, "state", &state);
                 }
+                url = append_query_param(&url, "iss", issuer);
                 redirect_to_client(&url)
             }
         }
@@ -4219,6 +4245,7 @@ async fn issue_authorization_code(
     pool: &PgPool,
     user_id: &str,
     validated: &ValidatedAuthorization,
+    issuer: &str,
 ) -> Response {
     let auth_code = format!("code_{}", uuid::Uuid::new_v4());
     let expires_at = Utc::now() + chrono::Duration::minutes(10);
@@ -4247,7 +4274,7 @@ async fn issue_authorization_code(
             error: "server_error",
             description: "Failed to record the authorization".to_string(),
         }
-        .into_response();
+        .into_response(issuer);
     }
 
     tracing::info!(
@@ -4260,6 +4287,13 @@ async fn issue_authorization_code(
     if let Some(state) = validated.state.as_deref() {
         target = append_query_param(&target, "state", state);
     }
+    // RFC 9207. A client that sent authorization requests to more than one
+    // server cannot otherwise tell which of them a code came back from, and a
+    // code from the wrong one redeemed at the right one is the mix-up attack
+    // the parameter exists to close. The engine is both halves of this on a
+    // multi-host deployment, so the issuer named is the one for the host the
+    // flow actually ran on rather than the default base URL.
+    target = append_query_param(&target, "iss", issuer);
 
     redirect_to_client(&target)
 }
@@ -4524,13 +4558,22 @@ pub async fn oauth2_authorize(
     req: axum::extract::Request,
 ) -> Response {
     let host = get_request_host(req.headers());
+    // Resolved from the host the request arrived on, not from the default base
+    // URL: every configured host is its own authorization server here
+    // (RFC 8414 §3.3), so naming the default one would put an issuer in the
+    // response that the client's own discovery document disagrees with — which
+    // is precisely the confusion `iss` exists to prevent.
+    let issuer = oauth2_state
+        .metadata
+        .issuer_for_host(host.as_deref())
+        .to_string();
 
     // Validated before authentication is considered, so a request that would be
     // refused anyway does not first cost someone a sign-in.
     let validated =
         match validate_authorize_request(&oauth2_state.pool, &params, host.as_deref()).await {
             Ok(validated) => validated,
-            Err(rejection) => return rejection.into_response(),
+            Err(rejection) => return rejection.into_response(&issuer),
         };
 
     let Some(auth_user) = req.extensions().get::<crate::auth::AuthUser>().cloned() else {
@@ -4566,11 +4609,11 @@ pub async fn oauth2_authorize(
                 error: "server_error",
                 description: "Could not read stored consent".to_string(),
             }
-            .into_response();
+            .into_response(&issuer);
         }
     }
 
-    issue_authorization_code(&oauth2_state.pool, &auth_user.user_id, &validated).await
+    issue_authorization_code(&oauth2_state.pool, &auth_user.user_id, &validated, &issuer).await
 }
 
 /// How to name the signed-in person on the consent page.
@@ -4699,10 +4742,14 @@ pub async fn oauth2_consent(
 
     let params = form.to_params();
     let host = get_request_host(&parts.headers);
+    let issuer = oauth2_state
+        .metadata
+        .issuer_for_host(host.as_deref())
+        .to_string();
     let validated =
         match validate_authorize_request(&oauth2_state.pool, &params, host.as_deref()).await {
             Ok(validated) => validated,
-            Err(rejection) => return rejection.into_response(),
+            Err(rejection) => return rejection.into_response(&issuer),
         };
 
     if form.decision != "allow" {
@@ -4712,7 +4759,7 @@ pub async fn oauth2_consent(
             error: "access_denied",
             description: "The request was declined".to_string(),
         }
-        .into_response();
+        .into_response(&issuer);
     }
 
     if let Err(e) = record_consent(&oauth2_state.pool, &auth_user.user_id, &validated).await {
@@ -4723,10 +4770,10 @@ pub async fn oauth2_consent(
             error: "server_error",
             description: "Could not record the approval".to_string(),
         }
-        .into_response();
+        .into_response(&issuer);
     }
 
-    issue_authorization_code(&oauth2_state.pool, &auth_user.user_id, &validated).await
+    issue_authorization_code(&oauth2_state.pool, &auth_user.user_id, &validated, &issuer).await
 }
 
 /// OAuth 2.0 token request parameters (RFC 6749)
@@ -5463,7 +5510,7 @@ pub fn create_oauth2_router(
             ),
             get(protected_resource_metadata_handler),
         )
-        .with_state(metadata_config);
+        .with_state(metadata_config.clone());
 
     // Add OAuth 2.0 protocol endpoints
     // Enable CORS for token endpoint to allow MCP clients on localhost
@@ -5480,7 +5527,7 @@ pub fn create_oauth2_router(
     // unauthenticated, so its per-address budget is the only thing bounding it.
     let registration_security = auth_manager.security_context();
 
-    let oauth2_state = OAuth2State::new(auth_manager, pool);
+    let oauth2_state = OAuth2State::new(auth_manager, pool, metadata_config);
 
     let oauth2_protocol_router = Router::new()
         // Under the reserved /auth prefix, and advertised in the authorization

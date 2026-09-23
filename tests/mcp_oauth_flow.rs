@@ -356,6 +356,116 @@ async fn a_token_minted_through_discovery_opens_the_mcp_endpoint() -> anyhow::Re
     Ok(())
 }
 
+/// RFC 9207: the authorization response says which server it came from.
+///
+/// A client that has authorization requests outstanding at more than one server
+/// cannot otherwise tell which one a code came back from, and a code obtained
+/// from an attacker's server but redeemed at an honest one is the mix-up attack
+/// this parameter closes. The engine is an authorization server, so it names
+/// itself — and the name has to be the one its own discovery document gives for
+/// this host, or a conforming client discards the response for disagreeing with
+/// what it was told.
+///
+/// Asserted on both arms, because an attacker who can choose which server a
+/// browser reaches can choose to make it fail: an error redirect carries `iss`
+/// exactly as a success does.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_authorization_response_names_the_server_it_came_from() -> anyhow::Result<()> {
+    let server = TestServer::start_with_auth().await?;
+    let client = Client::new(server.port())?;
+    wait_for_server(server.port(), 30).await?;
+
+    // What the engine calls itself, taken from the document a client reads
+    // rather than composed here — the point of the test is that the two agree.
+    let metadata: Value = client
+        .http
+        .get(client.url("/.well-known/oauth-authorization-server"))
+        .send()
+        .await?
+        .json()
+        .await?;
+    let issuer = metadata["issuer"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("metadata carried no issuer: {}", metadata))?
+        .to_string();
+
+    clear_registration_limit().await;
+    let client_id = register_client(&client).await?;
+    let (_, session_cookie) = sign_in(&client).await?;
+    let pkce = PkcePair::generate();
+    let params = request_params(&client_id, &pkce.code_challenge, None);
+
+    let query = params
+        .iter()
+        .map(|(key, value)| format!("{}={}", key, urlencoding::encode(value)))
+        .collect::<Vec<_>>()
+        .join("&");
+
+    let consent_page = client
+        .http
+        .get(format!(
+            "{}?{}",
+            client.url("/auth/oauth2/authorize"),
+            query
+        ))
+        .header(reqwest::header::COOKIE, &session_cookie)
+        .send()
+        .await?
+        .text()
+        .await?;
+    let csrf_token = csrf_token_from(&consent_page)
+        .ok_or_else(|| anyhow::anyhow!("consent page carried no CSRF token"))?;
+
+    // The approving arm.
+    let mut allow = vec![("csrf_token", csrf_token.as_str()), ("decision", "allow")];
+    allow.extend(params.iter().copied());
+    let approved = client
+        .http
+        .post(client.url("/auth/oauth2/consent"))
+        .header(reqwest::header::COOKIE, &session_cookie)
+        .form(&allow)
+        .send()
+        .await?
+        .text()
+        .await?;
+
+    assert!(
+        approved.contains(&urlencoding::encode(&issuer).to_string()),
+        "a code must come back naming its issuer ({}): {}",
+        issuer,
+        approved
+    );
+
+    // And the refusing one. `access_denied` goes back through the redirect URI
+    // just as a code does, so it is just as confusable.
+    let mut deny = vec![("csrf_token", csrf_token.as_str()), ("decision", "deny")];
+    deny.extend(params.iter().copied());
+    let denied = client
+        .http
+        .post(client.url("/auth/oauth2/consent"))
+        .header(reqwest::header::COOKIE, &session_cookie)
+        .form(&deny)
+        .send()
+        .await?
+        .text()
+        .await?;
+
+    assert!(
+        denied.contains("access_denied"),
+        "declining should answer access_denied: {}",
+        denied
+    );
+    assert!(
+        denied.contains(&urlencoding::encode(&issuer).to_string()),
+        "an error redirect must name its issuer too ({}): {}",
+        issuer,
+        denied
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
 /// What Claude Code sends: the origin with a trailing slash, rather than the
 /// endpoint. Clients derive a resource indicator in more ways than one, and a
 /// token minted for a whole site would otherwise authorize nothing at all.
