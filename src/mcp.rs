@@ -479,22 +479,39 @@ pub fn tool_call_backstop_ms(tool_name: &str) -> u64 {
 }
 
 /// Execute an MCP tool by calling its JavaScript handler
+/// What a tool call produced: an answer, or a question for the caller.
+///
+/// A handler that asks produces no result at all — the specification's Multi
+/// Round-Trip Requests pattern ends the call, and the client starts a fresh one
+/// carrying the answer. So this is an enum rather than a result with an
+/// optional field: the two outcomes have nothing in common to merge.
+pub enum ToolOutcome {
+    /// The handler returned. The string is its JSON.
+    Complete(String),
+    /// The handler asked for something before it could finish.
+    InputRequired(crate::mcp_elicitation::Asked),
+}
+
 pub fn execute_mcp_tool(
     tool_name: &str,
     arguments: serde_json::Value,
     auth_context: Option<crate::auth::JsAuthContext>,
     user_context: crate::security::UserContext,
-) -> Result<serde_json::Value, String> {
+    exchange: crate::mcp_elicitation::Exchange,
+) -> Result<ToolOutcome, String> {
     debug!(
         "Executing MCP tool: {} with args: {:?}",
         tool_name, arguments
     );
 
-    // Native engine tools take precedence over script-registered tools
+    // Native engine tools take precedence over script-registered tools. None of
+    // them elicits: they are the engine's own management surface, called by an
+    // agent against an account that already holds the rights, so there is never
+    // a question to put to a person mid-call.
     if let Some(result) =
         crate::engine_api::execute_native_mcp_tool(tool_name, &arguments, &user_context)
     {
-        return Ok(result);
+        return Ok(ToolOutcome::Complete(result.to_string()));
     }
 
     // Get the tool from registry
@@ -512,18 +529,16 @@ pub fn execute_mcp_tool(
     };
 
     // Execute the JavaScript handler
-    let result = crate::js_engine::execute_mcp_tool_handler(
+    crate::js_engine::execute_mcp_tool_handler(
         &script_uri,
         &handler_function,
         tool_name,
         arguments,
         auth_context,
         user_context,
+        exchange,
     )
-    .map_err(|e| format!("Tool execution failed: {}", e))?;
-
-    // Parse the result as JSON
-    serde_json::from_str(&result).map_err(|e| format!("Failed to parse tool result as JSON: {}", e))
+    .map_err(|e| format!("Tool execution failed: {}", e))
 }
 
 /// Versions reachable through the `initialize` handshake, newest first.

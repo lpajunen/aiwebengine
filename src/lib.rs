@@ -44,6 +44,7 @@ pub mod limits;
 pub mod log_retention;
 pub mod mcp;
 pub mod mcp_client;
+pub mod mcp_elicitation;
 pub mod middleware;
 pub mod module_loader;
 pub mod notifications;
@@ -1222,6 +1223,21 @@ async fn initialize_components(config: &config::Config) -> AppResult<()> {
     // Initialize database connection and repository
     initialize_database_and_repository(config).await?;
 
+    // MCP elicitation state is sealed under a key derived from the session
+    // key. Here rather than beside the auth manager because `/mcp` is served
+    // whether or not authentication is enabled, and a tool that asks a
+    // question has to be able to carry the answer back either way.
+    let session_key = config
+        .security
+        .session_encryption_key
+        .as_deref()
+        .filter(|key| !key.is_empty())
+        .and_then(|key| {
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, key).ok()
+        })
+        .and_then(|decoded| <[u8; 32]>::try_from(decoded.as_slice()).ok());
+    mcp_elicitation::initialize_request_state_encryption(session_key.as_ref());
+
     // Start PostgreSQL notification listener for script synchronization
     if let Some(db) = database::get_global_database() {
         info!("Starting PostgreSQL notification listener for script synchronization...");
@@ -2258,6 +2274,15 @@ async fn setup_routes(
         // make a client probe for an answer it came to be told. Every other
         // modern method is held to the version it named.
         let era = mcp::classify_era(rpc_request.params.as_ref());
+        // Kept for `tools/call`, which has to know whether this client can be
+        // asked anything before it lets a handler try.
+        let client_capabilities = rpc_request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("_meta"))
+            .and_then(|meta| meta.get(mcp::META_CLIENT_CAPABILITIES))
+            .cloned();
+        let era_is_modern = matches!(era, mcp::Era::Modern { .. });
         if let mcp::Era::Modern { version } = &era {
             if rpc_request.method != "server/discover" {
                 if !mcp::supports_modern_version(version) {
@@ -2394,6 +2419,14 @@ async fn setup_routes(
                 struct ToolCallParams {
                     name: String,
                     arguments: Option<serde_json::Value>,
+                    /// What the person answered, keyed as the `inputRequests`
+                    /// that asked for it. Present only on a retry.
+                    #[serde(rename = "inputResponses")]
+                    input_responses: Option<serde_json::Value>,
+                    /// The sealed state the engine minted last time round. The
+                    /// client echoes it without being able to read it.
+                    #[serde(rename = "requestState")]
+                    request_state: Option<String>,
                 }
 
                 let params: ToolCallParams = match rpc_request.params {
@@ -2428,6 +2461,65 @@ async fn setup_routes(
                     .as_ref()
                     .map(|session| create_js_auth_context_from_session(Some(session)));
                 let user_context = create_user_context_from_session(mcp_session.as_ref());
+
+                // Whether this caller can be asked a question mid-call.
+                //
+                // The era gate is not a formality: `input_required` is a
+                // `resultType`, and `resultType` does not exist before
+                // `2026-07-28`. A legacy client would be handed a result it has
+                // no case for, so a handler running for one must find
+                // `mcp.canAsk()` false and take its other path.
+                let principal = mcp_session
+                    .as_ref()
+                    .map(|session| session.user_id.clone())
+                    .unwrap_or_else(|| "anonymous".to_string());
+                let can_ask = era_is_modern
+                    && mcp_elicitation::client_can_elicit(client_capabilities.as_ref());
+                let args_digest = mcp_elicitation::digest_arguments(&params.name, &arguments);
+
+                // A presented request state is attacker-controlled, and is
+                // refused unless it was minted for this account, on this host,
+                // for this call, and has not lapsed. Every refusal answers the
+                // same way: naming which check failed tells whoever is probing
+                // how to pass it.
+                let carried = match params.request_state.as_deref() {
+                    None => Some((serde_json::Map::new(), serde_json::Map::new())),
+                    Some(state) => match mcp_elicitation::open(
+                        state,
+                        &principal,
+                        &canonical_host,
+                        &params.name,
+                        &args_digest,
+                    ) {
+                        Ok(opened) => Some(opened),
+                        Err(reason) => {
+                            warn!(
+                                "MCP tool '{}': refusing the request state presented with it ({:?})",
+                                params.name, reason
+                            );
+                            None
+                        }
+                    },
+                };
+                let Some((mut answers, memo)) = carried else {
+                    return axum::response::Json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32602,
+                            "message": "Invalid params: requestState is not valid for this request"
+                        },
+                        "id": rpc_request.id
+                    }));
+                };
+
+                // What the person said this time joins what they said before.
+                if let Some(responses) = params.input_responses.as_ref().and_then(|v| v.as_object())
+                {
+                    for (key, value) in responses {
+                        answers.insert(key.clone(), value.clone());
+                    }
+                }
+                let exchange = mcp_elicitation::Exchange::new(answers, memo, can_ask);
 
                 // A tool runs JavaScript to completion — a script-registered
                 // handler, or the engine's own test runner — which is CPU-bound
@@ -2475,7 +2567,13 @@ async fn setup_routes(
                     tokio::task::spawn_blocking(move || {
                         let _permit = permit;
                         let _ticket = ticket;
-                        mcp::execute_mcp_tool(&tool_name, arguments, auth_context, user_context)
+                        mcp::execute_mcp_tool(
+                            &tool_name,
+                            arguments,
+                            auth_context,
+                            user_context,
+                            exchange,
+                        )
                     })
                     .await
                 })
@@ -2503,14 +2601,90 @@ async fn setup_routes(
                 };
 
                 match execution {
-                    Ok(result) => {
+                    Ok(mcp::ToolOutcome::InputRequired(asked)) => {
+                        // The handler asked for something. This call is over —
+                        // the client gathers the answers and starts a new one,
+                        // which runs the handler again from the top with them
+                        // in hand. Nothing is held open here.
+                        debug!(
+                            "MCP tool '{}' is waiting on {} input request(s)",
+                            params.name,
+                            asked.requests.len()
+                        );
+
+                        match mcp_elicitation::seal(
+                            &principal,
+                            &canonical_host,
+                            &params.name,
+                            &args_digest,
+                            asked.answers,
+                            asked.memo,
+                        ) {
+                            Ok(request_state) => axum::response::Json(serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": rpc_request.id,
+                                "result": {
+                                    "resultType": "input_required",
+                                    "inputRequests": asked.requests,
+                                    "requestState": request_state,
+                                    "_meta": {
+                                        mcp::META_SERVER_INFO: mcp::server_info()
+                                    }
+                                }
+                            })),
+                            Err(e) => {
+                                // Without state there is nothing to carry the
+                                // answers back on, so the exchange cannot
+                                // continue and saying so beats asking a
+                                // question whose answer we could not use.
+                                error!(
+                                    "MCP tool '{}' asked for input but its state could not be \
+                                     sealed: {}",
+                                    params.name, e
+                                );
+                                axum::response::Json(serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "id": rpc_request.id,
+                                    "error": {
+                                        "code": -32603,
+                                        "message": format!("Could not carry the exchange: {}", e)
+                                    }
+                                }))
+                            }
+                        }
+                    }
+                    Ok(mcp::ToolOutcome::Complete(result)) => {
                         debug!("MCP tool '{}' executed successfully", params.name);
 
-                        // Parse the result to determine if it's structured or just text
-                        let content = vec![serde_json::json!({
-                            "type": "text",
-                            "text": serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string())
-                        })];
+                        // Parsed and re-serialised rather than passed through,
+                        // which is what `execute_mcp_tool` used to do before it
+                        // started handing back the handler's own string: a
+                        // handler whose result is not JSON is a broken handler,
+                        // and it should fail here rather than put whatever it
+                        // returned into content as though it were data.
+                        let content = match serde_json::from_str::<serde_json::Value>(&result) {
+                            Ok(parsed) => vec![serde_json::json!({
+                                "type": "text",
+                                "text": serde_json::to_string(&parsed)
+                                    .unwrap_or_else(|_| "{}".to_string())
+                            })],
+                            Err(e) => {
+                                error!(
+                                    "MCP tool '{}' returned something that is not JSON: {}",
+                                    params.name, e
+                                );
+                                return axum::response::Json(serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "id": rpc_request.id,
+                                    "error": {
+                                        "code": -32603,
+                                        "message": format!(
+                                            "Failed to parse tool result as JSON: {}", e
+                                        )
+                                    }
+                                }));
+                            }
+                        };
 
                         axum::response::Json(serde_json::json!({
                             "jsonrpc": "2.0",

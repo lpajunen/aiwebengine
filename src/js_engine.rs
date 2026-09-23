@@ -2813,17 +2813,13 @@ pub fn execute_mcp_prompt_handler(
     result_exec.map_err(|e| format!("Prompt handler execution failed: {}", e))
 }
 
-/// Execute an MCP tool handler function
+/// Execute an MCP tool handler function.
 ///
-/// # Arguments
-/// * `script_uri` - The URI of the script containing the handler
-/// * `handler_function` - The name of the handler function to call
-/// * `tool_name` - The name of the MCP tool being executed
-/// * `arguments` - The arguments to pass to the handler
-///
-/// # Returns
-/// * `Ok(String)` - The result from the handler function (as JSON string)
-/// * `Err(String)` - Error message if execution fails
+/// Takes the exchange rather than building one, because whether this caller can
+/// be asked anything is a property of the request that arrived — `lib.rs` reads
+/// the client's declared capabilities — and not of the script. Hands back what
+/// the handler asked for alongside its result, since a handler that asks
+/// produces no result at all.
 pub fn execute_mcp_tool_handler(
     script_uri: &str,
     handler_function: &str,
@@ -2831,7 +2827,8 @@ pub fn execute_mcp_tool_handler(
     arguments: serde_json::Value,
     auth_context: Option<crate::auth::JsAuthContext>,
     user_context: UserContext,
-) -> Result<String, String> {
+    exchange: crate::mcp_elicitation::Exchange,
+) -> Result<crate::mcp::ToolOutcome, String> {
     let script_uri_owned = script_uri.to_string();
     let handler_function_owned = handler_function.to_string();
     let tool_name_owned = tool_name.to_string();
@@ -2882,6 +2879,8 @@ pub fn execute_mcp_tool_handler(
     if let Err(e) = setup_exec {
         return Err(format!("JavaScript execution error: {}", e));
     }
+
+    let guard = crate::mcp_elicitation::ExchangeGuard::install(exchange);
 
     let result_exec = call_and_settle(
         &rt,
@@ -2978,11 +2977,22 @@ pub fn execute_mcp_tool_handler(
         },
     );
 
+    // What the handler asked for is read before the result is judged, because a
+    // handler that asks ends by throwing: the exception is only how the
+    // execution unwinds, and the outcome is decided by what was recorded. That
+    // ordering is also what stops a script catching its own `McpInputRequired`
+    // and returning a value as though the question had been answered.
+    let exchange = guard.finish();
+    if let Some(asked) = exchange.into_asked() {
+        drop(ctx);
+        return Ok(crate::mcp::ToolOutcome::InputRequired(asked));
+    }
+
     let result_string = result_exec.map_err(|e| format!("JavaScript execution error: {}", e))?;
 
     // Ensure clean shutdown: drop Context before Runtime
     drop(ctx);
-    Ok(result_string)
+    Ok(crate::mcp::ToolOutcome::Complete(result_string))
 }
 
 /// Execute a stream customization function to get connection filter criteria
@@ -4399,6 +4409,10 @@ mod tests {
         super::execute_graphql_resolver(params)
     }
 
+    /// These tests predate elicitation and call tools that do not ask, so the
+    /// shim runs them unattended — `mcp.canAsk()` false, `mcp.ask` throwing —
+    /// and reads the result out of the outcome. A test that wants the other
+    /// branch builds its own `Exchange`.
     fn execute_mcp_tool_handler(
         script_uri: &str,
         handler_function: &str,
@@ -4413,14 +4427,20 @@ mod tests {
         let rt = get_runtime();
         let _guard = rt.enter();
         setup_db();
-        super::execute_mcp_tool_handler(
+        match super::execute_mcp_tool_handler(
             script_uri,
             handler_function,
             tool_name,
             arguments,
             auth_context,
             user_context,
-        )
+            crate::mcp_elicitation::Exchange::unattended(),
+        )? {
+            crate::mcp::ToolOutcome::Complete(result) => Ok(result),
+            crate::mcp::ToolOutcome::InputRequired(_) => {
+                Err("handler asked for input, which this shim does not answer".to_string())
+            }
+        }
     }
 
     fn setup_db_for_test() {

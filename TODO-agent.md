@@ -304,14 +304,36 @@ endpoint, and the engine had to, because a legacy client has no fall-forward.
    and the caching hint needs — a client comparing a cached list against the
    next one must not see a change that is only iteration order.
 
-3. **MRTR, and with it elicitation.** The one still open, and the prize: a
-   script's tool asking the person a question mid-run, over plain POST. Needs
-   `resultType: "input_required"` with `inputRequests`, a `requestState` the
-   engine mints and reads back, and a JS surface for a handler to suspend on.
-   That last part is the design question — a host call blocks the script (item
-   6), so "return a question and be re-entered with its answer" is a different
-   shape from `await`, and the closest existing model is `tasks.rs`: work that
-   outlives the call that started it, keyed so it can be resumed.
+3. ~~**MRTR, and with it elicitation.**~~ Done for form mode on `tools/call`,
+   which was the prize: a script's tool asking the person a question mid-run,
+   over plain POST. `mcp.ask` / `mcp.canAsk` / `mcp.once` are the surface,
+   `mcp_elicitation.rs` is the engine half, and the design and its two open
+   edges are in `docs/MCP_ELICITATION.md`. Still to come: URL mode (which
+   should reuse `script_channel_link_tokens` rather than grow a second consent
+   dance) and `prompts/get`.
+
+   This item said the missing piece was "a JS surface for a handler to suspend
+   on", and named `tasks.rs` as the closest model. Both were wrong, and wrong in
+   the direction that would have made this hard. **MRTR does not suspend
+   anything.** The retry is a new request with a new JSON-RPC id, and the
+   specification is explicit that "the server processing the retry does not need
+   any information beyond what is directly present in the retry request" — the
+   whole point of the pattern is to need no server-side state and no sticky
+   load balancing. The handler _re-runs from the top_ with the answers now in
+   hand.
+
+   Which is the good news, because suspending a handler would have run straight
+   into item 6: a host call blocks the script and there is no event loop to
+   yield to. Re-execution needs neither. It also means no execution slot is held
+   while a person thinks, so this does not interact with `script_limits.rs` at
+   all — each round trip is an ordinary call with an ordinary budget.
+
+   What re-execution costs is the real design question, and it is not the one
+   this item had: everything a handler does _before_ it asks happens again on
+   every round trip. `tasks.rs` re-runs a handler too, but only after a failure;
+   this re-runs a prologue that succeeded. A tool that charges before asking
+   "are you sure?" charges twice.
+
    `mcp::complete` already leaves a handler's own `resultType` alone, so the
    stamping does not have to change when this lands.
 

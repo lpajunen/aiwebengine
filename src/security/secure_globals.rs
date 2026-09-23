@@ -24,6 +24,7 @@ const TASKS_PRELUDE: &str = include_str!("../../assets/tasks_prelude.js");
 
 /// Builds `sandbox` over the host call that runs a narrowed sub-execution.
 const SANDBOX_PRELUDE: &str = include_str!("../../assets/sandbox_prelude.js");
+const MCP_PRELUDE: &str = include_str!("../../assets/mcp_prelude.js");
 
 /// What `secretStorage`'s mutating methods answer in a delegated execution.
 ///
@@ -2246,8 +2247,68 @@ impl SecureGlobalContext {
         mcp_registry.set("registerPrompt", register_prompt)?;
         global.set("mcpRegistry", mcp_registry)?;
 
+        // The other half of MCP: asking the caller a question mid-tool.
+        self.setup_mcp_elicitation(ctx)?;
+
         // Setup McpClient class for connecting to external MCP servers
         self.setup_mcp_client_class(ctx, script_uri)?;
+
+        Ok(())
+    }
+
+    /// `mcp.ask` / `mcp.canAsk` / `mcp.once`, over the thread-local exchange.
+    ///
+    /// Every binding here reads [`crate::mcp_elicitation`]'s thread-local
+    /// rather than anything captured at install time, which is the one thing
+    /// that has to be true of them: globals are installed once per execution,
+    /// and what a call must see is the exchange the *current* tool call
+    /// established. Installed unconditionally, because an execution with no
+    /// exchange is not an error — it is a scheduled job or a listener, where
+    /// `canAsk` is false and `ask` throws.
+    fn setup_mcp_elicitation(&self, ctx: &rquickjs::Ctx<'_>) -> JsResult<()> {
+        use crate::mcp_elicitation as elicitation;
+
+        let host = rquickjs::Object::new(ctx.clone())?;
+
+        let can_ask = Function::new(ctx.clone(), || -> bool { elicitation::can_ask() })?;
+        host.set("canAsk", can_ask)?;
+
+        let asked_so_far = Function::new(ctx.clone(), || -> usize { elicitation::asked_so_far() })?;
+        host.set("askedSoFar", asked_so_far)?;
+
+        // `null` rather than `undefined` for "not answered", so the prelude can
+        // tell an absent answer from one whose value is legitimately falsy.
+        let answer = Function::new(ctx.clone(), |key: String| -> Option<String> {
+            elicitation::answer_for(&key).map(|value| value.to_string())
+        })?;
+        host.set("answer", answer)?;
+
+        let ask = Function::new(ctx.clone(), |key: String, request: String| {
+            let parsed = serde_json::from_str(&request).unwrap_or(serde_json::Value::Null);
+            elicitation::record_ask(&key, parsed);
+        })?;
+        host.set("ask", ask)?;
+
+        let memo_get = Function::new(ctx.clone(), |key: String| -> Option<String> {
+            elicitation::memo_get(&key).map(|value| value.to_string())
+        })?;
+        host.set("memoGet", memo_get)?;
+
+        let memo_set = Function::new(ctx.clone(), |key: String, value: String| {
+            let parsed = serde_json::from_str(&value).unwrap_or(serde_json::Value::Null);
+            elicitation::memo_set(&key, parsed);
+        })?;
+        host.set("memoSet", memo_set)?;
+
+        ctx.globals().set("__hostMcp", host)?;
+
+        crate::bytecode::eval_program(ctx, "engine://mcp-prelude", MCP_PRELUDE).map_err(|e| {
+            rquickjs::Error::new_from_js_message(
+                "mcp",
+                "prelude",
+                &format!("mcp prelude failed to load: {}", e),
+            )
+        })?;
 
         Ok(())
     }
