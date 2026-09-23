@@ -385,6 +385,7 @@ async fn editing_a_script_takes_what_writing_one_takes() {
         .into_iter()
         .collect(),
         attenuated: false,
+        network_scope: None,
     };
     assert!(
         patch_script_authorized(&reader, uri, &edits, None, None).is_err(),

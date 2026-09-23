@@ -197,10 +197,48 @@ impl HttpClient {
                 headers,
                 options.body,
                 timeout,
-                &resolved,
+                RequestPolicy {
+                    resolved: &resolved,
+                    scope: options.network_scope.as_ref(),
+                },
             )
             .map_err(|e| resolved.scrub_error(e))?;
         self.convert_response(response, options.binary)
+    }
+
+    /// Refuse a destination the execution is not allowed to reach.
+    ///
+    /// Applied to the request's own URL *and* to every redirect hop, which is
+    /// the part that makes it worth anything: an allowlist checked once at the
+    /// call is one open redirector on a permitted host away from being no
+    /// allowlist at all.
+    ///
+    /// The refusal names the host, because it is the caller's own scope that
+    /// refused and the useful question is which entry is missing. No scope
+    /// permits everything, which is what every context built from a tier has.
+    fn check_scope(
+        url: &Url,
+        scope: Option<&std::sync::Arc<crate::security::NetworkScope>>,
+    ) -> Result<(), HttpError> {
+        let Some(scope) = scope else {
+            return Ok(());
+        };
+        let host = url
+            .host_str()
+            .ok_or_else(|| HttpError::InvalidUrl("No host in URL".to_string()))?;
+        if scope.permits(host) {
+            return Ok(());
+        }
+        let allowed: Vec<&str> = scope.hosts().collect();
+        Err(HttpError::BlockedUrl(format!(
+            "This execution may not reach '{}' (allowed: {})",
+            host,
+            if allowed.is_empty() {
+                "nothing".to_string()
+            } else {
+                allowed.join(", ")
+            }
+        )))
     }
 
     /// Fetch a URL and return its body as bytes.
@@ -247,7 +285,13 @@ impl HttpClient {
             headers,
             None,
             self.default_timeout,
-            &plain,
+            RequestPolicy {
+                resolved: &plain,
+                // No scope: this path is the engine fetching an archive for a
+                // git binding an administrator set, not a script reaching a
+                // host it chose. `fetch` is where destinations are bounded.
+                scope: None,
+            },
         )?;
 
         let status = response.status().as_u16();
@@ -340,7 +384,10 @@ impl HttpClient {
                 headers,
                 options.body,
                 timeout,
-                &resolved,
+                RequestPolicy {
+                    resolved: &resolved,
+                    scope: options.network_scope.as_ref(),
+                },
             )
             .map_err(|e| resolved.scrub_error(e))?;
 
@@ -388,14 +435,13 @@ impl HttpClient {
         headers: HeaderMap,
         body: Option<String>,
         timeout: Duration,
-        // What must not appear in anything this function writes down. A
-        // redirect resolves against a URL that may carry a credential, and
-        // the hop is logged.
-        resolved: &ResolvedUrl,
+        policy: RequestPolicy<'_>,
     ) -> Result<reqwest::blocking::Response, HttpError> {
+        let RequestPolicy { resolved, scope } = policy;
         if !self.manual_redirects {
             // Test mode: single request through the redirect-following client
             let parsed_url = self.validate(url)?;
+            Self::check_scope(&parsed_url, scope)?;
             let mut request = shared_test_client()?
                 .request(method, parsed_url.as_str())
                 .headers(headers)
@@ -410,6 +456,7 @@ impl HttpClient {
         // host, and DNS resolution). The shared client has redirects disabled.
         let client = shared_client()?;
         let mut current_url = self.validate(url)?;
+        Self::check_scope(&current_url, scope)?;
         let mut current_method = method;
         let mut current_body = body;
         let mut current_headers = headers;
@@ -449,6 +496,10 @@ impl HttpClient {
                 .join(location)
                 .map_err(|e| HttpError::InvalidUrl(format!("Invalid redirect target: {}", e)))?;
             let next_url = self.validate(next_url.as_str())?;
+            // The hop is a destination too. Checked before the credential
+            // stripping below, so a redirect out of scope is refused rather
+            // than followed with fewer headers.
+            Self::check_scope(&next_url, scope)?;
 
             // 301/302/303 switch non-GET/HEAD methods to GET and drop the
             // body (browser/fetch semantics); 307/308 preserve both
@@ -739,6 +790,22 @@ impl HttpClient {
             ok,
         })
     }
+}
+
+/// What a request may reach, and what must not be written down about it.
+///
+/// Two things that travel together through the redirect loop and are checked
+/// at the same point on every hop: the scrubbing rules for a URL that may
+/// carry a credential, and the destinations this execution is allowed. Grouped
+/// rather than passed separately because they are the same kind of thing —
+/// policy about the request rather than content of it — and because the
+/// alternative was an eight-argument function.
+#[derive(Clone, Copy)]
+struct RequestPolicy<'a> {
+    /// What must not appear in anything the loop logs.
+    resolved: &'a ResolvedUrl,
+    /// Where this execution may go. `None` is unrestricted.
+    scope: Option<&'a std::sync::Arc<crate::security::NetworkScope>>,
 }
 
 /// Whether a `Content-Encoding` means "nothing was applied".
@@ -1471,6 +1538,19 @@ pub struct FetchOptions {
     /// an empty string reads exactly like a server that sent nothing.
     #[serde(default)]
     pub binary: bool,
+
+    /// Which hosts this request may reach, when the execution is bounded.
+    ///
+    /// **`skip` is the security property here, not a serialization detail.**
+    /// Every other field is written by the calling script; this one is written
+    /// by the engine from the `UserContext`, after the caller's options have
+    /// been parsed. `skip` means serde never reads it from the caller's JSON,
+    /// so a script passing `{ networkScope: null }` — or anything at all —
+    /// cannot touch it. A restriction the restricted party can lift is not one.
+    ///
+    /// `None` means unrestricted, which is every context built from a tier.
+    #[serde(skip)]
+    pub network_scope: Option<std::sync::Arc<crate::security::NetworkScope>>,
 }
 
 fn default_method() -> String {
@@ -1485,6 +1565,7 @@ impl Default for FetchOptions {
             body: None,
             timeout_ms: None,
             binary: false,
+            network_scope: None,
         }
     }
 }

@@ -2938,6 +2938,41 @@ interface SandboxRunOptions {
    * must not hand model-authored code the whole of the caller's authority.
    */
   capabilities?: Capability[];
+  /**
+   * Which hosts the sub-execution may reach.
+   *
+   * The destination half of a narrowing, and the one a capability set cannot
+   * express: `use_network` is a verb, so "may call the network" means "may
+   * call anything". That gap is why **exfiltration needs no write
+   * capability** — a planning turn holding only reads can still put what it
+   * read into a URL. This takes the destination away rather than the data,
+   * which is the one defence that holds regardless of what untrusted text
+   * talked the model into.
+   *
+   * Each entry is a host: `api.example.com`, or `*.example.com` for its
+   * subdomains. A wildcard does **not** match the bare parent — the CSP and
+   * CORS rule — so name both when both are wanted. Ports are not part of it.
+   *
+   * Checked on the request's own host **and on every redirect hop**: an
+   * allowlist checked once is one open redirector away from being none.
+   * `McpClient` is bounded by it too, since an MCP server is a destination
+   * like any other.
+   *
+   * Omitted means *wherever the calling turn could already go*, which is the
+   * opposite default to `capabilities` and deliberately so: this only ever
+   * subtracts from a set that is already the caller's, and defaulting it to
+   * empty would silently take the network away from every existing call.
+   * Pass `[]` for "nowhere". Must be covered by the caller's own scope —
+   * asking to reach further throws.
+   *
+   * @example
+   * // The model may call one API and cannot post what it read anywhere else.
+   * sandbox.run(modelWroteThis, {
+   *   capabilities: ["use_network"],
+   *   hosts: ["api.anthropic.com"],
+   * });
+   */
+  hosts?: string[];
   /** Handed to the source as `context.args`. Must be JSON-serializable. */
   input?: unknown;
   /** Budget in milliseconds, clamped to the engine's own ceiling. */
@@ -2999,8 +3034,9 @@ interface Sandbox {
    *
    * @throws TypeError if a capability name is not one, RangeError if
    *   sub-executions are already nested as deep as they go, and a
-   *   SecurityError if the caller does not hold what it asked to keep. What
-   *   the *source* did comes back in the result instead.
+   *   SecurityError if the caller does not hold what it asked to keep or
+   *   cannot itself reach a host it named. What the *source* did comes back
+   *   in the result instead.
    */
   run(source: string, options?: SandboxRunOptions): SandboxResult;
 
@@ -3009,6 +3045,15 @@ interface Sandbox {
 
   /** What the calling turn holds, sorted. The set a narrowing subtracts from. */
   held(): Capability[];
+
+  /**
+   * Where the calling turn may go, or `null` for anywhere.
+   *
+   * `null` rather than an empty array, because an empty array is a real
+   * answer — a turn that may reach nothing — and conflating the two would
+   * make `sandbox.hosts() || []` quietly open the network back up.
+   */
+  hosts(): string[] | null;
 }
 
 // ============================================================================

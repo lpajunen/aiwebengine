@@ -698,6 +698,10 @@ impl GitHubClient {
             timeout_ms: None,
             // The binary path here is `fetch_bytes`, which this is not.
             binary: false,
+            // Git sync reaches one host named by a binding an administrator
+            // set, not one a script chose, so a script's destination scope is
+            // not what bounds it.
+            network_scope: None,
         };
 
         let response = self

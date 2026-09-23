@@ -195,6 +195,7 @@ async fn host_bindings_reject_an_unauthenticated_holder_of_delete_scripts() {
             .into_iter()
             .collect(),
         attenuated: false,
+        network_scope: None,
     };
 
     assert!(matches!(

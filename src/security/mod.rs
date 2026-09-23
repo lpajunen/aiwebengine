@@ -14,7 +14,7 @@ pub mod threat_detection;
 pub mod validation;
 
 pub use audit::{SecurityAuditor, SecurityEvent, SecurityEventType, SecuritySeverity};
-pub use capabilities::UserContext;
+pub use capabilities::{NetworkScope, UserContext};
 pub use client_ip::{TrustedProxies, normalize_client_ip};
 pub use cors::{CorsConfig, cors_middleware};
 pub use csp::{

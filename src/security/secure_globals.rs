@@ -2530,9 +2530,10 @@ impl SecureGlobalContext {
                 mcp_client_capabilities("constructor", &user_ctx_new)?;
 
                 // Create MCP client instance (just validate parameters)
-                let _client = crate::mcp_client::McpClient::new(
+                let _client = crate::mcp_client::McpClient::scoped(
                     server_url.clone(),
                     secret_identifier.clone(),
+                    user_ctx_new.network_scope.clone(),
                 )
                 .map_err(|e| {
                     rquickjs::Error::new_from_js_message(
@@ -2593,9 +2594,10 @@ impl SecureGlobalContext {
                     })?;
 
                 // Create client
-                let client = crate::mcp_client::McpClient::new(
+                let client = crate::mcp_client::McpClient::scoped(
                     server_url.to_string(),
                     secret_identifier.to_string(),
+                    user_ctx_list.network_scope.clone(),
                 )
                 .map_err(|e| {
                     rquickjs::Error::new_from_js_message(
@@ -2677,9 +2679,10 @@ impl SecureGlobalContext {
                     })?;
 
                 // Create client
-                let client = crate::mcp_client::McpClient::new(
+                let client = crate::mcp_client::McpClient::scoped(
                     server_url.to_string(),
                     secret_identifier.to_string(),
+                    user_ctx_call.network_scope.clone(),
                 )
                 .map_err(|e| {
                     rquickjs::Error::new_from_js_message(
@@ -3393,6 +3396,11 @@ impl SecureGlobalContext {
                 } else {
                     Default::default()
                 };
+                // The engine's field, written after the caller's options are
+                // parsed. It is `#[serde(skip)]`, so nothing the script wrote
+                // could have set it — this is the only way it is ever filled.
+                let mut options = options;
+                options.network_scope = user_ctx_fetch.network_scope.clone();
 
                 // A template this execution may not resolve is refused, not
                 // sent as itself: a request carrying the literal
@@ -3510,7 +3518,13 @@ impl SecureGlobalContext {
                     .into_iter()
                     .map(|request| crate::http_client::ParallelRequest {
                         url: request.url,
-                        options: request.options,
+                        options: crate::http_client::FetchOptions {
+                            // Per request, because each carries its own
+                            // options object and a batch that bounded only the
+                            // first would bound nothing.
+                            network_scope: user_ctx_all.network_scope.clone(),
+                            ..request.options
+                        },
                     })
                     .collect();
 
@@ -3578,6 +3592,8 @@ impl SecureGlobalContext {
                     })?,
                     None => Default::default(),
                 };
+                let mut options = options;
+                options.network_scope = user_ctx_stream.network_scope.clone();
 
                 if !may_read_secrets && crate::http_client::names_a_secret(&url, &options) {
                     return Err(capability_error(
@@ -6677,7 +6693,42 @@ impl SecureGlobalContext {
                     }
                 };
 
-                let narrowed = match crate::sandbox::narrow(&user_run, &requested) {
+                // `hosts` is the destination half, and it defaults the other
+                // way round from `capabilities`: omitted means "whatever the
+                // caller could already reach", not "nothing". They differ
+                // because they answer different questions — `capabilities`
+                // says what this sub-execution may do, and an omitted list
+                // safely means none of it, while `hosts` only ever *removes*
+                // destinations from a set that is already the caller's.
+                // Defaulting it to the empty list would silently take the
+                // network away from every existing `sandbox.run` call that
+                // asked for `use_network`.
+                let hosts: Option<Vec<String>> = match options.get("hosts") {
+                    Some(serde_json::Value::Array(names)) => {
+                        let mut parsed = Vec::with_capacity(names.len());
+                        for name in names {
+                            match name.as_str() {
+                                Some(name) => parsed.push(name.to_string()),
+                                None => {
+                                    return Ok(Self::sandbox_failure(
+                                        "TypeError",
+                                        "sandbox.run: every host must be named by a string",
+                                    ));
+                                }
+                            }
+                        }
+                        Some(parsed)
+                    }
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(_) => {
+                        return Ok(Self::sandbox_failure(
+                            "TypeError",
+                            "sandbox.run: hosts must be an array of host patterns",
+                        ));
+                    }
+                };
+
+                let narrowed = match crate::sandbox::narrow_to(&user_run, &requested, hosts) {
                     Ok(narrowed) => narrowed,
                     Err(refusal) => {
                         let name = match refusal {
@@ -6757,6 +6808,19 @@ impl SecureGlobalContext {
             .to_string()
         })?;
         host.set("capabilities", all)?;
+
+        // What this execution may reach, so a script can narrow by subtracting
+        // rather than by writing a list it hopes is a subset. `null` rather
+        // than an empty array for "anywhere": an empty array is a real answer
+        // here — a scope that permits nothing — and the two must not collide.
+        let user_hosts = self.user_context.clone();
+        let hosts = Function::new(ctx.clone(), move |_ctx: rquickjs::Ctx<'_>| -> String {
+            match &user_hosts.network_scope {
+                Some(scope) => serde_json::json!(scope.hosts().collect::<Vec<_>>()).to_string(),
+                None => "null".to_string(),
+            }
+        })?;
+        host.set("hosts", hosts)?;
 
         let user_held = self.user_context.clone();
         let held = Function::new(ctx.clone(), move |_ctx: rquickjs::Ctx<'_>| -> String {

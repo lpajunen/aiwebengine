@@ -81,7 +81,8 @@ impl MockServer {
             // down the middle — the boundary a naive decoder turns into
             // U+FFFD.
             .route("/stream-split", axum::routing::get(handle_stream_split))
-            .route("/binary", axum::routing::get(handle_binary));
+            .route("/binary", axum::routing::get(handle_binary))
+            .route("/redirect-to", axum::routing::get(handle_redirect_to));
 
         // Bind to random port
         let addr = SocketAddr::from(([127, 0, 0, 1], 0));
@@ -344,6 +345,23 @@ async fn handle_redirect(axum::extract::Path(n): axum::extract::Path<u32>) -> Re
     Response::builder()
         .status(StatusCode::FOUND)
         .header(header::LOCATION, location)
+        .body(Body::empty())
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// Redirects to wherever the query string says.
+///
+/// An open redirector, which is the thing a destination allowlist has to
+/// survive: a permitted host that will forward you anywhere is the whole
+/// bypass, and an allowlist checked once at the call does not survive it.
+async fn handle_redirect_to(Query(params): Query<HashMap<String, String>>) -> Response {
+    let target = params
+        .get("to")
+        .cloned()
+        .unwrap_or_else(|| "/get".to_string());
+    Response::builder()
+        .status(StatusCode::FOUND)
+        .header(header::LOCATION, target)
         .body(Body::empty())
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }

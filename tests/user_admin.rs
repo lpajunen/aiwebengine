@@ -71,6 +71,7 @@ async fn list_users_denied_for_unauthenticated_holder_of_the_admin_capability() 
             .into_iter()
             .collect(),
         attenuated: false,
+        network_scope: None,
     };
 
     assert!(matches!(

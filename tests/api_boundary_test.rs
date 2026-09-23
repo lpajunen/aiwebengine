@@ -39,6 +39,7 @@ fn create_user_with_capabilities(user_id: &str, caps: Vec<Capability>) -> UserCo
         is_authenticated: true,
         capabilities: caps.into_iter().collect(),
         attenuated: false,
+        network_scope: None,
     }
 }
 

@@ -92,6 +92,62 @@ and `_listTools` / `_callTool` rebuild the client from whatever blob they are
 handed, so a gate on the constructor alone would be one string literal away
 from being skipped.
 
+## Where it may go, as well as what it may do
+
+A capability is a verb, and `use_network` names one: "may call the network",
+with no destination in it. That gap is not cosmetic, because **exfiltration
+needs no write capability**. A planning turn narrowed to hold nothing but reads
+can still read a person's notes and put them in a URL, and no arrangement of
+the capability set prevents it — the verb it needs is one it must have to be
+useful at all.
+
+`hosts` is the other dimension:
+
+```javascript
+const out = sandbox.run(modelWroteThis, {
+  capabilities: ["use_network"],
+  hosts: ["api.anthropic.com"],
+});
+```
+
+This takes away the **destination** rather than the data, which is why it holds
+regardless of what the untrusted text talked the model into. Everything else
+here narrows what an execution may do with what it can reach; this narrows what
+it can reach.
+
+**An entry is a host.** `api.example.com`, or `*.example.com` for its
+subdomains. A wildcard does not match the bare parent — the rule CSP and CORS
+use, and the one that makes a list say what it looks like it says — so name both
+when both are wanted. Ports are not part of it: a port distinguishes services
+rather than parties.
+
+**Every hop is checked, not just the first.** An allowlist applied once to the
+URL a script wrote is one permitted host with a `?to=` parameter away from being
+no allowlist at all, and open redirectors are common enough on large sites that
+this is the expected bypass rather than an exotic one. The check sits in the
+same loop that re-validates the address on each redirect. `McpClient` is bounded
+by it too, since an MCP server is a destination like any other.
+
+**Omitted means "wherever the caller could already go"**, which is the opposite
+default to `capabilities` and deliberately so. The two answer different
+questions: `capabilities` says what this sub-execution may do, so an omitted
+list safely means none of it, while `hosts` only ever subtracts from a set that
+is already the caller's — defaulting it to empty would take the network away
+from every `sandbox.run` call that asked for `use_network`. Pass `[]` for
+"nowhere". `sandbox.hosts()` answers the caller's own scope, or `null` for
+unrestricted; `null` rather than `[]` because an empty scope is a real answer
+and `sandbox.hosts() || []` would otherwise open the network back up.
+
+**A narrowing cannot widen it**, the same rule the capability set follows and
+refused in the same place: naming a host the caller cannot itself reach throws
+at the call rather than producing a sub-execution whose requests mysteriously
+fail.
+
+It is deliberately **not spelled as a capability**. Names like
+`use_network:api.example.com` would have made the capability set no longer a set
+of verbs and every `has_capability` call a parse. A capability is held or not
+held; this is an argument to one.
+
 Two things are not capabilities and cannot be narrowed by this. **Ownership**
 is a separate check (`user_owns_script`) — a narrowed turn owns exactly what
 its caller owned. And **computing** is not a capability: a sub-execution given

@@ -71,7 +71,7 @@
 //! one for a loop, which is worth saying in the documentation rather than
 //! discovering in production.
 
-use crate::security::{Capability, UserContext};
+use crate::security::{Capability, NetworkScope, UserContext};
 
 /// How deep sub-executions may nest.
 ///
@@ -136,6 +136,9 @@ pub enum Refusal {
     NotHeld(Vec<Capability>),
     /// The nesting limit.
     TooDeep(usize),
+    /// Hosts the caller's own scope does not cover. The destination
+    /// counterpart of [`Refusal::NotHeld`], refused for the same reason.
+    HostsNotReachable(Vec<String>),
 }
 
 impl std::fmt::Display for Refusal {
@@ -158,6 +161,11 @@ impl std::fmt::Display for Refusal {
                 "sandboxed executions are already {} deep, which is the limit",
                 depth
             ),
+            Refusal::HostsNotReachable(hosts) => write!(
+                f,
+                "cannot reach what this execution cannot reach: {}",
+                hosts.join(", ")
+            ),
         }
     }
 }
@@ -170,6 +178,24 @@ impl std::fmt::Display for Refusal {
 /// what the caller held. They exist so that a script hears about a mistake
 /// where it made it.
 pub fn narrow(caller: &UserContext, requested: &[String]) -> Result<UserContext, Refusal> {
+    narrow_to(caller, requested, None)
+}
+
+/// [`narrow`], also bounding which hosts the sub-execution may reach.
+///
+/// `hosts` of `None` leaves the caller's own scope in force, which is what
+/// makes the two dimensions independent — narrowing the verbs says nothing
+/// about the destinations, and a caller that was already bounded stays bounded.
+///
+/// The destination check mirrors the capability one exactly, including its
+/// reason: asking to reach somewhere the caller cannot is a bug at the call,
+/// and answering it with a sub-execution whose requests mysteriously fail is
+/// the worse of the two ways to report it.
+pub fn narrow_to(
+    caller: &UserContext,
+    requested: &[String],
+    hosts: Option<Vec<String>>,
+) -> Result<UserContext, Refusal> {
     let mut keep = Vec::with_capacity(requested.len());
     for name in requested {
         match Capability::parse(name) {
@@ -183,7 +209,19 @@ pub fn narrow(caller: &UserContext, requested: &[String]) -> Result<UserContext,
         return Err(Refusal::NotHeld(missing));
     }
 
-    Ok(caller.attenuated(keep))
+    let scope = match hosts {
+        Some(hosts) => {
+            let scope = NetworkScope::new(hosts);
+            let uncovered = caller.uncovered_hosts(&scope);
+            if !uncovered.is_empty() {
+                return Err(Refusal::HostsNotReachable(uncovered));
+            }
+            Some(scope)
+        }
+        None => None,
+    };
+
+    Ok(caller.attenuated_to(keep, scope))
 }
 
 #[cfg(test)]

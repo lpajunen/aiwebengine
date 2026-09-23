@@ -33,6 +33,7 @@ mod admin_script_update_tests {
             .into_iter()
             .collect::<HashSet<_>>(),
             attenuated: false,
+            network_scope: None,
         };
 
         // Step 1: Create a script without an owner (simulating a bootstrap script or legacy script)
@@ -123,6 +124,7 @@ mod admin_script_update_tests {
             .into_iter()
             .collect::<HashSet<_>>(),
             attenuated: false,
+            network_scope: None,
         };
 
         // Create script without owner

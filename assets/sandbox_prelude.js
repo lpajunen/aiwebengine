@@ -54,6 +54,13 @@
       return call({
         source: String(source),
         capabilities: options.capabilities || [],
+        // The destination half, and it defaults the opposite way to
+        // `capabilities`: omitted means "wherever this turn could already go",
+        // not "nowhere". The two answer different questions — `capabilities`
+        // says what the sub-execution may do, so an omitted list safely means
+        // none of it, while `hosts` only ever subtracts from a set that is
+        // already the caller's. Passing `[]` is the real "nowhere".
+        hosts: options.hosts === undefined ? null : options.hosts,
         input: options.input === undefined ? null : options.input,
         timeoutMs: options.timeoutMs,
         // Off by default, unlike `/engine/eval`. A turn that may not write
@@ -76,6 +83,18 @@
     // subtracts from.
     held: function () {
       return JSON.parse(__hostSandbox.held());
+    },
+
+    // Where the calling turn may go: an array of host patterns, or `null` for
+    // anywhere. `null` rather than an empty array, because an empty array is a
+    // real answer — a turn that may reach nothing — and conflating the two
+    // would make `sandbox.hosts() || []` silently open the network back up.
+    //
+    // `use_network` says whether an execution may call out at all; this says
+    // where. A capability set cannot express the second, which is why
+    // exfiltration survives a plan mode that holds only reads.
+    hosts: function () {
+      return JSON.parse(__hostSandbox.hosts());
     },
   };
 })();

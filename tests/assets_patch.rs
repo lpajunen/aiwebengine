@@ -421,6 +421,7 @@ async fn read_access_alone_cannot_patch_an_asset() {
             .into_iter()
             .collect(),
         attenuated: false,
+        network_scope: None,
     };
 
     let result = aiwebengine::engine_api::patch_asset_authorized(

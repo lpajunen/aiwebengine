@@ -102,6 +102,7 @@ fn user_without_capabilities(user_id: &str) -> UserContext {
         is_authenticated: true,
         capabilities: HashSet::<Capability>::new(),
         attenuated: false,
+        network_scope: None,
     }
 }
 

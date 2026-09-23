@@ -1,5 +1,118 @@
 use super::validation::Capability;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
+use std::sync::Arc;
+
+/// Which hosts an execution may reach, when that is narrower than "any".
+///
+/// [`Capability::UseNetwork`] names the verb and nothing else, so "may call the
+/// network" has always meant "may call anything". That is the gap a capability
+/// set cannot close on its own: **exfiltration needs no write capability**, so
+/// a planning turn holding only reads can still put what it read into a URL. A
+/// tool that runs model-authored code is the sharp case, because the untrusted
+/// text and the network reach the same execution.
+///
+/// This is the destination dimension. `None` on a [`UserContext`] means
+/// unrestricted, which is what every context built from a tier is and what the
+/// engine did before this existed; `Some` means these hosts and nothing else,
+/// checked against the request's host **and against every redirect hop** —
+/// an open redirector on an allowed host is otherwise the way out.
+///
+/// It is not a capability, and is deliberately not spelled as one. A capability
+/// is a verb held or not held; this is an argument to one. Which is why
+/// `sandbox.run` takes `hosts` beside `capabilities` rather than inventing
+/// names like `use_network:api.example.com`, a spelling that would have made
+/// the set no longer a set of verbs and every `has_capability` call a parse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkScope {
+    /// Lower-cased host patterns. An entry beginning `*.` matches subdomains.
+    hosts: BTreeSet<String>,
+}
+
+impl NetworkScope {
+    /// Build a scope from caller-written host patterns.
+    ///
+    /// An empty scope is meaningful and permits nothing, which is what an
+    /// execution that should make no requests at all wants. Withholding
+    /// `use_network` says the same thing more directly and both work — this one
+    /// gives a refusal that names the destination, which is the more useful
+    /// message when a list was meant to have something in it.
+    pub fn new<I, S>(hosts: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self {
+            hosts: hosts
+                .into_iter()
+                .map(|host| host.as_ref().trim().to_ascii_lowercase())
+                .filter(|host| !host.is_empty())
+                .collect(),
+        }
+    }
+
+    /// The patterns this scope holds.
+    pub fn hosts(&self) -> impl Iterator<Item = &str> {
+        self.hosts.iter().map(String::as_str)
+    }
+
+    /// Whether `host` is one this scope permits.
+    ///
+    /// Exact match, or a `*.example.com` entry against any subdomain of
+    /// `example.com`. A wildcard deliberately does **not** match the bare
+    /// parent — `*.example.com` permits `api.example.com` and not
+    /// `example.com` — which is the rule CSP and CORS use and the one that
+    /// makes a list say what it looks like it says. Name both when both are
+    /// wanted.
+    ///
+    /// Ports are not part of it: a port distinguishes services rather than
+    /// parties, and what is being bounded here is who may be talked to.
+    pub fn permits(&self, host: &str) -> bool {
+        let host = host
+            .trim()
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_ascii_lowercase();
+        self.hosts
+            .iter()
+            .any(|pattern| Self::pattern_permits(pattern, &host))
+    }
+
+    fn pattern_permits(pattern: &str, host: &str) -> bool {
+        match pattern.strip_prefix("*.") {
+            // Measured rather than compared to the suffix alone, so a host
+            // whose first label is empty — `.example.com` — cannot pass as a
+            // subdomain of it.
+            Some(suffix) => {
+                host.len() > suffix.len() + 1
+                    && host.ends_with(suffix)
+                    && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
+            }
+            None => host == pattern,
+        }
+    }
+
+    /// Whether this scope already covers everything `pattern` would permit.
+    ///
+    /// The question a narrowing asks, and it is not the same as [`permits`]:
+    /// `*.example.com` as a *request* is covered only by a caller scope that
+    /// itself holds `*.example.com` or a wildcard above it, never by one
+    /// holding the single host `api.example.com`. Asking `permits` about the
+    /// pattern text would have got this wrong in the direction that widens.
+    ///
+    /// [`permits`]: NetworkScope::permits
+    pub fn covers_pattern(&self, pattern: &str) -> bool {
+        let pattern = pattern.trim().to_ascii_lowercase();
+        match pattern.strip_prefix("*.") {
+            Some(suffix) => self.hosts.iter().any(|held| {
+                held == &pattern
+                    || held.strip_prefix("*.").is_some_and(|held_suffix| {
+                        held_suffix == suffix || Self::pattern_permits(held, suffix)
+                    })
+            }),
+            None => self.permits(&pattern),
+        }
+    }
+}
 
 impl Capability {
     /// The name this capability is asked for by, from JavaScript and over the
@@ -81,6 +194,14 @@ pub struct UserContext {
     /// refusing something an administrator may do, which is otherwise the most
     /// confusing message the engine can produce.
     pub attenuated: bool,
+    /// Which hosts this execution may reach, when that is narrower than any.
+    ///
+    /// `None` on every context built from a tier, which is the behaviour that
+    /// predates this field: `use_network` names the verb and permits any
+    /// destination. Set only by a narrowing, and `Arc` because a context is
+    /// cloned into every global closure at install time and the list is read
+    /// rather than written.
+    pub network_scope: Option<Arc<NetworkScope>>,
 }
 
 impl UserContext {
@@ -90,6 +211,7 @@ impl UserContext {
             is_authenticated: false,
             capabilities: Self::anonymous_capabilities(),
             attenuated: false,
+            network_scope: None,
         }
     }
 
@@ -99,6 +221,7 @@ impl UserContext {
             is_authenticated: true,
             capabilities: Self::authenticated_capabilities(),
             attenuated: false,
+            network_scope: None,
         }
     }
 
@@ -111,6 +234,7 @@ impl UserContext {
             is_authenticated: true,
             capabilities: Self::editor_capabilities(),
             attenuated: false,
+            network_scope: None,
         }
     }
 
@@ -120,6 +244,7 @@ impl UserContext {
             is_authenticated: true,
             capabilities: Self::admin_capabilities(),
             attenuated: false,
+            network_scope: None,
         }
     }
 
@@ -225,7 +350,64 @@ impl UserContext {
                 .cloned()
                 .collect(),
             attenuated: true,
+            // Carried forward untouched. Attenuating capabilities must never
+            // *lift* a destination restriction, and a caller narrowing only the
+            // verbs has said nothing about the destinations — so the answer to
+            // "which hosts" is whatever it already was.
+            network_scope: self.network_scope.clone(),
         }
+    }
+
+    /// The same narrowing, also bounding which hosts may be reached.
+    ///
+    /// `hosts` of `None` keeps whatever scope this context already has, which
+    /// is what makes the two dimensions independent: narrowing the verbs does
+    /// not widen the destinations and narrowing the destinations does not
+    /// change the verbs.
+    ///
+    /// The caller is expected to have refused an out-of-scope request already
+    /// (see [`UserContext::uncovered_hosts`]); this replaces rather than
+    /// intersects, because computing a pattern set that means "everything both
+    /// sides allow" is an algebra with edge cases, and refusing at the call is
+    /// both simpler and the rule capabilities already follow.
+    pub fn attenuated_to(
+        &self,
+        keep: impl IntoIterator<Item = Capability>,
+        hosts: Option<NetworkScope>,
+    ) -> Self {
+        let mut narrowed = self.attenuated(keep);
+        if let Some(hosts) = hosts {
+            narrowed.network_scope = Some(Arc::new(hosts));
+        }
+        narrowed
+    }
+
+    /// Which of `hosts` this context could not reach itself.
+    ///
+    /// The destination counterpart of [`UserContext::unheld`], and refused for
+    /// the same reason: a sub-execution asking to reach somewhere its caller
+    /// cannot is a bug at the call, not a puzzling refusal from inside.
+    ///
+    /// Empty when this context has no scope, since an unrestricted caller
+    /// covers everything.
+    pub fn uncovered_hosts(&self, hosts: &NetworkScope) -> Vec<String> {
+        let Some(scope) = &self.network_scope else {
+            return Vec::new();
+        };
+        hosts
+            .hosts()
+            .filter(|pattern| !scope.covers_pattern(pattern))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Whether this execution may reach `host`.
+    ///
+    /// True with no scope, which is every context built from a tier.
+    pub fn may_reach(&self, host: &str) -> bool {
+        self.network_scope
+            .as_ref()
+            .is_none_or(|scope| scope.permits(host))
     }
 
     /// What `keep` asks for that this context does not hold.
@@ -265,6 +447,83 @@ impl UserContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A wildcard matches subdomains and not the bare parent, which is the CSP
+    /// and CORS rule and the one that makes a list say what it looks like it
+    /// says.
+    #[test]
+    fn a_wildcard_matches_subdomains_only() {
+        let scope = NetworkScope::new(["*.example.com", "api.other.test"]);
+
+        assert!(scope.permits("a.example.com"));
+        assert!(scope.permits("deep.nested.example.com"));
+        assert!(scope.permits("API.OTHER.TEST"), "hosts compare case-folded");
+
+        assert!(
+            !scope.permits("example.com"),
+            "a wildcard must not admit the parent; name it separately"
+        );
+        assert!(!scope.permits("other.test"), "an exact entry is exact");
+        // The one that would matter: a suffix match rather than a label match
+        // would admit this, and it is an attacker's domain.
+        assert!(!scope.permits("example.com.evil.test"));
+        assert!(
+            !scope.permits(".example.com"),
+            "an empty first label is not a subdomain"
+        );
+    }
+
+    /// An empty scope is a real answer, not an absent one.
+    #[test]
+    fn an_empty_scope_permits_nothing() {
+        let scope = NetworkScope::new(Vec::<String>::new());
+        assert!(!scope.permits("example.com"));
+
+        // And a context with no scope at all permits everything, which is
+        // every tier and the behaviour that predates the field.
+        assert!(UserContext::admin("a".to_string()).may_reach("anywhere.test"));
+    }
+
+    /// Covering a *pattern* is a different question from permitting a *host*,
+    /// and getting them confused would widen rather than narrow.
+    #[test]
+    fn covering_a_wildcard_takes_a_wildcard() {
+        let caller = NetworkScope::new(["api.example.com"]);
+        assert!(caller.covers_pattern("api.example.com"));
+        assert!(
+            !caller.covers_pattern("*.example.com"),
+            "holding one host does not cover every host under its parent"
+        );
+
+        let wide = NetworkScope::new(["*.example.com"]);
+        assert!(wide.covers_pattern("*.example.com"));
+        assert!(wide.covers_pattern("api.example.com"));
+        assert!(
+            wide.covers_pattern("*.api.example.com"),
+            "a wildcard covers a narrower wildcard beneath it"
+        );
+        assert!(!wide.covers_pattern("example.com"));
+    }
+
+    /// Narrowing the verbs must not lift a destination bound.
+    #[test]
+    fn attenuating_capabilities_keeps_the_destination_bound() {
+        let bounded = UserContext::admin("a".to_string()).attenuated_to(
+            [Capability::UseNetwork],
+            Some(NetworkScope::new(["a.test"])),
+        );
+        assert!(bounded.may_reach("a.test"));
+        assert!(!bounded.may_reach("b.test"));
+
+        // A further narrowing that says nothing about hosts inherits the bound
+        // rather than clearing it.
+        let deeper = bounded.attenuated([Capability::UseNetwork]);
+        assert!(deeper.may_reach("a.test"));
+        assert!(
+            !deeper.may_reach("b.test"),
+            "a narrowing that mentions no hosts must not widen them"
+        );
+    }
 
     /// There is one anonymous tier and no way to widen it. What used to sit
     /// here — a configured flag and an `AIWEBENGINE_MODE` env var that

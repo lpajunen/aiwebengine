@@ -935,3 +935,94 @@ fn the_documented_timeout_name_is_accepted() {
         serde_json::from_str(r#"{"timeout_ms": 1234}"#).expect("options should parse");
     assert_eq!(real.timeout_ms, Some(1234));
 }
+
+/// An allowlist that survives an open redirector, which is the only kind worth
+/// having.
+///
+/// A destination check applied once to the URL a script wrote is one permitted
+/// host with a `?to=` parameter away from being no check at all — and open
+/// redirectors are common enough on large sites that this is the expected
+/// bypass rather than an exotic one. So the scope is checked on every hop, in
+/// the same loop that re-validates the address.
+///
+/// Both halves are asserted together: the in-scope hop must still be followed,
+/// or a passing test would only prove the client had stopped following
+/// redirects.
+#[tokio::test]
+async fn a_destination_scope_is_checked_on_every_redirect_hop() {
+    use aiwebengine::security::NetworkScope;
+    use std::sync::Arc;
+
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+
+    // The mock is on 127.0.0.1, so that is the host a scope has to name for
+    // the permitted case; `evil.test` stands in for anywhere else.
+    let permitted = NetworkScope::new(["127.0.0.1"]);
+    let within = mock.url("/redirect-to?to=/get");
+    let escaping = mock.url("/redirect-to?to=https://evil.test/collect");
+
+    let scope = Arc::new(permitted);
+    let scope_for_escape = scope.clone();
+
+    let followed = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_redirect_tests().expect("Failed to create client");
+        client.fetch(
+            within,
+            FetchOptions {
+                network_scope: Some(scope),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+    })
+    .await
+    .expect("Task panicked")
+    .expect("a hop inside the scope should still be followed");
+    assert_eq!(followed.status, 200, "the in-scope redirect should land");
+
+    let refused = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_redirect_tests().expect("Failed to create client");
+        client.fetch(
+            escaping,
+            FetchOptions {
+                network_scope: Some(scope_for_escape),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+    })
+    .await
+    .expect("Task panicked")
+    .expect_err("a redirect out of the scope must be refused");
+
+    let message = refused.to_string();
+    assert!(
+        message.contains("evil.test"),
+        "the refusal should name the host the redirect tried to reach: {}",
+        message
+    );
+
+    mock.shutdown().await;
+}
+
+/// The scope is the engine's field, not the caller's.
+///
+/// `network_scope` is `#[serde(skip)]`, so it is never read from the options a
+/// script writes — which is the whole of what makes it a restriction rather
+/// than a suggestion. A script that could set it could clear it.
+#[test]
+fn a_script_cannot_write_its_own_destination_scope() {
+    let options: FetchOptions = serde_json::from_str(
+        r#"{"method":"GET","networkScope":["evil.test"],"network_scope":["evil.test"]}"#,
+    )
+    .expect("unknown fields should be ignored, as they always have been");
+
+    assert!(
+        options.network_scope.is_none(),
+        "nothing a caller writes may reach this field"
+    );
+}

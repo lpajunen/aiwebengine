@@ -570,6 +570,7 @@ async fn read_access_alone_cannot_write_a_batch() {
             .into_iter()
             .collect(),
         attenuated: false,
+        network_scope: None,
     };
 
     let result = aiwebengine::engine_api::upsert_assets_authorized(
@@ -1141,6 +1142,7 @@ async fn writing_the_root_in_a_batch_takes_script_write_rights() {
         .into_iter()
         .collect(),
         attenuated: false,
+        network_scope: None,
     };
 
     let result = aiwebengine::engine_api::write_script_files_authorized(

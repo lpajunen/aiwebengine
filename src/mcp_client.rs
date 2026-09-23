@@ -271,6 +271,10 @@ pub struct McpClient {
     server_url: String,
     secret_identifier: String,
     http: HttpClient,
+    /// The destination bound of the execution that built this client, if it
+    /// has one. Carried rather than consulted at the call, so that the scope
+    /// which applies is the one in force when the script named the server.
+    network_scope: Option<std::sync::Arc<crate::security::NetworkScope>>,
     request_id_counter: std::sync::atomic::AtomicU64,
 }
 
@@ -290,12 +294,27 @@ impl McpClient {
     /// Refusing here rather than at the first call is what keeps a blocked
     /// address from reaching a secret lookup on the way to being refused.
     pub fn new(server_url: String, secret_identifier: String) -> Result<Self, McpClientError> {
+        Self::scoped(server_url, secret_identifier, None)
+    }
+
+    /// The same client, bounded to the destinations an execution may reach.
+    ///
+    /// Separate from [`McpClient::new`] rather than an extra argument on it,
+    /// because most callers here are the engine reaching a server nobody
+    /// narrowed; the ones that matter are in `secure_globals`, where a script's
+    /// own execution may be carrying a scope.
+    pub fn scoped(
+        server_url: String,
+        secret_identifier: String,
+        network_scope: Option<std::sync::Arc<crate::security::NetworkScope>>,
+    ) -> Result<Self, McpClientError> {
         crate::http_client::validate_public_url(&server_url)?;
 
         Ok(Self {
             server_url,
             secret_identifier,
             http: HttpClient::new()?,
+            network_scope,
             request_id_counter: std::sync::atomic::AtomicU64::new(1),
         })
     }
@@ -314,6 +333,7 @@ impl McpClient {
             server_url,
             secret_identifier,
             http: HttpClient::new_for_tests()?,
+            network_scope: None,
             request_id_counter: std::sync::atomic::AtomicU64::new(1),
         })
     }
@@ -600,6 +620,10 @@ impl McpClient {
                 // JSON-RPC over HTTP; a response that is not text is a protocol
                 // error rather than something to base64 and hand on.
                 binary: false,
+                // An MCP server is a destination like any other. A narrowed
+                // execution that may reach two hosts must not be able to reach
+                // a third by calling it an MCP server.
+                network_scope: self.network_scope.clone(),
             },
             Some(script_uri),
             user_id,
