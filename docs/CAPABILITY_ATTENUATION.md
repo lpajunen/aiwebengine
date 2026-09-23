@@ -48,34 +48,49 @@ nothing at all. `secretStorage` and `personalStorage` were gated only by a
 delegation scope. Reads and writes of a script's tables shared one capability,
 so **read-only was inexpressible**.
 
-| Name                     | Gates                                                   |
-| ------------------------ | ------------------------------------------------------- |
-| `read_scripts`           | Reading script source                                   |
-| `write_scripts`          | Writing it                                              |
-| `delete_scripts`         | Deleting a script you own                               |
-| `read_assets`            | `assetStorage.listAssets`, `fetchAsset`                 |
-| `write_assets`           | `assetStorage.upsertAsset`                              |
-| `delete_assets`          | `assetStorage.deleteAsset`                              |
-| `view_logs`              | Writing to the script's log — what `console` does       |
-| `delete_logs`            | Clearing it                                             |
-| `manage_streams`         | Registering streams and sending stream messages         |
-| `manage_graphql`         | Every `graphQLRegistry` call                            |
-| `read_script_data`       | `database.query`                                        |
-| `write_script_data`      | `insert`, `update`, `delete`, `upsert`, `deleteWhere`   |
-| `manage_script_database` | Creating and dropping tables, columns, indexes          |
-| `administer_engine`      | Acting on what you do not own                           |
-| `use_network`            | `fetch`                                                 |
-| `read_secrets`           | `secretStorage.exists`, and `{{secret:…}}` in a `fetch` |
-| `write_secrets`          | `setSecret`, `removeSecret`, `clear`                    |
-| `read_storage`           | Reading `scriptStorage` and `personalStorage`           |
-| `write_storage`          | Writing or clearing either                              |
-| `enqueue_tasks`          | `scriptTasks` and `personalTasks` — enqueue and cancel  |
-| `send_messages`          | `dispatcher.sendMessage`                                |
+| Name                     | Gates                                                                           |
+| ------------------------ | ------------------------------------------------------------------------------- |
+| `read_scripts`           | Reading script source                                                           |
+| `write_scripts`          | Writing it                                                                      |
+| `delete_scripts`         | Deleting a script you own                                                       |
+| `read_assets`            | `assetStorage.listAssets`, `fetchAsset`                                         |
+| `write_assets`           | `assetStorage.upsertAsset`                                                      |
+| `delete_assets`          | `assetStorage.deleteAsset`                                                      |
+| `view_logs`              | Writing to the script's log — what `console` does                               |
+| `delete_logs`            | Clearing it                                                                     |
+| `manage_streams`         | Registering streams and sending stream messages                                 |
+| `manage_graphql`         | Every `graphQLRegistry` call                                                    |
+| `read_script_data`       | `database.query`                                                                |
+| `write_script_data`      | `insert`, `update`, `delete`, `upsert`, `deleteWhere`                           |
+| `manage_script_database` | Creating and dropping tables, columns, indexes                                  |
+| `administer_engine`      | Acting on what you do not own                                                   |
+| `use_network`            | `fetch`, and every `McpClient` call                                             |
+| `read_secrets`           | `secretStorage.exists`, `{{secret:…}}` in a `fetch`, and every `McpClient` call |
+| `write_secrets`          | `setSecret`, `removeSecret`, `clear`                                            |
+| `read_storage`           | Reading `scriptStorage` and `personalStorage`                                   |
+| `write_storage`          | Writing or clearing either                                                      |
+| `enqueue_tasks`          | `scriptTasks` and `personalTasks` — enqueue and cancel                          |
+| `send_messages`          | `dispatcher.sendMessage`                                                        |
 
 The seven script-side names at the bottom of that table are new, and **adding
 them took nothing away from anybody**. Every tier that could already do the
 thing holds the name for it, including the anonymous tier, which could always
 `fetch` and reach `scriptStorage`. They exist to be taken away.
+
+`McpClient` is the entry that was missing, and it is worth knowing why rather
+than only that. It was installed into every context without consulting the
+capability set at all, so a sub-execution narrowed out of both names still held
+a way to reach any public address and to spend the person's credentials getting
+there — it resolves the secret you name host-side and sends it as a `Bearer`
+token, which is the whole point of the design and exactly what makes it worth
+gating. **A capability model enforced everywhere except through a secret name
+is not enforced where it matters**, because a credential resolved by name is
+authority obtained without ever asking for the capability that authority
+represents. Both names are required on every arm, including the constructor,
+and the check sits on the methods too: `constructor` returns a plain JSON blob
+and `_listTools` / `_callTool` rebuild the client from whatever blob they are
+handed, so a gate on the constructor alone would be one string literal away
+from being skipped.
 
 Two things are not capabilities and cannot be narrowed by this. **Ownership**
 is a separate check (`user_owns_script`) — a narrowed turn owns exactly what

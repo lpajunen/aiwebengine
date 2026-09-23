@@ -1520,6 +1520,18 @@ interface McpTool {
  * MCP servers (like GitHub Copilot MCP) and use their tools. Authentication
  * is handled via secrets stored in the environment.
  *
+ * Every call here — the constructor included — requires **both**
+ * `use_network` and `read_secrets`. A call to an MCP server is unconditionally
+ * both: an outbound request to the URL you name, carrying the secret you name
+ * as a `Bearer` token. There is no unauthenticated arm, which is why
+ * `read_secrets` is required up front rather than only when a secret is
+ * mentioned, as it is for `fetch`.
+ *
+ * So a `sandbox.run` narrowed out of either cannot mount an MCP server, and
+ * that is deliberate: a credential resolved host-side by name would otherwise
+ * be a way to hold, through a secret, authority the narrowing had just
+ * refused.
+ *
  * IMPORTANT: The McpClient uses a low-level API with static methods. For easier
  * usage, wrap it in a class as shown in scripts/examples/github_mcp_issues.js
  *

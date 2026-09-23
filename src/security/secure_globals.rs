@@ -641,6 +641,27 @@ fn capability_error(
     )
 }
 
+/// What every `McpClient` arm requires before it does anything.
+///
+/// Both, always, and in this order: a call out to an MCP server is a network
+/// request that carries a resolved secret, so an execution holding one of the
+/// two and not the other may not make it. `UseNetwork` is checked first because
+/// it is the coarser refusal — a context that may not call out at all should
+/// hear that rather than be told about a credential it was never going to get
+/// to use.
+///
+/// The `api` names the arm rather than the class, so the message points at the
+/// call the script wrote (`McpClient.callTool`) instead of at the global.
+fn mcp_client_capabilities(api: &'static str, user: &UserContext) -> JsResult<()> {
+    if !user.has_capability(&Capability::UseNetwork) {
+        return Err(capability_error(api, &Capability::UseNetwork, user));
+    }
+    if !user.has_capability(&Capability::ReadSecrets) {
+        return Err(capability_error(api, &Capability::ReadSecrets, user));
+    }
+    Ok(())
+}
+
 /// Reply for a registration call made outside the registration phase.
 ///
 /// Registration APIs stay callable everywhere so that top-level script code
@@ -2314,11 +2335,40 @@ impl SecureGlobalContext {
     }
 
     /// Setup McpClient class for external MCP server connections
+    ///
+    /// Every arm here is gated on both [`Capability::UseNetwork`] and
+    /// [`Capability::ReadSecrets`], because a call to an external MCP server is
+    /// unconditionally both: it opens an outbound request to a caller-chosen
+    /// URL, and it resolves `secret_identifier` host-side and sends it as a
+    /// `Bearer` token. There is no unauthenticated arm to leave ungated —
+    /// [`crate::mcp_client::McpClient`] answers `SecretNotFound` rather than
+    /// sending the request without one.
+    ///
+    /// **The gate has to be on the methods and not only on the constructor.**
+    /// `constructor` returns a plain JSON blob and `_listTools` / `_callTool`
+    /// rebuild the client from whatever blob they are handed, so a check that
+    /// sat only on the constructor would be one line of hand-written JSON away
+    /// from being skipped. The constructor check is there to refuse early,
+    /// where the message names the call the script actually wrote; the two on
+    /// the methods are the enforcement.
+    ///
+    /// This was ungated entirely until now, which made it the way around
+    /// [`super::capabilities::UserContext::attenuated`]: `sandbox.run` narrowed
+    /// to hold neither capability still installed this class, so model-authored
+    /// source could reach any public address and spend the person's API key
+    /// getting there. A capability model enforced everywhere except through a
+    /// secret name is not enforced where it matters.
     fn setup_mcp_client_class(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
         let global = ctx.globals();
         let script_uri_owned = script_uri.to_string();
         // Capture user_id for secret resolution (user_secrets first, then script_secrets)
         let user_id_for_mcp = self.user_context.user_id.clone();
+
+        // One clone per arm below: each closure outlives this function and the
+        // refusal names the caller's own tier, so the context travels with it.
+        let user_ctx_new = self.user_context.clone();
+        let user_ctx_list = self.user_context.clone();
+        let user_ctx_call = self.user_context.clone();
 
         // McpClient constructor
         let mcp_client_constructor = Function::new(
@@ -2327,6 +2377,8 @@ impl SecureGlobalContext {
                   server_url: String,
                   secret_identifier: String|
                   -> JsResult<String> {
+                mcp_client_capabilities("constructor", &user_ctx_new)?;
+
                 // Create MCP client instance (just validate parameters)
                 let _client = crate::mcp_client::McpClient::new(
                     server_url.clone(),
@@ -2359,6 +2411,10 @@ impl SecureGlobalContext {
         let list_tools = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, client_data_json: String| -> JsResult<String> {
+                // Before the blob is even parsed: what it names is a URL and a
+                // secret, and neither is this execution's to reach.
+                mcp_client_capabilities("listTools", &user_ctx_list)?;
+
                 // Parse client data
                 let client_data: serde_json::Value = serde_json::from_str(&client_data_json)
                     .map_err(|e| {
@@ -2431,6 +2487,8 @@ impl SecureGlobalContext {
                   tool_name: String,
                   arguments_json: String|
                   -> JsResult<String> {
+                mcp_client_capabilities("callTool", &user_ctx_call)?;
+
                 // Parse client data
                 let client_data: serde_json::Value = serde_json::from_str(&client_data_json)
                     .map_err(|e| {

@@ -173,6 +173,87 @@ async fn a_narrowed_turn_cannot_reach_the_network() {
     );
 }
 
+/// `fetch` is not the only way out, and the other one used to be ungated.
+///
+/// `McpClient` opens an outbound request to a caller-named URL carrying a
+/// secret resolved host-side, and it was installed into every context without
+/// consulting the capability set at all — so a narrowing that took away
+/// `use_network` and `read_secrets` took away neither on this path.
+///
+/// The call under test is `_callTool` **directly**, with a hand-written client
+/// blob, because that is the shape a check sitting only on the constructor
+/// would miss: `constructor` returns JSON and the methods rebuild the client
+/// from whatever JSON they are given, so the bypass is one string literal.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_narrowed_turn_cannot_reach_an_mcp_server() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let out = value(
+        "test://attenuation/mcp",
+        r#"
+        const run = sandbox.run(`
+            try {
+                McpClient._callTool(
+                    JSON.stringify({
+                        serverUrl: "https://example.com/mcp",
+                        secretIdentifier: "anthropic_key"
+                    }),
+                    "anything",
+                    "{}"
+                );
+                "not refused";
+            } catch (e) {
+                String(e.message || e);
+            }
+        `, { capabilities: ["read_script_data"] });
+        run.value
+        "#,
+    )
+    .await;
+
+    assert!(
+        out.as_str().unwrap_or_default().contains("use_network"),
+        "calling an MCP tool should be refused by name: {}",
+        out
+    );
+}
+
+/// Holding the network is not enough, because the credential is not optional.
+///
+/// This is where `McpClient` differs from `fetch`, which refuses on
+/// `read_secrets` only when the request actually names a secret. Every MCP
+/// call resolves `secretIdentifier` and sends it as a `Bearer` token — there is
+/// no unauthenticated arm — so a turn that may call out but may not spend the
+/// person's credentials may not make one.
+#[tokio::test(flavor = "multi_thread")]
+async fn reaching_an_mcp_server_takes_the_credential_too() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let out = value(
+        "test://attenuation/mcp-secret",
+        r#"
+        const run = sandbox.run(`
+            try {
+                McpClient.constructor("https://example.com/mcp", "anthropic_key");
+                "not refused";
+            } catch (e) {
+                String(e.message || e);
+            }
+        `, { capabilities: ["use_network"] });
+        run.value
+        "#,
+    )
+    .await;
+
+    assert!(
+        out.as_str().unwrap_or_default().contains("read_secrets"),
+        "an MCP client should be refused for the credential: {}",
+        out
+    );
+}
+
 /// Queueing is how an execution outlives itself. A turn that may not write
 /// now must not be able to arrange a write for later, since the task runs in
 /// script context holding what the script holds rather than what this turn

@@ -10,6 +10,7 @@ The MCP Client module enables AIWebEngine scripts to connect to external Model C
 - **Protocol Version**: 2025-11-25 (with backward compatibility)
 - **Caching**: 1-hour TTL cache for tool lists (max 5 servers with LRU eviction)
 - **Security**: Secret-based authentication with zero-exposure to JavaScript
+- **Capabilities**: every call requires both `use_network` and `read_secrets`
 - **Error Handling**: Distinguishes between network/auth errors (exceptions) and protocol errors (error objects)
 
 ## Setup
@@ -263,6 +264,26 @@ The client works with any MCP server that implements:
    - Must support HTTP transport with Bearer token auth
 
 ## Security
+
+### Capabilities
+
+Every arm of `McpClient` — `constructor`, `_listTools` and `_callTool` —
+requires **both** `use_network` and `read_secrets`. A call to an MCP server is
+unconditionally both: an outbound request to the URL you name, carrying the
+secret you name as a `Bearer` token. There is no unauthenticated arm, which is
+why `read_secrets` is required up front rather than only when a secret is
+mentioned, the way it is for `fetch`.
+
+This matters most for [capability attenuation](CAPABILITY_ATTENUATION.md): a
+`sandbox.run` narrowed out of either name cannot mount an MCP server. Secrets
+being invisible to JavaScript (below) is what makes the client safe to hand a
+script; it is not what decides whether _this_ execution should be holding one.
+A credential resolved host-side by name would otherwise be a way to obtain,
+through a secret, exactly the authority a narrowing had just refused.
+
+The check is on the methods and not only on the constructor, because
+`constructor` returns a plain JSON blob and the two methods rebuild the client
+from whatever blob they are handed.
 
 ### Secret Management
 
