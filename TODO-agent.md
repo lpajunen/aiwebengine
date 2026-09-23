@@ -10,6 +10,14 @@ There are two audiences, and they want different things. An **external agent**
 agent** (a script that is itself the agent) is blocked in specific, nameable
 ways, and the list below is those in order of how much each unblocks.
 
+Items 7 and 9 are dated differently from the rest: they track the MCP
+specification rather than something this engine chose, and they were rewritten
+against the [2026-07-28
+revision](https://modelcontextprotocol.io/specification/2026-07-28/changelog),
+which deprecated sampling and replaced server-initiated requests with a pattern
+a POST-only server can serve. Anything here that reads as a protocol constraint
+is worth re-checking against the current revision before it is built.
+
 The agent's own list of what it would build on top is
 [TODO-improvements.md](https://github.com/lpajunen/aiwebengine-agent/blob/main/TODO-improvements.md)
 in that repository. Most of it is script work. What is left over is this.
@@ -228,49 +236,112 @@ rewritten to yield rather than block. Worth being plain that this did not do
 it: an agent fanning out over network calls is served, and one wanting to
 interleave computation with them is not.
 
-### 7. MCP is POST-only — the correctness half is done
+### 7. MCP is POST-only — which the 2026-07-28 revision made the right shape
 
-`/mcp` is `axum::routing::post(mcp_handler)` (`lib.rs:2715`, `:2764`). Still no
-event-stream response, so still no progress notifications during a long tool
-call, no **elicitation**, and no server→client **sampling** — which remains the
-interesting one, because with it a script's MCP tool could ask the _calling_
-agent's model instead of the engine holding an API key at all. That is the
-cleanest answer to "who pays for the tokens": the caller does, with their own
-client, and the engine never sees a credential.
+`/mcp` is `axum::routing::post(mcp_handler)` (`lib.rs:2715`, `:2764`), and the
+handler dispatches `initialize`, `notifications/initialized`, `tools/list`,
+`tools/call`, `prompts/list`, `prompts/get` and `completion/complete`
+(`lib.rs:2229`–`:2559`). No `resources/*`.
 
-Three things this item had wrong or did not say.
+This item used to say the remaining work was an event-stream response, and with
+it sampling and elicitation. The [2026-07-28
+specification](https://modelcontextprotocol.io/specification/2026-07-28/changelog)
+retired both halves of that sentence, and it is worth being exact about which,
+because the conclusion inverts rather than shifts.
 
-**It is smaller than "no SSE transport" implies.** Streamable HTTP requires a
-server to answer `POST` and leaves the `GET` stream _optional_ — a `405` to a
-`GET /mcp`, which is what `routing::post` already returns, is conformant rather
-than a gap. What sampling and elicitation actually need is permission for one
-POST _response_ to be `text/event-stream`, so server→client requests can travel
-on it before the final result. That is a handler-shaped change rather than a
-transport-shaped one, and it does not need a standing channel or session
-management. The item was filed at the wrong size, and the right size moves it
-up rather than down.
+**Sampling is deprecated**, under a twelve-month window, with the suggested
+migration "integrate directly with LLM provider APIs". So the argument this item
+leaned hardest on — a script's tool asking the _calling_ agent's model, the
+caller paying, the engine never holding a credential — is not a thing to build.
+It is also the one place the engine needs no migration: per-person provider keys
+through `{{secret:...}}`, `secretStorage` and `delegation.rs` _are_ what the
+specification is now pointing at, and they answer "who pays for the tokens"
+without a protocol feature. The answer outlived the mechanism.
 
-**The engine was lying to clients about `listChanged`, and that is now fixed.**
-`initialize` advertised `"listChanged": true` for both tools and prompts while
-`grep` found no emitter anywhere in `src/` — the notification travels
-server-to-client and there is no stream to carry it. A conforming client
-therefore cached the tool list and waited to be told otherwise, which is exactly
-backwards here: scripts register tools at runtime, so the list is one of the few
-that genuinely does change. Both now advertise `false`, which makes a client
-re-list instead of trusting a promise the engine cannot keep. When a response
-can be a stream, this flips back — and by then it will be true.
+**Elicitation no longer wants a stream.** Multi Round-Trip Requests (MRTR)
+invert the flow: rather than the server opening a request to the client, the
+server returns `resultType: "input_required"` carrying `inputRequests`, and the
+client retries the _original_ request with `inputResponses` attached, correlated
+by a server-chosen `requestState`. That is request/response, and a POST-only
+server can do all of it. The `notifications/elicitation/complete` notification
+and the `elicitationId` field, both added in `2025-11-25`, are removed for the
+same reason.
 
-**The protocol version was pinned, and that is now fixed.** `initialize` read
-the client's `protocolVersion` into a discarded binding and answered
-`2024-11-05` unconditionally — the pre-Streamable-HTTP revision — while
-`mcp_client.rs` has the engine speaking `2025-11-25` as a _client_, so the two
-halves of one codebase disagreed about what year it was.
-`mcp::negotiate_protocol_version` now answers the client's own version when it
-is one of `SUPPORTED_PROTOCOL_VERSIONS`, the newest we speak when it is not, and
-the oldest to a client that names none — because omitting the field predates the
-field.
+**And the stream this item wanted is gone from the specification.** The HTTP
+`GET` endpoint is removed outright, replaced by `subscriptions/listen` — a
+single long-lived POST-response stream a client opts into for named change
+notifications. SSE resumability (`Last-Event-ID`, event ids) is removed too: a
+broken stream loses its in-flight request and the client re-issues it.
 
-What is left of this item is the stream, and with it sampling and elicitation.
+So the gap this item described closed from the far end. What is left is not
+transport work but catching up with a revision that moved toward where the
+engine already stood — `routing::post` with no session header, instances behind
+LISTEN/NOTIFY, a route index keyed `(host, path, method)` and a request that can
+land on any of them. `2026-07-28` removes `initialize`/`notifications/initialized`
+and the `Mcp-Session-Id` header and makes the protocol stateless; the engine had
+no session affinity to give up.
+
+The work, smallest first, because each step is useful without the next:
+
+1. **`resultType` on every result.** Required on all results in the new
+   revision, and clients **MUST** read its absence from an older server as
+   `"complete"`. Adding `"resultType": "complete"` to the arms in `lib.rs` is
+   safe against every version the engine already speaks, and it is the
+   precondition for anything below.
+
+2. **`ttlMs` and `cacheScope` on `tools/list` and `prompts/list`**
+   (`lib.rs:2285`, `:2471`), which the new `CacheableResult` requires. This is
+   the honest form of the thing `listChanged` was lying about — see below. A
+   freshness hint fits a tool list that scripts rebuild at runtime, where a
+   promise to notify never could; `cacheScope` has to be `"private"`, because
+   `list_tools_for_host` already filters by host and by `native_allowed`, so two
+   callers do not see the same list and a shared intermediary must not treat one
+   answer as everyone's. The specification also asks for a deterministic order,
+   which `mcp.rs:274` should then guarantee rather than leave to iteration.
+
+3. **MRTR, and with it elicitation.** The prize, and reachable now: a script's
+   tool can ask the person a question mid-run over plain POST. It needs
+   `resultType: "input_required"` with `inputRequests`, a `requestState` the
+   engine mints and reads back, and a JS surface for a handler to suspend on —
+   which is the part that wants design, since a host call blocks the script
+   (item 6) and "return a question and be re-entered with its answer" is a
+   different shape from `await`. Closest existing model is `tasks.rs`: work that
+   outlives the call that started it, keyed so it can be resumed.
+
+4. **`2026-07-28` itself.** `SUPPORTED_PROTOCOL_VERSIONS` (`mcp.rs:533`) tops
+   out at `2025-11-25` and `mcp_client.rs:30` speaks the same as a client, so
+   both are one revision behind. This is not a string edit: the new revision
+   carries the protocol version and client capabilities per request in `_meta`
+   (`io.modelcontextprotocol/protocolVersion`, `.../clientCapabilities`),
+   removes the handshake the engine's `initialize` arm _is_, and requires a
+   `server/discover` RPC advertising supported versions, capabilities and
+   identity. `negotiate_protocol_version` (`mcp.rs:544`) keeps its shape — the
+   rule is unchanged — while what calls it moves. Requests also carry
+   `Mcp-Method` and `Mcp-Name` headers so a gateway can route without parsing
+   the body.
+
+5. **The tasks extension**, if long-running agent work over MCP is wanted.
+   Tasks left the core for `io.modelcontextprotocol/tasks`, polling through
+   `tasks/get` with a new `tasks/update` for client-to-server input, and servers
+   may hand back a task handle unsolicited. The engine has the durable half of
+   this already in `tasks.rs`; what it lacks is the MCP-facing mapping.
+
+Two things this item recorded as fixes still hold, for changed reasons.
+
+**`listChanged` is `false`, and now permanently.** It advertised `true` for
+tools and prompts with no emitter anywhere in `src/` — the notification travels
+server-to-client and a POST response had nothing to carry it. The note then said
+"when a response can be a stream, this flips back". It does not: the flip is
+`ttlMs` above. A client that wants to be told rather than to re-poll opts into
+`subscriptions/listen`, which is a separate decision and not what this flag
+meant.
+
+**The protocol version is negotiated rather than pinned.** `initialize` used to
+read the client's `protocolVersion` into a discarded binding and answer
+`2024-11-05` regardless. That is fixed, and the fix survives the revision that
+deletes `initialize`, because the rule — answer the client's own version when we
+speak it, the newest we do when we do not, the oldest to a client that names
+none — is about versions and not about where they arrive.
 
 ### 8. No non-interactive credential — the stance held, the rotation fixed
 
@@ -319,6 +390,51 @@ If this is ever revisited, the question to answer first is not transport but
 whose roles and realm a userless token carries — that, rather than the grant
 mechanics, is what the engine has no answer for.
 
+### 9. The authorization hardening in 2026-07-28, one piece of which the engine already wanted
+
+New, and filed separately from item 7 because none of it is transport and none
+of it waits on the rest of that item.
+
+**Client ID Metadata Documents, in place of Dynamic Client Registration.** The
+new revision deprecates RFC 7591 DCR as a registration mechanism in favour of
+CIMD, keeping DCR only for authorization servers that cannot do the new thing.
+This is the piece worth wanting on its own merits rather than for conformance.
+`CLAUDE.md` already states the weakness plainly: registration is open, so
+holding a `client_id` proves nothing about who created it, and the only thing
+that establishes a client's standing is the per-`(user, client)` consent in
+`oauth_client_grants`. That is a real answer and it stays a real answer — but it
+is the _user's_ judgement doing all the work, with nothing underneath it. CIMD
+puts something underneath: a client is identified by a URL that serves its own
+metadata, so the name carries provenance the engine can check rather than a row
+anybody could have written. The budget on `RateLimitKey::ClientRegistration`
+exists because open registration has nothing better; CIMD is the better thing.
+The engine is the authorization server here (`auth/routes.rs:3724`,
+`REGISTRATION_PATH`, and `client_registration.rs:237`), so this is its call to
+make.
+
+**RFC 9207 `iss`, in both directions.** An authorization server **SHOULD**
+return `iss` on the authorization response, and a client **MUST** validate a
+present `iss` against the recorded issuer before redeeming the code. The engine
+is both: `grep` finds no `iss` on the authorize response today, and
+`mcp_client.rs` is the half that has to do the validating. Worth doing together
+so the two halves do not drift the way `protocolVersion` did.
+
+**Credentials keyed by issuer.** A client **MUST** key persisted credentials by
+the issuer identifier, **MUST NOT** reuse them against a different authorization
+server, and **MUST** re-register when it changes. The engine stores per-user
+remote credentials (`user_git_credentials` is the pattern, though not this
+table), and "which server was this for" has to be part of the key rather than
+implied by the row's existence.
+
+**`application_type` on registration**, which clients must now supply, to keep
+OpenID Connect redirect-URI rules from colliding.
+
+One thing the engine already has right: the resource-not-found error code moved
+from `-32002` to `-32602` to match JSON-RPC, and `lib.rs` was using `-32602`
+throughout already. The new error-code allocation policy reserves `-32020` to
+`-32099` for the specification and grandfathers `-32000`–`-32019`, so nothing
+the engine currently emits has to move.
+
 ## What external agents already have
 
 Worth recording, because it is the part that works: an agent driving the engine
@@ -339,8 +455,12 @@ from outside gets the loop it needs.
 - `/engine/script_updates` and `/engine/script_logs/stream` for "someone else
   changed this" and "my deploy is throwing".
 
-The gap for this audience is item 7 (transport) and item 8 (credential), not
-capability.
+The gap for this audience is not capability, and it is no longer transport
+either. Item 8 is decided; item 7 turned out to be a revision to catch up with
+rather than a feature to build, since `2026-07-28` moved the protocol toward the
+shape `/mcp` already had. What is left for an external agent is conformance with
+that revision — `resultType`, cacheable list results, `server/discover` — and
+the authorization hardening in item 9, which the engine wanted anyway.
 
 One thing this set cannot currently be turned into: an **in-engine** agent that
 edits solutions. Those tools want ownership or an administrator, and
