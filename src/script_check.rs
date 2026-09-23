@@ -596,6 +596,10 @@ fn missing_handler_diagnostic(script_uri: &str, missing: &MissingHandler) -> Dia
         RegistrationKind::GraphqlSubscription => "GraphQL subscription",
         RegistrationKind::McpTool => "MCP tool",
         RegistrationKind::McpPrompt => "MCP prompt",
+        // Reachable only in principle: a resource names an asset rather than a
+        // handler, so it has no handler to be missing. Named anyway, because
+        // this arm exists so that adding a kind makes the compiler ask.
+        RegistrationKind::McpResource => "MCP resource",
         RegistrationKind::ScheduledJob => "scheduled job",
         RegistrationKind::MessageListener => "listener",
     };

@@ -238,10 +238,10 @@ interleave computation with them is not.
 
 ### 7. MCP is POST-only — the revision caught up with, bar MRTR
 
-`/mcp` is `axum::routing::post(mcp_handler)` (`lib.rs:2715`, `:2764`), and the
-handler dispatches `initialize`, `notifications/initialized`, `tools/list`,
-`tools/call`, `prompts/list`, `prompts/get` and `completion/complete`
-(`lib.rs:2229`–`:2559`). No `resources/*`.
+`/mcp` is `axum::routing::post(mcp_handler)`, and the handler dispatches
+`server/discover`, `initialize`, `notifications/initialized`, `tools/list`,
+`tools/call`, `prompts/list`, `prompts/get`, `resources/list`, `resources/read`
+and `completion/complete`.
 
 This item used to say the remaining work was an event-stream response, and with
 it sampling and elicitation. The [2026-07-28
@@ -281,7 +281,7 @@ land on any of them. `2026-07-28` removes `initialize`/`notifications/initialize
 and the `Mcp-Session-Id` header and makes the protocol stateless; the engine had
 no session affinity to give up.
 
-Four of the five steps below are done. `/mcp` is now a **dual-era** server: a
+Five of the six steps below are done; the tasks extension is the one left. `/mcp` is now a **dual-era** server: a
 request carrying `io.modelcontextprotocol/protocolVersion` in its `params._meta`
 is served statelessly under `2026-07-28`, and an `initialize` selects a legacy
 revision exactly as before. The specification allows serving both on one
@@ -371,6 +371,45 @@ endpoint, and the engine had to, because a legacy client has no fall-forward.
    Unstarted. `io.modelcontextprotocol/tasks`, polling through `tasks/get` with
    `tasks/update` for client-to-server input. The engine has the durable half in
    `tasks.rs`; what it lacks is the MCP-facing mapping.
+
+6. ~~**`resources/*`.**~~ Done, and it was not the item this list expected —
+   it came out of asking what the engine already had that MCP had a shape for.
+   `mcpRegistry.registerResource(uri, assetName, metadata)` is
+   `routeRegistry.registerAssetRoute` aimed at `/mcp` rather than at a path:
+   the same asset, published under a name a different protocol reaches.
+
+   The decision worth keeping is that a resource is **asset-backed and not
+   handler-backed**, which is the opposite of how tools and prompts work here
+   and is the whole reason this was cheap. A resource whose content came from a
+   handler would be a tool with a different spelling — free to read a database,
+   call out, and answer differently every time, none of which a client caching
+   by URI has reason to expect. An asset cannot, it changes only when somebody
+   writes it, and `revisions.rs` already records that they did. So there is no
+   handler to dispatch, no execution to budget, and nothing new in
+   `js_engine.rs`: registration records which asset backs the URI and
+   `resources/read` fetches it.
+
+   Reading at call time rather than copying at registration is what makes an
+   asset the script rewrites later reach clients with no redeploy — the same
+   reason `registerAssetRoute` does not copy one into the route index.
+   Registration still checks the asset exists and belongs to the registering
+   script, so a listed resource is never one a client cannot read.
+
+   Two things fell out better than planned. `resources/read` decides `text`
+   against `blob` by whether the bytes **are** text rather than by the declared
+   MIME type — a type on an asset store anybody can write to is a claim, and an
+   image labelled `text/plain` still has to travel as base64 or the JSON is
+   invalid. Which means an **image is reachable over MCP today**, while
+   `FetchResponse.body` is still a string: the binary-body row on the agent's
+   engine backlog is about `fetch`, and this route round it needs nothing.
+   And host filtering came free from `route_index`, with a URI published
+   elsewhere refused identically to one that does not exist, so a URI cannot be
+   used to enumerate what other hosts serve.
+
+   Not done, and both for the same reason a POST response cannot push:
+   `resources/subscribe` and `listChanged`, advertised `false`. A client that
+   wants to know whether a resource moved re-reads it, which is what `ttlMs`
+   is for.
 
 Still untouched, and deliberately: `subscriptions/listen`. It is the opt-in
 long-lived POST-response stream that replaced the `GET` endpoint, and it is what

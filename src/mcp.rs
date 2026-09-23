@@ -46,13 +46,50 @@ pub struct McpPrompt {
     pub script_uri: String,
 }
 
-/// Registry for storing MCP tools and prompts registered from JavaScript
+/// An asset a script has published as an MCP resource.
+///
+/// A resource is the read half of MCP: content a client may fetch by URI and
+/// put in front of a model, as against a tool, which is something it may run.
+/// The engine's answer to it is deliberately not a handler — it is
+/// `routeRegistry.registerAssetRoute` pointed at `/mcp` instead of at a path.
+/// Both publish an asset the script already has under a name callers can
+/// reach; the only difference is which protocol does the reaching, which is
+/// why this carries an `asset_name` rather than a `handler_function`.
+///
+/// That decision is what keeps the surface honest. A resource whose content
+/// came from a handler would be a tool with a different spelling — it could
+/// read a database, call out, and answer differently every time, none of which
+/// a client caching by URI has any reason to expect. An asset cannot: it is
+/// bytes in the repository, it changes only when somebody writes it, and
+/// `revisions.rs` already records that they did.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpResource {
+    /// The resource URI, as clients name it. Chosen by the script.
+    pub uri: String,
+    /// A short human-readable name, shown in a client's resource picker.
+    pub name: String,
+    /// What the resource is for.
+    pub description: String,
+    /// The MIME type, if the script overrode the asset's own.
+    pub mime_type: Option<String>,
+    /// The asset backing it, in the registering script's own asset store.
+    #[serde(skip)]
+    pub asset_name: String,
+    /// The script that registered it.
+    #[serde(skip)]
+    pub script_uri: String,
+}
+
+/// Registry for storing MCP tools, prompts and resources registered from
+/// JavaScript
 #[derive(Debug, Clone, Default)]
 pub struct McpRegistry {
     /// Registered tools (key: tool name, value: tool definition)
     pub tools: HashMap<String, McpTool>,
     /// Registered prompts (key: prompt name, value: prompt definition)
     pub prompts: HashMap<String, McpPrompt>,
+    /// Registered resources (key: resource URI, value: resource definition)
+    pub resources: HashMap<String, McpResource>,
 }
 
 impl McpRegistry {
@@ -96,6 +133,25 @@ impl McpRegistry {
                 prompt_name, script_uri
             );
         }
+
+        // Resources from this script. Same reasoning as the two above: a
+        // registration belongs to the version of the code that declared it, so
+        // re-running `init()` must not leave a resource pointing at an asset
+        // the new version no longer publishes.
+        let resources_to_remove: Vec<String> = self
+            .resources
+            .iter()
+            .filter(|(_, resource)| resource.script_uri == script_uri)
+            .map(|(uri, _)| uri.clone())
+            .collect();
+
+        for resource_uri in resources_to_remove {
+            self.resources.remove(&resource_uri);
+            debug!(
+                "Removed MCP resource '{}' from script '{}'",
+                resource_uri, script_uri
+            );
+        }
     }
 
     /// Register an MCP tool
@@ -128,6 +184,22 @@ impl McpRegistry {
     /// Get a specific prompt by name
     pub fn get_prompt(&self, name: &str) -> Option<&McpPrompt> {
         self.prompts.get(name)
+    }
+
+    /// Register an MCP resource
+    pub fn register_resource(&mut self, uri: String, resource: McpResource) {
+        debug!("Registering MCP resource: {}", uri);
+        self.resources.insert(uri, resource);
+    }
+
+    /// Get all registered resources
+    pub fn get_resources(&self) -> &HashMap<String, McpResource> {
+        &self.resources
+    }
+
+    /// Get a specific resource by URI
+    pub fn get_resource(&self, uri: &str) -> Option<&McpResource> {
+        self.resources.get(uri)
     }
 }
 
@@ -209,6 +281,99 @@ pub fn register_mcp_prompt(
     } else {
         error!("Failed to acquire write lock on MCP registry");
         Err("Failed to acquire write lock on MCP registry".to_string())
+    }
+}
+
+/// Register an MCP resource from JavaScript.
+///
+/// The asset is *not* read here. Registration records which asset backs the
+/// URI and `resources/read` fetches it when somebody asks, so that a resource
+/// answers with what the asset says now rather than with what it said at
+/// `init()` — an asset written after startup, by the script itself or by an
+/// editor, is served without a redeploy. The same reason
+/// `registerAssetRoute` does not copy an asset into the route index.
+pub fn register_mcp_resource(
+    uri: String,
+    name: String,
+    description: String,
+    mime_type: Option<String>,
+    asset_name: String,
+    script_uri: String,
+) {
+    debug!(
+        "Registering MCP resource: {} backed by asset '{}' from script: {}",
+        uri, asset_name, script_uri
+    );
+
+    let resource = McpResource {
+        uri: uri.clone(),
+        name,
+        description,
+        mime_type,
+        asset_name,
+        script_uri,
+    };
+
+    if let Ok(mut registry) = get_registry().write() {
+        registry.register_resource(uri.clone(), resource);
+        debug!(
+            "Successfully registered MCP resource: {} - total resources: {}",
+            uri,
+            registry.get_resources().len()
+        );
+    } else {
+        error!("Failed to acquire write lock on MCP registry");
+    }
+}
+
+/// List all registered MCP resources
+pub fn list_resources() -> Vec<McpResource> {
+    match get_registry().read() {
+        Ok(registry) => registry.get_resources().values().cloned().collect(),
+        Err(_) => {
+            error!("Failed to acquire read lock on MCP registry");
+            Vec::new()
+        }
+    }
+}
+
+/// The resources a client connecting on `host` should see. Filtered like
+/// [`list_tools_for_host`], and sorted for the same reason.
+pub async fn list_resources_for_host(host: &str) -> Vec<McpResource> {
+    let resources = list_resources();
+    let host_scripts = crate::route_index::scripts_for_host(host).await;
+    let mut resources: Vec<McpResource> = match &host_scripts {
+        Some(allowed) => resources
+            .into_iter()
+            .filter(|resource| allowed.contains(&resource.script_uri))
+            .collect(),
+        // Host binding not in force; every script publishes everywhere.
+        None => resources,
+    };
+    resources.sort_by(|a, b| a.uri.cmp(&b.uri));
+    resources
+}
+
+/// The resource `uri` names, if it is published on `host`.
+///
+/// Reading has to repeat the listing's filter for the reason
+/// [`tool_is_available_on_host`] gives: a URI learned somewhere else must not
+/// reach content this host does not publish just by being named. It answers
+/// `None` either way, so "not published here" and "no such resource" are one
+/// reply — a client that could tell them apart could enumerate the resources
+/// of scripts bound to other hosts.
+pub async fn resource_for_host(uri: &str, host: &str) -> Option<McpResource> {
+    let resource = match get_registry().read() {
+        Ok(registry) => registry.get_resource(uri).cloned(),
+        Err(e) => {
+            error!("Failed to read MCP registry for host check: {}", e);
+            return None;
+        }
+    }?;
+    if crate::route_index::script_serves_host(&resource.script_uri, host).await {
+        Some(resource)
+    } else {
+        None
     }
 }
 
@@ -810,16 +975,21 @@ pub fn discover_result(native_tools_allowed: bool) -> serde_json::Value {
         "capabilities": {
             "tools": {},
             "prompts": {},
+            // Advertised unconditionally rather than only when a script has
+            // registered one: the registry is filled at runtime by whatever is
+            // deployed, so "no resources right now" is a listing that comes
+            // back empty, not a server that cannot serve them.
+            "resources": {},
             "completions": {},
         },
         "instructions": if native_tools_allowed {
-            "Scripts hosted by this engine register tools and prompts at runtime, \
-             and this host also exposes the engine's own management tools. Call \
-             tools/list rather than caching a list across deployments; results \
+            "Scripts hosted by this engine register tools, prompts and resources at \
+             runtime, and this host also exposes the engine's own management tools. \
+             Call tools/list rather than caching a list across deployments; results \
              carry a ttlMs saying how long they stay good."
         } else {
-            "Scripts hosted by this engine register tools and prompts at runtime. \
-             Call tools/list rather than caching a list across deployments; \
+            "Scripts hosted by this engine register tools, prompts and resources at \
+             runtime. Call tools/list rather than caching a list across deployments; \
              results carry a ttlMs saying how long they stay good."
         },
         "ttlMs": LIST_CACHE_TTL_MS,

@@ -2369,6 +2369,16 @@ async fn setup_routes(
                             "prompts": {
                                 "listChanged": false
                             },
+                            // `subscribe` is false for the same reason
+                            // `listChanged` is: a subscription is a thing the
+                            // server pushes on, and a POST response has
+                            // nothing to push down. Resources here are
+                            // asset-backed, so a client that wants to know
+                            // whether one moved re-reads it.
+                            "resources": {
+                                "subscribe": false,
+                                "listChanged": false
+                            },
                             // Honest: `completion/complete` is handled below.
                             "completions": {}
                         },
@@ -2713,6 +2723,147 @@ async fn setup_routes(
                         }
                     }
                 }
+            }
+            "resources/list" => {
+                let resources = mcp::list_resources_for_host(&canonical_host).await;
+
+                let resources_list: Vec<serde_json::Value> = resources
+                    .iter()
+                    .map(|resource| {
+                        let mut entry = serde_json::json!({
+                            "uri": resource.uri,
+                            "name": resource.name,
+                            "description": resource.description
+                        });
+                        // Omitted rather than guessed when the script did not
+                        // say: a client is entitled to sniff, and a wrong
+                        // `mimeType` is worse than an absent one.
+                        if let (Some(mime_type), Some(object)) =
+                            (&resource.mime_type, entry.as_object_mut())
+                        {
+                            object.insert(
+                                "mimeType".to_string(),
+                                serde_json::Value::String(mime_type.clone()),
+                            );
+                        }
+                        entry
+                    })
+                    .collect();
+
+                axum::response::Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": rpc_request.id,
+                    "result": mcp::complete(serde_json::json!({
+                        "resources": resources_list,
+                        "ttlMs": mcp::LIST_CACHE_TTL_MS,
+                        "cacheScope": mcp::LIST_CACHE_SCOPE
+                    }))
+                }))
+            }
+            "resources/read" => {
+                #[derive(Deserialize)]
+                struct ResourceReadParams {
+                    uri: String,
+                }
+
+                let params: ResourceReadParams = match rpc_request.params {
+                    Some(p) => match serde_json::from_value(p) {
+                        Ok(params) => params,
+                        Err(e) => {
+                            error!("MCP resources/read: Invalid params: {}", e);
+                            return axum::response::Json(serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "error": {
+                                    "code": -32602,
+                                    "message": format!("Invalid params: {}", e)
+                                },
+                                "id": rpc_request.id
+                            }));
+                        }
+                    },
+                    None => {
+                        return axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "error": {
+                                "code": -32602,
+                                "message": "Invalid params: uri is required"
+                            },
+                            "id": rpc_request.id
+                        }));
+                    }
+                };
+
+                // One refusal for "no such resource" and for "not published on
+                // this host", so that a URI cannot be used to find out what
+                // other hosts serve.
+                let Some(resource) = mcp::resource_for_host(&params.uri, &canonical_host).await
+                else {
+                    return axum::response::Json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32602,
+                            "message": format!("Resource not found: {}", params.uri)
+                        },
+                        "id": rpc_request.id
+                    }));
+                };
+
+                // Read at call time rather than at registration, so the answer
+                // is what the asset says now. Gone means gone: a resource
+                // whose asset has been deleted since `init()` is a dangling
+                // registration, and answering with stale bytes would be worse
+                // than saying so.
+                let Some(asset) =
+                    repository::fetch_asset_async(&resource.script_uri, &resource.asset_name).await
+                else {
+                    return axum::response::Json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32602,
+                            "message": format!(
+                                "Resource '{}' is registered but its asset '{}' no longer exists",
+                                resource.uri, resource.asset_name
+                            )
+                        },
+                        "id": rpc_request.id
+                    }));
+                };
+
+                let mime_type = resource
+                    .mime_type
+                    .clone()
+                    .unwrap_or_else(|| asset.mimetype.clone());
+
+                // `text` or `blob`, decided by whether the bytes are text —
+                // not by the MIME type, which is a claim rather than a fact
+                // and is wrong often enough to matter on an asset store
+                // anybody can write to. An image declared `text/plain` still
+                // has to travel as base64 or the JSON is not valid.
+                let mut contents = serde_json::json!({
+                    "uri": resource.uri,
+                    "mimeType": mime_type
+                });
+                if let Some(object) = contents.as_object_mut() {
+                    match String::from_utf8(asset.content.clone()) {
+                        Ok(text) => {
+                            object.insert("text".to_string(), serde_json::Value::String(text));
+                        }
+                        Err(_) => {
+                            use base64::Engine as _;
+                            let encoded =
+                                base64::engine::general_purpose::STANDARD.encode(&asset.content);
+                            object.insert("blob".to_string(), serde_json::Value::String(encoded));
+                        }
+                    }
+                }
+
+                axum::response::Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": rpc_request.id,
+                    "result": mcp::complete(serde_json::json!({
+                        "contents": [contents]
+                    }))
+                }))
             }
             "prompts/list" => {
                 let prompts = mcp::list_prompts_for_host(&canonical_host).await;

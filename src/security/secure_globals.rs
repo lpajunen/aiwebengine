@@ -283,6 +283,7 @@ pub enum RegistrationKind {
     GraphqlSubscription,
     McpTool,
     McpPrompt,
+    McpResource,
     ScheduledJob,
     MessageListener,
 }
@@ -300,6 +301,7 @@ impl RegistrationKind {
             RegistrationKind::GraphqlSubscription => "graphQLRegistry.registerSubscription",
             RegistrationKind::McpTool => "mcpRegistry.registerTool",
             RegistrationKind::McpPrompt => "mcpRegistry.registerPrompt",
+            RegistrationKind::McpResource => "mcpRegistry.registerResource",
             RegistrationKind::ScheduledJob => "schedulerService",
             RegistrationKind::MessageListener => "dispatcher.registerListener",
         }
@@ -430,6 +432,34 @@ fn extract_route_metadata(
         }
     }
     (tags, summary, description)
+}
+
+/// `{ name, description, mimeType }` off an optional metadata object, for
+/// `mcpRegistry.registerResource`.
+///
+/// Every field is optional and a missing one comes back as `None` rather than
+/// as a default, because the caller decides what to fall back to: the name
+/// falls back to the asset's, and the MIME type falls back to the asset's own
+/// at read time rather than at registration, so an asset re-uploaded as
+/// something else is not described by a type recorded at `init()`.
+fn extract_resource_metadata(
+    metadata: Option<&rquickjs::Object<'_>>,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let mut name = None;
+    let mut description = None;
+    let mut mime_type = None;
+    if let Some(meta) = metadata {
+        if let Ok(value) = meta.get::<_, Option<String>>("name") {
+            name = value;
+        }
+        if let Ok(value) = meta.get::<_, Option<String>>("description") {
+            description = value;
+        }
+        if let Ok(value) = meta.get::<_, Option<String>>("mimeType") {
+            mime_type = value;
+        }
+    }
+    (name, description, mime_type)
 }
 
 /// Secure wrapper for JavaScript global functions that enforces Rust-level validation
@@ -2262,10 +2292,130 @@ impl SecureGlobalContext {
             },
         )?;
 
+        // registerResource function - publishes one of this script's assets as
+        // an MCP resource. Deliberately shaped after
+        // `routeRegistry.registerAssetRoute` rather than after `registerTool`:
+        // what is being published is an asset the script already has, and the
+        // only difference between the two is which protocol reaches it.
+        let user_ctx_resource = user_context.clone();
+        let auditor_resource = auditor.clone();
+        let script_uri_resource = script_uri_owned.clone();
+        let config_resource = config.clone();
+        let register_resource = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  uri: String,
+                  asset_name: String,
+                  metadata: Opt<rquickjs::Object>|
+                  -> JsResult<String> {
+                if !config_resource.registration_phase {
+                    return Ok(registration_inactive("mcpRegistry.registerResource", &uri));
+                }
+
+                // The same capability as the rest of `mcpRegistry`, rather
+                // than the `WriteAssets` its asset-route twin takes: what is
+                // being decided here is whether a solution publishes an MCP
+                // surface, not whether the asset may be written.
+                if let Err(e) = user_ctx_resource
+                    .require_capability(&crate::security::Capability::ManageGraphQL)
+                {
+                    let auditor_clone = auditor_resource.clone();
+                    let user_id = user_ctx_resource.user_id.clone();
+                    tokio::task::spawn(async move {
+                        let _ = auditor_clone
+                            .log_authz_failure(
+                                user_id,
+                                "mcp".to_string(),
+                                "register_resource".to_string(),
+                                "ManageGraphQL".to_string(),
+                            )
+                            .await;
+                    });
+                    return Ok(format!("Error: {}", e));
+                }
+
+                // A resource URI is an opaque identifier to a client, but it
+                // has to be one: something with a scheme, that a client can
+                // round-trip through `resources/read` and display. Anything
+                // shorter than `a:b` is a name that was meant to be a URI.
+                if uri.len() < 3 || uri.len() > 500 {
+                    return Ok("Invalid resource URI: must be 3-500 characters".to_string());
+                }
+                let scheme_end = uri.find(':').unwrap_or(0);
+                if scheme_end == 0 || scheme_end == uri.len() - 1 {
+                    return Ok(format!(
+                        "Invalid resource URI '{}': must carry a scheme, as in \
+                         'docs://handbook' or 'https://example.com/spec'",
+                        uri
+                    ));
+                }
+                if uri.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                    return Ok(format!(
+                        "Invalid resource URI '{}': no whitespace or control characters",
+                        uri
+                    ));
+                }
+
+                // The same two checks `registerAssetRoute` makes, and for the
+                // same reason: an asset name is a relative path, so `..` is
+                // how one script would name another's file.
+                if asset_name.is_empty() || asset_name.len() > 255 {
+                    return Ok("Invalid asset name: must be 1-255 characters".to_string());
+                }
+                if asset_name.contains("..") || asset_name.contains('\\') {
+                    return Ok("Invalid asset name: path characters not allowed".to_string());
+                }
+
+                let (name, description, mime_type) = extract_resource_metadata(metadata.0.as_ref());
+                // A client's resource picker shows the name, so it always has
+                // one — falling back to the asset's own name rather than to
+                // the URI, which is the less readable of the two.
+                let name = name.unwrap_or_else(|| asset_name.clone());
+
+                // Verify the asset exists and belongs to this script, exactly
+                // as `registerAssetRoute` does. Registering a URI that answers
+                // nothing would be a resource a client lists and cannot read.
+                if repository::fetch_asset(&script_uri_resource, &asset_name).is_none() {
+                    return Ok(format!(
+                        "Asset '{}' not found or not owned by script '{}'",
+                        asset_name, script_uri_resource
+                    ));
+                }
+
+                debug!(
+                    user_id = ?user_ctx_resource.user_id,
+                    uri = %uri,
+                    "Secure registerResource called for MCP"
+                );
+
+                if let Some(reply) = config_resource.collect(CollectedRegistration::new(
+                    RegistrationKind::McpResource,
+                    uri.clone(),
+                )) {
+                    return Ok(reply);
+                }
+
+                crate::mcp::register_mcp_resource(
+                    uri.clone(),
+                    name,
+                    description.unwrap_or_default(),
+                    mime_type,
+                    asset_name.clone(),
+                    script_uri_resource.clone(),
+                );
+
+                Ok(format!(
+                    "MCP resource '{}' registered from asset '{}'",
+                    uri, asset_name
+                ))
+            },
+        )?;
+
         // Create mcpRegistry object
         let mcp_registry = rquickjs::Object::new(ctx.clone())?;
         mcp_registry.set("registerTool", register_tool)?;
         mcp_registry.set("registerPrompt", register_prompt)?;
+        mcp_registry.set("registerResource", register_resource)?;
         global.set("mcpRegistry", mcp_registry)?;
 
         // The other half of MCP: asking the caller a question mid-tool.

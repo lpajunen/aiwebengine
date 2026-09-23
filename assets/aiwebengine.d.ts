@@ -71,7 +71,7 @@ declare function init(context?: HandlerContext): void;
  *
  * - `routeRegistry.registerRoute` / `registerAssetRoute` / `registerStreamRoute`
  * - `graphQLRegistry.registerQuery` / `registerMutation` / `registerSubscription`
- * - `mcpRegistry.registerTool` / `registerPrompt`
+ * - `mcpRegistry.registerTool` / `registerPrompt` / `registerResource`
  * - `schedulerService.registerOnce` / `registerRecurring` / `clearAll`
  * - `dispatcher.registerListener`
  *
@@ -1492,6 +1492,67 @@ interface McpRegistry {
     description: string,
     argumentsJson: string,
     handlerFunction: string,
+  ): string;
+
+  /**
+   * Publish one of this script's assets as an MCP resource.
+   *
+   * This is `routeRegistry.registerAssetRoute` aimed at `/mcp` instead of at
+   * a path: the same asset, under a name a different protocol reaches. A
+   * resource is the *read* half of MCP — content a client fetches by URI and
+   * puts in front of a model — as against a tool, which is something it runs.
+   *
+   * It is asset-backed rather than handler-backed on purpose. A resource whose
+   * content came from a handler would be a tool with a different spelling:
+   * free to read a database, call out, and answer differently every time, none
+   * of which a client caching by URI has reason to expect. An asset cannot,
+   * and `revisions.rs` already records every change to one.
+   *
+   * The asset is read when a client asks, not when this is called, so an asset
+   * rewritten later — by the script, or by an editor — is served without a
+   * redeploy. It must already exist and belong to this script at registration,
+   * so that a listed resource is never one a client cannot read.
+   *
+   * Published on the hosts this script publishes on, like every other
+   * registration, and requires `manage_graphql` — the same capability the rest
+   * of `mcpRegistry` takes, since what is being decided is whether the
+   * solution exposes an MCP surface rather than whether the asset may be
+   * written.
+   *
+   * @param uri - How clients name it. Must carry a scheme (`docs://handbook`,
+   *   `https://example.com/spec`), 3-500 characters, no whitespace.
+   * @param assetName - The backing asset, in this script's own asset store.
+   * @param metadata - Optional `{ name, description, mimeType }`. `name`
+   *   defaults to the asset's name; `mimeType` defaults to the asset's own at
+   *   read time, and is omitted from a listing when neither states one, since
+   *   a wrong type is worse than an absent one.
+   * @returns Registration result message
+   * @example
+   * mcpRegistry.registerResource("docs://handbook", "handbook.md", {
+   *   name: "Handbook",
+   *   description: "How the team works",
+   *   mimeType: "text/markdown",
+   * });
+   *
+   * Content that is not valid UTF-8 is served as base64 in `blob` rather than
+   * as `text`, decided by the bytes rather than by the declared type — so an
+   * image asset is reachable over MCP even though `fetch` cannot yet return
+   * one.
+   *
+   * Only takes effect during startup and `init()`. Called from a handler it
+   * returns a message saying nothing was registered, and does not throw.
+   */
+  registerResource(
+    uri: string,
+    assetName: string,
+    metadata?: {
+      /** Shown in a client's resource picker. Defaults to the asset's name. */
+      name?: string;
+      /** What the resource is for. */
+      description?: string;
+      /** Overrides the asset's own MIME type. */
+      mimeType?: string;
+    },
   ): string;
 }
 
