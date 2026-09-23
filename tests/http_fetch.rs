@@ -55,6 +55,7 @@ async fn test_fetch_post_with_json() {
                 headers: Some(headers),
                 body: Some(body.to_string()),
                 timeout_ms: None,
+                ..Default::default()
             },
             None,
             None,
@@ -95,6 +96,7 @@ async fn test_fetch_custom_headers() {
                 headers: Some(headers),
                 body: None,
                 timeout_ms: None,
+                ..Default::default()
             },
             None,
             None,
@@ -208,6 +210,7 @@ async fn test_fetch_decodes_gzip_with_caller_supplied_accept_encoding() {
                 headers: Some(headers),
                 body: None,
                 timeout_ms: None,
+                ..Default::default()
             },
             None,
             None,
@@ -420,6 +423,7 @@ async fn test_fetch_different_methods() {
                 headers: None,
                 body: Some("test data".to_string()),
                 timeout_ms: Some(10000),
+                ..Default::default()
             },
             None,
             None,
@@ -440,6 +444,7 @@ async fn test_fetch_different_methods() {
                 headers: None,
                 body: None,
                 timeout_ms: Some(10000),
+                ..Default::default()
             },
             None,
             None,
@@ -460,6 +465,7 @@ async fn test_fetch_different_methods() {
                 headers: None,
                 body: Some("patch data".to_string()),
                 timeout_ms: Some(10000),
+                ..Default::default()
             },
             None,
             None,
@@ -534,6 +540,7 @@ async fn test_fetch_secret_template_syntax() {
                 headers: Some(headers),
                 body: None,
                 timeout_ms: None,
+                ..Default::default()
             },
             Some(script_uri),
             None,
@@ -591,6 +598,7 @@ async fn test_fetch_secret_inside_a_header_value() {
                 headers: Some(headers),
                 body: None,
                 timeout_ms: None,
+                ..Default::default()
             },
             Some(script_uri),
             None,
@@ -649,6 +657,7 @@ async fn test_fetch_secret_inside_a_url_path() {
                 headers: None,
                 body: None,
                 timeout_ms: None,
+                ..Default::default()
             },
             Some(script_uri),
             None,
@@ -688,6 +697,7 @@ async fn test_a_url_template_is_refused_without_read_secrets() {
         headers: None,
         body: None,
         timeout_ms: None,
+        ..Default::default()
     };
 
     assert!(names_a_secret(
@@ -719,6 +729,7 @@ async fn test_fetch_missing_secret_error() {
                 headers: Some(headers),
                 body: None,
                 timeout_ms: None,
+                ..Default::default()
             },
             None,
             None,
@@ -805,6 +816,7 @@ async fn test_manual_redirect_switches_post_to_get() {
                 headers: None,
                 body: Some("payload".to_string()),
                 timeout_ms: None,
+                ..Default::default()
             },
             None,
             None,
@@ -817,4 +829,109 @@ async fn test_manual_redirect_switches_post_to_get() {
     assert_eq!(response.status, 200);
 
     mock.shutdown().await;
+}
+
+/// Bytes that are not text, which `fetch` could not return at all.
+///
+/// A response body is a `String`, and a body that is not UTF-8 was an error
+/// rather than a lossy decode — the right call for the JSON and HTML nearly
+/// every request fetches, and the reason a photo somebody sends a bot was
+/// unreachable: the bytes arrived, and there was no way to ask for them.
+///
+/// `{ binary: true }` is an option rather than a second field on every
+/// response, because base64 is a third again the size and every other caller
+/// would have paid for it; and rather than a silent fallback, because a binary
+/// body answering as an empty string reads exactly like a server that sent
+/// nothing.
+#[tokio::test]
+async fn a_binary_body_comes_back_as_base64_when_asked_for() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/binary");
+
+    let response = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        client.fetch(
+            url,
+            FetchOptions {
+                binary: true,
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+    })
+    .await
+    .expect("Task panicked")
+    .expect("a binary body should be retrievable");
+
+    assert_eq!(response.status, 200);
+    assert!(
+        response.body.is_empty(),
+        "exactly one of the two carries the answer: {}",
+        response.body
+    );
+
+    use base64::Engine as _;
+    let encoded = response
+        .body_base64
+        .expect("binary was asked for, so the bytes should be here");
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&encoded)
+        .expect("the client should answer with valid base64");
+    assert_eq!(
+        decoded,
+        vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe],
+        "the bytes should survive exactly"
+    );
+
+    mock.shutdown().await;
+}
+
+/// Without the option, the same body is still refused — and the refusal says
+/// how to get it.
+///
+/// The behaviour is deliberately unchanged: a script that believed it was
+/// fetching JSON and got something else should hear about it rather than
+/// receive an empty string. What is new is that the message names the way out,
+/// because this failure is recoverable and a caller cannot guess how.
+#[tokio::test]
+async fn a_binary_body_without_the_option_says_how_to_ask_for_it() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/binary");
+
+    let failure = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        client.fetch(url, FetchOptions::default(), None, None)
+    })
+    .await
+    .expect("Task panicked")
+    .expect_err("a non-UTF-8 body should still be refused by default");
+
+    let message = failure.to_string();
+    assert!(
+        message.contains("binary"),
+        "the refusal should name the option that fixes it: {}",
+        message
+    );
+}
+
+/// The timeout option the type declarations have always documented.
+///
+/// They said `timeout` and serde read `timeout_ms`, so every script that
+/// followed the documentation got the default and no sign its own value had
+/// been dropped. The alias makes the documented name work; the real name goes
+/// on working, which is why this asserts both.
+#[test]
+fn the_documented_timeout_name_is_accepted() {
+    let documented: FetchOptions =
+        serde_json::from_str(r#"{"timeout": 1234}"#).expect("options should parse");
+    assert_eq!(documented.timeout_ms, Some(1234));
+
+    let real: FetchOptions =
+        serde_json::from_str(r#"{"timeout_ms": 1234}"#).expect("options should parse");
+    assert_eq!(real.timeout_ms, Some(1234));
 }

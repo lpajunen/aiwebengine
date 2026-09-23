@@ -628,3 +628,58 @@ async fn closing_a_stream_early_reaches_the_host() {
         "a closed stream must not go back to the host for more"
     );
 }
+
+/// `bodyBase64` reaches JavaScript when the host put it in the envelope, and is
+/// absent when it did not.
+///
+/// The wrapper had a fixed set of fields, so a new one on the Rust side reached
+/// nothing until it was named here — which is the whole of what this asserts.
+/// Whether the transport *produces* it is `http_fetch.rs`'s subject; this is
+/// the seam between the two.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_binary_body_reaches_javascript() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let report = eval(
+        "test://fetch-shape/binary",
+        r#"
+        globalThis.__hostFetch = function (url, optionsJson) {
+          const options = optionsJson ? JSON.parse(optionsJson) : {};
+          // The option has to survive serialization to the host, so the stub
+          // answers on what it actually received rather than on the URL.
+          if (options.binary) {
+            return JSON.stringify({
+              status: 200, ok: true, headers: {},
+              body: "", bodyBase64: "iVBORw0KGgo="
+            });
+          }
+          return JSON.stringify({
+            status: 200, ok: true, headers: {}, body: "not binary"
+          });
+        };
+        (function () {
+          const binary = fetch("https://example.test/photo", { binary: true });
+          const text = fetch("https://example.test/page");
+          return {
+            encoded: binary.bodyBase64,
+            emptied: binary.body,
+            plain: text.body,
+            absent: text.bodyBase64 === undefined,
+          };
+        })()
+        "#,
+    )
+    .await;
+
+    assert!(report.ok, "{:?}", report.outcome.error);
+    let value = report.outcome.value.expect("a value");
+    assert_eq!(value["encoded"], json!("iVBORw0KGgo="));
+    assert_eq!(value["emptied"], json!(""));
+    assert_eq!(value["plain"], json!("not binary"));
+    assert_eq!(
+        value["absent"],
+        json!(true),
+        "an ordinary response must not grow a base64 field it never had"
+    );
+}

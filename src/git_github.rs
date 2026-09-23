@@ -696,6 +696,8 @@ impl GitHubClient {
             headers: Some(headers),
             body: Some(body.to_string()),
             timeout_ms: None,
+            // The binary path here is `fetch_bytes`, which this is not.
+            binary: false,
         };
 
         let response = self

@@ -597,6 +597,9 @@ impl McpClient {
                 headers: Some(headers),
                 body: Some(request_body.to_string()),
                 timeout_ms: None,
+                // JSON-RPC over HTTP; a response that is not text is a protocol
+                // error rather than something to base64 and hand on.
+                binary: false,
             },
             Some(script_uri),
             user_id,

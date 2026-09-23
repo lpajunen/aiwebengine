@@ -23,6 +23,11 @@
       headers: data.headers,
       body: data.body,
 
+      // Present only when the call asked for `{ binary: true }`. The two are
+      // never both populated: one of them carries the answer, so a caller
+      // never has to decide which to believe.
+      bodyBase64: data.bodyBase64,
+
       text: function () {
         return data.body;
       },

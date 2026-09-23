@@ -524,9 +524,9 @@ pub async fn delete_for_script(script_uri: &str) -> Result<u64, sqlx::Error> {
 ///
 /// "At most one running per `(script, lane)`" has to survive three different
 /// ways two tasks in one lane can be claimed at once, and each needs its own
-/// piece of the statement. Any one of them alone leaves a hole, and a lane
-/// key that occasionally lets two run is worse than none — scripts would go
-/// on writing the workaround it exists to remove.
+/// piece of the claim — the last of them two. Any one of those pieces alone
+/// leaves a hole, and a lane key that occasionally lets two run is worse than
+/// none — scripts would go on writing the workaround it exists to remove.
 ///
 /// **A lane already busy.** The `NOT EXISTS` excludes a candidate whose lane
 /// holds a live run. Live, not merely `state = 'running'`: a row left behind
@@ -545,21 +545,58 @@ pub async fn delete_for_script(script_uri: &str) -> Result<u64, sqlx::Error> {
 /// over the whole set. The gap is the `LIMIT` — a lane's second task falling
 /// outside one worker's batch is not locked by it, and the other worker
 /// evaluates `NOT EXISTS` against a snapshot where the first claim has not
-/// committed. `pg_try_advisory_xact_lock` closes it: the lane is held for the
-/// statement that claims from it, so the other worker skips the lane rather
-/// than racing on it. The lock is re-entrant within one transaction, which is
-/// why it does not also solve the case above.
+/// committed. `pg_try_advisory_xact_lock` is the exclusion that closes it: a
+/// lane is held by whichever claim is choosing from it, so the other worker
+/// skips the lane rather than racing on it. The lock is re-entrant within one
+/// transaction, which is why it does not also solve the case above.
+///
+/// # Why claiming is two statements
+///
+/// Exclusion alone does not hold that last case, and a CI run is what said
+/// so. The lock answers "is anybody else choosing from this lane right now";
+/// the `NOT EXISTS` answers "was anything running in it as of this
+/// statement's snapshot" — and under `READ COMMITTED` that snapshot is taken
+/// when the statement begins, which may be before the other worker committed
+/// the very claim the lock was there to protect. Then the two workers miss
+/// each other in both directions: the first holds the lane, so the second's
+/// `pg_try_advisory_xact_lock` fails and that row is filtered out — but the
+/// filter runs per candidate row, so the next row tries again, by which time
+/// the first worker has committed and released, and the lane now looks both
+/// free (the lock is gone) and idle (the snapshot predates the claim). The
+/// window is not an instant but the length of the second worker's own
+/// statement, and every row in the batch is another try, which is why forty
+/// tasks in one lane on a loaded runner found it and two on a laptop never
+/// did.
+///
+/// So the lock is taken in one statement and the decision made in the next,
+/// inside one transaction: choose the candidates and hold their lanes, then
+/// re-check each lane and claim what survives. `READ COMMITTED` takes a fresh
+/// snapshot per statement, so the re-check sees everything that committed
+/// before we held the lane, and nothing can commit into the lane while we
+/// hold it. Exclusion from the lock, freshness from the second snapshot;
+/// neither alone is enough.
 ///
 /// The advisory lock is taken in a `WHERE` alongside a `LIMIT`, so Postgres
 /// may take one for a row the statement never returns. That costs another
 /// worker one tick's sight of that lane and nothing else, since the lock ends
-/// with the statement.
+/// with the transaction — as does a candidate the re-check refuses, which is
+/// left pending for whoever comes round next.
 pub async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocation> {
     let Some(db) = crate::database::get_global_database() else {
         return Vec::new();
     };
 
-    let rows = match sqlx::query(
+    let mut tx = match db.pool().begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            warn!(error = %e, "Failed opening a transaction to claim script tasks");
+            return Vec::new();
+        }
+    };
+
+    // One: the rows this worker means to take, with each lane they belong to
+    // held for the rest of the transaction.
+    let candidates: Vec<Uuid> = match sqlx::query_scalar(
         r#"
         WITH candidates AS (
             SELECT task_id, script_uri, lane, run_at
@@ -587,38 +624,69 @@ pub async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocatio
             ORDER BY run_at ASC
             LIMIT $2
             FOR UPDATE SKIP LOCKED
-        ),
-        one_per_lane AS (
-            SELECT task_id
-            FROM (
-                SELECT
-                    task_id,
-                    lane,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY script_uri, lane
-                        ORDER BY run_at ASC, task_id ASC
-                    ) AS position
-                FROM candidates
-            ) ranked
-            WHERE lane IS NULL OR position = 1
         )
+        SELECT task_id
+        FROM (
+            SELECT
+                task_id,
+                lane,
+                ROW_NUMBER() OVER (
+                    PARTITION BY script_uri, lane
+                    ORDER BY run_at ASC, task_id ASC
+                ) AS position
+            FROM candidates
+        ) ranked
+        WHERE lane IS NULL OR position = 1
+        "#,
+    )
+    .bind(now)
+    .bind(CLAIM_BATCH_SIZE)
+    .fetch_all(&mut *tx)
+    .await
+    {
+        Ok(ids) => ids,
+        Err(e) => {
+            warn!(error = %e, "Failed choosing due script tasks");
+            return Vec::new();
+        }
+    };
+
+    if candidates.is_empty() {
+        let _ = tx.rollback().await;
+        return Vec::new();
+    }
+
+    // Two: with the lanes held, and a snapshot taken after they were, the
+    // busy check finally means what it says.
+    let rows = match sqlx::query(
+        r#"
         UPDATE script_tasks AS tasks
         SET state = 'running',
             locked_by = $3,
             locked_at = $1,
             lock_expires_at = $1 + make_interval(secs => $4),
             updated_at = NOW()
-        FROM one_per_lane
-        WHERE tasks.task_id = one_per_lane.task_id
+        WHERE tasks.task_id = ANY($2)
+          AND (
+            tasks.lane IS NULL
+            OR NOT EXISTS (
+                SELECT 1
+                FROM script_tasks AS busy
+                WHERE busy.script_uri = tasks.script_uri
+                  AND busy.lane = tasks.lane
+                  AND busy.state = 'running'
+                  AND busy.lock_expires_at > $1
+            )
+          )
         RETURNING tasks.task_id, tasks.script_uri, tasks.handler_name, tasks.payload,
                   tasks.attempts, tasks.max_attempts, tasks.kind, tasks.run_as
         "#,
     )
     .bind(now)
-    .bind(CLAIM_BATCH_SIZE)
+    .bind(&candidates)
     .bind(worker_id)
     .bind(crate::lease::TTL_SECONDS)
-    .fetch_all(db.pool())
+    .fetch_all(&mut *tx)
     .await
     {
         Ok(rows) => rows,
@@ -627,6 +695,11 @@ pub async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocatio
             return Vec::new();
         }
     };
+
+    if let Err(e) = tx.commit().await {
+        warn!(error = %e, "Failed committing a claim of due script tasks");
+        return Vec::new();
+    }
 
     rows.iter()
         .map(|row| TaskInvocation {

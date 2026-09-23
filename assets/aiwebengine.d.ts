@@ -1742,6 +1742,27 @@ interface FetchOptions {
    * within the same budget rather than each getting the full timeout.
    */
   timeout?: number;
+
+  /**
+   * Ask for the body as base64 in `bodyBase64` rather than as text in `body`.
+   *
+   * A response body is a string, and one that is not valid UTF-8 is an error
+   * rather than a lossy decode — right for the JSON and HTML nearly every call
+   * fetches, and the reason an image could not be retrieved at all. Set this
+   * when you know the bytes are not text: a photo from a chat platform, a PDF,
+   * an audio file.
+   *
+   * Exactly one of `body` and `bodyBase64` carries the answer. With `binary`,
+   * `body` is the empty string and `text()` and `json()` have nothing to read.
+   *
+   * @example
+   * const photo = fetch(fileUrl, { binary: true });
+   * const block = {
+   *   type: "image",
+   *   source: { type: "base64", media_type: "image/jpeg", data: photo.bodyBase64 },
+   * };
+   */
+  binary?: boolean;
 }
 
 /**
@@ -1761,8 +1782,22 @@ interface FetchResponse {
   /** Whether the status was a 2xx */
   ok: boolean;
 
-  /** Response body as string */
+  /**
+   * Response body as string.
+   *
+   * Empty when the request asked for `{ binary: true }` — the bytes are in
+   * `bodyBase64` instead.
+   */
   body: string;
+
+  /**
+   * Response body as base64, present only when the request asked for
+   * `{ binary: true }`.
+   *
+   * Never populated alongside a non-empty `body`, so there is never a question
+   * of which one to read.
+   */
+  bodyBase64?: string;
 
   /** Response headers */
   headers: Record<string, string>;

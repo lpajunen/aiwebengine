@@ -200,7 +200,7 @@ impl HttpClient {
                 &resolved,
             )
             .map_err(|e| resolved.scrub_error(e))?;
-        self.convert_response(response)
+        self.convert_response(response, options.binary)
     }
 
     /// Fetch a URL and return its body as bytes.
@@ -654,6 +654,7 @@ impl HttpClient {
     fn convert_response(
         &self,
         response: reqwest::blocking::Response,
+        binary: bool,
     ) -> Result<FetchResponse, HttpError> {
         let status = response.status().as_u16();
         let ok = response.status().is_success();
@@ -709,14 +710,32 @@ impl HttpClient {
             decoded
         };
 
+        if binary {
+            use base64::Engine as _;
+            return Ok(FetchResponse {
+                status,
+                headers,
+                body: String::new(),
+                body_base64: Some(base64::engine::general_purpose::STANDARD.encode(&bytes)),
+                ok,
+            });
+        }
+
         // Convert to string (UTF-8)
-        let body = String::from_utf8(bytes)
-            .map_err(|e| HttpError::ResponseEncodingError(e.to_string()))?;
+        let body = String::from_utf8(bytes).map_err(|e| {
+            // The message names the way out, because this failure is
+            // recoverable and the caller cannot guess how: every script that
+            // hit it was fetching something that was never text.
+            HttpError::ResponseEncodingError(format!(
+                "{e} - the body is not text; pass {{ binary: true }} to receive                  it as base64 in bodyBase64"
+            ))
+        })?;
 
         Ok(FetchResponse {
             status,
             headers,
             body,
+            body_base64: None,
             ok,
         })
     }
@@ -1427,8 +1446,31 @@ pub struct FetchOptions {
     pub body: Option<String>,
 
     /// Timeout in milliseconds
-    #[serde(default)]
+    ///
+    /// The alias is not cosmetic: the type declarations have documented this
+    /// option as `timeout` since they were written, while serde has only ever
+    /// read `timeout_ms` — so every script that followed the documentation got
+    /// the default timeout and no indication that its own had been ignored. An
+    /// alias fixes it in the direction that breaks nothing, since callers using
+    /// the real name go on working.
+    #[serde(default, alias = "timeout")]
     pub timeout_ms: Option<u64>,
+
+    /// Ask for the body as base64 rather than as text.
+    ///
+    /// The body of a response is a `String`, and a body that is not UTF-8 is an
+    /// error rather than a lossy decode — right for the JSON and HTML that
+    /// nearly every call here fetches, and the reason an image could not be
+    /// retrieved at all. A photo somebody sends a bot is the case: the bytes
+    /// exist, the caller knows perfectly well they are not text, and there was
+    /// no way to say so.
+    ///
+    /// An option rather than a second field on every response, because base64
+    /// is a third again the size and every other call would pay for it. And an
+    /// option rather than a silent fallback, because a binary body answering as
+    /// an empty string reads exactly like a server that sent nothing.
+    #[serde(default)]
+    pub binary: bool,
 }
 
 fn default_method() -> String {
@@ -1442,6 +1484,7 @@ impl Default for FetchOptions {
             headers: None,
             body: None,
             timeout_ms: None,
+            binary: false,
         }
     }
 }
@@ -1455,8 +1498,17 @@ pub struct FetchResponse {
     /// Response headers
     pub headers: HashMap<String, String>,
 
-    /// Response body as string
+    /// Response body as string. Empty when [`FetchOptions::binary`] was asked
+    /// for — the bytes are in `body_base64` instead.
     pub body: String,
+
+    /// Response body as base64, present only when `binary` was asked for.
+    ///
+    /// Never populated alongside a non-empty `body`: exactly one of the two
+    /// carries the answer, so there is no question of which to believe and no
+    /// caller paying for an encoding it did not want.
+    #[serde(rename = "bodyBase64", skip_serializing_if = "Option::is_none")]
+    pub body_base64: Option<String>,
 
     /// Whether the request was successful (2xx status)
     pub ok: bool,

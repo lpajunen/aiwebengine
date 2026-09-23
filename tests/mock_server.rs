@@ -80,7 +80,8 @@ impl MockServer {
             // A chunked response whose pieces split a multi-byte character
             // down the middle — the boundary a naive decoder turns into
             // U+FFFD.
-            .route("/stream-split", axum::routing::get(handle_stream_split));
+            .route("/stream-split", axum::routing::get(handle_stream_split))
+            .route("/binary", axum::routing::get(handle_binary));
 
         // Bind to random port
         let addr = SocketAddr::from(([127, 0, 0, 1], 0));
@@ -255,6 +256,22 @@ async fn handle_compressed(Path(coding): Path<String>, headers: HeaderMap) -> Re
         .header(header::CONTENT_LENGTH, body.len())
         .body(Body::from(body))
         .expect("build compressed response")
+}
+
+/// Bytes that are not text, which is what a photo or a PDF actually is.
+///
+/// A PNG signature: it begins with `0x89`, which is not a valid UTF-8 start
+/// byte, so a client decoding it as a string fails on the first character
+/// rather than somewhere in the middle. That is the case worth pinning — the
+/// failure is immediate and total, not a few replacement characters.
+async fn handle_binary() -> Response {
+    let body: Vec<u8> = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe];
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "image/png")
+        .header(header::CONTENT_LENGTH, body.len())
+        .body(Body::from(body))
+        .expect("build binary response")
 }
 
 async fn handle_headers(headers: HeaderMap) -> Json<HeadersResponse> {

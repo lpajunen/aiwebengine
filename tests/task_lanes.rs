@@ -11,10 +11,13 @@
 //! one running per `(script, lane)`", and it has to hold against three
 //! different ways two tasks in one lane can be claimed at once — a lane
 //! already busy, two due in one worker's batch, and two workers racing at
-//! the batch boundary. Each needs its own piece of the claim statement, so
-//! each gets its own test here: a lane key that occasionally lets two run is
-//! worse than none, because scripts would go on writing the workaround it
-//! exists to remove.
+//! the batch boundary. Each needs its own piece of the claim, and the
+//! boundary needs two of them: an advisory lock to keep the workers apart,
+//! and a second statement to decide in, since the lock says only that nobody
+//! else is choosing from the lane now while a snapshot says what was running
+//! before it was taken. So each gets its own test here — a lane key that
+//! occasionally lets two run is worse than none, because scripts would go on
+//! writing the workaround it exists to remove.
 
 mod common;
 
@@ -41,6 +44,17 @@ async fn expire_leases(script_uri: &str) {
     .execute(&common::test_pool().await)
     .await
     .expect("the lease should expire");
+}
+
+/// A run that finished. Success deletes the row, and that is what hands the
+/// lane on to the next task in it; the run itself is not what this file is
+/// about, so it is written directly.
+async fn finish_running(script_uri: &str) {
+    sqlx::query("DELETE FROM script_tasks WHERE script_uri = $1 AND state = 'running'")
+        .bind(script_uri)
+        .execute(&common::test_pool().await)
+        .await
+        .expect("the finished run should be cleared");
 }
 
 fn task(script_uri: &str, handler: &str, lane: Option<&str>) -> NewTask {
@@ -155,46 +169,61 @@ async fn a_busy_lane_is_not_claimed_from_again() {
     assert_eq!(claimed(script_uri).await, 1);
 }
 
-/// Two workers claiming at the same moment. `FOR UPDATE` locks every
-/// candidate a statement selected, so most of this is already impossible.
+/// Workers claiming at the same moment, round after round.
 ///
-/// This asserts the invariant rather than the mechanism, and it is worth
-/// being plain about what it does not reach: the window it is aiming at is
-/// sub-millisecond, and two spawned claims against a local database do not
-/// reliably land inside it. What it does catch is a claim that stopped
-/// holding lanes at all. The narrow window has its own test below, which
-/// forces the overlap instead of hoping for it.
+/// `FOR UPDATE` locks every candidate a statement selected, so most of this
+/// is already impossible; what is left is the batch boundary, and the claim
+/// needs both its advisory lock and its second statement to hold it. This is
+/// the test that found that the lock alone did not — and it found it on CI
+/// rather than here, because two claims against a local database often do not
+/// overlap at all and none of this is reachable until they do.
+///
+/// So it is deliberately greedy: four workers per round, several rounds, and
+/// a queue longer than one claim batch throughout. It asserts the invariant
+/// rather than the mechanism, and what it cannot promise is to reproduce the
+/// overlap on any particular machine. What it does promise is that a claim
+/// which stopped holding lanes shows up here.
 #[tokio::test(flavor = "multi_thread")]
-async fn two_workers_claiming_at_once_still_hold_the_lane() {
+async fn workers_claiming_at_once_still_hold_the_lane() {
     setup_env().await;
     let script_uri = "test://lanes/racing";
 
-    // More than one claim batch, deliberately. With fewer, `FOR UPDATE`
-    // locks the whole candidate set and the second worker's `SKIP LOCKED`
-    // passes over all of it — the race cannot happen and the test would
-    // prove nothing. The gap this is aiming at is the batch boundary: a
-    // lane's later tasks fall outside the first worker's selection, so they
-    // are not locked, and the second worker evaluates the lane against a
-    // snapshot in which the first claim has not committed.
-    for _ in 0..40 {
+    // More than one claim batch, and enough to stay that way for every round.
+    // With fewer, `FOR UPDATE` locks the whole candidate set and the other
+    // workers' `SKIP LOCKED` passes over all of it — the race cannot happen
+    // and the test would prove nothing. The gap this is aiming at is the
+    // batch boundary: a lane's later tasks fall outside the first worker's
+    // selection, so they are not locked, and another worker evaluates the
+    // lane against a snapshot in which the first claim has not committed.
+    for _ in 0..60 {
         tasks::enqueue(task(script_uri, "work", Some("person:a")))
             .await
             .expect("accepted");
     }
 
-    // Spawned rather than joined: `join!` polls two futures from one task, so
-    // they take turns at each await and the statements would not overlap.
-    // These two land on the runtime's threads and race for real.
-    let one = tokio::spawn(claim("worker-one"));
-    let two = tokio::spawn(claim("worker-two"));
-    let (one, two) = (one.await.expect("no panic"), two.await.expect("no panic"));
+    for round in 0..8 {
+        // Spawned rather than joined: `join!` polls its futures from one task,
+        // so they take turns at each await and the statements would not
+        // overlap. These land on the runtime's threads and race for real.
+        let workers = ["worker-one", "worker-two", "worker-three", "worker-four"]
+            .map(|worker| tokio::spawn(claim(worker)));
 
-    assert_eq!(
-        one + two,
-        1,
-        "however two workers race, one lane hands out one task"
-    );
-    assert_eq!(claimed(script_uri).await, 1);
+        let mut handed_out = 0;
+        for worker in workers {
+            handed_out += worker.await.expect("no panic");
+        }
+
+        assert_eq!(
+            handed_out, 1,
+            "however workers race, one lane hands out one task (round {round})"
+        );
+        assert_eq!(claimed(script_uri).await, 1);
+
+        // A finished run is what frees the lane, and it is what makes the next
+        // round another race at the boundary rather than the busy-lane case
+        // above.
+        finish_running(script_uri).await;
+    }
 }
 
 /// The batch boundary, forced rather than raced for.

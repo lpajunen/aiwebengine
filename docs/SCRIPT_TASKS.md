@@ -205,11 +205,22 @@ with the scheduler). A worker that dies stops renewing, and its tasks become
 claimable again once the lease lapses — which is how work survives the instance
 that was running it.
 
-Lanes hold across instances too, and that takes three separate pieces of the
+Lanes hold across instances too, and that takes four separate pieces of the
 claim rather than one. A lane already holding a live run is excluded by a
 `NOT EXISTS`. Two tasks of one lane falling in a single batch are cut to one
 by a window function, since neither is running yet and the `NOT EXISTS` cannot
-see them. And two workers claiming at the same moment are kept apart by
+see them. Two workers claiming at the same moment are kept apart by
 `FOR UPDATE`, which locks every candidate a statement selected — except at the
 batch boundary, where a lane's later tasks fall outside one worker's `LIMIT`
 and an advisory lock on the lane closes the gap.
+
+And an advisory lock alone does not close it, which is what a failing CI run
+said. The lock answers "is anybody else choosing from this lane right now",
+while the `NOT EXISTS` answers "was anything running in it as of this
+statement's snapshot" — and under `READ COMMITTED` that snapshot is taken when
+the statement begins, which may be before the other worker committed the claim
+the lock was there to protect. So claiming is two statements in one
+transaction: the first chooses the rows and holds their lanes, the second
+re-checks each lane and claims what survives, with its snapshot taken once the
+locks are held. Exclusion from the lock, freshness from the second statement;
+neither alone is enough.
