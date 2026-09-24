@@ -22,7 +22,16 @@ pub enum SecurityError {
     #[error("Path traversal attempt")]
     PathTraversal,
 
-    #[error("Insufficient capabilities: required {required:?}")]
+    /// Named by [`Capability::as_str`] rather than by `{:?}`, which prints the
+    /// Rust variant. Every other surface spells a capability the snake_case
+    /// way — `sandbox.run` takes it, the JavaScript refusals report it, and it
+    /// is what a caller would have to name to ask for it — so a refusal
+    /// reading `WriteScripts` was the one place the engine used a name its
+    /// caller could not use.
+    #[error(
+        "Insufficient capabilities: required {}",
+        .required.iter().map(Capability::as_str).collect::<Vec<_>>().join(", ")
+    )]
     InsufficientCapabilities { required: Vec<Capability> },
 
     #[error("Operation not allowed: {0}")]
@@ -895,6 +904,34 @@ impl InputValidator {
 
 #[cfg(test)]
 mod tests {
+
+    /// The refusal names what a caller would have to ask for.
+    ///
+    /// `{:?}` printed `WriteScripts`, which is the Rust variant and is not a
+    /// name any surface of the engine accepts. Every other one — `sandbox.run`,
+    /// the JavaScript refusals, the capability names on the wire — spells it
+    /// `write_scripts`.
+    #[test]
+    fn an_insufficient_capability_is_named_the_way_it_is_asked_for() {
+        let one = super::SecurityError::InsufficientCapabilities {
+            required: vec![super::Capability::WriteScripts],
+        };
+        let several = super::SecurityError::InsufficientCapabilities {
+            required: vec![
+                super::Capability::WriteScripts,
+                super::Capability::AdministerEngine,
+            ],
+        };
+
+        assert_eq!(
+            one.to_string(),
+            "Insufficient capabilities: required write_scripts"
+        );
+        assert_eq!(
+            several.to_string(),
+            "Insufficient capabilities: required write_scripts, administer_engine"
+        );
+    }
     use super::*;
 
     #[test]

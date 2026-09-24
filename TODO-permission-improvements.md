@@ -139,8 +139,26 @@ Sub-steps, in order:
 
 1. `UserContext::for_session` — collapse the four duplicated tier matches into
    one place, so elevation has somewhere to land. **← done**
-2. `AppError::ElevationRequired` and its three renderings (HTTP 403/303, MCP
-   JSON-RPC error `data`, JavaScript `Error.capabilities` / `.elevateUrl`).
+2. A capability refusal that keeps its capabilities. **← done**, as
+   `AppError::InsufficientCapabilities` rather than as `ElevationRequired`:
+   naming it for the elevation would have been a promise the engine cannot yet
+   keep, and a refusal that says "go and elevate" with nowhere to go is worse
+   than one that says what is missing. The variant carries the list, renders
+   403 with `required_capabilities` in the response's `context` map, and is
+   where the `elevate` hint is added when there is one. `SecurityError` now
+   names capabilities by `Capability::as_str` as well — `{:?}` printed
+   `WriteScripts`, which is the Rust variant and not a name any surface of the
+   engine accepts.
+
+   Still string-shaped, and each needs its own decision rather than a sweep:
+   `FileReadError::AccessDenied`, `TestRunRefusal::AccessDenied` and
+   `CheckRefusal::AccessDenied` each flatten a capability refusal into a
+   bespoke variant, and `authorize_script_write` returns `Err(String)`. Sharper
+   than any of those: `engine_api.rs:742`, `:805` and `:1070` answer a refusal
+   with `None` or an empty `Vec`, so "you may not see this" and "there is
+   nothing here" are the same answer — which is right for an enumeration that
+   must not leak what exists, and wrong for a caller who could have elevated.
+
 3. `SessionData.elevation` + `reauthenticated_at`, checked in
    `validate_session` **and** `refresh_session` (the two places `realm` is
    checked, for the same reason).
@@ -276,8 +294,8 @@ Not done:
 
 1. `UserContext::for_session` (**done** — the four sites now collapse into one,
    which is where elevation lands).
-2. `AppError::ElevationRequired` + renderings. Useful on its own: every
-   capability refusal in the engine gets structure instead of a string.
+2. A capability refusal that keeps its capabilities (**done**). Useful on its
+   own, and the hook the elevation challenge hangs from.
 3. `crypto.hmacVerify` and friends. Small, independent, and stops every
    solution getting webhook verification wrong.
 4. Session elevation proper (`docs/SESSION_ELEVATION.md`), `administer` gated

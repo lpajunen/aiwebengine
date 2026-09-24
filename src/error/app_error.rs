@@ -25,6 +25,26 @@ pub enum AppError {
     #[error("Authorization failed: {message}")]
     AuthorizationFailed { message: String },
 
+    /// Refused for want of a capability, with the capability still in hand.
+    ///
+    /// Distinct from [`AppError::Security`], which carries a message and
+    /// nothing else. A capability refusal is the one authorization failure
+    /// where the engine knows exactly what was missing, and flattening that
+    /// into prose threw the answer away at the boundary: the caller got a
+    /// sentence to read rather than a name to act on, and nothing downstream
+    /// could tell a missing capability from any other security violation.
+    ///
+    /// Keeping the list is also where session elevation lands
+    /// (`docs/SESSION_ELEVATION.md`). A refusal that names the capability is
+    /// one short step from a refusal that names where to go and get it.
+    #[error(
+        "Insufficient capabilities: required {}",
+        .required.iter().map(crate::security::Capability::as_str).collect::<Vec<_>>().join(", ")
+    )]
+    InsufficientCapabilities {
+        required: Vec<crate::security::Capability>,
+    },
+
     #[error("Session error: {message}")]
     Session { message: String },
 
@@ -144,6 +164,7 @@ impl AppError {
             AppError::JsTimeout { .. } => 504,
             AppError::JsCompilation { .. } => 500,
             AppError::Security { .. } => 403,
+            AppError::InsufficientCapabilities { .. } => 403,
             AppError::Http { .. } => 502,
             AppError::Timeout => 504,
             AppError::Graphql { .. } => 500,
@@ -243,6 +264,23 @@ impl AppError {
             }
             AppError::Database { message, .. } => (ErrorCode::DatabaseError, message.as_str()),
             AppError::Security { message } => (ErrorCode::Forbidden, message.as_str()),
+            AppError::InsufficientCapabilities { required } => {
+                // `context` rather than a new field on every error response:
+                // the map is already there, already omitted when empty, and
+                // already the place a refusal puts what is specific to it.
+                return ErrorResponseBuilder::new(ErrorCode::Forbidden, self.to_string())
+                    .path(path)
+                    .method(method)
+                    .request_id(request_id)
+                    .context(
+                        "required_capabilities",
+                        required
+                            .iter()
+                            .map(|capability| serde_json::Value::from(capability.as_str()))
+                            .collect::<Vec<_>>(),
+                    )
+                    .build();
+            }
             AppError::Http { message } => (ErrorCode::BadGateway, message.as_str()),
             AppError::Timeout => (ErrorCode::GatewayTimeout, "Request timeout"),
             AppError::Graphql { message } => (ErrorCode::InternalServerError, message.as_str()),
@@ -334,8 +372,17 @@ impl From<crate::user_repository::UserRepositoryError> for AppError {
 
 impl From<crate::security::SecurityError> for AppError {
     fn from(err: crate::security::SecurityError) -> Self {
-        AppError::Security {
-            message: err.to_string(),
+        // One variant carries something worth keeping; the rest are prose by
+        // nature. Matched rather than stringified so that every `?` on a
+        // `require_capability` — and there are several, in the log and route
+        // endpoints — arrives at the response still knowing what was missing.
+        match err {
+            crate::security::SecurityError::InsufficientCapabilities { required } => {
+                AppError::InsufficientCapabilities { required }
+            }
+            other => AppError::Security {
+                message: other.to_string(),
+            },
         }
     }
 }
@@ -409,6 +456,71 @@ pub type AppResult<T> = Result<T, AppError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::security::{Capability, SecurityError};
+
+    /// A capability refusal arrives at the response still knowing what was
+    /// missing, rather than as a sentence somebody has to parse.
+    #[test]
+    fn a_capability_refusal_keeps_its_capabilities() {
+        let error = AppError::from(SecurityError::InsufficientCapabilities {
+            required: vec![Capability::WriteScripts, Capability::AdministerEngine],
+        });
+
+        let AppError::InsufficientCapabilities { required } = &error else {
+            panic!("a capability refusal became {:?}", error);
+        };
+        assert_eq!(
+            required,
+            &vec![Capability::WriteScripts, Capability::AdministerEngine]
+        );
+        assert_eq!(error.status_code(), 403);
+    }
+
+    /// Every other security violation is prose by nature and still is.
+    #[test]
+    fn other_security_errors_are_still_security_errors() {
+        let error = AppError::from(SecurityError::PathTraversal);
+
+        assert!(matches!(error, AppError::Security { .. }));
+        assert_eq!(error.status_code(), 403);
+    }
+
+    /// The names a caller could actually ask for, in the message and in the
+    /// response, not the Rust variant `{:?}` used to print.
+    #[test]
+    fn a_refusal_names_capabilities_the_way_callers_spell_them() {
+        let error = AppError::InsufficientCapabilities {
+            required: vec![Capability::WriteScripts],
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "Insufficient capabilities: required write_scripts"
+        );
+
+        let response = error.to_error_response("/engine/write_file", "POST", "req-1");
+        assert_eq!(response.status, 403);
+        assert_eq!(
+            response.error.context.get("required_capabilities"),
+            Some(&serde_json::json!(["write_scripts"]))
+        );
+    }
+
+    /// Several missing capabilities are listed, in the order they were asked
+    /// for: a caller that has to elevate twice should be told so once.
+    #[test]
+    fn several_missing_capabilities_are_all_reported() {
+        let response = AppError::InsufficientCapabilities {
+            required: vec![Capability::ViewLogs, Capability::DeleteLogs],
+        }
+        .to_error_response("/engine/script_logs", "DELETE", "req-2");
+
+        assert_eq!(
+            response.error.context.get("required_capabilities"),
+            Some(&serde_json::json!(["view_logs", "delete_logs"]))
+        );
+    }
 
     #[test]
     fn test_error_status_codes() {
