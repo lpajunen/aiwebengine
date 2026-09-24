@@ -319,7 +319,17 @@ impl UserContext {
             None => return Self::anonymous(),
         };
 
-        let held = super::elevation::held_capabilities(&tier, roles.elevation, now);
+        // Nothing gated is the default and by far the common path, and it is
+        // answered without touching the capability set at all. Going through
+        // the composition anyway would clone the tier's set and rebuild it by
+        // intersection on every request the engine serves, to arrive at the
+        // set it started with.
+        let policy = super::elevation::configured();
+        if !policy.is_active() {
+            return tier;
+        }
+
+        let held = super::elevation::held_under(&policy, &tier, roles.elevation, now);
 
         // The intersection is what keeps the ceiling in the repository, where
         // an administrator put it: an elevation naming `administer_engine`

@@ -182,16 +182,21 @@ Sub-steps, in order:
    inside the window after signing in — see step 5, which is what makes that
    smooth.
 
-5. `prompt=login` threaded into `get_authorization_url` (a fifth argument;
-   `extra_params` is per-provider config and this is per-request). **Next, and
-   it is what makes elevation usable on a federated deployment.** The page
-   deliberately offers no "re-authenticate" button without it: a round trip
-   the provider answers from its own cookie proves nothing, and an engine
-   calling that re-authentication would be claiming something it cannot back.
+5. `prompt=login` threaded into `get_authorization_url`, and the refusal
+   hint. **← done.** The parameter is per request, so it could not be
+   `extra_params`; beside it is `supports_forced_reauthentication`, defaulting
+   to **false**, which is the security property rather than caution — a
+   provider that ignores `prompt` answers from its own session cookie, so the
+   round trip completes with nobody challenged and an engine treating that as
+   re-authentication would be claiming proof it never obtained. Google and
+   Entra ID say true; Apple documents no `prompt` and keeps the default, and
+   the page tells an Apple account to sign out and back in rather than
+   offering a link that would not work.
 
-   The refusal hint belongs here too — `AppError::InsufficientCapabilities`
-   gaining the `elevate` URL that `routes::elevate_url` already builds, so a
-   refused caller is sent to the page rather than left to find it.
+   `AppError::InsufficientCapabilities` now carries an `elevate` URL — but
+   only when the engine gates something _and_ a gated bundle actually supplies
+   one of the missing capabilities. Pointing at the page otherwise would send
+   somebody to press a button that cannot change the answer.
 
 6. `scope=` honoured at `/auth/oauth2/authorize`, re-read on refresh.
 7. `[security.elevation]` with `enabled = false` as the code default, and a

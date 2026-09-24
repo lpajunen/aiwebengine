@@ -138,6 +138,11 @@ pub trait OAuth2Provider: Send + Sync {
     /// * `nonce` - Optional nonce for OIDC providers
     /// * `code_challenge` - Optional PKCE code challenge (base64url-encoded SHA256 of code_verifier)
     /// * `resource` - Optional resource indicator (RFC 8707) - URI of the resource to access
+    /// * `prompt` - Optional OIDC `prompt` value. `Some("login")` asks the
+    ///   provider to challenge the person again rather than answering from its
+    ///   own session, which is what a step-up needs and what an ordinary
+    ///   sign-in must not ask for. Per request, which is why it cannot be
+    ///   `extra_params` — that is per-provider configuration.
     ///
     /// # Returns
     /// The authorization URL to redirect the user to
@@ -147,7 +152,20 @@ pub trait OAuth2Provider: Send + Sync {
         nonce: Option<&str>,
         code_challenge: Option<&str>,
         resource: Option<&str>,
+        prompt: Option<&str>,
     ) -> Result<String, AuthError>;
+
+    /// Whether this provider honours `prompt=login`.
+    ///
+    /// Defaults to **false**, and the default is the security property rather
+    /// than caution. A provider that ignores the parameter answers the
+    /// authorization request from its own session cookie, so the round trip
+    /// completes without the person doing anything — and an engine that
+    /// treated that as re-authentication would be claiming proof of presence
+    /// it never obtained. A provider is asked only if it says it can.
+    fn supports_forced_reauthentication(&self) -> bool {
+        false
+    }
 
     /// Exchange the authorization code for tokens
     ///

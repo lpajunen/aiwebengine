@@ -254,12 +254,19 @@ impl OAuth2Provider for GoogleProvider {
         "google"
     }
 
+    /// Google honours `prompt=login`: it re-challenges even when it holds a live
+    /// session for the account.
+    fn supports_forced_reauthentication(&self) -> bool {
+        true
+    }
+
     fn authorization_url(
         &self,
         state: &str,
         nonce: Option<&str>,
         code_challenge: Option<&str>,
         resource: Option<&str>,
+        prompt: Option<&str>,
     ) -> Result<String, AuthError> {
         let auth_url = self.config.auth_url.as_deref().unwrap_or(GOOGLE_AUTH_URL);
 
@@ -292,6 +299,14 @@ impl OAuth2Provider for GoogleProvider {
             // Resource indicator (RFC 8707)
             if let Some(res) = resource {
                 query.append_pair("resource", res);
+            }
+
+            // Asking the provider to challenge the person again, for a
+            // step-up. Written before `extra_params` so a deployment that
+            // pins its own `prompt` there still wins — that is somebody's
+            // explicit configuration and this is the engine's default.
+            if let Some(prompt) = prompt {
+                query.append_pair("prompt", prompt);
             }
 
             // Add extra parameters
@@ -499,7 +514,7 @@ mod tests {
         let provider = GoogleProvider::new(config).unwrap();
 
         let auth_url = provider
-            .authorization_url("test-state", Some("test-nonce"), None, None)
+            .authorization_url("test-state", Some("test-nonce"), None, None, None)
             .unwrap();
 
         assert!(auth_url.contains("client_id=test-client-id"));

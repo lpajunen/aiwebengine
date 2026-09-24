@@ -43,6 +43,14 @@ pub struct LoginParams {
     /// Optional redirect URL after successful login
     #[allow(dead_code)]
     redirect: Option<String>,
+    /// Ask the provider to challenge the person again, for a step-up.
+    ///
+    /// Only `"login"` means anything; anything else is ignored rather than
+    /// refused, since it arrives in a URL and an unknown prompt is a request
+    /// for the ordinary sign-in the engine was about to do anyway. Refused by
+    /// the manager when the provider cannot honour it, because a bounce that
+    /// nobody is challenged by is not a re-authentication.
+    prompt: Option<String>,
 }
 
 /// Logout parameters
@@ -1883,7 +1891,13 @@ pub async fn start_login(
     let login = oauth_state::PendingLogin::new(&provider, redirect, now);
 
     let auth_url = auth_manager
-        .authorization_url(&provider, &login.nonce, &ip_addr, host.as_deref())
+        .authorization_url(
+            &provider,
+            &login.nonce,
+            &ip_addr,
+            host.as_deref(),
+            params.prompt.as_deref() == Some("login"),
+        )
         .await
         .map_err(|e| ErrorResponse {
             error: "login_failed".to_string(),
@@ -6599,6 +6613,25 @@ pub async fn elevate_page(
         (None, true) => r#"<p class="explain">You signed in a moment ago, so that is proof
         enough this time.</p>"#
             .to_string(),
+        // The provider can be asked to check them again, so offer that rather
+        // than a sign-out: it is one click, it comes back here, and it is a
+        // real challenge rather than a round trip answered from a cookie.
+        (None, false)
+            if auth_manager.can_force_reauthentication(host.as_deref(), &session.provider) =>
+        {
+            format!(
+                r#"<p class="explain">Switching these on needs you to sign in again — that is
+        what asking is for.</p>
+        <p class="switch"><a href="/auth/login/{provider_path}?prompt=login&amp;redirect={back}">Check
+        me again with {provider}</a></p>"#,
+                provider_path = html_attribute(&session.provider),
+                provider = html_escape::encode_text(&session.provider),
+                back = html_attribute(&urlencoding::encode(&here)),
+            )
+        }
+        // It cannot, and the engine does not pretend otherwise. A bounce a
+        // provider answers from its own session proves nothing, so the only
+        // honest instruction is the one that actually re-authenticates.
         (None, false) => format!(
             r#"<p class="explain">This account signs in through {provider}, which the engine
         cannot ask to check you again. <a href="/auth/logout">Sign out and back in</a>, then

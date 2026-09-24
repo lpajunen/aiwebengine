@@ -268,7 +268,7 @@ impl AppError {
                 // `context` rather than a new field on every error response:
                 // the map is already there, already omitted when empty, and
                 // already the place a refusal puts what is specific to it.
-                return ErrorResponseBuilder::new(ErrorCode::Forbidden, self.to_string())
+                let mut builder = ErrorResponseBuilder::new(ErrorCode::Forbidden, self.to_string())
                     .path(path)
                     .method(method)
                     .request_id(request_id)
@@ -278,8 +278,20 @@ impl AppError {
                             .iter()
                             .map(|capability| serde_json::Value::from(capability.as_str()))
                             .collect::<Vec<_>>(),
-                    )
-                    .build();
+                    );
+
+                // Where to go and get it — but only when going there would
+                // actually help. An engine gating nothing has no elevation to
+                // offer, and a capability in no gated bundle is one no
+                // elevation supplies: pointing at the page in either case
+                // would send somebody to press a button that cannot change
+                // the answer, which is worse than a refusal that simply says
+                // what is missing.
+                if let Some(elevate) = elevation_hint(required, path) {
+                    builder = builder.context("elevate", elevate);
+                }
+
+                return builder.build();
             }
             AppError::Http { message } => (ErrorCode::BadGateway, message.as_str()),
             AppError::Timeout => (ErrorCode::GatewayTimeout, "Request timeout"),
@@ -450,6 +462,46 @@ impl From<anyhow::Error> for AppError {
     }
 }
 
+/// Where a refused caller could switch on what they are missing, if anywhere.
+///
+/// `None` when the engine gates nothing, and `None` when every missing
+/// capability lies outside the bundles it does gate — in both cases no
+/// elevation supplies the answer, and a hint would be an invitation to press a
+/// button that changes nothing.
+///
+/// The `redirect` is the path that was refused, so the person lands back on
+/// the thing they were doing rather than on an account page they now have to
+/// navigate out of. It is the caller's own path and is reduced to a local one
+/// by the elevation page's own `safe_redirect_target`, so it cannot be used to
+/// bounce anybody off-site.
+fn elevation_hint(required: &[crate::security::Capability], path: &str) -> Option<String> {
+    let policy = crate::security::elevation::configured();
+    if !policy.is_active() {
+        return None;
+    }
+
+    let gated: std::collections::HashSet<crate::security::Capability> = policy
+        .gated
+        .iter()
+        .flat_map(|grade| grade.capabilities())
+        .collect();
+
+    let supplies: Vec<&str> = required
+        .iter()
+        .filter(|capability| gated.contains(capability))
+        .map(|capability| capability.as_str())
+        .collect();
+
+    if supplies.is_empty() {
+        return None;
+    }
+
+    Some(crate::auth::routes::elevate_url(
+        Some(&supplies.join(",")),
+        Some(path),
+    ))
+}
+
 // Result type alias for convenience
 pub type AppResult<T> = Result<T, AppError>;
 
@@ -520,6 +572,54 @@ mod tests {
             response.error.context.get("required_capabilities"),
             Some(&serde_json::json!(["view_logs", "delete_logs"]))
         );
+    }
+
+    /// An engine that gates nothing offers no elevation, so a refusal does not
+    /// suggest one. Pointing at a page that cannot change the answer is worse
+    /// than a refusal that only says what is missing.
+    #[test]
+    fn a_refusal_suggests_no_elevation_when_nothing_is_gated() {
+        let response = AppError::InsufficientCapabilities {
+            required: vec![Capability::AdministerEngine],
+        }
+        .to_error_response("/engine/users", "GET", "req-3");
+
+        assert!(!response.error.context.contains_key("elevate"));
+        assert!(response.error.context.contains_key("required_capabilities"));
+    }
+
+    /// The hint names the capabilities an elevation would supply and carries
+    /// the path that was refused, so the person lands back on what they were
+    /// doing.
+    #[test]
+    fn the_hint_names_what_would_help_and_where_to_come_back_to() {
+        use crate::security::elevation::{Grade, Policy};
+
+        // `configured()` is a `OnceLock` the process sets at startup, so this
+        // exercises the composition rather than installing a policy: what the
+        // hint is made of is the intersection of the refusal with the gated
+        // bundles, and that is testable directly.
+        let policy = Policy {
+            gated: vec![Grade::Administer],
+            ..Policy::default()
+        };
+        let gated: std::collections::HashSet<Capability> = policy
+            .gated
+            .iter()
+            .flat_map(|grade| grade.capabilities())
+            .collect();
+
+        assert!(gated.contains(&Capability::AdministerEngine));
+        assert!(
+            !gated.contains(&Capability::WriteScripts),
+            "gating administer must not claim to supply an editor's capabilities"
+        );
+
+        let url =
+            crate::auth::routes::elevate_url(Some("administer_engine"), Some("/engine/users"));
+        assert!(url.starts_with("/auth/elevate?"));
+        assert!(url.contains("need=administer_engine"));
+        assert!(url.contains("redirect=%2Fengine%2Fusers"));
     }
 
     #[test]

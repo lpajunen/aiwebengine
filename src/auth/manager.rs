@@ -204,6 +204,17 @@ impl AuthManager {
     /// Falls back to the host-independent registration when the host has no
     /// dedicated instance, which keeps single-host deployments and requests
     /// with an unrecognised Host header on the configured base URL.
+    /// Whether this provider can be asked to challenge somebody again.
+    ///
+    /// Asked by the elevation page before it offers the link, so that a
+    /// provider which would ignore `prompt=login` is never presented as a way
+    /// to prove presence. A name this engine does not serve answers false,
+    /// which is the same answer and the right one.
+    pub fn can_force_reauthentication(&self, host: Option<&str>, provider_name: &str) -> bool {
+        self.get_provider_for_host(host, provider_name)
+            .is_some_and(|provider| provider.supports_forced_reauthentication())
+    }
+
     pub fn get_provider_for_host(
         &self,
         host: Option<&str>,
@@ -267,22 +278,41 @@ impl AuthManager {
     /// * `state` - The opaque value the provider will hand back
     /// * `ip_addr` - Client IP address, for the audit record only
     /// * `host` - Host the login was started on, selecting the redirect URI
+    /// * `force_reauthentication` - Ask the provider to challenge the person
+    ///   again rather than answering from its own session. Refused, rather
+    ///   than quietly ignored, by a provider that cannot: a step-up that
+    ///   completed without anybody being challenged would be the engine
+    ///   claiming proof of presence it never obtained.
     pub async fn authorization_url(
         &self,
         provider_name: &str,
         state: &str,
         ip_addr: &str,
         host: Option<&str>,
+        force_reauthentication: bool,
     ) -> Result<String, AuthError> {
         let provider = self
             .get_provider_for_host(host, provider_name)
             .ok_or_else(|| AuthError::UnsupportedProvider(provider_name.to_string()))?;
 
+        if force_reauthentication && !provider.supports_forced_reauthentication() {
+            return Err(AuthError::UnsupportedProvider(format!(
+                "{} cannot be asked to check somebody again",
+                provider_name
+            )));
+        }
+
         // Generate nonce for OIDC providers
         let nonce = format!("nonce_{}", uuid::Uuid::new_v4());
 
         // Generate authorization URL (no PKCE for now - will be added when needed)
-        let auth_url = provider.authorization_url(state, Some(&nonce), None, None)?;
+        let auth_url = provider.authorization_url(
+            state,
+            Some(&nonce),
+            None,
+            None,
+            force_reauthentication.then_some("login"),
+        )?;
 
         // Log authentication attempt
         self.security_context
@@ -1209,7 +1239,7 @@ mod tests {
     async fn test_unsupported_provider() {
         let manager = create_test_manager().await;
         let result = manager
-            .authorization_url("nonexistent", "state", "127.0.0.1", None)
+            .authorization_url("nonexistent", "state", "127.0.0.1", None, false)
             .await;
         assert!(matches!(result, Err(AuthError::UnsupportedProvider(_))));
     }
@@ -1245,7 +1275,13 @@ mod tests {
             .expect("host registration should succeed");
 
         let auth_url = manager
-            .authorization_url("google", "state", "127.0.0.1", Some("manage.example.com"))
+            .authorization_url(
+                "google",
+                "state",
+                "127.0.0.1",
+                Some("manage.example.com"),
+                false,
+            )
             .await
             .expect("login should start");
         assert!(
@@ -1294,7 +1330,7 @@ mod tests {
         // A Host header naming somewhere we never registered must not steer the
         // flow anywhere new — it gets the configured base URL's provider.
         let auth_url = manager
-            .authorization_url("google", "state", "127.0.0.1", Some("attacker.test"))
+            .authorization_url("google", "state", "127.0.0.1", Some("attacker.test"), false)
             .await
             .expect("login should start");
         assert!(

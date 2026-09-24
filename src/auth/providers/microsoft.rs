@@ -312,12 +312,19 @@ impl OAuth2Provider for MicrosoftProvider {
         "microsoft"
     }
 
+    /// Entra ID honours `prompt=login`, and re-challenges rather than
+    /// answering from its own session.
+    fn supports_forced_reauthentication(&self) -> bool {
+        true
+    }
+
     fn authorization_url(
         &self,
         state: &str,
         nonce: Option<&str>,
         code_challenge: Option<&str>,
         resource: Option<&str>,
+        prompt: Option<&str>,
     ) -> Result<String, AuthError> {
         let auth_url = self.get_auth_url();
 
@@ -346,6 +353,14 @@ impl OAuth2Provider for MicrosoftProvider {
             // Resource indicator (RFC 8707)
             if let Some(res) = resource {
                 query.append_pair("resource", res);
+            }
+
+            // Asking the provider to challenge the person again, for a
+            // step-up. Written before `extra_params` so a deployment that
+            // pins its own `prompt` there still wins — that is somebody's
+            // explicit configuration and this is the engine's default.
+            if let Some(prompt) = prompt {
+                query.append_pair("prompt", prompt);
             }
 
             // Add extra parameters (excluding tenant_id which is in URL)
@@ -541,7 +556,7 @@ mod tests {
         let provider = MicrosoftProvider::new(config).unwrap();
 
         let auth_url = provider
-            .authorization_url("test-state", Some("test-nonce"), None, None)
+            .authorization_url("test-state", Some("test-nonce"), None, None, None)
             .unwrap();
 
         assert!(auth_url.contains("client_id=test-client-id"));
@@ -562,7 +577,7 @@ mod tests {
         assert_eq!(provider.tenant_id, "custom-tenant");
 
         let auth_url = provider
-            .authorization_url("test-state", None, None, None)
+            .authorization_url("test-state", None, None, None, None)
             .unwrap();
         assert!(auth_url.contains("/custom-tenant/oauth2/v2.0/authorize"));
     }

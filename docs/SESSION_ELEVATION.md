@@ -1,29 +1,43 @@
 # Holding Your Roles Only While You Are Using Them
 
-> **Status: partly built.** The mechanism is in —
-> `src/security/elevation.rs`, `SessionData.elevation`,
-> `UserContext::for_session`, and `[security.elevation]`, which gates nothing
-> by default. What is not built is the way to _obtain_ an elevation: the
-> `/auth/elevate` endpoints, re-authentication, the account panel, and the
-> `scope=` an OAuth token would carry. Until those exist, gating a bundle
-> would lock the surface rather than guard it.
+> **Status: built, bar one piece.** `src/security/elevation.rs`,
+> `SessionData.elevation` and `reauthenticated_at`,
+> `UserContext::for_session`, `[security.elevation]` (which gates nothing by
+> default), `GET|POST /auth/elevate`, `POST /auth/elevate/drop`, the panel on
+> `/auth/account`, `prompt=login` through the providers that honour it, and
+> the `elevate` hint a refusal carries.
+>
+> **Not built:** the `scope=` an OAuth2 token would carry, so a `/mcp` bearer
+> token is still minted at its holder's full tier. That is the piece the agent
+> work depends on.
 >
 > Two things below were decided differently once written. There is no separate
 > `enabled` flag — `gated` empty is the whole of "off", because "enabled with
 > nothing gated" and "disabled" are the same engine. And the variant that
 > carries a refusal is `AppError::InsufficientCapabilities` rather than
 > `ElevationRequired`, since a refusal pointing at a door that does not exist
-> is worse than one naming what is missing; the `elevate` hint joins it when
-> there is one to give.
+> is worse than one naming what is missing.
+>
+> Apple accounts cannot step up: Sign in with Apple documents no `prompt`, so
+> `supports_forced_reauthentication` answers false for it and the page says so
+> rather than bouncing somebody through a round trip that proves nothing.
 
 ```
 POST /engine/write_file          →  403
 {
-  "error": "elevation_required",
-  "capabilities": ["write_scripts"],
-  "elevate": "/auth/elevate?need=write_scripts&redirect=%2Feditor"
+  "error": { "code": "Forbidden",
+             "message": "Insufficient capabilities: required write_scripts",
+             "context": {
+               "required_capabilities": ["write_scripts"],
+               "elevate": "/auth/elevate?need=write_scripts&redirect=%2Feditor"
+             } }
 }
 ```
+
+The `elevate` hint appears only when the engine gates something _and_ a gated
+bundle supplies one of the missing capabilities. Otherwise the refusal names
+what is missing and stops there, because pointing at a page that cannot change
+the answer is worse than not pointing anywhere.
 
 A session carries the roles it was minted with and nothing narrows them
 afterwards. Sign in as an administrator and every request for the next thirty

@@ -331,6 +331,11 @@ impl OAuth2Provider for AppleProvider {
         nonce: Option<&str>,
         code_challenge: Option<&str>,
         resource: Option<&str>,
+        // Sign in with Apple documents no `prompt`, so there is nothing to
+        // send and `supports_forced_reauthentication` stays at its default of
+        // false — an Apple account cannot step up, and the page says so rather
+        // than bouncing somebody through a round trip that proves nothing.
+        _prompt: Option<&str>,
     ) -> Result<String, AuthError> {
         let auth_url = self.config.auth_url.as_deref().unwrap_or(APPLE_AUTH_URL);
 
@@ -563,7 +568,7 @@ mod tests {
         let provider = AppleProvider::new(config).unwrap();
 
         let auth_url = provider
-            .authorization_url("test-state", Some("test-nonce"), None, None)
+            .authorization_url("test-state", Some("test-nonce"), None, None, None)
             .unwrap();
 
         assert!(auth_url.contains("client_id=com.example.service"));
