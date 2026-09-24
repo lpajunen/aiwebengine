@@ -264,6 +264,11 @@ pub struct CreateSessionParams {
     pub audience: Option<String>,
     /// The host the account is a principal on, read from the user record.
     pub realm: String,
+    /// What this credential switched on beyond the floor, if anything.
+    ///
+    /// `None` for every browser login, which is the floor. Only a token minted
+    /// from a consented `scope` arrives carrying one.
+    pub elevation: Option<super::elevation::Elevation>,
 }
 
 /// What a session was minted against, so a token presented from somewhere else
@@ -538,9 +543,11 @@ impl SecureSessionManager {
             refresh_token: params.refresh_token.clone(),
             audience: params.audience.clone(),
             realm: Some(params.realm.clone()),
-            // A fresh session starts at the floor. Signing in is not, on its
-            // own, a statement that you intend to administer anything.
-            elevation: None,
+            // A browser login starts at the floor: signing in is not, on its
+            // own, a statement that you intend to administer anything, and
+            // `/auth/elevate` is where a browser says so. A token arrives
+            // carrying what its consent screen named.
+            elevation: params.elevation.clone(),
             // Signing in *is* proof of presence, so a person who elevates
             // straight after does not authenticate twice in a row.
             reauthenticated_at: Some(now),
@@ -1320,6 +1327,7 @@ mod tests {
             refresh_token: None,
             audience: None,
             realm: "test.example.com".to_string(),
+            elevation: None,
         };
 
         let token = manager.create_session(params).await.unwrap();
@@ -1364,6 +1372,7 @@ mod tests {
             refresh_token: None,
             audience: None,
             realm: "test.example.com".to_string(),
+            elevation: None,
         };
 
         // A fresh session starts at the floor: signing in is not by itself a
@@ -1451,6 +1460,7 @@ mod tests {
             refresh_token: None,
             audience: None,
             realm: "test.example.com".to_string(),
+            elevation: None,
         };
 
         let token = manager.create_session(params).await.unwrap();
@@ -1492,6 +1502,7 @@ mod tests {
             refresh_token: None,
             audience: Some("test.example.com/mcp".to_string()),
             realm: "test.example.com".to_string(),
+            elevation: None,
         };
 
         let token = manager.create_session(params).await.unwrap();
@@ -1536,6 +1547,7 @@ mod tests {
                     refresh_token: None,
                     audience: None,
                     realm: "test.example.com".to_string(),
+                    elevation: None,
                 };
                 manager.create_session(params).await.unwrap();
             }
@@ -1567,6 +1579,7 @@ mod tests {
             refresh_token: None,
             audience: None,
             realm: "test.example.com".to_string(),
+            elevation: None,
         };
 
         let token = manager.create_session(params).await.unwrap();

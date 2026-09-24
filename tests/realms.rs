@@ -49,6 +49,7 @@ fn params(realm: &str) -> CreateSessionParams {
         refresh_token: None,
         audience: None,
         realm: realm.to_string(),
+        elevation: None,
     }
 }
 

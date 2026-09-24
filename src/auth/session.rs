@@ -24,6 +24,13 @@ pub struct CreateAuthSessionParams {
     pub audience: Option<String>,
     /// The host this account is a principal on, read from the user record.
     pub realm: String,
+    /// What this credential switched on beyond the floor, if anything.
+    ///
+    /// Only the OAuth2 token endpoint sets it, from the `scope` the person
+    /// consented to. A browser login mints none: signing in is not a statement
+    /// that you mean to administer anything, and a browser has `/auth/elevate`
+    /// for when it is.
+    pub elevation: Option<crate::security::elevation::Elevation>,
 }
 
 /// Authentication session (user-facing)
@@ -103,6 +110,7 @@ impl AuthSessionManager {
             refresh_token: params.refresh_token,
             audience: params.audience,
             realm: params.realm,
+            elevation: params.elevation,
         };
 
         let token = self
@@ -324,6 +332,7 @@ mod tests {
                 refresh_token: None,
                 audience: None,
                 realm: "test.example.com".to_string(),
+                elevation: None,
             })
             .await
             .unwrap();
@@ -362,6 +371,7 @@ mod tests {
                 refresh_token: None,
                 audience: None,
                 realm: "test.example.com".to_string(),
+                elevation: None,
             })
             .await
             .unwrap();
@@ -410,6 +420,7 @@ mod tests {
                     refresh_token: None,
                     audience: None,
                     realm: "test.example.com".to_string(),
+                    elevation: None,
                 })
                 .await
                 .unwrap();
@@ -439,6 +450,7 @@ mod tests {
                 refresh_token: None,
                 audience: None,
                 realm: "test.example.com".to_string(),
+                elevation: None,
             })
             .await
             .unwrap();

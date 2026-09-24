@@ -50,6 +50,7 @@ async fn test_session_lifecycle() {
         refresh_token: None,
         audience: None,
         realm: TEST_HOST.to_string(),
+        elevation: None,
     };
     let token = manager.create_session(params).await.unwrap();
 
@@ -103,6 +104,7 @@ async fn test_session_fingerprint_user_agent_mismatch() {
         refresh_token: None,
         audience: None,
         realm: TEST_HOST.to_string(),
+        elevation: None,
     };
     let token = manager.create_session(params).await.unwrap();
 
@@ -138,6 +140,7 @@ async fn test_session_ip_change_tolerance() {
         refresh_token: None,
         audience: None,
         realm: TEST_HOST.to_string(),
+        elevation: None,
     };
     let token = manager.create_session(params).await.unwrap();
 
@@ -178,6 +181,7 @@ async fn test_concurrent_session_limit() {
                 refresh_token: None,
                 audience: None,
                 realm: "test.example.com".to_string(),
+                elevation: None,
             };
             manager.create_session(params).await.unwrap();
         }
@@ -214,6 +218,7 @@ async fn test_session_encryption() {
         audience: None,
         user_agent: "Mozilla/5.0".to_string(),
         realm: TEST_HOST.to_string(),
+        elevation: None,
     };
     let token = manager.create_session(params).await.unwrap();
 
@@ -252,6 +257,7 @@ async fn test_refresh_session_extends_expiry() {
         refresh_token: None,
         audience: None,
         realm: TEST_HOST.to_string(),
+        elevation: None,
     };
 
     let token = manager.create_session(params).await.unwrap();
@@ -288,6 +294,7 @@ async fn test_refresh_session_rejects_after_absolute_max_age() {
         refresh_token: None,
         audience: None,
         realm: TEST_HOST.to_string(),
+        elevation: None,
     };
 
     let token = manager.create_session(params).await.unwrap();
@@ -540,6 +547,7 @@ async fn test_full_auth_flow_simulation() {
         refresh_token: None,
         audience: None,
         realm: TEST_HOST.to_string(),
+        elevation: None,
     };
     let session_token = session_manager.create_session(params).await.unwrap();
     println!("Session created: {}", session_token.token);
@@ -606,6 +614,7 @@ async fn test_concurrent_users_isolation() {
             refresh_token: None,
             audience: None,
             realm: "test.example.com".to_string(),
+            elevation: None,
         };
         let token = session_manager.create_session(params).await.unwrap();
         tokens.push((user, token));

@@ -43,6 +43,7 @@ fn params(user: &str) -> CreateSessionParams {
         refresh_token: None,
         audience: None,
         realm: TEST_HOST.to_string(),
+        elevation: None,
     }
 }
 

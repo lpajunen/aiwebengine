@@ -235,6 +235,7 @@ fn session_params(user_id: &str) -> CreateSessionParams {
         refresh_token: None,
         audience: None,
         realm: REALM.to_string(),
+        elevation: None,
     }
 }
 

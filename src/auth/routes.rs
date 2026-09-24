@@ -4315,6 +4315,85 @@ async fn consent_already_given(
     )
 }
 
+/// The elevation a token carries, from the scope its consent named.
+///
+/// `None` when the engine gates nothing, because then there is nothing to
+/// elevate and a token claiming an elevation would be carrying a fact about a
+/// policy this engine does not have. `None` too when the scope names no
+/// bundle, which is every ordinary OAuth request.
+fn token_elevation(
+    scope: Option<&str>,
+    max_session_age_secs: u64,
+) -> Option<crate::security::elevation::Elevation> {
+    use crate::security::elevation;
+
+    if !elevation::configured().is_active() {
+        return None;
+    }
+
+    let grades = elevation::grades_in_scope(scope);
+    if grades.is_empty() {
+        return None;
+    }
+
+    let now = Utc::now();
+    Some(elevation::Elevation::for_token(
+        &grades,
+        now + chrono::Duration::seconds(max_session_age_secs as i64),
+        now,
+    ))
+}
+
+/// The same, for a refresh: the narrower of what the token holds and what the
+/// person still consents to.
+///
+/// A consent row that cannot be read is treated as no consent. The failure
+/// direction matters and there is only one safe one — a database hiccup must
+/// not be a way to keep an elevation alive, and losing one costs a client a
+/// re-authorization it can perform.
+async fn token_elevation_for_refresh(
+    pool: &PgPool,
+    user_id: &str,
+    client_id: &str,
+    token_scope: Option<&str>,
+    max_session_age_secs: u64,
+) -> Option<crate::security::elevation::Elevation> {
+    use crate::security::elevation;
+
+    if !elevation::configured().is_active() {
+        return None;
+    }
+
+    let consented: Option<String> = sqlx::query_scalar(
+        "SELECT scope FROM oauth_client_grants WHERE user_id = $1 AND client_id = $2",
+    )
+    .bind(user_id)
+    .bind(client_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or_else(|e| {
+        tracing::error!(
+            "Could not read the consent while refreshing for {}: {}",
+            user_id,
+            e
+        );
+        None
+    })
+    .flatten();
+
+    let grades = elevation::grades_in_both(token_scope, consented.as_deref());
+    if grades.is_empty() {
+        return None;
+    }
+
+    let now = Utc::now();
+    Some(elevation::Elevation::for_token(
+        &grades,
+        now + chrono::Duration::seconds(max_session_age_secs as i64),
+        now,
+    ))
+}
+
 /// Record what a person just approved, replacing whatever they approved before.
 ///
 /// Stored as approved rather than merged with the previous grant: a client that
@@ -4418,9 +4497,24 @@ fn render_consent_page(
 
     let scope_block = match validated.scope.as_deref() {
         Some(scope) => {
+            // A scope value that names an elevation bundle is rendered in the
+            // words the elevation page uses, because it means the same thing
+            // and this is the same decision: `administer` in a monospace list
+            // beside `openid` reads as protocol furniture, and it is the one
+            // line on this page somebody actually has to weigh.
             let items = scope
                 .split_whitespace()
-                .map(|s| format!("<li><code>{}</code></li>", html_escape::encode_text(s)))
+                .map(
+                    |value| match crate::security::elevation::Grade::parse(value) {
+                        Some(grade) => format!(
+                            r#"<li><strong>{}</strong></li>"#,
+                            html_escape::encode_text(grade.describe())
+                        ),
+                        None => {
+                            format!("<li><code>{}</code></li>", html_escape::encode_text(value))
+                        }
+                    },
+                )
                 .collect::<String>();
             format!(
                 r#"<div class="detail"><span class="detail-label">Access requested</span><ul class="scopes">{}</ul></div>"#,
@@ -5326,6 +5420,17 @@ pub async fn oauth2_token(
         refresh_token: None,
         realm: identity.realm,
         audience: audience.clone(),
+        // What the person consented to on the way here. The bundles are read
+        // out of the scope that travelled with the code, so a client cannot
+        // ask for more at redemption than it was approved for at consent.
+        //
+        // It lasts as long as the session can rather than the step-up ceiling:
+        // a program holds a credential and cannot be asked to type a password
+        // in half an hour, and the proof of presence was the consent screen.
+        elevation: token_elevation(
+            code_data.scope.as_deref(),
+            oauth2_state.auth_manager.config().max_session_age,
+        ),
     };
 
     match oauth2_state
@@ -5507,6 +5612,23 @@ async fn handle_refresh_token_grant(
         // The audience the original authorization was for, never re-derived
         // from this request: refreshing must not widen where a token reaches.
         audience: grant.audience.clone(),
+        // Re-read, for the reason the roles above are. A session carries what
+        // it was minted with, so a refresh is the moment a withdrawal takes
+        // effect — and an elevation copied forward would make a refresh token
+        // a way to go on holding authority the person has taken back.
+        //
+        // The narrower of two: what this token was issued for, and what the
+        // person consents to now. Either alone leaves one side open — the
+        // first would carry a withdrawn grant, the second would let a narrow
+        // token widen because the consent is wide.
+        elevation: token_elevation_for_refresh(
+            &oauth2_state.pool,
+            &grant.user_id,
+            &client.client_id,
+            grant.scope.as_deref(),
+            oauth2_state.auth_manager.config().max_session_age,
+        )
+        .await,
     };
 
     let session_token = match oauth2_state

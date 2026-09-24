@@ -55,17 +55,24 @@ This is written up from the agent's side in
 `../aiwebengine-agent/TODO-improvements.md`, section "The engine is already an
 MCP server". It is a design decision to make rather than drift into.
 
-### 2.2 There is no smaller credential to give it
+### 2.2 There is no smaller credential to give it — **fixed**
 
-A session carries roles, not scopes (`SessionData.is_admin` / `is_editor`,
-`src/security/session.rs:168`). `oauth_client_grants.scope` is recorded at
-consent (`src/auth/routes.rs:4198`) and **gates nothing** — it is read only to
-compare a new request against a stored grant.
+A session carried roles and not scopes, and `oauth_client_grants.scope` was
+recorded at consent and gated nothing — read only to compare a new request
+against a stored grant. So the minimum credential the engine could mint was
+"everything that person can do on that host": write any script they own **and**
+`list_users`, `add_user_role`, `write_secret`, `eval_script`. "My scripts, not
+the user table" was not expressible.
 
-So the minimum credential the engine can mint is "everything that person can do
-on that host": write any script they own **and** `list_users`, `add_user_role`,
-`write_secret`, `eval_script`. "My scripts, not the user table" is not
-expressible.
+It is now. A session carries an elevation (step 4 of the plan below), and a
+scope naming a bundle becomes the minted token's — so a token can be issued at
+less than its holder's tier, and `administer` is something a client has to be
+consented to rather than something it inherits.
+
+**This is the piece the agent work waited on.** A script storing a `/mcp` token
+now stores one bounded by what its owner approved, which is what stops the
+laundering in 2.1 from being unbounded: the delegation cap still does not reach
+an outbound bearer header, but the header no longer carries everything.
 
 ### 2.3 The refresh token has nowhere safe to live
 
@@ -198,7 +205,21 @@ Sub-steps, in order:
    one of the missing capabilities. Pointing at the page otherwise would send
    somebody to press a button that cannot change the answer.
 
-6. `scope=` honoured at `/auth/oauth2/authorize`, re-read on refresh.
+6. `scope=` honoured at `/auth/oauth2/authorize`, re-read on refresh. **←
+   done.** A bundle named in the scope becomes the minted token's elevation,
+   with `Method::Consent` — the consent screen is the proof of presence,
+   because a program holds a credential and cannot be asked to type a password
+   in half an hour. It lasts as long as the session can rather than being held
+   to `max_minutes`, which is the ceiling on a step-up in a browser.
+
+   Refreshing takes the **narrower** of what the token was issued for and what
+   the person consents to now. Either alone leaves a hole: the token's own
+   scope would carry a grant that has since been withdrawn, and the stored
+   consent alone would let a narrow token widen because the consent is wide. A
+   consent row that cannot be read counts as no consent — a database hiccup
+   must not keep an elevation alive, and losing one costs a client a
+   re-authorization it can perform.
+
 7. `[security.elevation]` with `enabled = false` as the code default, and a
    `gated` list so `administer` can move before `author`.
 

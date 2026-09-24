@@ -48,6 +48,7 @@ fn params(audience: Option<&str>) -> CreateSessionParams {
         refresh_token: None,
         audience: audience.map(str::to_string),
         realm: HOST.to_string(),
+        elevation: None,
     }
 }
 

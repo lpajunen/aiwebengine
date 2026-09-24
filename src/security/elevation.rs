@@ -130,6 +130,43 @@ impl Grade {
     }
 }
 
+/// The bundles named in an OAuth2 `scope`.
+///
+/// A token is a session, so until this existed the smallest credential the
+/// engine could mint carried its holder's whole authority — which is what made
+/// a stored `/mcp` token a way for a script to hold, through a credential,
+/// authority the capability model refuses to hand it directly.
+///
+/// Scope values that are not bundles are ignored rather than refused. A client
+/// sends `openid email profile` alongside whatever it wants, and an
+/// authorization request is not the place to argue about vocabulary — the
+/// engine reads what it understands and the rest means nothing to it either
+/// way.
+pub fn grades_in_scope(scope: Option<&str>) -> Vec<Grade> {
+    let mut grades: Vec<Grade> = scope
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter_map(Grade::parse)
+        .collect();
+    grades.sort_unstable();
+    grades.dedup();
+    grades
+}
+
+/// The bundles two scopes both name.
+///
+/// Refreshing composes the token's own scope with the consent currently
+/// recorded, and takes the narrower: the token must not widen past what it was
+/// issued for, and it must not go on carrying what the person has since
+/// withdrawn. Either alone leaves one of those open.
+pub fn grades_in_both(token_scope: Option<&str>, consented_scope: Option<&str>) -> Vec<Grade> {
+    let consented = grades_in_scope(consented_scope);
+    grades_in_scope(token_scope)
+        .into_iter()
+        .filter(|grade| consented.contains(grade))
+        .collect()
+}
+
 /// How the person proved they were present when the elevation was granted.
 ///
 /// Recorded for the audit line rather than checked: by the time an elevation
@@ -187,6 +224,36 @@ impl Elevation {
             granted_at: now,
             expires_at: now + Duration::minutes(configured().bounded_minutes(minutes)),
             method,
+        }
+    }
+
+    /// An elevation for a token, lasting as long as the token can.
+    ///
+    /// Deliberately not bounded by [`Policy::max_minutes`], which is the
+    /// ceiling on a *step-up*: a person who elevates in a browser can be asked
+    /// again in half an hour, and a program cannot — it holds a credential and
+    /// has no way to type a password. Making an agent re-elevate on that
+    /// schedule would make the feature unusable rather than safe.
+    ///
+    /// What bounds it instead is everything that bounds the token: the
+    /// session's own absolute age, the access token's shorter life, and the
+    /// fact that refreshing mints a fresh session whose elevation is rebuilt
+    /// from the consent as it stands then. The proof of presence is the
+    /// consent screen, which the person was at.
+    pub fn for_token(grades: &[Grade], expires_at: DateTime<Utc>, now: DateTime<Utc>) -> Self {
+        let mut names: Vec<String> = grades
+            .iter()
+            .flat_map(|grade| grade.capabilities())
+            .map(|capability| capability.as_str().to_string())
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+
+        Self {
+            capabilities: names,
+            granted_at: now,
+            expires_at,
+            method: Method::Consent,
         }
     }
 
@@ -497,6 +564,76 @@ mod tests {
         assert_eq!(policy.bounded_minutes(600), 60);
         assert_eq!(policy.bounded_minutes(0), 1);
         assert_eq!(policy.bounded_minutes(-5), 1);
+    }
+
+    /// A scope names bundles, and everything else in it means nothing here.
+    #[test]
+    fn a_scope_names_bundles_and_ignores_the_rest() {
+        assert_eq!(
+            grades_in_scope(Some("openid email author profile")),
+            vec![Grade::Author]
+        );
+        assert_eq!(
+            grades_in_scope(Some("administer author")),
+            vec![Grade::Author, Grade::Administer],
+            "order comes from the vocabulary, not from the request"
+        );
+        assert_eq!(grades_in_scope(Some("openid email")), Vec::new());
+        assert_eq!(grades_in_scope(None), Vec::new());
+        assert_eq!(grades_in_scope(Some("")), Vec::new());
+    }
+
+    /// Refreshing takes the narrower of the token and the consent, and either
+    /// side alone leaves a hole: the token would carry a withdrawn grant, and
+    /// the consent would let a narrow token widen.
+    #[test]
+    fn refreshing_takes_the_narrower_of_token_and_consent() {
+        // Consent withdrawn entirely: the token stops elevating.
+        assert_eq!(grades_in_both(Some("administer"), None), Vec::new());
+        assert_eq!(
+            grades_in_both(Some("administer"), Some("openid")),
+            Vec::new()
+        );
+
+        // Consent narrowed: the token follows it down.
+        assert_eq!(
+            grades_in_both(Some("author administer"), Some("author")),
+            vec![Grade::Author]
+        );
+
+        // Consent widened: the token does *not* follow it up. Widening takes
+        // a fresh authorization, which is the whole reason consent is checked
+        // against the request rather than assumed.
+        assert_eq!(
+            grades_in_both(Some("author"), Some("author administer")),
+            vec![Grade::Author]
+        );
+
+        assert_eq!(
+            grades_in_both(Some("author"), Some("author")),
+            vec![Grade::Author]
+        );
+    }
+
+    /// A token's elevation is not held to the step-up ceiling, because a
+    /// program cannot be asked to type a password in half an hour. What bounds
+    /// it is the session.
+    #[test]
+    fn a_token_elevation_lasts_as_long_as_it_was_given() {
+        let now = Utc::now();
+        let until = now + Duration::days(30);
+        let token = Elevation::for_token(&[Grade::Administer], until, now);
+
+        assert_eq!(token.expires_at, until);
+        assert_eq!(token.method, Method::Consent);
+        assert!(token.is_live(now + Duration::hours(2)));
+        assert!(!token.is_live(until + Duration::seconds(1)));
+        assert_eq!(token.capabilities(), Grade::Administer.capabilities());
+
+        // A step-up in a browser is held to the ceiling, and the two do not
+        // share a constructor for that reason.
+        let stepped_up = Elevation::grant(&[Grade::Administer], Method::Password, 10_000, now);
+        assert!(stepped_up.expires_at < now + Duration::days(1));
     }
 
     /// Every name round-trips, so a bundle added to one half cannot be missing

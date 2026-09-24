@@ -485,6 +485,11 @@ impl AuthManager {
                 // sign-in on one host cannot mint a session that authenticates
                 // on another.
                 realm: user.realm.clone(),
+                // Every login path converges here, and none of them elevates.
+                // Signing in proves who you are; it is not a statement that
+                // you mean to administer anything, and `/auth/elevate` is
+                // where a browser says so.
+                elevation: None,
             })
             .await?;
 

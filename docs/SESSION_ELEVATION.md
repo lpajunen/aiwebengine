@@ -1,15 +1,11 @@
 # Holding Your Roles Only While You Are Using Them
 
-> **Status: built, bar one piece.** `src/security/elevation.rs`,
-> `SessionData.elevation` and `reauthenticated_at`,
-> `UserContext::for_session`, `[security.elevation]` (which gates nothing by
-> default), `GET|POST /auth/elevate`, `POST /auth/elevate/drop`, the panel on
-> `/auth/account`, `prompt=login` through the providers that honour it, and
-> the `elevate` hint a refusal carries.
->
-> **Not built:** the `scope=` an OAuth2 token would carry, so a `/mcp` bearer
-> token is still minted at its holder's full tier. That is the piece the agent
-> work depends on.
+> **Status: built.** `src/security/elevation.rs`, `SessionData.elevation` and
+> `reauthenticated_at`, `UserContext::for_session`, `[security.elevation]`
+> (which gates nothing by default), `GET|POST /auth/elevate`,
+> `POST /auth/elevate/drop`, the panel on `/auth/account`, `prompt=login`
+> through the providers that honour it, the `elevate` hint a refusal carries,
+> and `scope=` honoured at `/auth/oauth2/authorize` and re-read on refresh.
 >
 > Two things below were decided differently once written. There is no separate
 > `enabled` flag — `gated` empty is the whole of "off", because "enabled with
