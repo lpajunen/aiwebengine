@@ -72,12 +72,7 @@ fn iso_timestamp() -> String {
 }
 
 fn user_context_from(auth_user: Option<&AuthUser>) -> UserContext {
-    match auth_user {
-        Some(user) if user.is_admin => UserContext::admin(user.user_id.clone()),
-        Some(user) if user.is_editor => UserContext::editor(user.user_id.clone()),
-        Some(user) => UserContext::authenticated(user.user_id.clone()),
-        None => UserContext::anonymous(),
-    }
+    UserContext::for_session(auth_user.map(AuthUser::roles).unwrap_or_default())
 }
 
 fn auditor() -> SecurityAuditor {

@@ -180,6 +180,40 @@ impl Capability {
     }
 }
 
+/// The roles a credential carries, as every carrier of one spells them.
+///
+/// [`crate::auth::AuthUser`], [`crate::auth::AuthSession`] and
+/// [`crate::auth::JsAuthContext`] are three views of one session, and each of
+/// them held its own copy of the "which tier is this" match — four copies in
+/// all, counting the one written inline in the dynamic-request path. That is
+/// three too many for a rule which is about to grow a second half: a session
+/// will carry the roles it was minted with *and* how much of them is switched
+/// on right now (`docs/SESSION_ELEVATION.md`). A second half added to a rule
+/// that lives in four places lands in three of them and is forgotten in the
+/// fourth, and the one it is forgotten in is the one that keeps working.
+///
+/// `user_id` carries the option rather than the caller testing for one,
+/// because a carrier can hold an id and still not be a principal —
+/// [`crate::auth::JsAuthContext`] does, when `is_authenticated` is false. Such
+/// a carrier passes `None` and gets the anonymous tier, which is what it did
+/// before this existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SessionRoles<'a> {
+    /// The account this credential belongs to, or `None` for a caller with no
+    /// identity.
+    pub user_id: Option<&'a str>,
+    pub is_admin: bool,
+    pub is_editor: bool,
+}
+
+impl SessionRoles<'_> {
+    /// A caller with no identity. The [`Default`], named, so that
+    /// `.unwrap_or_default()` at a call site reads as what it means.
+    pub fn anonymous() -> Self {
+        Self::default()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UserContext {
     pub user_id: Option<String>,
@@ -245,6 +279,31 @@ impl UserContext {
             capabilities: Self::admin_capabilities(),
             attenuated: false,
             network_scope: None,
+        }
+    }
+
+    /// The context a credential is entitled to.
+    ///
+    /// The one place the engine turns a session's roles into a tier. Every
+    /// path that authenticates a caller — the engine's own HTTP endpoints, the
+    /// native MCP tools, a script serving a request, and the `auth` object a
+    /// script reads — arrives here, so a change to what a session may do is a
+    /// change to one function rather than a change that has to be remembered
+    /// four times.
+    ///
+    /// Administrator wins over editor because the sets nest: an administrator
+    /// holds everything an editor does plus [`Capability::AdministerEngine`].
+    ///
+    /// No identity is the anonymous tier whatever the flags say. A carrier
+    /// that has no `user_id` is not a principal, and one claiming to be an
+    /// administrator without being anybody is a bug better answered with the
+    /// smallest tier than with the largest.
+    pub fn for_session(roles: SessionRoles<'_>) -> Self {
+        match roles.user_id {
+            Some(user_id) if roles.is_admin => Self::admin(user_id.to_string()),
+            Some(user_id) if roles.is_editor => Self::editor(user_id.to_string()),
+            Some(user_id) => Self::authenticated(user_id.to_string()),
+            None => Self::anonymous(),
         }
     }
 
@@ -722,5 +781,95 @@ mod tests {
             user.unheld([Capability::ReadScriptData, Capability::WriteScripts]),
             vec![Capability::WriteScripts]
         );
+    }
+
+    /// The tiers, from the one place that decides them. Each arm is the whole
+    /// of what the four call sites used to spell for themselves.
+    #[test]
+    fn a_session_gets_the_tier_its_roles_name() {
+        let administrator = UserContext::for_session(SessionRoles {
+            user_id: Some("u"),
+            is_admin: true,
+            is_editor: false,
+        });
+        let editor = UserContext::for_session(SessionRoles {
+            user_id: Some("u"),
+            is_admin: false,
+            is_editor: true,
+        });
+        let ordinary = UserContext::for_session(SessionRoles {
+            user_id: Some("u"),
+            is_admin: false,
+            is_editor: false,
+        });
+
+        assert!(administrator.has_capability(&Capability::AdministerEngine));
+        assert!(editor.has_capability(&Capability::WriteScripts));
+        assert!(!editor.has_capability(&Capability::AdministerEngine));
+        assert!(ordinary.has_capability(&Capability::ReadScripts));
+        assert!(!ordinary.has_capability(&Capability::WriteScripts));
+        assert_eq!(ordinary.user_id.as_deref(), Some("u"));
+    }
+
+    /// Administrator wins over editor, because the sets nest. A carrier
+    /// setting both flags is ordinary — every sign-in that grants the
+    /// administrator role grants the editor one beside it.
+    #[test]
+    fn administrator_outranks_editor_when_both_are_set() {
+        let both = UserContext::for_session(SessionRoles {
+            user_id: Some("u"),
+            is_admin: true,
+            is_editor: true,
+        });
+
+        assert!(both.has_capability(&Capability::AdministerEngine));
+    }
+
+    /// No identity is the anonymous tier whatever the flags claim.
+    ///
+    /// The flags travel beside the id in three different carrier structs, and
+    /// one of them — `JsAuthContext` — can hold an id while not being
+    /// authenticated. A carrier that is nobody and says it administers the
+    /// engine is a bug, and the smallest tier is the right answer to it.
+    #[test]
+    fn a_caller_with_no_identity_is_anonymous_however_it_is_flagged() {
+        let nobody = UserContext::for_session(SessionRoles::anonymous());
+        let nobody_claiming_otherwise = UserContext::for_session(SessionRoles {
+            user_id: None,
+            is_admin: true,
+            is_editor: true,
+        });
+
+        for context in [&nobody, &nobody_claiming_otherwise] {
+            assert!(!context.is_authenticated);
+            assert!(context.user_id.is_none());
+            assert!(!context.has_capability(&Capability::AdministerEngine));
+            assert!(!context.has_capability(&Capability::WriteScripts));
+            assert!(context.has_capability(&Capability::ReadScripts));
+        }
+    }
+
+    /// The default is the anonymous caller, which is what makes
+    /// `.unwrap_or_default()` at a call site say what it means.
+    #[test]
+    fn the_default_roles_are_nobody() {
+        assert_eq!(SessionRoles::default(), SessionRoles::anonymous());
+        assert_eq!(SessionRoles::anonymous().user_id, None);
+    }
+
+    /// A tier built through `for_session` is not attenuated, so a refusal
+    /// blames the tier rather than a narrowing that did not happen.
+    ///
+    /// This is the flag session elevation will set, so the unelevated case
+    /// having it clear is what will make the elevated case legible.
+    #[test]
+    fn a_tier_from_a_session_is_not_attenuated() {
+        let editor = UserContext::for_session(SessionRoles {
+            user_id: Some("u"),
+            is_admin: false,
+            is_editor: true,
+        });
+
+        assert!(!editor.attenuated);
     }
 }

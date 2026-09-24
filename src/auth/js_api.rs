@@ -68,23 +68,23 @@ impl JsAuthContext {
         }
     }
 
+    /// The roles this context carries, for [`UserContext::for_session`].
+    ///
+    /// An id without an authenticated session is not a principal, so it is
+    /// filtered out here rather than at the tier match: `for_session` reads
+    /// "no identity means anonymous" and this is what makes that true for a
+    /// carrier which can hold both an id and a `false`.
+    pub fn roles(&self) -> crate::security::SessionRoles<'_> {
+        crate::security::SessionRoles {
+            user_id: self.user_id.as_deref().filter(|_| self.is_authenticated),
+            is_admin: self.is_admin,
+            is_editor: self.is_editor,
+        }
+    }
+
     /// Convert to UserContext for security checks
     pub fn to_user_context(&self) -> UserContext {
-        if self.is_authenticated {
-            if let Some(user_id) = &self.user_id {
-                if self.is_admin {
-                    UserContext::admin(user_id.clone())
-                } else if self.is_editor {
-                    UserContext::editor(user_id.clone())
-                } else {
-                    UserContext::authenticated(user_id.clone())
-                }
-            } else {
-                UserContext::anonymous()
-            }
-        } else {
-            UserContext::anonymous()
-        }
+        UserContext::for_session(self.roles())
     }
 }
 

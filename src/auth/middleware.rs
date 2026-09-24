@@ -38,6 +38,16 @@ pub struct AuthUser {
 }
 
 impl AuthUser {
+    /// The roles this credential carries, for
+    /// [`crate::security::UserContext::for_session`].
+    pub fn roles(&self) -> crate::security::SessionRoles<'_> {
+        crate::security::SessionRoles {
+            user_id: Some(&self.user_id),
+            is_admin: self.is_admin,
+            is_editor: self.is_editor,
+        }
+    }
+
     pub fn new(
         user_id: String,
         provider: String,

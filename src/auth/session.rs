@@ -40,6 +40,18 @@ pub struct AuthSession {
     pub expires_at: DateTime<Utc>,
 }
 
+impl AuthSession {
+    /// The roles this session carries, for
+    /// [`crate::security::UserContext::for_session`].
+    pub fn roles(&self) -> crate::security::SessionRoles<'_> {
+        crate::security::SessionRoles {
+            user_id: Some(&self.user_id),
+            is_admin: self.is_admin,
+            is_editor: self.is_editor,
+        }
+    }
+}
+
 impl From<SessionData> for AuthSession {
     fn from(data: SessionData) -> Self {
         Self {
