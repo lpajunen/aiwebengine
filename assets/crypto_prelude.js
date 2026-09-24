@@ -26,7 +26,10 @@
     },
 
     constantTimeEqual: function (a, b) {
-      return host.constantTimeEqual(String(a == null ? "" : a), String(b == null ? "" : b));
+      return host.constantTimeEqual(
+        String(a == null ? "" : a),
+        String(b == null ? "" : b),
+      );
     },
 
     secretEquals: function (secretName, candidate) {
