@@ -257,15 +257,22 @@ already-judged address.
 
 Not done:
 
-1. **No crypto whatsoever.** Checked the whole `assets/aiwebengine.d.ts`: no
-   HMAC, no constant-time compare, no random bytes, no UUID. Meanwhile the
-   agent's README instructs scripts to verify Telegram and Slack webhook
-   signatures themselves, which means every solution writes a timing-leaky
-   `===` over a secret and generates its webhook secret by hand.
-   `crypto.hmacVerify(alg, secretName, message, signature)` resolving the key
-   host-side the way `fetch` resolves `{{secret:}}` means the secret is never
-   in JavaScript **and** the comparison is constant-time. Clearest gap of the
-   lot.
+1. ~~**No crypto whatsoever.**~~ **Done** — see
+   [`docs/SCRIPT_CRYPTO.md`](docs/SCRIPT_CRYPTO.md). `crypto.hmacVerify` and
+   `crypto.secretEquals` resolve the key host-side the way `fetch` resolves
+   `{{secret:}}`, so the secret is never in JavaScript and the comparison is
+   constant-time; `crypto.randomToken` mints the webhook secret that was being
+   typed by hand. Both halves of the split matter: `randomUUID`,
+   `randomToken` and `constantTimeEqual` take no capability, since randomness
+   is not authority, while the two that resolve a secret take `read_secrets` —
+   which is what stops `run_js` turning a comparison into an oracle.
+
+   Deliberately absent, each for its own reason: signing (verification answers
+   a question, signing produces a credential, and `{{secret:}}` already serves
+   the outbound cases), prefix stripping (only the sender's documentation says
+   what `sha256=` or `v0=` is), and a general hashing API (nothing has needed
+   one).
+
 2. **No rate-limit primitive for scripts.** `rate_limiting.rs` protects engine
    endpoints; a script with a public form writes its own, or does not.
    `limits.consume(key, budget)` with the engine choosing the bucket (per
@@ -296,8 +303,8 @@ Not done:
    which is where elevation lands).
 2. A capability refusal that keeps its capabilities (**done**). Useful on its
    own, and the hook the elevation challenge hangs from.
-3. `crypto.hmacVerify` and friends. Small, independent, and stops every
-   solution getting webhook verification wrong.
+3. `crypto.hmacVerify` and friends (**done**). Small, independent, and stops
+   every solution getting webhook verification wrong.
 4. Session elevation proper (`docs/SESSION_ELEVATION.md`), `administer` gated
    first.
 5. `engine.call` in-process, once refusals carry structure.

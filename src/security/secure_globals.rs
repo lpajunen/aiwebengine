@@ -24,6 +24,7 @@ const TASKS_PRELUDE: &str = include_str!("../../assets/tasks_prelude.js");
 
 /// Builds `sandbox` over the host call that runs a narrowed sub-execution.
 const SANDBOX_PRELUDE: &str = include_str!("../../assets/sandbox_prelude.js");
+const CRYPTO_PRELUDE: &str = include_str!("../../assets/crypto_prelude.js");
 const MCP_PRELUDE: &str = include_str!("../../assets/mcp_prelude.js");
 
 /// What `secretStorage`'s mutating methods answer in a delegated execution.
@@ -657,6 +658,79 @@ fn capability_refusal(api: &str, capability: &Capability, user: &UserContext) ->
     }
 }
 
+/// What `crypto.hmacVerify` is handed, as JavaScript writes it.
+///
+/// `secretName` and not `secret`. The value never enters the runtime — that is
+/// the whole of what this API is for — and a field called `secret` invites
+/// somebody to pass one, which would work, and would silently give up the
+/// property they came here for.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HmacVerifyOptions {
+    secret_name: String,
+    message: String,
+    signature: String,
+    #[serde(default)]
+    algorithm: Option<String>,
+    #[serde(default)]
+    encoding: Option<String>,
+}
+
+/// Refusal for a name that is not one of a fixed set.
+///
+/// Names what was asked for *and* what there is, because the caller who typed
+/// `sha-256` cannot otherwise tell whether the problem is the hyphen or the
+/// algorithm.
+fn unknown_name_error(api: &str, what: &str, given: &str, known: &[&str]) -> rquickjs::Error {
+    rquickjs::Error::new_from_js_message(
+        "crypto",
+        "type_error",
+        &format!(
+            "{}: '{}' is not a known {} — one of {}",
+            api,
+            given,
+            what,
+            known.join(", ")
+        ),
+    )
+}
+
+/// The value behind a secret's name, or a refusal naming the secret.
+///
+/// Missing throws rather than answering `false`. A verification that quietly
+/// fails because nobody stored the key looks exactly like a verification that
+/// failed because the request was forged — so a deployment that was never
+/// finished would present as an endpoint under permanent attack, and the log
+/// would agree. The `{{secret:...}}` rule, in the place it matters most: an
+/// unresolvable secret is an error, because behaving as though it resolved is
+/// worse than stopping.
+fn resolve_named_secret(
+    api: &str,
+    script_uri: &str,
+    name: &str,
+    user_id: Option<&str>,
+) -> JsResult<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(rquickjs::Error::new_from_js_message(
+            "crypto",
+            "type_error",
+            &format!("{}: a secret must be named", api),
+        ));
+    }
+
+    crate::repository::resolve_secret_db(script_uri, name, user_id).ok_or_else(|| {
+        rquickjs::Error::new_from_js_message(
+            "crypto",
+            "secret_not_found",
+            &format!(
+                "{}: this script has no secret named '{}' — store one with write_secret",
+                api, name
+            ),
+        )
+    })
+}
+
 /// [`capability_refusal`] as a thrown JavaScript error, for the APIs that
 /// throw rather than returning an envelope.
 fn capability_error(
@@ -767,6 +841,7 @@ impl SecureGlobalContext {
         // also puts `post` on the dispatcher, which has to be there already.
         self.setup_task_functions(ctx, script_uri)?;
         self.setup_sandbox_functions(ctx, script_uri)?;
+        self.setup_crypto_object(ctx, script_uri)?;
 
         // Setup JSX factory functions for server-side HTML generation
         self.setup_jsx_functions(ctx)?;
@@ -7506,6 +7581,190 @@ fn execute_message_handler(
 }
 
 impl SecureGlobalContext {
+    /// `crypto` — the cryptography a solution should not be writing for itself.
+    ///
+    /// The engine tells scripts to verify their own webhook signatures and
+    /// until now handed them nothing to do it with, so every solution that
+    /// followed the documentation fetched its secret into JavaScript and
+    /// compared it with `===`. See [`crate::security::script_crypto`] for why
+    /// each of these exists; what happens *here* is the part that makes them
+    /// worth having — the secret is resolved host-side and never crosses into
+    /// the runtime.
+    ///
+    /// Two halves, gated differently, because they are different grants:
+    ///
+    /// - `randomUUID`, `randomToken` and `constantTimeEqual` take no
+    ///   capability. Randomness is not authority and a comparison of two
+    ///   strings the caller already holds reveals nothing it did not have.
+    ///   Model-authored code inside `sandbox.run` may use them, and should:
+    ///   the alternative is that it writes the comparison itself.
+    ///
+    /// - `secretEquals` and `hmacVerify` resolve a secret, so both require
+    ///   [`Capability::ReadSecrets`] — the same gate `fetch` puts on
+    ///   `{{secret:...}}` and for the same reason. A narrowed execution that
+    ///   may not reach the account's credentials must not reach them through a
+    ///   comparison either, and `run_js` withholding `read_secrets` is what
+    ///   stops model-authored code turning this into an oracle.
+    fn setup_crypto_object(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
+        use crate::security::script_crypto as crypto;
+
+        let global = ctx.globals();
+        let host = rquickjs::Object::new(ctx.clone())?;
+
+        // Whose secrets this execution may resolve, decided exactly as
+        // `setup_fetch_function` decides it: withheld from a delegated run
+        // that was not granted `Scope::Secrets`, so the lookup falls back to
+        // the script's own key rather than erroring. A webhook secret belongs
+        // to the solution rather than to a person, so that fallback is the
+        // normal path here rather than the degraded one.
+        let user_id_for_secrets = if self
+            .config
+            .allows_delegated(crate::delegation::Scope::Secrets)
+        {
+            self.user_context.user_id.clone()
+        } else {
+            None
+        };
+
+        let random_uuid = Function::new(ctx.clone(), || -> String {
+            uuid::Uuid::new_v4().to_string()
+        })?;
+
+        let random_token = Function::new(
+            ctx.clone(),
+            move |bytes: i64, encoding: String| -> JsResult<String> {
+                let Some(encoding) = crypto::Encoding::parse(&encoding) else {
+                    return Err(unknown_name_error(
+                        "crypto.randomToken",
+                        "encoding",
+                        &encoding,
+                        &["hex", "base64"],
+                    ));
+                };
+                // Negative reaches here as a negative: refused as too short,
+                // which is the same answer as zero and names the same fix.
+                let asked = usize::try_from(bytes).unwrap_or(0);
+                crypto::random_token(asked, encoding).map_err(|refusal| {
+                    rquickjs::Error::new_from_js_message(
+                        "crypto.randomToken",
+                        "range_error",
+                        &format!("crypto.randomToken: {}", refusal),
+                    )
+                })
+            },
+        )?;
+
+        let constant_time_equal = Function::new(ctx.clone(), |a: String, b: String| -> bool {
+            crypto::constant_time_eq(a.as_bytes(), b.as_bytes())
+        })?;
+
+        let user_ctx_secret_equals = self.user_context.clone();
+        let uri_secret_equals = script_uri.to_string();
+        let user_id_secret_equals = user_id_for_secrets.clone();
+        let secret_equals = Function::new(
+            ctx.clone(),
+            move |secret_name: String, candidate: String| -> JsResult<bool> {
+                if !user_ctx_secret_equals.has_capability(&Capability::ReadSecrets) {
+                    return Err(capability_error(
+                        "crypto.secretEquals",
+                        &Capability::ReadSecrets,
+                        &user_ctx_secret_equals,
+                    ));
+                }
+
+                let secret = resolve_named_secret(
+                    "crypto.secretEquals",
+                    &uri_secret_equals,
+                    &secret_name,
+                    user_id_secret_equals.as_deref(),
+                )?;
+
+                Ok(crypto::constant_time_eq(
+                    secret.as_bytes(),
+                    candidate.as_bytes(),
+                ))
+            },
+        )?;
+
+        let user_ctx_hmac = self.user_context.clone();
+        let uri_hmac = script_uri.to_string();
+        let user_id_hmac = user_id_for_secrets;
+        let hmac_verify =
+            Function::new(ctx.clone(), move |options_json: String| -> JsResult<bool> {
+                if !user_ctx_hmac.has_capability(&Capability::ReadSecrets) {
+                    return Err(capability_error(
+                        "crypto.hmacVerify",
+                        &Capability::ReadSecrets,
+                        &user_ctx_hmac,
+                    ));
+                }
+
+                let options: HmacVerifyOptions =
+                    serde_json::from_str(&options_json).map_err(|e| {
+                        rquickjs::Error::new_from_js_message(
+                            "crypto.hmacVerify",
+                            "type_error",
+                            &format!("crypto.hmacVerify: {}", e),
+                        )
+                    })?;
+
+                let algorithm_name = options.algorithm.as_deref().unwrap_or("sha256");
+                let Some(algorithm) = crypto::Digest::parse(algorithm_name) else {
+                    return Err(unknown_name_error(
+                        "crypto.hmacVerify",
+                        "algorithm",
+                        algorithm_name,
+                        &["sha256", "sha512", "sha1"],
+                    ));
+                };
+
+                let encoding_name = options.encoding.as_deref().unwrap_or("hex");
+                let Some(encoding) = crypto::Encoding::parse(encoding_name) else {
+                    return Err(unknown_name_error(
+                        "crypto.hmacVerify",
+                        "encoding",
+                        encoding_name,
+                        &["hex", "base64"],
+                    ));
+                };
+
+                let secret = resolve_named_secret(
+                    "crypto.hmacVerify",
+                    &uri_hmac,
+                    &options.secret_name,
+                    user_id_hmac.as_deref(),
+                )?;
+
+                Ok(crypto::verify_hmac(
+                    algorithm,
+                    secret.as_bytes(),
+                    options.message.as_bytes(),
+                    &options.signature,
+                    encoding,
+                ))
+            })?;
+
+        host.set("randomUUID", random_uuid)?;
+        host.set("randomToken", random_token)?;
+        host.set("constantTimeEqual", constant_time_equal)?;
+        host.set("secretEquals", secret_equals)?;
+        host.set("hmacVerify", hmac_verify)?;
+        global.set("__hostCrypto", host)?;
+
+        crate::bytecode::eval_program(ctx, "engine://crypto-prelude", CRYPTO_PRELUDE).map_err(
+            |e| {
+                rquickjs::Error::new_from_js_message(
+                    "crypto",
+                    "prelude",
+                    &format!("crypto prelude failed to load: {}", e),
+                )
+            },
+        )?;
+
+        debug!("crypto initialized for script: {}", script_uri);
+        Ok(())
+    }
+
     /// Setup JSX factory functions for server-side HTML generation
     fn setup_jsx_functions(&self, ctx: &rquickjs::Ctx<'_>) -> JsResult<()> {
         // Define the h() function and Fragment in JavaScript to properly handle variadic arguments

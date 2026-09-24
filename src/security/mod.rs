@@ -8,6 +8,7 @@ pub mod encryption;
 pub mod headers;
 pub mod operations;
 pub mod rate_limiting;
+pub mod script_crypto;
 pub mod secure_globals;
 pub mod session;
 pub mod threat_detection;
