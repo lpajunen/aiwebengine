@@ -7091,6 +7091,12 @@ impl SecureGlobalContext {
             is_authenticated: auth.get("isAuthenticated").unwrap_or_default(),
             is_admin: auth.get("isAdmin").unwrap_or_default(),
             is_editor: auth.get("isEditor").unwrap_or_default(),
+            // Never an elevation. JavaScript is not told about one, so there
+            // is nothing here to read back — and a sub-execution is the last
+            // place that should reconstruct authority out of what the running
+            // code could see. `sandbox.run` narrows; it has never widened, and
+            // this is where widening would have had to come from.
+            elevation: None,
         })
     }
 

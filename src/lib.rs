@@ -1677,6 +1677,26 @@ pub async fn start_server_with_config(
         debug!("Log retention was already configured");
     }
 
+    // Which authority a session has to switch on deliberately. Read before
+    // anything authenticates, since the first request to arrive resolves a
+    // credential into a `UserContext` and that is where the policy applies.
+    let elevation_policy = config.security.elevation.policy();
+    if elevation_policy.is_active() {
+        info!(
+            "Session elevation is active: {} must be switched on per session, for at most {} minutes",
+            elevation_policy
+                .gated
+                .iter()
+                .map(|grade| grade.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            elevation_policy.max_minutes
+        );
+    }
+    if !security::elevation::configure(elevation_policy) {
+        debug!("Session elevation was already configured");
+    }
+
     // Every limit a solution developer can meet, captured so the OpenAPI
     // document publishes what this engine enforces rather than the defaults it
     // shipped with.

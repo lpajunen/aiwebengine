@@ -32,6 +32,16 @@ pub struct JsAuthContext {
 
     /// Whether user has editor privileges
     pub is_editor: bool,
+
+    /// What this session switched on beyond the floor, if anything.
+    ///
+    /// Not part of either constructor: it is set by
+    /// [`crate::security::elevation`]-aware code that has a session in hand,
+    /// and every other way of building this — an evaluation, a test — leaves
+    /// it `None`, which is the floor. Those paths carry their own
+    /// `UserContext` anyway, so the floor is what they should get rather than
+    /// an elevation nobody granted.
+    pub elevation: Option<crate::security::elevation::Elevation>,
 }
 
 impl JsAuthContext {
@@ -45,6 +55,7 @@ impl JsAuthContext {
             is_authenticated: false,
             is_admin: false,
             is_editor: false,
+            elevation: None,
         }
     }
 
@@ -65,6 +76,7 @@ impl JsAuthContext {
             is_authenticated: true,
             is_admin,
             is_editor,
+            elevation: None,
         }
     }
 
@@ -79,6 +91,7 @@ impl JsAuthContext {
             user_id: self.user_id.as_deref().filter(|_| self.is_authenticated),
             is_admin: self.is_admin,
             is_editor: self.is_editor,
+            elevation: self.elevation.as_ref(),
         }
     }
 

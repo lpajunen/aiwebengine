@@ -38,6 +38,8 @@ pub struct AuthSession {
     pub is_editor: bool,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    /// What this session switched on beyond the floor, if anything.
+    pub elevation: Option<crate::security::elevation::Elevation>,
 }
 
 impl AuthSession {
@@ -48,6 +50,7 @@ impl AuthSession {
             user_id: Some(&self.user_id),
             is_admin: self.is_admin,
             is_editor: self.is_editor,
+            elevation: self.elevation.as_ref(),
         }
     }
 }
@@ -64,6 +67,7 @@ impl From<SessionData> for AuthSession {
             is_editor: data.is_editor,
             created_at: data.created_at,
             expires_at: data.expires_at,
+            elevation: data.elevation,
         }
     }
 }

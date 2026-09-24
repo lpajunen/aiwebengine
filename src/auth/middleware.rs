@@ -35,6 +35,13 @@ pub struct AuthUser {
 
     /// User's display name (if available)
     pub name: Option<String>,
+
+    /// What this session switched on beyond the floor, if anything.
+    ///
+    /// Carried rather than re-read, because this struct is the request's copy
+    /// of the session and an elevation looked up again per handler would be a
+    /// second answer to a question already settled at the edge.
+    pub elevation: Option<crate::security::elevation::Elevation>,
 }
 
 impl AuthUser {
@@ -45,6 +52,7 @@ impl AuthUser {
             user_id: Some(&self.user_id),
             is_admin: self.is_admin,
             is_editor: self.is_editor,
+            elevation: self.elevation.as_ref(),
         }
     }
 
@@ -65,7 +73,21 @@ impl AuthUser {
             is_editor,
             email,
             name,
+            elevation: None,
         }
+    }
+
+    /// The same credential, carrying what the session had switched on.
+    ///
+    /// Separate from [`Self::new`] so that the four construction sites which
+    /// have a session say so, and the ones that do not cannot silently claim
+    /// an elevation by forgetting an argument.
+    pub fn with_elevation(
+        mut self,
+        elevation: Option<crate::security::elevation::Elevation>,
+    ) -> Self {
+        self.elevation = elevation;
+        self
     }
 }
 

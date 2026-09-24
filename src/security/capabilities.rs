@@ -204,6 +204,13 @@ pub struct SessionRoles<'a> {
     pub user_id: Option<&'a str>,
     pub is_admin: bool,
     pub is_editor: bool,
+    /// What this session switched on beyond the floor, if anything.
+    ///
+    /// Borrowed rather than owned because it is read once, here, to compute a
+    /// capability set — nothing downstream needs the elevation itself, and a
+    /// `UserContext` that carried one would be a second place to ask the same
+    /// question.
+    pub elevation: Option<&'a super::elevation::Elevation>,
 }
 
 impl SessionRoles<'_> {
@@ -299,12 +306,35 @@ impl UserContext {
     /// administrator without being anybody is a bug better answered with the
     /// smallest tier than with the largest.
     pub fn for_session(roles: SessionRoles<'_>) -> Self {
-        match roles.user_id {
+        Self::for_session_at(roles, chrono::Utc::now())
+    }
+
+    /// [`Self::for_session`] as of a given moment, so that a test can describe
+    /// an elevation that has run out without waiting for one to.
+    pub fn for_session_at(roles: SessionRoles<'_>, now: chrono::DateTime<chrono::Utc>) -> Self {
+        let tier = match roles.user_id {
             Some(user_id) if roles.is_admin => Self::admin(user_id.to_string()),
             Some(user_id) if roles.is_editor => Self::editor(user_id.to_string()),
             Some(user_id) => Self::authenticated(user_id.to_string()),
-            None => Self::anonymous(),
-        }
+            None => return Self::anonymous(),
+        };
+
+        let held = super::elevation::held_capabilities(&tier, roles.elevation, now);
+
+        // The intersection is what keeps the ceiling in the repository, where
+        // an administrator put it: an elevation naming `administer_engine`
+        // adds nothing to an account that is not an administrator, whatever
+        // was written into the session.
+        //
+        // `attenuated` is deliberately *not* set by this. It answers "was this
+        // execution narrowed from the caller's own authority", which a session
+        // at the tier it was minted with was not — and a refusal reading "this
+        // execution was narrowed" would be wrong on every engine that gates
+        // nothing. What an unelevated refusal should say is that the session
+        // is unelevated, which is the elevation challenge's job.
+        let mut narrowed = tier.attenuated(held);
+        narrowed.attenuated = false;
+        narrowed
     }
 
     /// What a caller with no identity holds: enough to be served a solution,
@@ -791,16 +821,19 @@ mod tests {
             user_id: Some("u"),
             is_admin: true,
             is_editor: false,
+            elevation: None,
         });
         let editor = UserContext::for_session(SessionRoles {
             user_id: Some("u"),
             is_admin: false,
             is_editor: true,
+            elevation: None,
         });
         let ordinary = UserContext::for_session(SessionRoles {
             user_id: Some("u"),
             is_admin: false,
             is_editor: false,
+            elevation: None,
         });
 
         assert!(administrator.has_capability(&Capability::AdministerEngine));
@@ -820,6 +853,7 @@ mod tests {
             user_id: Some("u"),
             is_admin: true,
             is_editor: true,
+            elevation: None,
         });
 
         assert!(both.has_capability(&Capability::AdministerEngine));
@@ -838,6 +872,7 @@ mod tests {
             user_id: None,
             is_admin: true,
             is_editor: true,
+            elevation: None,
         });
 
         for context in [&nobody, &nobody_claiming_otherwise] {
@@ -868,8 +903,84 @@ mod tests {
             user_id: Some("u"),
             is_admin: false,
             is_editor: true,
+            elevation: None,
         });
 
         assert!(!editor.attenuated);
+    }
+
+    /// An engine that gates nothing hands a session its whole tier, elevation
+    /// or no elevation. The default, and the behaviour that existed before
+    /// any of this.
+    #[test]
+    fn with_nothing_gated_a_session_holds_its_whole_tier() {
+        let administrator = UserContext::for_session(SessionRoles {
+            user_id: Some("u"),
+            is_admin: true,
+            is_editor: true,
+            elevation: None,
+        });
+
+        assert!(administrator.has_capability(&Capability::AdministerEngine));
+        assert!(administrator.has_capability(&Capability::WriteScripts));
+    }
+
+    /// The ceiling stays in the repository. An elevation naming what the
+    /// account's roles do not carry adds nothing, because the composition is
+    /// an intersection — so writing one into a session is not a way to become
+    /// an administrator.
+    #[test]
+    fn an_elevation_cannot_exceed_the_roles_it_sits_on() {
+        let now = chrono::Utc::now();
+        let overreaching = super::super::elevation::Elevation {
+            capabilities: vec![
+                Capability::AdministerEngine.as_str().to_string(),
+                Capability::WriteScripts.as_str().to_string(),
+            ],
+            granted_at: now,
+            expires_at: now + chrono::Duration::hours(1),
+            method: super::super::elevation::Method::Password,
+        };
+
+        let ordinary = UserContext::for_session_at(
+            SessionRoles {
+                user_id: Some("u"),
+                is_admin: false,
+                is_editor: false,
+                elevation: Some(&overreaching),
+            },
+            now,
+        );
+
+        assert!(!ordinary.has_capability(&Capability::AdministerEngine));
+        assert!(!ordinary.has_capability(&Capability::WriteScripts));
+        assert!(ordinary.has_capability(&Capability::ReadScripts));
+    }
+
+    /// An elevation belongs to the session and never to the identity: it does
+    /// not change who the caller is, only what they may do.
+    #[test]
+    fn an_elevation_does_not_change_who_the_caller_is() {
+        let now = chrono::Utc::now();
+        let elevation = super::super::elevation::Elevation {
+            capabilities: vec![Capability::AdministerEngine.as_str().to_string()],
+            granted_at: now,
+            expires_at: now + chrono::Duration::hours(1),
+            method: super::super::elevation::Method::Provider,
+        };
+
+        let elevated = UserContext::for_session_at(
+            SessionRoles {
+                user_id: Some("u"),
+                is_admin: true,
+                is_editor: true,
+                elevation: Some(&elevation),
+            },
+            now,
+        );
+
+        assert_eq!(elevated.user_id.as_deref(), Some("u"));
+        assert!(elevated.is_authenticated);
+        assert!(!elevated.attenuated);
     }
 }

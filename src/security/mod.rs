@@ -4,6 +4,7 @@ pub mod client_ip;
 pub mod cors;
 pub mod csp;
 pub mod csrf;
+pub mod elevation;
 pub mod encryption;
 pub mod headers;
 pub mod operations;

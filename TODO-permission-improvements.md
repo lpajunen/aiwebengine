@@ -159,11 +159,26 @@ Sub-steps, in order:
    nothing here" are the same answer — which is right for an enumeration that
    must not leak what exists, and wrong for a caller who could have elevated.
 
-3. `SessionData.elevation` + `reauthenticated_at`, checked in
-   `validate_session` **and** `refresh_session` (the two places `realm` is
-   checked, for the same reason).
+3. `SessionData.elevation`, checked in `validate_session` **and**
+   `refresh_session` (the two places `realm` is checked, for the same reason).
+   **← done.** `security::elevation` holds the vocabulary and the composition;
+   `UserContext::for_session` applies it; `[security.elevation] gated` is the
+   one dial and is empty by default, which is the engine as it behaved before.
+   `SecureSessionManager::set_elevation` is the write the endpoints below are
+   both made of.
+
+   `reauthenticated_at` is **not** done and belongs with the endpoints: it is
+   only meaningful next to something that checks it, and a field nothing reads
+   is a claim the engine does not keep.
+
 4. `GET|POST /auth/elevate`, `POST /auth/elevate/drop`, and the third panel on
-   `/auth/account` — a copy of `delegate_page`.
+   `/auth/account` — a copy of `delegate_page`. **Next.** Until this exists
+   nothing can elevate, so gating a bundle would lock the surface rather than
+   guard it: the mechanism is in and the dial stays at empty.
+
+   `reauthenticated_at` lands here, set at sign-in and by both re-auth paths,
+   with `POST /auth/elevate` refusing outside `reauth_window_secs`.
+
 5. `prompt=login` threaded into `get_authorization_url` (a fifth argument;
    `extra_params` is per-provider config and this is per-request).
 6. `scope=` honoured at `/auth/oauth2/authorize`, re-read on refresh.

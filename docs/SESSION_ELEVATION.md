@@ -1,7 +1,20 @@
 # Holding Your Roles Only While You Are Using Them
 
-> **Status: design, not built.** Nothing in this document exists yet. It is
-> written in the present tense because that is how the decisions read.
+> **Status: partly built.** The mechanism is in —
+> `src/security/elevation.rs`, `SessionData.elevation`,
+> `UserContext::for_session`, and `[security.elevation]`, which gates nothing
+> by default. What is not built is the way to _obtain_ an elevation: the
+> `/auth/elevate` endpoints, re-authentication, the account panel, and the
+> `scope=` an OAuth token would carry. Until those exist, gating a bundle
+> would lock the surface rather than guard it.
+>
+> Two things below were decided differently once written. There is no separate
+> `enabled` flag — `gated` empty is the whole of "off", because "enabled with
+> nothing gated" and "disabled" are the same engine. And the variant that
+> carries a refusal is `AppError::InsufficientCapabilities` rather than
+> `ElevationRequired`, since a refusal pointing at a door that does not exist
+> is worse than one naming what is missing; the `elevate` hint joins it when
+> there is one to give.
 
 ```
 POST /engine/write_file          →  403

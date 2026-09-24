@@ -180,6 +180,25 @@ pub struct SessionData {
     /// realms existed, which authorizes nothing — sign in again.
     #[serde(default)]
     pub realm: Option<String>,
+    /// What this session may do beyond the floor, and until when.
+    ///
+    /// `None` is a session at the floor — which on an engine gating nothing
+    /// (the default) is the whole of its tier, so this changes nothing until
+    /// an operator names a bundle in `[security.elevation]`.
+    ///
+    /// Arrives the way `realm` did: a field on a blob that is already
+    /// encrypted into `sessions.data`, so there is no migration. A session
+    /// established before elevation existed deserialises to `None`, which is
+    /// the safe direction — it is refused and offered the elevation page
+    /// rather than silently carrying authority nobody asked for.
+    ///
+    /// There is deliberately no elevations table. Living inside the session
+    /// means `security::delete_sessions_for_user` — which already runs when
+    /// roles change, a realm narrows, an account is deleted or a password is
+    /// changed — revokes every elevation with no new statement and nothing
+    /// else to remember.
+    #[serde(default)]
+    pub elevation: Option<crate::security::elevation::Elevation>,
 }
 
 /// One of an account's sessions, as its owner is allowed to see it.
@@ -503,6 +522,9 @@ impl SecureSessionManager {
             refresh_token: params.refresh_token.clone(),
             audience: params.audience.clone(),
             realm: Some(params.realm.clone()),
+            // A fresh session starts at the floor. Signing in is not, on its
+            // own, a statement that you intend to administer anything.
+            elevation: None,
         };
 
         // Encrypt session data
@@ -544,6 +566,57 @@ impl SecureSessionManager {
         );
 
         Ok(SessionToken { token, expires_at })
+    }
+
+    /// Write an elevation into a session that already exists, or clear one.
+    ///
+    /// The operation `POST /auth/elevate` and `POST /auth/elevate/drop` are
+    /// both made of. It re-reads and rewrites the stored blob rather than
+    /// taking a [`SessionData`] the caller has been holding, because anything
+    /// else would let a handler write back a session that had changed
+    /// underneath it — the address on its fingerprint, its slid expiry — and
+    /// silently undo whichever of those landed in between.
+    ///
+    /// It deliberately checks nothing about *whether* the elevation should be
+    /// granted. The ceiling is enforced where it is read
+    /// ([`super::capabilities::UserContext::for_session`]), by intersection
+    /// with the tier, so a session carrying more than its account may do is
+    /// already harmless; re-checking here would be a second answer to a
+    /// question that has one.
+    pub async fn set_elevation(
+        &self,
+        token: &str,
+        elevation: Option<super::elevation::Elevation>,
+    ) -> Result<(), SessionError> {
+        let row: Option<(serde_json::Value, DateTime<Utc>)> =
+            sqlx::query_as("SELECT data, expires_at FROM sessions WHERE session_id = $1")
+                .bind(token)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?;
+
+        let (encrypted_json, expires_at) = row.ok_or(SessionError::SessionNotFound)?;
+        if expires_at < Utc::now() {
+            return Err(SessionError::SessionExpired);
+        }
+
+        let encrypted: EncryptedSessionData = serde_json::from_value(encrypted_json)
+            .map_err(|e| SessionError::ValidationFailed(format!("Data corruption: {}", e)))?;
+        let mut session_data = self.decrypt_session(&encrypted)?;
+        session_data.elevation = elevation;
+
+        let encrypted = self.encrypt_session(&session_data)?;
+        let encrypted_json = serde_json::to_value(&encrypted)
+            .map_err(|e| SessionError::EncryptionError(e.to_string()))?;
+
+        sqlx::query("UPDATE sessions SET data = $1 WHERE session_id = $2")
+            .bind(encrypted_json)
+            .bind(token)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?;
+
+        Ok(())
     }
 
     /// Validate and retrieve session data
@@ -629,6 +702,29 @@ impl SecureSessionManager {
         let now = Utc::now();
         session_data.last_access = now;
         session_data.expires_at = self.next_sliding_expiry(session_data.created_at, now);
+
+        // An elevation that has run out is dropped here rather than merely
+        // ignored downstream, so the stored session stops claiming authority
+        // it no longer carries and `/auth/account` does not offer a countdown
+        // to a moment that has passed.
+        //
+        // Note what is *not* slid: the elevation's own expiry. The session's
+        // window slides on use so that somebody working is not signed out;
+        // sliding the elevation with it would mean an agent looping every
+        // thirty seconds holds an administrator's authority for as long as it
+        // keeps looping, which is exactly what this exists to stop. It is
+        // absolute, and a person still working elevates again.
+        if session_data
+            .elevation
+            .as_ref()
+            .is_some_and(|elevation| !elevation.is_live(now))
+        {
+            debug!(
+                "Elevation expired for user {}; session continues at the floor",
+                session_data.user_id
+            );
+            session_data.elevation = None;
+        }
 
         // Re-encrypt and update session
         let encrypted = self.encrypt_session(&session_data)?;
@@ -782,6 +878,19 @@ impl SecureSessionManager {
         let now = Utc::now();
         session_data.last_access = now;
         session_data.expires_at = self.next_sliding_expiry(session_data.created_at, now);
+
+        // Refreshing reads and rewrites the session without going through
+        // `validate_session`, so a spent elevation has to be dropped here too
+        // — the same argument the realm check above makes, and the same reason
+        // it is made twice: a session close enough to expiry to be renewed
+        // would otherwise be the one path that skipped it.
+        if session_data
+            .elevation
+            .as_ref()
+            .is_some_and(|elevation| !elevation.is_live(now))
+        {
+            session_data.elevation = None;
+        }
 
         let encrypted = self.encrypt_session(&session_data)?;
         let encrypted_json = serde_json::to_value(&encrypted)
@@ -1180,6 +1289,101 @@ mod tests {
         assert_eq!(session.provider, "google");
         assert!(!session.is_admin);
         assert!(!session.is_editor);
+    }
+
+    /// An elevation survives the encrypted round trip, and a spent one is
+    /// dropped by the validation that finds it.
+    ///
+    /// The arithmetic is covered in `security::elevation`; what this covers is
+    /// the part only a real session can show — that the field is written into
+    /// `sessions.data`, read back out of it, and cleaned up in the one place
+    /// every credential passes through.
+    #[tokio::test]
+    async fn an_elevation_round_trips_and_a_spent_one_is_dropped() {
+        use crate::security::elevation::{Elevation, Method};
+
+        let manager = create_test_manager();
+        let params = |user: &str| CreateSessionParams {
+            user_id: user.to_string(),
+            provider: "internal".to_string(),
+            email: None,
+            name: None,
+            is_admin: true,
+            is_editor: true,
+            ip_addr: "192.168.1.1".to_string(),
+            user_agent: "Mozilla/5.0".to_string(),
+            refresh_token: None,
+            audience: None,
+            realm: "test.example.com".to_string(),
+        };
+
+        // A fresh session starts at the floor: signing in is not by itself a
+        // statement that you mean to administer anything.
+        let token = manager.create_session(params("live")).await.unwrap();
+        let session = manager
+            .validate_session(
+                &token.token,
+                "192.168.1.1",
+                "Mozilla/5.0",
+                "test.example.com",
+            )
+            .await
+            .unwrap();
+        assert!(session.elevation.is_none(), "a new session is unelevated");
+
+        let now = Utc::now();
+        for (label, expires_at, expected) in [
+            ("live", now + chrono::Duration::minutes(30), true),
+            ("spent", now - chrono::Duration::minutes(1), false),
+        ] {
+            let token = manager.create_session(params(label)).await.unwrap();
+            let stored = manager
+                .validate_session(
+                    &token.token,
+                    "192.168.1.1",
+                    "Mozilla/5.0",
+                    "test.example.com",
+                )
+                .await
+                .unwrap();
+
+            assert!(stored.elevation.is_none());
+            manager
+                .set_elevation(
+                    &token.token,
+                    Some(Elevation {
+                        capabilities: vec!["administer_engine".to_string()],
+                        granted_at: now,
+                        expires_at,
+                        method: Method::Password,
+                    }),
+                )
+                .await
+                .unwrap();
+
+            let read_back = manager
+                .validate_session(
+                    &token.token,
+                    "192.168.1.1",
+                    "Mozilla/5.0",
+                    "test.example.com",
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(
+                read_back.elevation.is_some(),
+                expected,
+                "a {label} elevation should {}",
+                if expected { "survive" } else { "be dropped" }
+            );
+            if expected {
+                assert_eq!(
+                    read_back.elevation.unwrap().capabilities,
+                    vec!["administer_engine".to_string()]
+                );
+            }
+        }
     }
 
     #[tokio::test]

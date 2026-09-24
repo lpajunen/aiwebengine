@@ -491,6 +491,105 @@ pub struct SecurityConfig {
     /// Example (env): APP_SECURITY__SECRET_ENCRYPTION_KEY
     #[serde(default)]
     pub secret_encryption_key: Option<String>,
+
+    /// Which authority a session must switch on deliberately, rather than
+    /// carry for the thirty days it lives.
+    #[serde(default)]
+    pub elevation: ElevationConfig,
+}
+
+/// `[security.elevation]` — step-up authentication.
+///
+/// A session carries the roles it was minted with and nothing narrows them
+/// afterwards, so signing in as an administrator means every request for the
+/// life of that session holds `AdministerEngine`. This is the dial that
+/// changes it: a named bundle stops being carried and starts being switched
+/// on, for minutes at a time, by a person who has just re-authenticated.
+///
+/// See `docs/SESSION_ELEVATION.md`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ElevationConfig {
+    /// Bundles that require elevating: `"author"`, `"administer"`.
+    ///
+    /// **Empty by default, and empty is the engine as it behaved before any of
+    /// this existed.** There is no separate `enabled` flag, because "enabled
+    /// with nothing gated" and "disabled" are the same engine, and two ways to
+    /// say one thing is one too many.
+    ///
+    /// Gate `administer` first. It is the half that matters and the half
+    /// nothing routine needs, so an editor goes on working unchanged while the
+    /// dangerous authority starts being asked for.
+    #[serde(default)]
+    pub gated: Vec<String>,
+
+    /// The longest an elevation may last, in minutes.
+    ///
+    /// The window is absolute rather than sliding, unlike the session's own
+    /// expiry: sliding it would let an agent looping every thirty seconds hold
+    /// an administrator's authority indefinitely, which is the thing this
+    /// exists to stop.
+    #[serde(default = "default_elevation_minutes")]
+    pub max_minutes: u32,
+
+    /// How recently the person must have authenticated to be granted one, in
+    /// seconds.
+    ///
+    /// The question is "did they just prove they are here", not "have they
+    /// been here today".
+    #[serde(default = "default_reauth_window_secs")]
+    pub reauth_window_secs: u32,
+}
+
+fn default_elevation_minutes() -> u32 {
+    60
+}
+
+fn default_reauth_window_secs() -> u32 {
+    120
+}
+
+impl Default for ElevationConfig {
+    fn default() -> Self {
+        Self {
+            gated: Vec::new(),
+            max_minutes: default_elevation_minutes(),
+            reauth_window_secs: default_reauth_window_secs(),
+        }
+    }
+}
+
+impl ElevationConfig {
+    /// The policy this describes, with any bundle name the engine does not
+    /// know dropped and reported.
+    ///
+    /// Dropped rather than fatal, and reported rather than silent: the rule
+    /// `security::cors` follows for an entry that is not an origin. A
+    /// misspelled bundle would otherwise gate nothing while the configuration
+    /// says it gates something, which is the failure that looks like success.
+    pub fn policy(&self) -> crate::security::elevation::Policy {
+        let mut gated = Vec::new();
+        for name in &self.gated {
+            match crate::security::elevation::Grade::parse(name) {
+                Some(grade) => {
+                    if !gated.contains(&grade) {
+                        gated.push(grade);
+                    }
+                }
+                None => tracing::warn!(
+                    "security.elevation.gated names '{}', which is not a bundle — ignoring it. \
+                     Known bundles: author, administer",
+                    name
+                ),
+            }
+        }
+        gated.sort_unstable();
+
+        crate::security::elevation::Policy {
+            gated,
+            max_minutes: i64::from(self.max_minutes),
+            reauth_window_secs: i64::from(self.reauth_window_secs),
+        }
+    }
 }
 
 /// Whether a configured secret is one nobody chose.
@@ -684,6 +783,7 @@ impl Default for SecurityConfig {
             strict_ip_validation: false,
             session_encryption_key: None,
             secret_encryption_key: None,
+            elevation: ElevationConfig::default(),
         }
     }
 }
