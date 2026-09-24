@@ -300,8 +300,24 @@ pub struct Exchange {
     answers: Map<String, Value>,
     memo: Map<String, Value>,
     can_ask: bool,
+    /// Whether the client said it understands a task handle.
+    ///
+    /// Separate from `can_ask` because they are separate declarations and a
+    /// client may make either without the other: elicitation is core, tasks
+    /// are an extension. Handing a handle to a client that declared neither
+    /// turns a tool call into an object full of fields it never asked for.
+    can_hand_off: bool,
     pending: Map<String, Value>,
     fresh_memo: Map<String, Value>,
+    /// The `CreateTaskResult` this call handed back instead of an answer, if
+    /// the handler decided its work was long enough to queue.
+    ///
+    /// Here rather than in a thread-local of its own because the nesting is
+    /// already solved: [`ExchangeGuard`] restores its predecessor, so a tool
+    /// call reached from inside another execution cannot hand off on its
+    /// caller's behalf. Two ways of ending a call early, one place that knows
+    /// a call ended early.
+    handed_off: Option<Value>,
 }
 
 impl Exchange {
@@ -314,6 +330,12 @@ impl Exchange {
             can_ask,
             ..Default::default()
         }
+    }
+
+    /// The same exchange, for a client that also understands task handles.
+    pub fn with_task_handoff(mut self, can_hand_off: bool) -> Self {
+        self.can_hand_off = can_hand_off;
+        self
     }
 
     /// An exchange for an execution with nobody to ask — a scheduled job, a
@@ -421,6 +443,40 @@ pub fn memo_set(key: &str, value: Value) {
     });
 }
 
+/// Whether the client for this call declared the tasks extension.
+pub fn can_hand_off() -> bool {
+    EXCHANGE.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map(|exchange| exchange.can_hand_off)
+            .unwrap_or(false)
+    })
+}
+
+/// Record that this call handed its work to the queue.
+///
+/// Like [`record_ask`], the prelude throws immediately after, which ends the
+/// execution — and like an ask, the *outcome* is decided by what is recorded
+/// here rather than by the exception, so a handler that catches it still ends
+/// its call having handed off. The work is already queued by the time this is
+/// called, which is what makes that safe: the throw cannot unqueue it.
+pub fn record_handoff(create_result: Value) {
+    EXCHANGE.with(|cell| {
+        if let Some(exchange) = cell.borrow_mut().as_mut() {
+            exchange.handed_off = Some(create_result);
+        }
+    });
+}
+
+/// Whether this execution is a tool call at all.
+///
+/// Distinct from [`can_ask`], which additionally asks whether the *client* can
+/// be elicited from. Handing back a task needs a request to answer and nothing
+/// more, so a call that cannot ask a question may still queue its work.
+pub fn in_exchange() -> bool {
+    EXCHANGE.with(|cell| cell.borrow().is_some())
+}
+
 /// How many questions this pass has asked, which names the next one.
 pub fn asked_so_far() -> usize {
     EXCHANGE.with(|cell| {
@@ -440,6 +496,16 @@ pub struct Asked {
 }
 
 impl Exchange {
+    /// The task handle this call handed back, if it handed one back.
+    ///
+    /// Read before [`Exchange::into_asked`] by every caller, because the two
+    /// are mutually exclusive in practice and a handler that did both has
+    /// already queued its work — answering `input_required` would leave the
+    /// queue holding work for a call the client is about to retry.
+    pub fn handed_off(&self) -> Option<&Value> {
+        self.handed_off.as_ref()
+    }
+
     /// `None` when the handler asked nothing, which is the ordinary case.
     pub fn into_asked(self) -> Option<Asked> {
         if self.pending.is_empty() {

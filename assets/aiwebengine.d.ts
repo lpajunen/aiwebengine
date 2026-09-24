@@ -3150,6 +3150,79 @@ interface Mcp {
    * const draftId = mcp.once("draft", () => createDraft(repo));
    */
   once<T>(key: string, compute: () => T): T;
+
+  /**
+   * Whether this call may hand its work to a task
+   * (`io.modelcontextprotocol/tasks`).
+   *
+   * Two conditions: there is a request to answer at all — false in a scheduled
+   * job, a listener or a route handler — and the client declared the tasks
+   * extension. A client that did not declare it has to be answered
+   * synchronously, because a handle it cannot read is a tool call answered with
+   * a small object full of fields it never asked for.
+   *
+   * Ask this before `mcp.task`, and write the synchronous path after it.
+   */
+  canTask(): boolean;
+
+  /**
+   * Hand this call's work to the durable queue, and answer the client with a
+   * task handle it can poll.
+   *
+   * **This does not return.** Like `mcp.ask`, it ends the execution: the work
+   * is queued, the handle is recorded, and the client is answered with
+   * `resultType: "task"`. So the line after it is the synchronous fallback,
+   * which is why `canTask()` is worth asking first.
+   *
+   * The engine never decides this for you. By the time it could measure that a
+   * handler is slow, the handler has started and the answer is a value rather
+   * than a handle — so the script says so, from inside the handler that knows.
+   *
+   * `handler` names a top-level function in this script, called later with the
+   * payload on `context.meta.task.payload`. **What that handler returns is the
+   * task's result**, and is what `tasks/get` answers with once the status is
+   * `completed`; it is wrapped in the same envelope a synchronous call would
+   * have produced, so a client never has to branch on whether its work was
+   * queued. A handler that throws puts the task in `failed`.
+   *
+   * The work runs in *script* context, not as the caller — running it as them
+   * would take a delegation grant, and an MCP client holding a token is not the
+   * same as a person having consented to background work in their name. It gets
+   * one attempt: a retried tool call is a second run of work the client was
+   * told had started, with no way to tell it the first attempt failed.
+   *
+   * @example
+   * function buildReport(context) {
+   *   if (mcp.canTask()) {
+   *     mcp.task({
+   *       handler: "runReport",
+   *       payload: context.args,
+   *       statusMessage: "gathering",
+   *     });
+   *   }
+   *   return runReportInline(context.args); // the client cannot poll
+   * }
+   *
+   * function runReport(context) {
+   *   const report = gather(context.meta.task.payload);
+   *   return { content: [{ type: "text", text: report }] };
+   * }
+   *
+   * @throws if this call cannot hand off, if the work cannot be queued, or if
+   *   the execution does not hold `enqueue_tasks`.
+   */
+  task(options: {
+    /** A top-level function in this script that does the work. */
+    handler: string;
+    /** Handed to it as `context.meta.task.payload`. Must be an object. */
+    payload?: Record<string, unknown>;
+    /** Progress text the client sees on every poll. */
+    statusMessage?: string;
+    /** What this must not run beside — see `scriptTasks.enqueue`. */
+    lane?: string;
+    /** The tool or prompt this is for, recorded on the handle. */
+    target?: string;
+  }): never;
 }
 
 declare var scriptStorage: Storage;

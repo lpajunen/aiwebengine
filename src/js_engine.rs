@@ -2043,7 +2043,7 @@ pub fn execute_scheduled_handler(
 pub fn execute_task_handler(
     invocation: &crate::tasks::TaskInvocation,
     delegated: Option<&crate::delegation::Delegated>,
-) -> Result<(), String> {
+) -> Result<Option<serde_json::Value>, String> {
     let script_uri = invocation.script_uri.as_str();
     let handler_name = invocation.handler_name.as_str();
     let script_uri_owned = script_uri.to_string();
@@ -2196,13 +2196,39 @@ pub fn execute_task_handler(
 
             promise_resolve(ctx, result)
         },
-        |_ctx, _value| Ok(()),
+        // What the handler returned, kept rather than discarded.
+        //
+        // Every task used to answer `()`, which was right while the only
+        // consumer was the queue — a task's effects are its output, and what it
+        // did is in the script's log. An MCP task is the case where somebody is
+        // waiting for a *value*: `tasks/get` has to answer with what the tool
+        // call would have returned synchronously, and the handler's return is
+        // the only place that can come from. A conversion failure is not a task
+        // failure, so it lands as `None` rather than poisoning the run.
+        |ctx, value| {
+            // Through `JSON.stringify` rather than a direct conversion, which
+            // is how every other boundary here reads a handler's value: it is
+            // the same serialization the handler would have got had it returned
+            // to a synchronous call, so a task's result and a direct result
+            // cannot differ in shape. `undefined` stringifies to nothing, which
+            // is `None` — a handler that returned nothing has no result, and
+            // storing `null` would claim it answered.
+            let json: rquickjs::Object = match ctx.globals().get("JSON") {
+                Ok(json) => json,
+                Err(_) => return Ok(None),
+            };
+            let stringify: rquickjs::Function = match json.get("stringify") {
+                Ok(stringify) => stringify,
+                Err(_) => return Ok(None),
+            };
+            let text: Option<String> = stringify.call((value,)).ok();
+            Ok(text.and_then(|text| serde_json::from_str(&text).ok()))
+        },
     );
 
     drop(ctx);
 
-    handler_result?;
-    Ok(())
+    handler_result
 }
 
 /// The JavaScript authoring API (`test`, `expect`, hooks) evaluated into a test
@@ -2816,6 +2842,12 @@ pub fn execute_mcp_prompt_handler(
     // Read before judging the result, for the reason the tool path does: a
     // handler that asks ends by throwing, and the outcome is what it recorded.
     let exchange = guard.finish();
+    // Before the questions, because a handler that did both has already queued
+    // its work: answering `input_required` would leave the queue holding work
+    // for a call the client is about to retry from the top.
+    if let Some(handed) = exchange.handed_off() {
+        return Ok(crate::mcp::Outcome::Handed(handed.clone()));
+    }
     if let Some(asked) = exchange.into_asked() {
         return Ok(crate::mcp::Outcome::InputRequired(asked));
     }
@@ -2995,6 +3027,12 @@ pub fn execute_mcp_tool_handler(
     // ordering is also what stops a script catching its own `McpInputRequired`
     // and returning a value as though the question had been answered.
     let exchange = guard.finish();
+    // Before the questions, because a handler that did both has already queued
+    // its work: answering `input_required` would leave the queue holding work
+    // for a call the client is about to retry from the top.
+    if let Some(handed) = exchange.handed_off() {
+        return Ok(crate::mcp::Outcome::Handed(handed.clone()));
+    }
     if let Some(asked) = exchange.into_asked() {
         drop(ctx);
         return Ok(crate::mcp::ToolOutcome::InputRequired(asked));
@@ -4451,6 +4489,9 @@ mod tests {
             crate::mcp::ToolOutcome::Complete(result) => Ok(result),
             crate::mcp::ToolOutcome::InputRequired(_) => {
                 Err("handler asked for input, which this shim does not answer".to_string())
+            }
+            crate::mcp::ToolOutcome::Handed(_) => {
+                Err("handler handed off to a task, which this shim does not poll".to_string())
             }
         }
     }

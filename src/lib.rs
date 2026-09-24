@@ -45,6 +45,7 @@ pub mod log_retention;
 pub mod mcp;
 pub mod mcp_client;
 pub mod mcp_elicitation;
+pub mod mcp_tasks;
 pub mod middleware;
 pub mod module_loader;
 pub mod notifications;
@@ -843,6 +844,42 @@ async fn initialize_database_and_repository(config: &config::Config) -> AppResul
 }
 
 /// Helper: Convert ErrorResponse to HTTP response
+/// A `tasks/*` request whose `taskId` names nothing we can answer for.
+///
+/// One reply for "never existed" and "expired", because the client's move is
+/// the same either way — the work is not reachable through this id any more —
+/// and distinguishing them would let a caller probe which ids have ever been
+/// issued.
+fn mcp_task_unknown(id: Option<serde_json::Value>, task_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": -32602,
+            "message": format!("Unknown or expired task: {}", task_id)
+        }
+    })
+}
+
+fn mcp_task_bad_params(
+    id: Option<serde_json::Value>,
+    error: serde_json::Error,
+) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": -32602, "message": format!("Invalid params: {}", error) }
+    })
+}
+
+fn mcp_task_missing_id(id: Option<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": -32602, "message": "Invalid params: taskId is required" }
+    })
+}
+
 fn error_to_response(error_response: error::ErrorResponse) -> Response {
     let status =
         StatusCode::from_u16(error_response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
@@ -2381,6 +2418,14 @@ async fn setup_routes(
                             },
                             // Honest: `completion/complete` is handled below.
                             "completions": {}
+                            // No `extensions` here, and the tasks extension in
+                            // particular. Its negotiation is per-request — a
+                            // client declares it in `_meta` on every call — and
+                            // a legacy client has no `_meta` to declare it in.
+                            // Advertising it would promise a legacy client
+                            // something it has no way to take up, and the
+                            // engine would never hand it a handle: the check
+                            // that gates one reads the field it cannot send.
                         },
                         "serverInfo": {
                             "name": "aiwebengine",
@@ -2485,6 +2530,13 @@ async fn setup_routes(
                     .unwrap_or_else(|| "anonymous".to_string());
                 let can_ask = era_is_modern
                     && mcp_elicitation::client_can_elicit(client_capabilities.as_ref());
+                // Modern-era only for the same reason `can_ask` is: the
+                // extension is declared per request in `_meta`, which a legacy
+                // client does not send. A handle given to a client that cannot
+                // read `resultType: "task"` is a tool call answered with an
+                // object full of fields it never asked for.
+                let can_hand_off =
+                    era_is_modern && mcp_tasks::client_accepts_tasks(client_capabilities.as_ref());
                 let args_digest = mcp_elicitation::digest_arguments(&params.name, &arguments);
 
                 // A presented request state is attacker-controlled, and is
@@ -2500,7 +2552,9 @@ async fn setup_routes(
                     &params.name,
                     &args_digest,
                     can_ask,
-                ) {
+                )
+                .map(|exchange| exchange.with_task_handoff(can_hand_off))
+                {
                     Ok(exchange) => exchange,
                     Err(reason) => {
                         warn!(
@@ -2598,6 +2652,26 @@ async fn setup_routes(
                 };
 
                 match execution {
+                    Ok(mcp::ToolOutcome::Handed(create_result)) => {
+                        // The handler queued its work. The handle is already
+                        // recorded — `mcp.task` writes it before the execution
+                        // ends, because a client holding a `taskId` that names
+                        // nothing is worse than a slow answer — so there is
+                        // nothing to decide here but to pass it on.
+                        debug!("MCP '{}' handed its work to a task", params.name);
+                        let mut result = create_result;
+                        if let Some(object) = result.as_object_mut() {
+                            object.insert(
+                                "_meta".to_string(),
+                                serde_json::json!({ mcp::META_SERVER_INFO: mcp::server_info() }),
+                            );
+                        }
+                        axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": rpc_request.id,
+                            "result": result
+                        }))
+                    }
                     Ok(mcp::ToolOutcome::InputRequired(asked)) => {
                         // The handler asked for something. This call is over —
                         // the client gathers the answers and starts a new one,
@@ -2721,6 +2795,115 @@ async fn setup_routes(
                                 }))
                             }))
                         }
+                    }
+                }
+            }
+            "tasks/get" => {
+                #[derive(Deserialize)]
+                struct TaskParams {
+                    #[serde(rename = "taskId")]
+                    task_id: String,
+                }
+
+                let params: TaskParams = match rpc_request.params.clone() {
+                    Some(p) => match serde_json::from_value(p) {
+                        Ok(params) => params,
+                        Err(e) => {
+                            return axum::response::Json(mcp_task_bad_params(rpc_request.id, e));
+                        }
+                    },
+                    None => {
+                        return axum::response::Json(mcp_task_missing_id(rpc_request.id));
+                    }
+                };
+
+                let Ok(task_id) = uuid::Uuid::parse_str(&params.task_id) else {
+                    return axum::response::Json(mcp_task_unknown(rpc_request.id, &params.task_id));
+                };
+
+                match mcp_tasks::get(task_id).await {
+                    Ok(Some(task)) => axum::response::Json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": rpc_request.id,
+                        "result": mcp::complete(task.detailed_result())
+                    })),
+                    // An expired handle and one that never existed answer the
+                    // same way, and the client's move is the same either way:
+                    // the work it was waiting on is not reachable through this
+                    // id any more.
+                    Ok(None) => {
+                        axum::response::Json(mcp_task_unknown(rpc_request.id, &params.task_id))
+                    }
+                    Err(e) => {
+                        error!("MCP tasks/get failed: {}", e);
+                        axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": rpc_request.id,
+                            "error": { "code": -32603, "message": "Could not read the task" }
+                        }))
+                    }
+                }
+            }
+            "tasks/update" => {
+                // Acknowledged and otherwise ignored, which is what the
+                // extension asks of a server with no outstanding
+                // `inputRequests`: responses for keys that are not outstanding
+                // are dropped. Nothing here reaches `input_required` yet — a
+                // queued run asking a person a question is a design question
+                // rather than a plumbing one, since a task runs in script
+                // context or as somebody who is by definition away — so every
+                // key is that case. Served rather than refused because the
+                // method exists and a client is entitled to call it.
+                axum::response::Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": rpc_request.id,
+                    "result": mcp::complete(serde_json::json!({}))
+                }))
+            }
+            "tasks/cancel" => {
+                #[derive(Deserialize)]
+                struct TaskParams {
+                    #[serde(rename = "taskId")]
+                    task_id: String,
+                }
+
+                let params: TaskParams = match rpc_request.params.clone() {
+                    Some(p) => match serde_json::from_value(p) {
+                        Ok(params) => params,
+                        Err(e) => {
+                            return axum::response::Json(mcp_task_bad_params(rpc_request.id, e));
+                        }
+                    },
+                    None => {
+                        return axum::response::Json(mcp_task_missing_id(rpc_request.id));
+                    }
+                };
+
+                let Ok(task_id) = uuid::Uuid::parse_str(&params.task_id) else {
+                    return axum::response::Json(mcp_task_unknown(rpc_request.id, &params.task_id));
+                };
+
+                // Cooperative, which the extension says plainly: a handler a
+                // worker has already claimed runs to its own conclusion. The
+                // acknowledgement is the same either way, because a client told
+                // "cancelled" that then got a result would have been lied to by
+                // a more confident answer.
+                match mcp_tasks::cancel(task_id).await {
+                    Ok(true) => axum::response::Json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": rpc_request.id,
+                        "result": mcp::complete(serde_json::json!({}))
+                    })),
+                    Ok(false) => {
+                        axum::response::Json(mcp_task_unknown(rpc_request.id, &params.task_id))
+                    }
+                    Err(e) => {
+                        error!("MCP tasks/cancel failed: {}", e);
+                        axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": rpc_request.id,
+                            "error": { "code": -32603, "message": "Could not cancel the task" }
+                        }))
                     }
                 }
             }
@@ -2947,6 +3130,13 @@ async fn setup_routes(
                     .unwrap_or_else(|| "anonymous".to_string());
                 let can_ask = era_is_modern
                     && mcp_elicitation::client_can_elicit(client_capabilities.as_ref());
+                // Modern-era only for the same reason `can_ask` is: the
+                // extension is declared per request in `_meta`, which a legacy
+                // client does not send. A handle given to a client that cannot
+                // read `resultType: "task"` is a tool call answered with an
+                // object full of fields it never asked for.
+                let can_hand_off =
+                    era_is_modern && mcp_tasks::client_accepts_tasks(client_capabilities.as_ref());
                 let args_digest = mcp_elicitation::digest_arguments(&params.name, &arguments);
 
                 let exchange = match mcp_elicitation::exchange_for(
@@ -2957,7 +3147,9 @@ async fn setup_routes(
                     &params.name,
                     &args_digest,
                     can_ask,
-                ) {
+                )
+                .map(|exchange| exchange.with_task_handoff(can_hand_off))
+                {
                     Ok(exchange) => exchange,
                     Err(reason) => {
                         warn!(
@@ -2982,6 +3174,26 @@ async fn setup_routes(
                     user_context,
                     exchange,
                 ) {
+                    Ok(mcp::Outcome::Handed(create_result)) => {
+                        // The handler queued its work. The handle is already
+                        // recorded — `mcp.task` writes it before the execution
+                        // ends, because a client holding a `taskId` that names
+                        // nothing is worse than a slow answer — so there is
+                        // nothing to decide here but to pass it on.
+                        debug!("MCP '{}' handed its work to a task", params.name);
+                        let mut result = create_result;
+                        if let Some(object) = result.as_object_mut() {
+                            object.insert(
+                                "_meta".to_string(),
+                                serde_json::json!({ mcp::META_SERVER_INFO: mcp::server_info() }),
+                            );
+                        }
+                        axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": rpc_request.id,
+                            "result": result
+                        }))
+                    }
                     Ok(mcp::Outcome::InputRequired(asked)) => {
                         match mcp_elicitation::seal(
                             &principal,

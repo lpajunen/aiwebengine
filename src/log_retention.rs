@@ -87,6 +87,18 @@ pub fn spawn_pruner(config: LogsConfig, shutdown: tokio::sync::oneshot::Receiver
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
+                    // MCP task handles ride this tick rather than getting a
+                    // pass of their own: both are "delete what is past its
+                    // window", both are cheap, and a second timer would be a
+                    // second thing to configure for no decision anyone wants
+                    // to make separately.
+                    match crate::mcp_tasks::prune().await {
+                        Ok(deleted) if deleted > 0 => {
+                            tracing::info!(deleted = deleted, "Pruned expired MCP task handles");
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!("MCP task pruning pass failed: {}", e),
+                    }
                     match prune(retention).await {
                         Ok(deleted) if deleted > 0 => {
                             tracing::info!(deleted = deleted, "Pruned script logs");

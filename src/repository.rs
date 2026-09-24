@@ -5555,6 +5555,20 @@ pub fn delete_script(uri: &str) -> bool {
                 }) {
                     warn!("Failed to clear queued tasks for '{}': {}", uri, e);
                 }
+                // And the MCP handles naming it. A handle whose script is gone
+                // could never reach a terminal status, so a client polling one
+                // would do so until its TTL rather than being told.
+                let deleted_handles = uri.to_string();
+                if let Err(e) = run_bounded(async move {
+                    crate::mcp_tasks::delete_for_script(&deleted_handles)
+                        .await
+                        .map_err(|e| AppError::Database {
+                            message: e.to_string(),
+                            source: None,
+                        })
+                }) {
+                    warn!("Failed to clear MCP task handles for '{}': {}", uri, e);
+                }
                 // Its message listeners go with them. A listener names a
                 // script the dispatcher then cannot fetch, so every dispatch
                 // of that message type counts a failure for a script that no

@@ -296,7 +296,7 @@ land on any of them. `2026-07-28` removes `initialize`/`notifications/initialize
 and the `Mcp-Session-Id` header and makes the protocol stateless; the engine had
 no session affinity to give up.
 
-Five of the six steps below are done; the tasks extension is the one left. `/mcp` is now a **dual-era** server: a
+Every step below is done. `/mcp` is now a **dual-era** server: a
 request carrying `io.modelcontextprotocol/protocolVersion` in its `params._meta`
 is served statelessly under `2026-07-28`, and an `initialize` selects a legacy
 revision exactly as before. The specification allows serving both on one
@@ -382,10 +382,54 @@ endpoint, and the engine had to, because a legacy client has no fall-forward.
    so, but a version a client puts in `_meta` has to be one whose rules `_meta`
    is part of.
 
-5. **The tasks extension**, if long-running agent work over MCP is wanted.
-   Unstarted. `io.modelcontextprotocol/tasks`, polling through `tasks/get` with
-   `tasks/update` for client-to-server input. The engine has the durable half in
-   `tasks.rs`; what it lacks is the MCP-facing mapping.
+5. ~~**The tasks extension.**~~ Done. `io.modelcontextprotocol/tasks`, with
+   `tasks/get`, `tasks/update` and `tasks/cancel`, over the durable half
+   `tasks.rs` already was.
+
+   This item assumed the mapping was the work. It was not — the mapping is
+   thin, and three decisions underneath it were the work.
+
+   **The script decides, not the engine.** The specification calls this
+   server-directed, and the obvious reading is that the engine works out which
+   calls are slow. It cannot: by the time it could measure, the handler has
+   started and the answer is a value rather than a handle. So `mcp.task` is a
+   surface a handler calls, and it is `mcp.ask`'s sibling exactly — both end
+   the execution, both are decided by what the host recorded rather than by the
+   exception the prelude throws, and both leave the next line as the fallback
+   for a client that cannot take part. The difference is that an ask re-runs
+   the handler from the top and a task does not run it again at all.
+
+   **A second table, because the lifetimes are opposite.** `script_tasks`
+   deletes a row on success, deliberately — one row per success grows the queue
+   for the outcome nobody debugs. An MCP task's completed row is precisely the
+   one that has to survive, because the client has not seen the answer yet.
+   Folding them together would have meant making the queue keep its successes,
+   which is the decision it made the other way for good reasons.
+
+   **A task handler's return value stopped being discarded.**
+   `execute_task_handler` answered `()`, which was right while the only
+   consumer was the queue: a task's effects are its output and what it did is
+   in the log. An MCP task is the case where somebody is waiting for a _value_,
+   and it is wrapped at read time in the same envelope a synchronous call would
+   have produced — so a client never branches on whether its work happened to
+   be queued.
+
+   Three smaller things worth carrying forward. One attempt, not the queue's
+   five: a retried tool call is a second run of work the client was told had
+   started, with no way to tell it the first attempt failed. Script context
+   rather than the caller's, because running it as them would take a delegation
+   grant and an MCP client holding a token is not a person consenting to
+   background work in their name. And a handle never reaches a legacy client,
+   because the extension is declared per request in `_meta` and legacy has none
+   — so `initialize` advertises no `extensions` rather than promising something
+   that could never be taken up.
+
+   `input_required` is representable and unreachable. A queued run asking a
+   person a question is a design question rather than a plumbing one: the task
+   runs in script context, or as somebody who is by definition away. So
+   `tasks/update` acknowledges and ignores, which is what the extension says to
+   do with responses for keys that are not outstanding — and with no
+   `input_required` state, every key is that.
 
 6. ~~**`resources/*`.**~~ Done, and it was not the item this list expected —
    it came out of asking what the engine already had that MCP had a shape for.
@@ -597,9 +641,11 @@ from outside gets the loop it needs.
 The gap for this audience is not capability, and it is no longer transport
 either. Item 8 is decided; item 7 turned out to be a revision to catch up with
 rather than a feature to build, since `2026-07-28` moved the protocol toward the
-shape `/mcp` already had. What is left for an external agent is conformance with
-that revision — `resultType`, cacheable list results, `server/discover` — and
-the authorization hardening in item 9, which the engine wanted anyway.
+shape `/mcp` already had. That conformance is now done — `resultType`, cacheable
+list results, `server/discover`, MRTR, resources, and the tasks extension — as
+is the `iss` half of item 9. What is left of that item is CIMD,
+`application_type`, and keying stored credentials by issuer, none of which the
+engine needs an agent to want.
 
 One thing this set cannot currently be turned into: an **in-engine** agent that
 edits solutions. Those tools want ownership or an administrator, and

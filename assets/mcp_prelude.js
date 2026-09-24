@@ -30,6 +30,16 @@
     return error;
   }
 
+  // The same trick as AskedError, for the other way a call ends without an
+  // answer. The *outcome* is decided by what the host recorded, not by this
+  // exception, so a handler that catches it still ends its call having handed
+  // off — the work is already queued and a throw cannot unqueue it.
+  function HandedError(message) {
+    var error = new Error(message);
+    error.name = "McpTaskHandedOff";
+    return error;
+  }
+
   var mcp = {
     // Whether this caller can be asked at all.
     //
@@ -139,6 +149,66 @@
         );
       });
       return value;
+    },
+
+    // Whether this call may hand its work to a task.
+    //
+    // Two conditions: there is a request to answer at all (false in a
+    // scheduled job or a listener), and the client declared the tasks
+    // extension. A client that did not declare it has to be answered
+    // synchronously, because a handle it cannot read is a tool call answered
+    // with an object full of fields it never asked for.
+    canTask: function () {
+      return hostCall("canTask", function () {
+        return __hostMcp.canTask();
+      });
+    },
+
+    // Hand this call's work to the durable queue and answer the client with a
+    // task handle it can poll.
+    //
+    //   function buildReport(context) {
+    //     if (mcp.canTask()) {
+    //       mcp.task({ handler: "runReport", payload: context.request.arguments });
+    //     }
+    //     return runReportInline(context.request.arguments);
+    //   }
+    //
+    // Like `mcp.ask`, this does not return: the work is queued, the handle is
+    // recorded, and the call ends. So the line after it is the synchronous
+    // fallback, which is why `canTask()` is worth asking first — a client that
+    // cannot be handed a task still needs an answer.
+    //
+    // `handler` names a top-level function in this script, called later with
+    // `context.meta.task.payload`. **What it returns is the task's result**,
+    // and is what `tasks/get` answers with once the status is `completed`; it
+    // has to be JSON. A handler that throws puts the task in `failed`.
+    //
+    // The work runs in *script* context, not as the caller. Running it as them
+    // would need a delegation grant, and an MCP client holding a token is not
+    // the same as a person having consented to background work in their name.
+    task: function (options) {
+      options = options || {};
+      if (typeof options.handler !== "string" || options.handler.length === 0) {
+        throw new Error("mcp.task: a handler name is required");
+      }
+
+      var created = hostCall("task", function () {
+        return __hostMcp.handOff(
+          JSON.stringify({
+            handler: options.handler,
+            payload: options.payload === undefined ? {} : options.payload,
+            statusMessage: options.statusMessage,
+            lane: options.lane,
+            method: options.method,
+            target: options.target,
+          }),
+        );
+      });
+
+      throw HandedError(
+        "mcp.task: handed off as " + JSON.parse(created).taskId,
+      );
     },
   };
 

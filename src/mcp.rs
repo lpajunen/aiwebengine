@@ -634,6 +634,13 @@ pub fn execute_mcp_completion(
         // handler is shared with `prompts/get` and saying so beats a panic if
         // that ever stops being true.
         Outcome::InputRequired(_) => Err("a completion handler cannot ask for input".to_string()),
+        // Unreachable for the same reason and refused for the same one: an
+        // unattended exchange reports no client, so `mcp.canTask` is false and
+        // `mcp.task` throws. An autocomplete on a half-typed argument that
+        // answered with a handle to poll would be useless to the thing asking.
+        Outcome::Handed(_) => {
+            Err("a completion handler cannot hand its work to a task".to_string())
+        }
     }
 }
 
@@ -674,6 +681,16 @@ pub enum Outcome<T> {
     Complete(T),
     /// The handler asked for something before it could finish.
     InputRequired(crate::mcp_elicitation::Asked),
+    /// The handler queued its work and handed back a task handle
+    /// (`io.modelcontextprotocol/tasks`). The value is the `CreateTaskResult`,
+    /// already built, because the handle was written to the database before the
+    /// handler's execution ended and there is nothing left to decide.
+    ///
+    /// A third case rather than a flavour of `Complete`, for the reason
+    /// `InputRequired` is one: the three end the call in ways that have nothing
+    /// in common to merge, and a `resultType` the caller has to remember to
+    /// override is one it will eventually forget to.
+    Handed(serde_json::Value),
 }
 
 /// A tool's result is its handler's JSON, still a string.
@@ -981,6 +998,12 @@ pub fn discover_result(native_tools_allowed: bool) -> serde_json::Value {
             // back empty, not a server that cannot serve them.
             "resources": {},
             "completions": {},
+            // Extensions beyond the core protocol. A client reads this to
+            // decide whether to declare the same one on its own requests, which
+            // is what gates the engine ever handing back a task handle.
+            "extensions": {
+                crate::mcp_tasks::EXTENSION: {},
+            },
         },
         "instructions": if native_tools_allowed {
             "Scripts hosted by this engine register tools, prompts and resources at \

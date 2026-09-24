@@ -56,6 +56,35 @@ one needs nothing the engine does not already do. And because each round trip is
 an ordinary tool call with an ordinary budget, no execution slot is held while a
 person is thinking — `script_limits.rs` never sees a difference.
 
+## The other way a call ends without an answer
+
+`mcp.task` is the sibling of `mcp.ask`, and worth reading beside it because the
+two share a mechanism and answer opposite questions. An ask says _I need
+something from you before I can finish_; a task says _this will take longer than
+you want to wait_.
+
+```javascript
+function buildReport(context) {
+  if (mcp.canTask()) {
+    mcp.task({ handler: "runReport", payload: context.args });
+  }
+  return runReportInline(context.args); // the client cannot poll
+}
+```
+
+Both end the execution, both are decided by what the host recorded rather than
+by the exception the prelude throws, and both leave the line after them as the
+fallback for a client that cannot take part. Where they differ is what happens
+next: an ask is re-run from the top when the answer arrives, and a task is not
+re-run at all — the work moves to the durable queue and the client polls
+`tasks/get` for it.
+
+That difference is why the re-execution cost below applies to asks and not to
+tasks. A handler that hands off runs once.
+
+See [Script Tasks](SCRIPT_TASKS.md) for the queue underneath, and
+`src/mcp_tasks.rs` for why the handle lives in a table of its own.
+
 ## What it costs, and the two ways out
 
 Everything before the first `ask` happens on every round trip. A handler that

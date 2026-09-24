@@ -769,13 +769,24 @@ async fn abandon(worker_id: &str, invocation: &TaskInvocation, reason: &str) {
 ///
 /// Every statement names this worker in `locked_by`, so a claim that has since
 /// moved on writes nothing rather than overwriting whatever took it.
-async fn finalize(worker_id: &str, invocation: &TaskInvocation, outcome: Result<(), String>) {
+async fn finalize(
+    worker_id: &str,
+    invocation: &TaskInvocation,
+    outcome: Result<Option<Value>, String>,
+) {
     let Some(db) = crate::database::get_global_database() else {
         return;
     };
 
     let error = match outcome {
-        Ok(()) => {
+        Ok(value) => {
+            // An MCP client polling for this is waiting on a value, so the
+            // handle is settled before the queue row goes. Ordered this way
+            // round deliberately: a crash between the two leaves the task
+            // `working` against a row that no longer exists, which the lease
+            // reaper reports as a failure — where the reverse leaves a client
+            // told "completed" by a row that had not finished.
+            let _ = crate::mcp_tasks::finish(invocation.task_id, "completed", value, None).await;
             // Succeeded: the row goes. What it did is in the script's log under
             // this invocation id, and a row per success would grow this table
             // for the one outcome nobody needs to look up.
@@ -795,6 +806,23 @@ async fn finalize(worker_id: &str, invocation: &TaskInvocation, outcome: Result<
 
     let attempts = invocation.attempts.saturating_add(1);
     let exhausted = attempts >= invocation.max_attempts;
+
+    // Only once there is nothing left to try. A client polling a task that is
+    // being retried should go on seeing `working`, because that is what is
+    // happening — reporting each attempt's failure would make a task that
+    // eventually succeeds look like one that failed several times.
+    if exhausted {
+        let _ = crate::mcp_tasks::finish(
+            invocation.task_id,
+            "failed",
+            None,
+            Some(serde_json::json!({
+                "code": -32603,
+                "message": truncate_error(&error),
+            })),
+        )
+        .await;
+    }
 
     // Kept rather than deleted, unlike a success: a failed task is the one
     // somebody needs to read, and `last_error` is what saves them correlating

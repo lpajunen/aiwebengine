@@ -2419,7 +2419,7 @@ impl SecureGlobalContext {
         global.set("mcpRegistry", mcp_registry)?;
 
         // The other half of MCP: asking the caller a question mid-tool.
-        self.setup_mcp_elicitation(ctx)?;
+        self.setup_mcp_elicitation(ctx, script_uri)?;
 
         // Setup McpClient class for connecting to external MCP servers
         self.setup_mcp_client_class(ctx, script_uri)?;
@@ -2436,7 +2436,7 @@ impl SecureGlobalContext {
     /// established. Installed unconditionally, because an execution with no
     /// exchange is not an error — it is a scheduled job or a listener, where
     /// `canAsk` is false and `ask` throws.
-    fn setup_mcp_elicitation(&self, ctx: &rquickjs::Ctx<'_>) -> JsResult<()> {
+    fn setup_mcp_elicitation(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
         use crate::mcp_elicitation as elicitation;
 
         let host = rquickjs::Object::new(ctx.clone())?;
@@ -2470,6 +2470,142 @@ impl SecureGlobalContext {
             elicitation::memo_set(&key, parsed);
         })?;
         host.set("memoSet", memo_set)?;
+
+        // `mcp.task` — the other way a tool call ends without an answer.
+        //
+        // The script decides, not the engine: by the time the engine could
+        // measure that a handler is slow, the handler has started and the
+        // answer is a value rather than a handle. A handler that knows its own
+        // work is long says so, and the work moves to the durable queue.
+        let user_ctx_task = self.user_context.clone();
+        let script_uri_task = script_uri.to_string();
+        let hand_off = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, spec_json: String| -> JsResult<String> {
+                // Queueing is queueing, whoever asked for it. A delegated run
+                // that may not enqueue must not get one by routing through the
+                // MCP surface.
+                if !user_ctx_task.has_capability(&Capability::EnqueueTasks) {
+                    return Err(capability_error(
+                        "mcp.task",
+                        &Capability::EnqueueTasks,
+                        &user_ctx_task,
+                    ));
+                }
+
+                let spec: serde_json::Value = serde_json::from_str(&spec_json).map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "mcp.task",
+                        "options",
+                        &format!("Invalid task options: {}", e),
+                    )
+                })?;
+
+                let handler = spec
+                    .get("handler")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if handler.is_empty() {
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "mcp.task",
+                        "handler",
+                        "mcp.task: a handler name is required",
+                    ));
+                }
+
+                let method = spec
+                    .get("method")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("tools/call")
+                    .to_string();
+                let target = spec
+                    .get("target")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let status_message = spec
+                    .get("statusMessage")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string);
+
+                let queued = crate::tasks::blocking::enqueue(crate::tasks::NewTask {
+                    script_uri: script_uri_task.clone(),
+                    handler_name: handler,
+                    payload: spec
+                        .get("payload")
+                        .cloned()
+                        .unwrap_or(serde_json::json!({})),
+                    run_at: None,
+                    // One attempt. A retried tool call is a second run of work
+                    // the client was told had started, with no way to tell it
+                    // the first attempt failed — and `tasks.rs`'s backoff is
+                    // built for work nobody is waiting on. A handler that wants
+                    // retries can chain them itself and report through
+                    // `statusMessage`.
+                    max_attempts: Some(1),
+                    enqueued_by: user_ctx_task.user_id.clone(),
+                    kind: crate::tasks::TaskKind::Task,
+                    // Script context. Running a queued tool call as the caller
+                    // would need a delegation grant, and an MCP client holding
+                    // a token is not the same as a person having consented to
+                    // background work in their name.
+                    run_as: None,
+                    lane: spec
+                        .get("lane")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string),
+                })
+                .map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "mcp.task",
+                        "enqueue",
+                        &format!("mcp.task: could not queue the work: {}", e),
+                    )
+                })?;
+
+                // The handle is recorded before the response goes out, which
+                // the specification requires: a client holding a `taskId` that
+                // names nothing is worse than a slow answer.
+                let task_id = uuid::Uuid::new_v4();
+                let created = crate::database::run_blocking(crate::mcp_tasks::create(
+                    task_id,
+                    queued.task_id,
+                    &script_uri_task,
+                    &method,
+                    &target,
+                    status_message.as_deref(),
+                ))
+                .map_err(|e| {
+                    // The work is queued and the handle is not, so the client
+                    // would have no way to reach it. Cancelling is the honest
+                    // unwind: better nothing ran than something ran that
+                    // nobody can collect.
+                    let _ = crate::tasks::blocking::cancel(queued.task_id);
+                    rquickjs::Error::new_from_js_message(
+                        "mcp.task",
+                        "record",
+                        &format!("mcp.task: could not record the task handle: {}", e),
+                    )
+                })?;
+
+                let create_result = created.create_result();
+                elicitation::record_handoff(create_result.clone());
+                Ok(create_result.to_string())
+            },
+        )?;
+        host.set("handOff", hand_off)?;
+
+        // Whether this call may hand back a handle at all: a tool call whose
+        // client declared the extension. Two conditions rather than one,
+        // because they fail for different reasons and a script wants to know
+        // which — there is no request to answer at all in a scheduled job,
+        // while a client that did not declare the extension is a request that
+        // has to be answered synchronously.
+        let can_task = Function::new(ctx.clone(), || -> bool {
+            elicitation::in_exchange() && elicitation::can_hand_off()
+        })?;
+        host.set("canTask", can_task)?;
 
         ctx.globals().set("__hostMcp", host)?;
 
