@@ -199,6 +199,22 @@ pub struct SessionData {
     /// else to remember.
     #[serde(default)]
     pub elevation: Option<crate::security::elevation::Elevation>,
+    /// When the person last proved they were at the keyboard.
+    ///
+    /// Set when the session is minted and again by a re-authentication, and
+    /// read by exactly one thing: `POST /auth/elevate`, which refuses outside
+    /// `security.elevation.reauth_window_secs`.
+    ///
+    /// Elevating on the cookie you already hold stops a confused script and a
+    /// CSRF; it does not stop a stolen session, which is most of what a
+    /// thirty-day window is worth to whoever took it. So the question this
+    /// answers is "did they just prove they are here", not "have they been
+    /// here today".
+    ///
+    /// `None` on a session that predates the field, which is read as *never* —
+    /// the direction that asks for proof rather than assuming it.
+    #[serde(default)]
+    pub reauthenticated_at: Option<DateTime<Utc>>,
 }
 
 /// One of an account's sessions, as its owner is allowed to see it.
@@ -525,6 +541,9 @@ impl SecureSessionManager {
             // A fresh session starts at the floor. Signing in is not, on its
             // own, a statement that you intend to administer anything.
             elevation: None,
+            // Signing in *is* proof of presence, so a person who elevates
+            // straight after does not authenticate twice in a row.
+            reauthenticated_at: Some(now),
         };
 
         // Encrypt session data
@@ -588,6 +607,36 @@ impl SecureSessionManager {
         token: &str,
         elevation: Option<super::elevation::Elevation>,
     ) -> Result<(), SessionError> {
+        self.rewrite_session(token, |session| {
+            session.elevation = elevation;
+        })
+        .await
+    }
+
+    /// Record that the person just proved they are here.
+    ///
+    /// Kept apart from [`Self::set_elevation`] because they are two facts and
+    /// the second does not imply the first: dropping an elevation is not proof
+    /// of anything, and a re-authentication that is then not spent on an
+    /// elevation is still a re-authentication.
+    pub async fn mark_reauthenticated(&self, token: &str) -> Result<(), SessionError> {
+        self.rewrite_session(token, |session| {
+            session.reauthenticated_at = Some(Utc::now());
+        })
+        .await
+    }
+
+    /// Read a stored session, change it, and write it back.
+    ///
+    /// Re-reads rather than taking a [`SessionData`] the caller has been
+    /// holding, because anything else would write back a session that had
+    /// changed underneath it — the address on its fingerprint, its slid expiry
+    /// — and silently undo whichever of those landed in between.
+    async fn rewrite_session(
+        &self,
+        token: &str,
+        change: impl FnOnce(&mut SessionData),
+    ) -> Result<(), SessionError> {
         let row: Option<(serde_json::Value, DateTime<Utc>)> =
             sqlx::query_as("SELECT data, expires_at FROM sessions WHERE session_id = $1")
                 .bind(token)
@@ -603,7 +652,7 @@ impl SecureSessionManager {
         let encrypted: EncryptedSessionData = serde_json::from_value(encrypted_json)
             .map_err(|e| SessionError::ValidationFailed(format!("Data corruption: {}", e)))?;
         let mut session_data = self.decrypt_session(&encrypted)?;
-        session_data.elevation = elevation;
+        change(&mut session_data);
 
         let encrypted = self.encrypt_session(&session_data)?;
         let encrypted_json = serde_json::to_value(&encrypted)

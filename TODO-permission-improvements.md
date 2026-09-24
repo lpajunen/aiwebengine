@@ -172,15 +172,27 @@ Sub-steps, in order:
    is a claim the engine does not keep.
 
 4. `GET|POST /auth/elevate`, `POST /auth/elevate/drop`, and the third panel on
-   `/auth/account` — a copy of `delegate_page`. **Next.** Until this exists
-   nothing can elevate, so gating a bundle would lock the surface rather than
-   guard it: the mechanism is in and the dial stays at empty.
+   `/auth/account` — a copy of `delegate_page`. **← done**, with
+   `reauthenticated_at` set at sign-in and by `mark_reauthenticated`, and the
+   POST refusing outside `reauth_window_secs`.
 
-   `reauthenticated_at` lands here, set at sign-in and by both re-auth paths,
-   with `POST /auth/elevate` refusing outside `reauth_window_secs`.
+   A local account proves presence with its password, throttled per address
+   _and_ per account exactly as `login_local` is, since a guess here is worth
+   more than a sign-in rather than less. A federated one can only elevate
+   inside the window after signing in — see step 5, which is what makes that
+   smooth.
 
 5. `prompt=login` threaded into `get_authorization_url` (a fifth argument;
-   `extra_params` is per-provider config and this is per-request).
+   `extra_params` is per-provider config and this is per-request). **Next, and
+   it is what makes elevation usable on a federated deployment.** The page
+   deliberately offers no "re-authenticate" button without it: a round trip
+   the provider answers from its own cookie proves nothing, and an engine
+   calling that re-authentication would be claiming something it cannot back.
+
+   The refusal hint belongs here too — `AppError::InsufficientCapabilities`
+   gaining the `elevate` URL that `routes::elevate_url` already builds, so a
+   refused caller is sent to the page rather than left to find it.
+
 6. `scope=` honoured at `/auth/oauth2/authorize`, re-read on refresh.
 7. `[security.elevation]` with `enabled = false` as the code default, and a
    `gated` list so `administer` can move before `author`.

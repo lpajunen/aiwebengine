@@ -40,6 +40,8 @@ pub struct AuthSession {
     pub expires_at: DateTime<Utc>,
     /// What this session switched on beyond the floor, if anything.
     pub elevation: Option<crate::security::elevation::Elevation>,
+    /// When the person last proved they were at the keyboard.
+    pub reauthenticated_at: Option<DateTime<Utc>>,
 }
 
 impl AuthSession {
@@ -68,6 +70,7 @@ impl From<SessionData> for AuthSession {
             created_at: data.created_at,
             expires_at: data.expires_at,
             elevation: data.elevation,
+            reauthenticated_at: data.reauthenticated_at,
         }
     }
 }
@@ -161,6 +164,30 @@ impl AuthSessionManager {
     }
 
     /// Delete session (logout)
+    /// Write an elevation into a session, or clear one.
+    ///
+    /// A passthrough like every other method here: this type is the auth
+    /// layer's view of a session and reaching around it for one operation
+    /// would be the start of two ways to do the same thing.
+    pub async fn set_elevation(
+        &self,
+        token: &str,
+        elevation: Option<crate::security::elevation::Elevation>,
+    ) -> Result<(), AuthError> {
+        self.session_manager
+            .set_elevation(token, elevation)
+            .await
+            .map_err(|e| AuthError::Internal(format!("could not write the elevation: {}", e)))
+    }
+
+    /// Record that the person just proved they are here.
+    pub async fn mark_reauthenticated(&self, token: &str) -> Result<(), AuthError> {
+        self.session_manager
+            .mark_reauthenticated(token)
+            .await
+            .map_err(|e| AuthError::Internal(format!("could not record the authentication: {}", e)))
+    }
+
     pub async fn delete_session(&self, token: &str) -> Result<(), AuthError> {
         self.session_manager
             .invalidate_session(token)
