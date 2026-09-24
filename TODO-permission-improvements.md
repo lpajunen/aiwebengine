@@ -223,19 +223,30 @@ Sub-steps, in order:
 7. `[security.elevation]` with `enabled = false` as the code default, and a
    `gated` list so `administer` can move before `author`.
 
-### Phase 3 — a delegation verb for management
+### Phase 3 — a delegation verb for management — **done**
 
-`Scope::Write` was the verb `delegation.rs` grew for storage and tables.
-Management needs its own — something like `manage_own_scripts`, capped to
-scripts the person owns, never reaching `list_users` / `write_secret` /
-`eval_script`.
+`Scope::Author` and `Scope::Administer`, named to match
+`elevation::Grade` so that the three consent surfaces — a browser stepping up,
+a token minted from an OAuth scope, and an app authorised to act while you are
+away — read the same two words for the same two things.
 
-Until it exists, **writes belong where `write_skill` already puts them**: in
-the approving request, under the person's own rights. Plan mode is already the
-seam (`plans.ts`, `POST /agent/decide`), so this costs almost nothing and is
-honest about what it is. The consequence is documented and correct: a
-Telegram-button approval is refused, because a delegated turn can never hold
-editor authority.
+This is the one change that breaks a rule `delegation.rs` used to state
+absolutely, so it is worth stating what replaced it. The cap is now a
+_default_ rather than a maximum, and what must never change is that raising it
+is never quiet: the scope is ticked on a page that spells out what it means,
+and `tier_for` grants it only as far as the account's roles already reach. A
+grant is consent, not a promotion — ticking `administer` on an ordinary
+account grants nothing, and does not fall back to `author`.
+
+The two are independent on purpose. `administer` alone carries
+`AdministerEngine` and not `WriteScripts`: enough to read the engine and list
+its users, not enough to rewrite somebody's solution. That is the grant an
+agent answering "who are the users" actually needs, and it is strictly less
+than full administration.
+
+`CLAUDE.md` and `docs/DELEGATION.md` were updated to describe the cap as it
+now is; the test that asserted the old absolute rule now asserts the narrower
+one it left behind.
 
 ### Phase 4 — the status half
 

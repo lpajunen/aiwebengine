@@ -296,10 +296,19 @@ async fn an_undelegated_task_reaches_nobodys_storage() {
     );
 }
 
-/// The tier is capped however much the person holds, so a delegated task
-/// belonging to an administrator is not a way to get an administrative one.
+/// Every scope that is not a management one leaves the cap where it was, so a
+/// delegated task belonging to an administrator is not *by itself* a way to
+/// get an administrative context.
+///
+/// This used to hold for `Scope::all()` unconditionally. `Scope::Author` and
+/// `Scope::Administer` are the deliberate exception — a person may now consent
+/// to exactly this, on a page that says so in those words — and the invariant
+/// that replaced the old one is that nothing else confers it and no amount of
+/// asking does. Both halves are covered:
+/// `an_administrator_can_delegate_administering_and_nobody_else_can` has the
+/// other one.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_delegated_task_is_not_an_administrator_even_for_an_administrator() {
+async fn ordinary_scopes_are_not_a_way_to_administer_even_for_an_administrator() {
     setup_env().await;
     let user_id = a_user("admin-delegate").await;
     let for_roles = user_id.clone();
@@ -315,7 +324,10 @@ async fn a_delegated_task_is_not_an_administrator_even_for_an_administrator() {
 
     let script_uri = "test://delegation/admin";
     repository::upsert_script(script_uri, "function work() {}").expect("script should store");
-    delegation::grant(&user_id, script_uri, &Scope::all(), Duration::days(1))
+    // Everything a delegation could ask for before the management scopes
+    // existed, granted at once, by somebody who holds every role.
+    let ordinary_scopes = [Scope::PersonalStorage, Scope::Secrets, Scope::Write];
+    delegation::grant(&user_id, script_uri, &ordinary_scopes, Duration::days(1))
         .await
         .expect("granted");
 
@@ -1380,4 +1392,131 @@ async fn a_link_without_a_live_grant_starts_nothing() {
 #[allow(dead_code)]
 fn _uses_utc() -> chrono::DateTime<Utc> {
     Utc::now()
+}
+
+/// Administering the engine while the person is away, which the cap used to
+/// refuse outright.
+///
+/// The change this covers is the one thing `delegation.rs` never allowed: a
+/// delegated run reaching past `authenticated`. It reaches only as far as the
+/// account's own roles, and only because the person ticked the box — so this
+/// walks the whole path, storing roles on a real account and resolving a real
+/// grant, rather than asserting about `context_for` in isolation.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_administrator_can_delegate_administering_and_nobody_else_can() {
+    setup_env().await;
+
+    let script_uri = "test://delegation/administer";
+    let administrator = a_user("administers").await;
+    let ordinary = a_user("ordinary").await;
+
+    aiwebengine::user_repository::update_user_roles(
+        &administrator,
+        vec![aiwebengine::user_repository::UserRole::Administrator],
+    )
+    .expect("the role should be stored");
+
+    for user in [&administrator, &ordinary] {
+        delegation::grant(user, script_uri, &[Scope::Administer], Duration::days(1))
+            .await
+            .expect("the grant should be recorded");
+    }
+
+    let elevated = delegation::resolve(&administrator, script_uri)
+        .await
+        .expect("a live grant should resolve");
+    assert!(
+        elevated
+            .user_context
+            .has_capability(&aiwebengine::security::Capability::AdministerEngine),
+        "an administrator who consented should be able to administer"
+    );
+
+    let refused = delegation::resolve(&ordinary, script_uri)
+        .await
+        .expect("a live grant should resolve");
+    assert!(
+        !refused
+            .user_context
+            .has_capability(&aiwebengine::security::Capability::AdministerEngine),
+        "consenting is not a promotion: an ordinary account grants nothing here"
+    );
+}
+
+/// Taking the role away ends the delegation outright.
+///
+/// Two things stop it, and the belt is the interesting one.
+/// `update_user_roles` calls `security::delete_sessions_for_user`, which
+/// withdraws every delegation the account had — so a demotion does not wait
+/// for a grant to lapse, and this is what the test observes.
+///
+/// Underneath that, `resolve` reads the roles as they stand when the task
+/// runs rather than as they were when the grant was recorded, so a role change
+/// reaching the account by any path that did *not* revoke would still take
+/// effect. That one is covered by `consenting_to_more_than_you_hold_grants_nothing`
+/// in `delegation.rs`, which can describe roles the repository never held.
+#[tokio::test(flavor = "multi_thread")]
+async fn losing_the_role_ends_the_delegated_authority() {
+    setup_env().await;
+
+    let script_uri = "test://delegation/demoted";
+    let user = a_user("demoted").await;
+
+    aiwebengine::user_repository::update_user_roles(
+        &user,
+        vec![aiwebengine::user_repository::UserRole::Administrator],
+    )
+    .expect("the role should be stored");
+
+    delegation::grant(&user, script_uri, &[Scope::Administer], Duration::days(1))
+        .await
+        .expect("the grant should be recorded");
+
+    assert!(
+        delegation::resolve(&user, script_uri)
+            .await
+            .expect("resolves")
+            .user_context
+            .has_capability(&aiwebengine::security::Capability::AdministerEngine),
+        "the grant should work while the role is held"
+    );
+
+    aiwebengine::user_repository::update_user_roles(&user, vec![])
+        .expect("the role should be removed");
+
+    assert!(
+        matches!(
+            delegation::resolve(&user, script_uri).await,
+            Err(delegation::Refusal::NoGrant)
+        ),
+        "changing what an account may do should withdraw what it delegated"
+    );
+}
+
+/// An editor's delegated authoring reaches their own scripts and stops at
+/// administering, which is the split the two scopes exist to draw.
+#[tokio::test(flavor = "multi_thread")]
+async fn delegated_authoring_stops_short_of_administering() {
+    setup_env().await;
+
+    let script_uri = "test://delegation/authors";
+    let user = a_user("authors").await;
+
+    aiwebengine::user_repository::update_user_roles(
+        &user,
+        vec![aiwebengine::user_repository::UserRole::Editor],
+    )
+    .expect("the role should be stored");
+
+    delegation::grant(&user, script_uri, &[Scope::Author], Duration::days(1))
+        .await
+        .expect("the grant should be recorded");
+
+    let context = delegation::resolve(&user, script_uri)
+        .await
+        .expect("resolves")
+        .user_context;
+
+    assert!(context.has_capability(&aiwebengine::security::Capability::WriteScripts));
+    assert!(!context.has_capability(&aiwebengine::security::Capability::AdministerEngine));
 }

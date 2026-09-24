@@ -1539,14 +1539,39 @@ pub async fn delegate_page(
         .iter()
         .map(|scope| {
             let already = existing.as_ref().is_some_and(|grant| grant.allows(*scope));
+            // A scope the account's roles cannot confer is shown disabled
+            // with the reason rather than hidden — the elevation page's rule,
+            // and the same argument: "your account is not an administrator"
+            // is the useful answer, where a missing checkbox is somebody
+            // wondering what the app asked for.
+            let reachable = match scope.required_role() {
+                Some(crate::user_repository::UserRole::Administrator) => session.is_admin,
+                Some(crate::user_repository::UserRole::Editor) => {
+                    session.is_editor || session.is_admin
+                }
+                _ => true,
+            };
+            let note = match (reachable, scope.required_role()) {
+                (true, _) => String::new(),
+                (false, Some(crate::user_repository::UserRole::Administrator)) => {
+                    r#" <span class="provider">— your account is not an administrator</span>"#
+                        .to_string()
+                }
+                (false, _) => {
+                    r#" <span class="provider">— your account cannot author scripts</span>"#
+                        .to_string()
+                }
+            };
             format!(
                 r#"<label class="scope">
-                    <input type="checkbox" name="scope" value="{value}"{checked}>
-                    {description}
+                    <input type="checkbox" name="scope" value="{value}"{checked}{disabled}>
+                    {description}{note}
                 </label>"#,
                 value = html_attribute(scope.as_str()),
-                checked = if already { " checked" } else { "" },
+                checked = if already && reachable { " checked" } else { "" },
+                disabled = if reachable { "" } else { " disabled" },
                 description = html_escape::encode_text(scope.describe()),
+                note = note,
             )
         })
         .collect::<Vec<_>>()

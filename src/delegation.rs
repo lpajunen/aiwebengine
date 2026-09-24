@@ -102,6 +102,23 @@ pub enum Scope {
     /// could not express — a person authorising an app to go away and *work
     /// out* what to do, without authorising it to do the thing.
     Write,
+    /// Author the scripts this person owns, while they are away.
+    ///
+    /// The first scope that raises the *tier* rather than narrowing within
+    /// it. Every other one attenuates `authenticated`; this asks for
+    /// something `authenticated` does not contain, which is why it is bounded
+    /// by the account's own roles as well as by the grant — see
+    /// [`tier_for`]. Ownership is still checked at every write, so this
+    /// reaches the person's own solutions and nobody else's.
+    Author,
+    /// Administer the engine as this person, while they are away.
+    ///
+    /// The widest thing anybody can consent to here, and deliberately
+    /// separate from [`Scope::Author`]: acting on what you do not own is the
+    /// question `AdministerEngine` has always marked, and an agent that lists
+    /// users is asking it. Granted only to an account that holds the
+    /// administrator role, because a grant is consent and not a promotion.
+    Administer,
 }
 
 impl Scope {
@@ -110,6 +127,8 @@ impl Scope {
             Scope::PersonalStorage => "personal_storage",
             Scope::Secrets => "secrets",
             Scope::Write => "write",
+            Scope::Author => "author",
+            Scope::Administer => "administer",
         }
     }
 
@@ -118,6 +137,24 @@ impl Scope {
             "personal_storage" => Some(Scope::PersonalStorage),
             "secrets" => Some(Scope::Secrets),
             "write" => Some(Scope::Write),
+            "author" => Some(Scope::Author),
+            "administer" => Some(Scope::Administer),
+            _ => None,
+        }
+    }
+
+    /// The elevation bundle this scope asks for, if it asks for one.
+    ///
+    /// The names match [`crate::security::elevation::Grade`] on purpose.
+    /// A person switching authority on in a browser, a token minted from an
+    /// OAuth `scope`, and an app authorised to act while they are away are
+    /// three lifetimes of one question, and reading the same two words in all
+    /// three places is most of what makes the answer legible.
+    pub fn grade(self) -> Option<crate::security::elevation::Grade> {
+        use crate::security::elevation::Grade;
+        match self {
+            Scope::Author => Some(Grade::Author),
+            Scope::Administer => Some(Grade::Administer),
             _ => None,
         }
     }
@@ -129,6 +166,14 @@ impl Scope {
             Scope::PersonalStorage => "Read the data this app keeps for you",
             Scope::Secrets => "Use the API keys you have given this app",
             Scope::Write => "Change things, not just read them",
+            // Worded harder than the rest, because these are the two that
+            // reach past what using a solution needs and the person deciding
+            // is usually being asked by the app that wants them.
+            Scope::Author => "Create and change your scripts while you are away",
+            Scope::Administer => {
+                "Administer this engine as you — including scripts, users and secrets \
+                 you do not own"
+            }
         }
     }
 
@@ -140,7 +185,13 @@ impl Scope {
     /// it rather than by a capability.
     pub fn capabilities(self) -> &'static [Capability] {
         match self {
-            Scope::PersonalStorage | Scope::Secrets => &[],
+            // The management scopes carry no list here either, and for a
+            // sharper reason than the nouns: what they add is a whole tier,
+            // derived from the tiers themselves by
+            // `elevation::Grade::capabilities`, so writing it out again would
+            // be a second place to forget. `context_for` reads it from
+            // [`Scope::grade`].
+            Scope::PersonalStorage | Scope::Secrets | Scope::Author | Scope::Administer => &[],
             Scope::Write => &[
                 Capability::WriteScriptData,
                 Capability::WriteStorage,
@@ -161,8 +212,28 @@ impl Scope {
         }
     }
 
-    pub fn all() -> [Scope; 3] {
-        [Scope::PersonalStorage, Scope::Secrets, Scope::Write]
+    pub fn all() -> [Scope; 5] {
+        [
+            Scope::PersonalStorage,
+            Scope::Secrets,
+            Scope::Write,
+            Scope::Author,
+            Scope::Administer,
+        ]
+    }
+
+    /// Whether reaching this scope takes a role beyond being signed in.
+    ///
+    /// Advisory: [`tier_for`] enforces it whatever this says. It exists so
+    /// the consent page can show a scope as unavailable with the reason,
+    /// rather than offering somebody a checkbox that would grant nothing.
+    pub fn required_role(self) -> Option<crate::user_repository::UserRole> {
+        use crate::user_repository::UserRole;
+        match self {
+            Scope::Author => Some(UserRole::Editor),
+            Scope::Administer => Some(UserRole::Administrator),
+            _ => None,
+        }
     }
 }
 
@@ -212,12 +283,93 @@ fn base_capabilities() -> Vec<Capability> {
 ///
 /// Attenuating rather than intersecting by hand matters: the cap already
 /// happened, so this can only take more away.
-pub fn context_for(user_id: &str, scopes: &[Scope]) -> UserContext {
+pub fn context_for(
+    user_id: &str,
+    scopes: &[Scope],
+    roles: &[crate::user_repository::UserRole],
+) -> UserContext {
+    let allowed = allowed_grades(scopes, roles);
+
     let mut keep = base_capabilities();
     for scope in scopes {
         keep.extend_from_slice(scope.capabilities());
     }
-    UserContext::authenticated(user_id.to_string()).attenuated(keep)
+    for grade in &allowed {
+        keep.extend(grade.capabilities());
+    }
+
+    tier_for(user_id, &allowed).attenuated(keep)
+}
+
+/// Which management bundles this grant actually reaches.
+///
+/// Two conditions, both required, and they answer different questions. The
+/// scope is what the *person* agreed to; the role is what their account may
+/// ever do. A grant is consent, not a promotion — somebody who is not an
+/// administrator ticking "administer" has agreed to something they cannot
+/// confer, and the answer is that nothing happens rather than that they
+/// become one.
+///
+/// Each bundle is decided on its own. Ticking `administer` without the
+/// administrator role does **not** fall back to `author`: that would hand over
+/// authoring nobody ticked, on the reasoning that it is less than what was
+/// asked for, which is not how consent works.
+fn allowed_grades(
+    scopes: &[Scope],
+    roles: &[crate::user_repository::UserRole],
+) -> Vec<crate::security::elevation::Grade> {
+    scopes
+        .iter()
+        .filter_map(|scope| {
+            let grade = scope.grade()?;
+            match scope.required_role() {
+                Some(required) if !holds_role(roles, &required) => None,
+                _ => Some(grade),
+            }
+        })
+        .collect()
+}
+
+/// Whether these roles reach `required`.
+///
+/// An administrator holds what an editor does, which the role list does not
+/// say for itself — `update_user_roles` stores what was granted rather than
+/// its closure, so an account can be an administrator without the editor row
+/// beside it.
+fn holds_role(
+    roles: &[crate::user_repository::UserRole],
+    required: &crate::user_repository::UserRole,
+) -> bool {
+    use crate::user_repository::UserRole;
+    match required {
+        UserRole::Administrator => roles.contains(&UserRole::Administrator),
+        UserRole::Editor => {
+            roles.contains(&UserRole::Editor) || roles.contains(&UserRole::Administrator)
+        }
+        other => roles.contains(other),
+    }
+}
+
+/// The tier a delegated run is capped at.
+///
+/// `authenticated` unless a management bundle was both consented to and
+/// carried by the account, which is the cap this module has always applied,
+/// now with the one way past it that a person can open deliberately.
+///
+/// The cap is still a cap. Nothing here reads what the person holds and hands
+/// it over; it reads what they *agreed to hand over* and checks they had it.
+/// An app that was granted nothing management-shaped gets exactly what every
+/// delegated run got before these scopes existed.
+fn tier_for(user_id: &str, allowed: &[crate::security::elevation::Grade]) -> UserContext {
+    use crate::security::elevation::Grade;
+
+    if allowed.contains(&Grade::Administer) {
+        UserContext::admin(user_id.to_string())
+    } else if allowed.contains(&Grade::Author) {
+        UserContext::editor(user_id.to_string())
+    } else {
+        UserContext::authenticated(user_id.to_string())
+    }
 }
 
 /// A grant as stored.
@@ -904,7 +1056,11 @@ pub async fn resolve(user_id: &str, script_uri: &str) -> Result<Delegated, Refus
     };
 
     Ok(Delegated {
-        user_context: context_for(user_id, &grant.scopes),
+        // The roles as stored right now, not as they were when the grant was
+        // recorded. Somebody whose administrator role was taken away since
+        // stops administering on the next run, which is the argument
+        // `auth::refresh_tokens` makes for re-reading on every refresh.
+        user_context: context_for(user_id, &grant.scopes, &user.roles),
         grant,
         email: user.email.clone(),
         name: user.name.clone(),
@@ -928,6 +1084,107 @@ mod tests {
     fn an_unknown_scope_is_not_a_scope() {
         assert_eq!(Scope::parse("administer_everything"), None);
         assert_eq!(Scope::parse(""), None);
+    }
+
+    /// The cap that has always been here still is, for every grant that does
+    /// not name a management scope. An app granted everything else holds no
+    /// more than it did before these scopes existed.
+    #[test]
+    fn an_ordinary_grant_is_still_capped_at_authenticated() {
+        use crate::user_repository::UserRole;
+
+        let everything_else = [Scope::PersonalStorage, Scope::Secrets, Scope::Write];
+        // Granted by an administrator, which is the case that would show a
+        // leak: their roles are the widest an account can have.
+        let context = context_for(
+            "u1",
+            &everything_else,
+            &[UserRole::Administrator, UserRole::Editor],
+        );
+
+        assert!(!context.has_capability(&Capability::AdministerEngine));
+        assert!(!context.has_capability(&Capability::WriteScripts));
+        assert!(!context.has_capability(&Capability::DeleteScripts));
+        assert!(context.has_capability(&Capability::WriteScriptData));
+    }
+
+    /// A grant is consent, not a promotion. Ticking a management scope on an
+    /// account that does not hold the role grants nothing at all.
+    #[test]
+    fn consenting_to_more_than_you_hold_grants_nothing() {
+        use crate::user_repository::UserRole;
+
+        let ordinary = context_for("u1", &[Scope::Author, Scope::Administer], &[]);
+        assert!(!ordinary.has_capability(&Capability::WriteScripts));
+        assert!(!ordinary.has_capability(&Capability::AdministerEngine));
+
+        // An editor consenting to `administer` gets the editor half only if
+        // they also ticked `author`. Falling back from one bundle to the other
+        // would hand over authoring nobody agreed to.
+        let editor_asked_to_administer =
+            context_for("u1", &[Scope::Administer], &[UserRole::Editor]);
+        assert!(!editor_asked_to_administer.has_capability(&Capability::AdministerEngine));
+        assert!(
+            !editor_asked_to_administer.has_capability(&Capability::WriteScripts),
+            "administer must not quietly become author"
+        );
+    }
+
+    /// The scope an agent listing users needs, granted by somebody who can.
+    #[test]
+    fn an_administrator_can_delegate_administering() {
+        use crate::user_repository::UserRole;
+
+        let context = context_for("u1", &[Scope::Administer], &[UserRole::Administrator]);
+
+        assert!(context.has_capability(&Capability::AdministerEngine));
+        // Enough to read the engine and its users, and deliberately not
+        // enough to rewrite somebody's solution: writing a script takes
+        // `WriteScripts`, which lives in the other bundle.
+        assert!(context.has_capability(&Capability::ReadScripts));
+        assert!(!context.has_capability(&Capability::WriteScripts));
+    }
+
+    /// Authoring, for an account that may author. Ownership is checked at
+    /// every write, so this reaches the person's own scripts and no others.
+    #[test]
+    fn an_editor_can_delegate_authoring() {
+        use crate::user_repository::UserRole;
+
+        let context = context_for("u1", &[Scope::Author], &[UserRole::Editor]);
+
+        assert!(context.has_capability(&Capability::WriteScripts));
+        assert!(context.has_capability(&Capability::WriteAssets));
+        assert!(!context.has_capability(&Capability::AdministerEngine));
+    }
+
+    /// An administrator holds what an editor does, even when the role list
+    /// says only `Administrator` — roles are stored as granted rather than as
+    /// their closure.
+    #[test]
+    fn an_administrator_may_delegate_authoring_without_the_editor_row() {
+        use crate::user_repository::UserRole;
+
+        let context = context_for("u1", &[Scope::Author], &[UserRole::Administrator]);
+
+        assert!(context.has_capability(&Capability::WriteScripts));
+        assert!(
+            !context.has_capability(&Capability::AdministerEngine),
+            "authoring is not administering, whoever granted it"
+        );
+    }
+
+    /// Writes to a person's own things are still the `write` scope's, and a
+    /// management scope does not smuggle them in.
+    #[test]
+    fn authoring_does_not_imply_writing_the_persons_own_data() {
+        use crate::user_repository::UserRole;
+
+        let context = context_for("u1", &[Scope::Author], &[UserRole::Editor]);
+
+        assert!(!context.has_capability(&Capability::WriteStorage));
+        assert!(!context.has_capability(&Capability::EnqueueTasks));
+        assert!(context.has_capability(&Capability::WriteScripts));
     }
 
     #[test]
@@ -975,10 +1232,15 @@ mod tests {
         assert!(live.is_live(Utc::now()));
     }
 
-    /// The tier a delegated task gets is capped regardless of the person's
-    /// roles, so this is the set it must never exceed.
+    /// The floor a delegated task starts from, and what it must not contain.
+    ///
+    /// This used to be the ceiling as well — the tier was `authenticated`
+    /// whatever the person held. It is now the default rather than the
+    /// maximum: `Scope::Author` and `Scope::Administer` raise it, and only as
+    /// far as the account's roles already reach. What has not changed is that
+    /// a grant naming neither of them lands here.
     #[test]
-    fn the_delegated_tier_is_no_more_than_an_ordinary_request_holds() {
+    fn the_default_delegated_tier_is_no_more_than_an_ordinary_request_holds() {
         let delegated = UserContext::authenticated("u1".to_string());
         let editor = UserContext::editor("u1".to_string());
 
@@ -1004,7 +1266,7 @@ mod tests {
     /// "change things" produces a context that holds no write at all.
     #[test]
     fn a_grant_without_the_verb_can_read_and_cannot_write() {
-        let context = context_for("u1", &[Scope::PersonalStorage, Scope::Secrets]);
+        let context = context_for("u1", &[Scope::PersonalStorage, Scope::Secrets], &[]);
 
         for readable in [
             Capability::ReadScriptData,
@@ -1053,7 +1315,7 @@ mod tests {
     /// in one more place rather than in a different way.
     #[test]
     fn a_grant_with_the_verb_holds_what_a_delegation_always_held() {
-        let context = context_for("u1", &Scope::all());
+        let context = context_for("u1", &Scope::all(), &[]);
         let before = UserContext::authenticated("u1".to_string());
 
         for capability in &before.capabilities {
@@ -1072,13 +1334,18 @@ mod tests {
         }
     }
 
-    /// The cap comes first and attenuation second, so no combination of
-    /// scopes reaches past what an ordinary request holds. A scope whose
-    /// capability list grew to include something authoring would be
-    /// intersected away rather than granted.
+    /// No combination of scopes reaches past an ordinary request **for an
+    /// account holding no roles**, which is what every delegation was before
+    /// the management scopes and what most still are.
+    ///
+    /// The unqualified invariant is gone on purpose: `author` and
+    /// `administer` exist precisely to raise the tier, and
+    /// `consenting_to_more_than_you_hold_grants_nothing` is what now carries
+    /// the half of it that must never change — that the raising is bounded by
+    /// the account's own roles rather than by the asking.
     #[test]
-    fn no_combination_of_scopes_exceeds_an_ordinary_request() {
-        let context = context_for("u1", &Scope::all());
+    fn scopes_reach_no_further_than_an_ordinary_request_for_an_ordinary_account() {
+        let context = context_for("u1", &Scope::all(), &[]);
         let ordinary = UserContext::authenticated("u1".to_string());
 
         for capability in &context.capabilities {
@@ -1095,7 +1362,7 @@ mod tests {
     /// "act as me, read what you need, touch nothing of mine".
     #[test]
     fn a_grant_with_no_scopes_can_still_read() {
-        let context = context_for("u1", &[]);
+        let context = context_for("u1", &[], &[]);
 
         assert!(context.has_capability(&Capability::ReadScriptData));
         assert!(!context.has_capability(&Capability::WriteScriptData));
@@ -1174,6 +1441,6 @@ mod tests {
                 scope
             );
         }
-        assert!(!context_for("u1", &Scope::all()).has_capability(&Capability::WriteSecrets));
+        assert!(!context_for("u1", &Scope::all(), &[]).has_capability(&Capability::WriteSecrets));
     }
 }

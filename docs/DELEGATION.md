@@ -271,16 +271,50 @@ A task whose grant has gone is **abandoned, not retried**. Retrying would be
 the engine repeatedly asking to act as somebody who has said no, and the
 attempts would only delay the row reaching the state that explains itself.
 
-## Capped, whatever the person holds
+## Capped by default, and raised only by being asked for
 
 A delegated task runs with what an ordinary request of that person's has and
-nothing more. An administrator's delegated task holds no `AdministerEngine`,
-no `WriteScripts`, no `DeleteScripts`.
+nothing more — unless they ticked one of the two scopes that say otherwise.
+An administrator's delegated task holds no `AdministerEngine`, no
+`WriteScripts` and no `DeleteScripts` on the strength of their roles alone.
 
-Background work has no business authoring a solution, and a delegated task
-must not become the way to get one that does. Narrowing is the safe direction
-and it is one sentence to state, which is why it is stated rather than
-computed from roles.
+Background work has no business authoring a solution _by default_, and a
+delegated task must not become the way to **quietly** get one that does. That
+is the sentence the cap was always keeping, and it is the one that still
+holds.
+
+### The two that raise it
+
+`author` — _Create and change your scripts while you are away._
+`administer` — _Administer this engine as you — including scripts, users and
+secrets you do not own._
+
+They exist because an agent that manages scripts and users is work people
+actually ask for while they are away, and the alternative was a stored `/mcp`
+token: the same authority reached through a credential, past every check in
+this file rather than through one.
+
+Three rules keep them honest.
+
+**A grant is consent, not a promotion.** Each is granted only as far as the
+account's own roles already reach. Ticking `administer` on an ordinary account
+grants nothing at all, and the consent page shows it disabled with the reason
+rather than offering a checkbox that would do nothing.
+
+**Neither falls back to the other.** An editor ticking `administer` does not
+get `author` instead. Handing over authoring nobody ticked, on the grounds
+that it is less than what was asked for, is not how consent works.
+
+**They are independent.** `administer` alone carries `AdministerEngine` and
+not `WriteScripts` — enough to read the engine and list its users, not enough
+to rewrite somebody's solution. Full administration is both, and a person who
+wants an agent that can answer "who are the users" without also being able to
+rewrite their scripts can say exactly that.
+
+Roles are read when the task runs, so a demotion takes effect on the next run
+rather than when the grant lapses. In practice it is faster than that: a role
+change runs `delete_sessions_for_user`, which withdraws every delegation the
+account had.
 
 ## Three ways a delegation ends
 
