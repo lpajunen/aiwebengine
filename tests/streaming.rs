@@ -648,6 +648,15 @@ async fn test_stream_endpoints() {
     assert_eq!(response.headers().get("cache-control").unwrap(), "no-cache");
     // Note: connection: keep-alive is not required for SSE (transfer-encoding: chunked is used instead)
 
+    // Let the stream go before asking anything else of this client.
+    //
+    // An SSE body is never finished, so this response holds its connection
+    // open and in use for as long as it is alive — and shadowing the binding
+    // below would *not* end it, since a shadowed value lives to the end of the
+    // scope. Dropping it here is what the test means, and it keeps the next
+    // request from being the one that discovers a connection nobody freed.
+    drop(response);
+
     // Test 3: Non-existent stream should return 404
     let response = client
         .get(format!("{}/non-existent-stream", base_url))

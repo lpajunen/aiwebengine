@@ -217,9 +217,22 @@ async fn a_task_whose_handler_throws_is_retried_and_then_given_up_on() {
 
         if attempt < 2 {
             assert_eq!(found.state, "pending", "there is an attempt left");
+            // Against `updated_at` rather than the wall clock. Both are
+            // written by the one statement that requeues the row, from the
+            // database's clock, so this compares the backoff with the moment
+            // it was applied and says exactly what it means.
+            //
+            // `Utc::now()` here was a race: the read that follows the write
+            // goes through the connection pool, and under a loaded suite
+            // acquiring a connection can take longer than the five-second
+            // backoff — at which point a correctly scheduled retry reads as a
+            // spin. Widening the margin would only have made the race rarer.
             assert!(
-                found.run_at > chrono::Utc::now(),
-                "a retry should wait before running again, not spin"
+                found.run_at > found.updated_at,
+                "a retry should wait before running again, not spin: \
+                 run_at {} is not after updated_at {}",
+                found.run_at,
+                found.updated_at
             );
         } else {
             assert_eq!(found.state, "failed", "the attempts are spent");

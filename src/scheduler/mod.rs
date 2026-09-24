@@ -1371,6 +1371,15 @@ mod tests {
             assert_eq!(attempts, 0, "a stranger should not count an attempt");
         }
 
+        /// How long a renewal is given to land before the test calls it a
+        /// failure.
+        ///
+        /// Generously more than `RENEW_EVERY_SECONDS`, because what is being
+        /// waited on is one tick plus one statement, and the statement
+        /// competes with every other test in the run for a connection. A
+        /// renewal that has not happened by now has not happened.
+        const RENEWAL_WAIT_SECONDS: u64 = 45;
+
         /// The bug this replaced: a claim lapsed a fixed time after it was
         /// taken, however long the run turned out to be, so a long job had its
         /// row re-claimed while it was still running and its own completing
@@ -1398,23 +1407,44 @@ mod tests {
                 scheduler.worker_id.clone(),
                 invocation.key.clone(),
             );
-            tokio::time::sleep(StdDuration::from_secs(
-                crate::lease::RENEW_EVERY_SECONDS + 2,
-            ))
-            .await;
+
+            // Waited for rather than slept past. This used to sleep
+            // `RENEW_EVERY_SECONDS + 2` and then abort, which gave the
+            // renewal's own statement two seconds to reach the database and
+            // come back — and under a loaded suite it does not always, so the
+            // abort cancelled a renewal that was still in flight and the test
+            // read a lease nobody had pushed out. The margin on the *value*
+            // was thirteen seconds; the margin on the *query* was two, and it
+            // was the second one that ran out.
+            //
+            // Polling for the condition tests the same property — the claim
+            // is pushed out rather than left to lapse — without depending on
+            // how long one statement takes.
+            let deadline =
+                tokio::time::Instant::now() + StdDuration::from_secs(RENEWAL_WAIT_SECONDS);
+            let pushed_out = loop {
+                let expires: DateTime<Utc> =
+                    sqlx::query("SELECT lock_expires_at FROM scheduler_jobs WHERE job_id = $1")
+                        .bind(invocation.job_id)
+                        .fetch_one(&pool)
+                        .await
+                        .expect("the row should still be there")
+                        .get("lock_expires_at");
+
+                if expires > Utc::now() + Duration::seconds(DB_LOCK_TTL_SECONDS / 2) {
+                    break true;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    break false;
+                }
+                tokio::time::sleep(StdDuration::from_millis(250)).await;
+            };
             renewal.abort();
 
-            let expires: DateTime<Utc> =
-                sqlx::query("SELECT lock_expires_at FROM scheduler_jobs WHERE job_id = $1")
-                    .bind(invocation.job_id)
-                    .fetch_one(&pool)
-                    .await
-                    .expect("the row should still be there")
-                    .get("lock_expires_at");
-
             assert!(
-                expires > Utc::now() + Duration::seconds(DB_LOCK_TTL_SECONDS / 2),
-                "the claim should have been pushed out, not left to lapse"
+                pushed_out,
+                "the claim should have been pushed out within {}s, not left to lapse",
+                RENEWAL_WAIT_SECONDS
             );
         }
 
@@ -1433,16 +1463,26 @@ mod tests {
                 stranger.worker_id.clone(),
                 invocation.key.clone(),
             );
-            tokio::time::sleep(StdDuration::from_secs(
-                crate::lease::RENEW_EVERY_SECONDS + 2,
-            ))
-            .await;
+            // Waited for rather than slept past, for the reason its sibling
+            // above is: the renewal gives up on its first tick, and that tick
+            // is a statement which has to reach the database and come back.
+            // Sleeping one tick plus two seconds gave that statement two
+            // seconds under a suite competing for every connection.
+            let deadline =
+                tokio::time::Instant::now() + StdDuration::from_secs(RENEWAL_WAIT_SECONDS);
+            while !renewal.is_finished() && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(StdDuration::from_millis(250)).await;
+            }
+
+            let stopped = renewal.is_finished();
+            renewal.abort();
 
             assert!(
-                renewal.is_finished(),
-                "a worker that does not hold the claim should stop renewing it"
+                stopped,
+                "a worker that does not hold the claim should stop renewing it, \
+                 and should have within {}s",
+                RENEWAL_WAIT_SECONDS
             );
-            renewal.abort();
         }
 
         #[tokio::test]
