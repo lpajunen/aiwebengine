@@ -14,13 +14,18 @@
     try {
       return JSON.parse(answer);
     } catch (e) {
-      throw new Error(where + ": the engine answered with something that is not JSON");
+      throw new Error(
+        where + ": the engine answered with something that is not JSON",
+      );
     }
   }
 
   var api = {
     tools: function (area) {
-      return parse("engine.tools", host.tools(area === undefined || area === null ? "" : String(area)));
+      return parse(
+        "engine.tools",
+        host.tools(area === undefined || area === null ? "" : String(area)),
+      );
     },
 
     callRaw: function (name, args) {
@@ -37,7 +42,11 @@
       var answer = api.callRaw(name, args);
       // Every native tool reports a refusal the same way, so this is one
       // check rather than one per tool.
-      if (answer && typeof answer === "object" && typeof answer.error === "string") {
+      if (
+        answer &&
+        typeof answer === "object" &&
+        typeof answer.error === "string"
+      ) {
         var error = new Error(answer.error);
         error.name = "EngineError";
         error.tool = name;
