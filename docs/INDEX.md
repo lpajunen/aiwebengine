@@ -70,11 +70,12 @@ routeRegistry.registerRoute("/hello", "helloHandler", "GET");
 
 #### Planning & Architecture
 
-| Document                                                           | Description                                  |
-| ------------------------------------------------------------------ | -------------------------------------------- |
-| [Requirements](engine-contributors/planning/REQUIREMENTS.md)       | Core requirements and feature specifications |
-| [Use Cases](engine-contributors/planning/USE_CASES.md)             | User scenarios and use case documentation    |
-| [Customer Survey](engine-contributors/planning/CUSTOMER_SURVEY.md) | Customer research and feedback               |
+| Document                                                           | Description                                             |
+| ------------------------------------------------------------------ | ------------------------------------------------------- |
+| [Requirements](engine-contributors/planning/REQUIREMENTS.md)       | Core requirements and feature specifications            |
+| [Use Cases](engine-contributors/planning/USE_CASES.md)             | User scenarios and use case documentation               |
+| [Customer Survey](engine-contributors/planning/CUSTOMER_SURVEY.md) | Customer research and feedback                          |
+| [Simplification](SIMPLIFICATION.md)                                | What to collapse across the three API surfaces, and why |
 
 **📁 Location**: `docs/engine-contributors/planning/`
 
