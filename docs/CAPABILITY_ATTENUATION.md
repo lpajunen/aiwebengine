@@ -59,7 +59,7 @@ so **read-only was inexpressible**.
 | `view_logs`              | Writing to the script's log — what `console` does                               |
 | `delete_logs`            | Clearing it                                                                     |
 | `manage_streams`         | Registering streams and sending stream messages                                 |
-| `manage_graphql`         | Every `graphQLRegistry` call                                                    |
+| `manage_mcp`             | Every `mcpRegistry` call                                                        |
 | `read_script_data`       | `database.query`                                                                |
 | `write_script_data`      | `insert`, `update`, `delete`, `upsert`, `deleteWhere`                           |
 | `manage_script_database` | Creating and dropping tables, columns, indexes                                  |

@@ -19,7 +19,7 @@ static DB_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 ///
 /// Because `execute_startup_scripts()` reads *all* scripts from the shared
 /// database and updates process-global state (`DYNAMIC_SCRIPTS`,
-/// `GRAPHQL_REGISTRY`, per-script metadata), running multiple test servers
+/// per-script metadata), running multiple test servers
 /// concurrently causes race conditions: server A picks up scripts that were
 /// just inserted by test B, producing non-deterministic route registrations.
 ///

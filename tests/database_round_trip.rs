@@ -123,7 +123,7 @@ async fn a_false_is_not_mistaken_for_a_zero() {
     // `false` and `0` are the same byte in some backends. A script that stores
     // `false` and reads `0` gets a value that is still falsy, so the bug
     // survives every truthiness check and surfaces somewhere far away — in
-    // `JSON.stringify`, in a strict equality, in a GraphQL Boolean field.
+    // `JSON.stringify`, and in a strict equality.
     let report = eval_with_probe_table(
         "test://db-round-trip/false",
         r#"

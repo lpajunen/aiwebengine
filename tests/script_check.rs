@@ -414,49 +414,6 @@ async fn candidate_content_is_checked_without_being_deployed() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_dry_run_leaves_the_graphql_registry_alone() {
-    let _guard = fixtures().await;
-    setup_env().await;
-
-    let uri = "test://check/graphql-isolation";
-    deploy(uri, "function init() {}");
-
-    let report = check_candidate(
-        uri,
-        r#"
-        function resolveThing(context) { return {}; }
-        function init() {
-            graphQLRegistry.registerQuery(
-                "checkIsolationThing",
-                "checkIsolationThing: String",
-                "resolveThing",
-                "external",
-            );
-        }
-        "#,
-    );
-
-    assert!(report.ok, "{:?}", report.diagnostics);
-    // The registration is reported...
-    assert_eq!(report.registrations.len(), 1);
-    assert_eq!(report.registrations[0].name, "checkIsolationThing");
-
-    // ...but never reached the process-wide registry. Without this, checking a
-    // candidate would replace the deployed script's resolvers with the
-    // candidate's, and a broken candidate would take the live schema down.
-    let registry = aiwebengine::graphql::get_registry();
-    let registered = registry
-        .read()
-        .expect("registry lock")
-        .queries
-        .contains_key("checkIsolationThing");
-    assert!(
-        !registered,
-        "a dry run must not write to the GraphQL registry"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn a_dry_run_leaves_the_stream_registry_alone() {
     let _guard = fixtures().await;
     setup_env().await;

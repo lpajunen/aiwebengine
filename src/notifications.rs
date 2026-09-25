@@ -1,6 +1,6 @@
 use crate::error::AppResult;
 use crate::stream_registry::FilterMatchMode;
-use crate::{deployments, graphql, repository, revisions, scheduler, script_init};
+use crate::{deployments, repository, revisions, scheduler, script_init};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgListener, PgPool};
 use std::collections::HashMap;
@@ -272,7 +272,7 @@ impl NotificationListener {
         // an administrator may have republished the script on other hosts.
         repository::refresh_cached_script_hosts_from_db(uri).await;
 
-        // Initialize the script (this will call init() and register routes/GraphQL)
+        // Initialize the script (this will call init() and register routes)
         let initializer = script_init::ScriptInitializer::with_configured_timeout();
         match initializer.initialize_script(uri, false).await {
             Ok(result) => {
@@ -291,19 +291,6 @@ impl NotificationListener {
             Err(e) => {
                 error!("Failed to initialize script '{}': {}", uri, e);
             }
-        }
-
-        // Rebuild GraphQL schema to include any new registrations
-        if let Err(e) = graphql::rebuild_schema() {
-            error!(
-                "Failed to rebuild GraphQL schema after script '{}' upsert: {:?}",
-                uri, e
-            );
-        } else {
-            debug!(
-                "GraphQL schema rebuilt successfully after script '{}' upsert",
-                uri
-            );
         }
 
         // Ensure route lookups and bytecode pick up the changed source
@@ -327,23 +314,6 @@ impl NotificationListener {
         revisions::forget_current(uri);
         deployments::forget_pin(uri);
         crate::script_limits::forget(uri);
-
-        // Clear GraphQL registrations for this script
-        graphql::clear_script_graphql_registrations(uri);
-        debug!("Cleared GraphQL registrations for script '{}'", uri);
-
-        // Rebuild GraphQL schema
-        if let Err(e) = graphql::rebuild_schema() {
-            error!(
-                "Failed to rebuild GraphQL schema after script '{}' deletion: {:?}",
-                uri, e
-            );
-        } else {
-            debug!(
-                "GraphQL schema rebuilt successfully after script '{}' deletion",
-                uri
-            );
-        }
 
         // Invalidate cache in repository
         if let Ok(mut guard) = repository::safe_lock_scripts() {

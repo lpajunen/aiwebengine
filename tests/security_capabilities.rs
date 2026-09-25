@@ -6,7 +6,6 @@
 //! - Rate limiting
 //! - Anonymous vs authenticated user capabilities
 //! - URL and protocol validation
-//! - GraphQL schema validation
 //! - Stream name validation
 //! - Header injection prevention
 //! - Secure global context execution
@@ -321,7 +320,7 @@ async fn test_anonymous_user_has_minimal_capabilities() {
     );
     assert!(
         anon_user
-            .require_capability(&Capability::ManageGraphQL)
+            .require_capability(&Capability::ManageMcp)
             .is_err()
     );
     assert!(
@@ -350,7 +349,7 @@ async fn test_authenticated_user_gets_default_capabilities() {
     // But not admin capabilities by default
     assert!(
         auth_user
-            .require_capability(&Capability::ManageGraphQL)
+            .require_capability(&Capability::ManageMcp)
             .is_err()
     );
 }
@@ -386,30 +385,6 @@ async fn test_url_validation_allows_safe_protocols() {
         let result = validator.validate_url(url);
         assert!(result.is_ok(), "Safe URL should be allowed: {}", url);
     }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_graphql_schema_validation() {
-    let validator = InputValidator::new();
-
-    // Valid GraphQL schema
-    let valid_schema = r#"
-        type Query {
-            hello: String
-        }
-    "#;
-    assert!(validator.validate_graphql_schema(valid_schema).is_ok());
-
-    // Schema with dangerous patterns - check if validate_graphql_schema catches it
-    // If not caught, that's OK as long as the system doesn't execute it unsafely
-    let dangerous_schema = r#"
-        type Query {
-            test: String
-        }
-    "#;
-    let result = validator.validate_graphql_schema(dangerous_schema);
-    // This is a basic schema - should pass validation
-    assert!(result.is_ok(), "Basic schema should be valid");
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -244,14 +244,6 @@ fn parse_table_spec(schema_json: &str) -> Result<crate::repository::TableSpec, S
     Ok(spec)
 }
 
-/// A GraphQL `{"errors": [{"message": "..."}]}` answer.
-///
-/// The shape a GraphQL client expects, with the same escaping guarantee
-/// [`error_answer`] gives.
-fn graphql_errors_answer(message: impl std::fmt::Display) -> String {
-    serde_json::json!({ "errors": [{ "message": message.to_string() }] }).to_string()
-}
-
 /// A `{"success": true, ...}` answer carrying `fields`.
 ///
 /// Serialised for the same reason [`error_answer`] is: the table and column
@@ -280,9 +272,6 @@ pub enum RegistrationKind {
     Route,
     Stream,
     AssetRoute,
-    GraphqlQuery,
-    GraphqlMutation,
-    GraphqlSubscription,
     McpTool,
     McpPrompt,
     McpResource,
@@ -297,9 +286,6 @@ impl RegistrationKind {
             RegistrationKind::Route => "routeRegistry.registerRoute",
             RegistrationKind::Stream => "routeRegistry.registerStreamRoute",
             RegistrationKind::AssetRoute => "routeRegistry.registerAssetRoute",
-            RegistrationKind::GraphqlQuery => "graphQLRegistry.registerQuery",
-            RegistrationKind::GraphqlMutation => "graphQLRegistry.registerMutation",
-            RegistrationKind::GraphqlSubscription => "graphQLRegistry.registerSubscription",
             RegistrationKind::McpTool => "mcpRegistry.registerTool",
             RegistrationKind::McpPrompt => "mcpRegistry.registerPrompt",
             RegistrationKind::McpResource => "mcpRegistry.registerResource",
@@ -386,13 +372,6 @@ pub type ConsoleSink = std::sync::Arc<std::sync::Mutex<ConsoleCapture>>;
 /// response without bound. Lines past the cap are dropped and the caller is
 /// told how many.
 pub const MAX_CAPTURED_CONSOLE_LINES: usize = 1_000;
-
-/// Longest query `graphQLRegistry.executeGraphQL` accepts, in characters, and
-/// longest JSON `variables` string beside it. Named so the limits the engine
-/// publishes are the ones this call enforces.
-pub const MAX_GRAPHQL_QUERY_CHARS: usize = 100_000;
-/// See [`MAX_GRAPHQL_QUERY_CHARS`].
-pub const MAX_GRAPHQL_VARIABLES_CHARS: usize = 50_000;
 
 fn parse_filter_match_mode(
     match_mode: Option<String>,
@@ -860,7 +839,6 @@ impl SecureGlobalContext {
         self.setup_conversion_functions(ctx, script_uri)?;
         self.setup_script_properties_functions(ctx, script_uri)?;
         self.setup_user_properties_functions(ctx, script_uri)?;
-        self.setup_graphql_functions(ctx, script_uri)?;
         self.setup_mcp_functions(ctx, script_uri)?;
         self.setup_scheduler_functions(ctx, script_uri)?;
         self.setup_task_functions(ctx, script_uri)?;
@@ -1476,689 +1454,6 @@ impl SecureGlobalContext {
         Ok(())
     }
 
-    /// Setup secure GraphQL functions  
-    fn setup_graphql_functions(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
-        let global = ctx.globals();
-        let user_context = self.user_context.clone();
-        let secure_ops = self.secure_ops.clone();
-        let auditor = self.auditor.clone();
-        let script_uri_owned = script_uri.to_string();
-
-        // Secure registerGraphQLQuery function
-        let user_ctx_query = user_context.clone();
-        let _secure_ops_query = secure_ops.clone();
-        let auditor_query = auditor.clone();
-        let script_uri_query = script_uri_owned.clone();
-        let config_query = self.config.clone();
-        let register_graphql_query = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  name: String,
-                  sdl: String,
-                  resolver_function: String,
-                  visibility: String|
-                  -> JsResult<String> {
-                debug!(
-                    "registerGraphQLQuery called: name={}, visibility={}",
-                    name, visibility
-                );
-                if !config_query.registration_phase {
-                    return Ok(registration_inactive(
-                        "graphQLRegistry.registerQuery",
-                        &name,
-                    ));
-                }
-
-                // Check capability
-                if let Err(e) =
-                    user_ctx_query.require_capability(&crate::security::Capability::ManageGraphQL)
-                {
-                    // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
-                    let auditor_clone = auditor_query.clone();
-                    let user_id = user_ctx_query.user_id.clone();
-                    tokio::task::spawn(async move {
-                        let _ = auditor_clone
-                            .log_authz_failure(
-                                user_id,
-                                "graphql".to_string(),
-                                "register_query".to_string(),
-                                "ManageGraphQL".to_string(),
-                            )
-                            .await;
-                    });
-                    return Ok(format!("Error: {}", e));
-                }
-
-                // Validate GraphQL schema inline (sync validation)
-                // Basic SDL validation
-                if sdl.is_empty() || sdl.len() > 100_000 {
-                    return Ok("Invalid SDL: must be between 1 and 100,000 characters".to_string());
-                }
-                if name.is_empty() || name.len() > 100 {
-                    return Ok(
-                        "Invalid query name: must be between 1 and 100 characters".to_string()
-                    );
-                }
-                // Check for dangerous patterns
-                if sdl.contains("__proto__") || sdl.contains("constructor") {
-                    return Ok("Invalid SDL: contains dangerous patterns".to_string());
-                }
-
-                // Log the operation attempt using spawn to avoid runtime conflicts
-                let auditor_clone = auditor_query.clone();
-                let user_id = user_ctx_query.user_id.clone();
-                let name_clone = name.clone();
-                let script_uri_clone = script_uri_query.clone();
-                let sdl_len = sdl.len();
-                let visibility_clone = visibility.clone();
-                tokio::task::spawn(async move {
-                    let _ = auditor_clone
-                        .log_event(
-                            crate::security::SecurityEvent::new(
-                                SecurityEventType::SystemSecurityEvent,
-                                SecuritySeverity::Medium,
-                                user_id,
-                            )
-                            .with_resource("graphql".to_string())
-                            .with_action("register_query".to_string())
-                            .with_detail("query_name", &name_clone)
-                            .with_detail("script_uri", &script_uri_clone)
-                            .with_detail("sdl_length", sdl_len.to_string())
-                            .with_detail("visibility", &visibility_clone),
-                        )
-                        .await;
-                });
-
-                debug!(
-                    user_id = ?user_ctx_query.user_id,
-                    name = %name,
-                    sdl_len = sdl.len(),
-                    visibility = %visibility,
-                    "Secure registerGraphQLQuery called"
-                );
-
-                if let Some(reply) = config_query.collect(
-                    CollectedRegistration::new(RegistrationKind::GraphqlQuery, name.clone())
-                        .with_handler(resolver_function.clone()),
-                ) {
-                    return Ok(reply);
-                }
-
-                // Actually register the GraphQL query
-                match crate::graphql::register_graphql_query(
-                    name.clone(),
-                    sdl.clone(),
-                    resolver_function.clone(),
-                    script_uri_query.clone(),
-                    visibility,
-                ) {
-                    Ok(()) => Ok(format!("GraphQL query '{}' registered successfully", name)),
-                    Err(e) => Ok(format!("Error registering GraphQL query '{}': {}", name, e)),
-                }
-            },
-        )?;
-
-        // Secure registerGraphQLMutation function
-        let user_ctx_mutation = user_context.clone();
-        let _secure_ops_mutation = secure_ops.clone();
-        let auditor_mutation = auditor.clone();
-        let script_uri_mutation = script_uri_owned.clone();
-        let config_mutation = self.config.clone();
-        let register_graphql_mutation = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  name: String,
-                  sdl: String,
-                  resolver_function: String,
-                  visibility: String|
-                  -> JsResult<String> {
-                debug!(
-                    "registerGraphQLMutation called: name={}, visibility={}",
-                    name, visibility
-                );
-                if !config_mutation.registration_phase {
-                    return Ok(registration_inactive(
-                        "graphQLRegistry.registerMutation",
-                        &name,
-                    ));
-                }
-
-                // Check capability
-                if let Err(e) = user_ctx_mutation
-                    .require_capability(&crate::security::Capability::ManageGraphQL)
-                {
-                    // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
-                    let auditor_clone = auditor_mutation.clone();
-                    let user_id = user_ctx_mutation.user_id.clone();
-                    tokio::task::spawn(async move {
-                        let _ = auditor_clone
-                            .log_authz_failure(
-                                user_id,
-                                "graphql".to_string(),
-                                "register_mutation".to_string(),
-                                "ManageGraphQL".to_string(),
-                            )
-                            .await;
-                    });
-                    return Ok(format!("Error: {}", e));
-                }
-
-                // Validate GraphQL schema inline (sync validation)
-                if sdl.is_empty() || sdl.len() > 100_000 {
-                    return Ok("Invalid SDL: must be between 1 and 100,000 characters".to_string());
-                }
-                if name.is_empty() || name.len() > 100 {
-                    return Ok(
-                        "Invalid mutation name: must be between 1 and 100 characters".to_string(),
-                    );
-                }
-                if sdl.contains("__proto__") || sdl.contains("constructor") {
-                    return Ok("Invalid SDL: contains dangerous patterns".to_string());
-                }
-
-                // Log the operation attempt using spawn to avoid runtime conflicts
-                let auditor_clone = auditor_mutation.clone();
-                let user_id = user_ctx_mutation.user_id.clone();
-                let name_clone = name.clone();
-                let sdl_len = sdl.len();
-                let visibility_clone = visibility.clone();
-                tokio::task::spawn(async move {
-                    let _ = auditor_clone
-                        .log_event(
-                            crate::security::SecurityEvent::new(
-                                SecurityEventType::SystemSecurityEvent,
-                                SecuritySeverity::Medium,
-                                user_id,
-                            )
-                            .with_resource("graphql".to_string())
-                            .with_action("register_mutation".to_string())
-                            .with_detail("mutation_name", &name_clone)
-                            .with_detail("sdl_length", sdl_len.to_string())
-                            .with_detail("visibility", &visibility_clone),
-                        )
-                        .await;
-                });
-
-                debug!(
-                    user_id = ?user_ctx_mutation.user_id,
-                    name = %name,
-                    sdl_len = sdl.len(),
-                    visibility = %visibility,
-                    "Secure registerGraphQLMutation called"
-                );
-
-                if let Some(reply) = config_mutation.collect(
-                    CollectedRegistration::new(RegistrationKind::GraphqlMutation, name.clone())
-                        .with_handler(resolver_function.clone()),
-                ) {
-                    return Ok(reply);
-                }
-
-                // Actually register the GraphQL mutation
-                match crate::graphql::register_graphql_mutation(
-                    name.clone(),
-                    sdl.clone(),
-                    resolver_function.clone(),
-                    script_uri_mutation.clone(),
-                    visibility,
-                ) {
-                    Ok(()) => Ok(format!(
-                        "GraphQL mutation '{}' registered successfully",
-                        name
-                    )),
-                    Err(e) => Ok(format!(
-                        "Error registering GraphQL mutation '{}': {}",
-                        name, e
-                    )),
-                }
-            },
-        )?;
-
-        // Secure registerGraphQLSubscription function
-        let user_ctx_subscription = user_context.clone();
-        let _secure_ops_subscription = secure_ops.clone();
-        let auditor_subscription = auditor.clone();
-        let script_uri_subscription = script_uri_owned.clone();
-        let config_subscription = self.config.clone();
-        let register_graphql_subscription = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  name: String,
-                  sdl: String,
-                  resolver_function: String,
-                  visibility: String|
-                  -> JsResult<String> {
-                debug!(
-                    "registerGraphQLSubscription called: name={}, visibility={}",
-                    name, visibility
-                );
-                if !config_subscription.registration_phase {
-                    return Ok(registration_inactive(
-                        "graphQLRegistry.registerSubscription",
-                        &name,
-                    ));
-                }
-
-                // Check capability
-                if let Err(e) = user_ctx_subscription
-                    .require_capability(&crate::security::Capability::ManageGraphQL)
-                {
-                    // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
-                    let auditor_clone = auditor_subscription.clone();
-                    let user_id = user_ctx_subscription.user_id.clone();
-                    tokio::task::spawn(async move {
-                        let _ = auditor_clone
-                            .log_authz_failure(
-                                user_id,
-                                "graphql".to_string(),
-                                "register_subscription".to_string(),
-                                "ManageGraphQL".to_string(),
-                            )
-                            .await;
-                    });
-                    return Ok(format!("Error: {}", e));
-                }
-
-                // Validate GraphQL schema inline (sync validation)
-                if sdl.is_empty() || sdl.len() > 100_000 {
-                    return Ok("Invalid SDL: must be between 1 and 100,000 characters".to_string());
-                }
-                if name.is_empty() || name.len() > 100 {
-                    return Ok(
-                        "Invalid subscription name: must be between 1 and 100 characters"
-                            .to_string(),
-                    );
-                }
-                if sdl.contains("__proto__") || sdl.contains("constructor") {
-                    return Ok("Invalid SDL: contains dangerous patterns".to_string());
-                }
-
-                // Log the operation attempt using spawn to avoid runtime conflicts
-                let auditor_clone = auditor_subscription.clone();
-                let user_id = user_ctx_subscription.user_id.clone();
-                let name_clone = name.clone();
-                let sdl_len = sdl.len();
-                let visibility_clone = visibility.clone();
-                tokio::task::spawn(async move {
-                    let _ = auditor_clone
-                        .log_event(
-                            crate::security::SecurityEvent::new(
-                                SecurityEventType::SystemSecurityEvent,
-                                SecuritySeverity::Medium,
-                                user_id,
-                            )
-                            .with_resource("graphql".to_string())
-                            .with_action("register_subscription".to_string())
-                            .with_detail("subscription_name", &name_clone)
-                            .with_detail("sdl_length", sdl_len.to_string())
-                            .with_detail("visibility", &visibility_clone),
-                        )
-                        .await;
-                });
-
-                debug!(
-                    user_id = ?user_ctx_subscription.user_id,
-                    name = %name,
-                    sdl_len = sdl.len(),
-                    visibility = %visibility,
-                    "Secure registerGraphQLSubscription called"
-                );
-
-                if let Some(reply) = config_subscription.collect(
-                    CollectedRegistration::new(RegistrationKind::GraphqlSubscription, name.clone())
-                        .with_handler(resolver_function.clone()),
-                ) {
-                    return Ok(reply);
-                }
-
-                // Actually register the GraphQL subscription
-                match crate::graphql::register_graphql_subscription(
-                    name.clone(),
-                    sdl.clone(),
-                    resolver_function.clone(),
-                    script_uri_subscription.clone(),
-                    visibility,
-                ) {
-                    Ok(()) => Ok(format!(
-                        "GraphQL subscription '{}' registered successfully",
-                        name
-                    )),
-                    Err(e) => Ok(format!(
-                        "Error registering GraphQL subscription '{}': {}",
-                        name, e
-                    )),
-                }
-            },
-        )?;
-
-        // Secure executeGraphQL function
-        let user_ctx_execute = user_context.clone();
-        let auditor_execute = auditor.clone();
-        let script_uri_execute = script_uri_owned.clone();
-        let execute_graphql = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  query: String,
-                  variables_json: Option<String>|
-                  -> JsResult<String> {
-                // Executing a query is a read of the live schema, not a
-                // registration, so it works in every context. It was previously
-                // gated on the registration flag, which left it usable only
-                // during startup - the one phase where a script has least
-                // reason to run one.
-                debug!("executeGraphQL called: query_length={}", query.len());
-
-                // Check capability
-                if let Err(e) =
-                    user_ctx_execute.require_capability(&crate::security::Capability::ManageGraphQL)
-                {
-                    // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
-                    let auditor_clone = auditor_execute.clone();
-                    let user_id = user_ctx_execute.user_id.clone();
-                    tokio::task::spawn(async move {
-                        let _ = auditor_clone
-                            .log_authz_failure(
-                                user_id,
-                                "graphql".to_string(),
-                                "execute".to_string(),
-                                "ManageGraphQL".to_string(),
-                            )
-                            .await;
-                    });
-                    return Ok(graphql_errors_answer(e));
-                }
-
-                // Validate query
-                if query.is_empty() || query.len() > MAX_GRAPHQL_QUERY_CHARS {
-                    return Ok("{\"errors\": [{\"message\": \"Invalid query: must be between 1 and 100,000 characters\"}]}".to_string());
-                }
-
-                // Parse variables if provided
-                let variables = if let Some(vars_json) = variables_json {
-                    if vars_json.len() > MAX_GRAPHQL_VARIABLES_CHARS {
-                        return Ok("{\"errors\": [{\"message\": \"Variables too large: max 50,000 characters\"}]}".to_string());
-                    }
-                    match serde_json::from_str::<serde_json::Value>(&vars_json) {
-                        Ok(v) => Some(v),
-                        Err(e) => {
-                            return Ok(graphql_errors_answer(format!(
-                                "Invalid variables JSON: {}",
-                                e
-                            )));
-                        }
-                    }
-                } else {
-                    None
-                };
-
-                // Log the operation attempt using spawn to avoid runtime conflicts
-                let auditor_clone = auditor_execute.clone();
-                let user_id = user_ctx_execute.user_id.clone();
-                let query_clone = query.clone();
-                let script_uri_clone = script_uri_execute.clone();
-                tokio::task::spawn(async move {
-                    let _ = auditor_clone
-                        .log_event(
-                            crate::security::SecurityEvent::new(
-                                SecurityEventType::SystemSecurityEvent,
-                                SecuritySeverity::Medium,
-                                user_id,
-                            )
-                            .with_resource("graphql".to_string())
-                            .with_action("execute".to_string())
-                            .with_detail("script_uri", &script_uri_clone)
-                            .with_detail("query_length", query_clone.len().to_string()),
-                        )
-                        .await;
-                });
-
-                debug!(
-                    user_id = ?user_ctx_execute.user_id,
-                    query_len = query.len(),
-                    has_variables = variables.is_some(),
-                    "Secure executeGraphQL called"
-                );
-
-                // Execute the GraphQL query
-                match crate::graphql::execute_graphql_query_sync(&query, variables) {
-                    Ok(result_json) => {
-                        debug!("GraphQL execution successful");
-                        Ok(result_json)
-                    }
-                    Err(e) => {
-                        tracing::error!("GraphQL execution failed: {}", e);
-                        Ok(graphql_errors_answer(format!(
-                            "GraphQL execution failed: {}",
-                            e
-                        )))
-                    }
-                }
-            },
-        )?;
-
-        // Secure sendSubscriptionMessage function
-        let user_ctx_send_sub = user_context.clone();
-        let auditor_send_sub = auditor.clone();
-        let send_subscription_message = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  subscription_name: String,
-                  message: String|
-                  -> JsResult<String> {
-                // Check capability
-                if let Err(e) = user_ctx_send_sub
-                    .require_capability(&crate::security::Capability::ManageGraphQL)
-                {
-                    // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
-                    let auditor_clone = auditor_send_sub.clone();
-                    let user_id = user_ctx_send_sub.user_id.clone();
-                    tokio::task::spawn(async move {
-                        let _ = auditor_clone
-                            .log_authz_failure(
-                                user_id,
-                                "graphql".to_string(),
-                                "send_subscription_message".to_string(),
-                                "ManageGraphQL".to_string(),
-                            )
-                            .await;
-                    });
-                    return Ok(format!("Error: {}", e));
-                }
-
-                // Log the operation attempt using spawn to avoid runtime conflicts
-                let auditor_clone = auditor_send_sub.clone();
-                let user_id = user_ctx_send_sub.user_id.clone();
-                let subscription_name_clone = subscription_name.clone();
-                let message_clone = message.clone();
-                tokio::task::spawn(async move {
-                    let _ = auditor_clone
-                        .log_event(
-                            crate::security::SecurityEvent::new(
-                                SecurityEventType::SystemSecurityEvent,
-                                SecuritySeverity::Low,
-                                user_id,
-                            )
-                            .with_resource("graphql".to_string())
-                            .with_action("send_subscription_message".to_string())
-                            .with_detail("subscription_name", &subscription_name_clone)
-                            .with_detail("message_length", message_clone.len().to_string()),
-                        )
-                        .await;
-                });
-
-                debug!(
-                    user_id = ?user_ctx_send_sub.user_id,
-                    subscription_name = %subscription_name,
-                    message_len = message.len(),
-                    "Secure sendSubscriptionMessage called"
-                );
-
-                // Send to the auto-registered stream path for this subscription
-                let stream_path = format!("/engine/graphql/subscription/{}", subscription_name);
-
-                // Call actual stream message sending (sync operation)
-                match crate::stream_registry::GLOBAL_STREAM_REGISTRY
-                    .broadcast_to_stream(&stream_path, &message)
-                {
-                    Ok(result) => {
-                        if result.is_fully_successful() {
-                            Ok(format!(
-                                "GraphQL subscription message sent to '{}' ({} connections) successfully",
-                                subscription_name, result.successful_sends
-                            ))
-                        } else {
-                            Ok(format!(
-                                "GraphQL subscription message to '{}' partially sent: {} successful, {} failed out of {} total",
-                                subscription_name,
-                                result.successful_sends,
-                                result.failed_connections.len(),
-                                result.total_connections
-                            ))
-                        }
-                    }
-                    Err(e) => Ok(format!(
-                        "Failed to send GraphQL subscription message to '{}': {}",
-                        subscription_name, e
-                    )),
-                }
-            },
-        )?;
-
-        // Secure sendSubscriptionMessageFiltered function (selective broadcasting for GraphQL)
-        let user_ctx_send_sub_filtered = user_context.clone();
-        let auditor_send_sub_filtered = auditor.clone();
-        let send_subscription_message_filtered = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  subscription_name: String,
-                  message: String,
-                  filter_json: Option<String>,
-                  match_mode: Option<String>|
-                  -> JsResult<String> {
-                // Parse filter criteria from JSON string
-                let metadata_filter: HashMap<String, String> = if let Some(json_str) = filter_json {
-                    serde_json::from_str(&json_str).map_err(|e| {
-                        rquickjs::Error::new_from_js_message(
-                            "filter",
-                            "MetadataFilter",
-                            &format!("Invalid filter JSON: {}", e),
-                        )
-                    })?
-                } else {
-                    HashMap::new() // Empty filter matches all connections
-                };
-                let match_mode = parse_filter_match_mode(match_mode)?;
-
-                // Same capability as the unfiltered `sendSubscriptionMessage`:
-                // both publish to /engine/graphql/subscription/{name}, and an
-                // empty filter matches every connection, so exempting this one
-                // would just be a bypass of the check on its sibling.
-                if let Err(e) = user_ctx_send_sub_filtered
-                    .require_capability(&crate::security::Capability::ManageGraphQL)
-                {
-                    // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
-                    let auditor_clone = auditor_send_sub_filtered.clone();
-                    let user_id = user_ctx_send_sub_filtered.user_id.clone();
-                    tokio::task::spawn(async move {
-                        let _ = auditor_clone
-                            .log_authz_failure(
-                                user_id,
-                                "graphql".to_string(),
-                                "send_subscription_message_to_connections".to_string(),
-                                "ManageGraphQL".to_string(),
-                            )
-                            .await;
-                    });
-                    return Ok(format!("Error: {}", e));
-                }
-
-                // Log the operation attempt using spawn to avoid runtime conflicts
-                let auditor_clone = auditor_send_sub_filtered.clone();
-                let user_id = user_ctx_send_sub_filtered.user_id.clone();
-                let subscription_name_clone = subscription_name.clone();
-                let message_clone = message.clone();
-                let filter_clone = metadata_filter.clone();
-                tokio::task::spawn(async move {
-                    let _ = auditor_clone
-                        .log_event(
-                            crate::security::SecurityEvent::new(
-                                SecurityEventType::SystemSecurityEvent,
-                                SecuritySeverity::Low,
-                                user_id,
-                            )
-                            .with_resource("graphql".to_string())
-                            .with_action("send_subscription_message_to_connections".to_string())
-                            .with_detail("subscription_name", &subscription_name_clone)
-                            .with_detail("message_length", message_clone.len().to_string())
-                            .with_detail("filter_criteria", format!("{:?}", filter_clone)),
-                        )
-                        .await;
-                });
-
-                debug!(
-                    user_id = ?user_ctx_send_sub_filtered.user_id,
-                    subscription_name = %subscription_name,
-                    message_len = message.len(),
-                    filter = ?metadata_filter,
-                    match_mode = ?match_mode,
-                    "Secure sendSubscriptionMessageFiltered called"
-                );
-
-                // Send to the auto-registered stream path for this subscription with filtering
-                let stream_path = format!("/engine/graphql/subscription/{}", subscription_name);
-
-                // Call selective broadcasting (sync operation)
-                let result = crate::stream_registry::GLOBAL_STREAM_REGISTRY
-                    .broadcast_to_stream_with_filter_mode(
-                        &stream_path,
-                        &message,
-                        &metadata_filter,
-                        match_mode,
-                    );
-
-                match result {
-                    Ok(broadcast_result) => {
-                        if broadcast_result.is_fully_successful() {
-                            Ok(format!(
-                                "GraphQL subscription message sent to '{}' with filter {:?} ({} connections) successfully",
-                                subscription_name,
-                                metadata_filter,
-                                broadcast_result.successful_sends
-                            ))
-                        } else {
-                            Ok(format!(
-                                "GraphQL subscription message to '{}' with filter {:?} partially sent: {} successful, {} failed connections",
-                                subscription_name,
-                                metadata_filter,
-                                broadcast_result.successful_sends,
-                                broadcast_result.failed_connections.len()
-                            ))
-                        }
-                    }
-                    Err(e) => Ok(format!(
-                        "Failed to send GraphQL subscription message to '{}' with filter: {}",
-                        subscription_name, e
-                    )),
-                }
-            },
-        )?;
-
-        // Create graphQLRegistry object with all 6 functions
-        let graphql_registry = rquickjs::Object::new(ctx.clone())?;
-        graphql_registry.set("registerQuery", register_graphql_query)?;
-        graphql_registry.set("registerMutation", register_graphql_mutation)?;
-        graphql_registry.set("registerSubscription", register_graphql_subscription)?;
-        graphql_registry.set("executeGraphQL", execute_graphql)?;
-        graphql_registry.set("sendSubscriptionMessage", send_subscription_message)?;
-        graphql_registry.set(
-            "sendSubscriptionMessageFiltered",
-            send_subscription_message_filtered,
-        )?;
-        global.set("graphQLRegistry", graphql_registry)?;
-
-        Ok(())
-    }
-
     /// Setup MCP (Model Context Protocol) registry functions
     fn setup_mcp_functions(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
         let global = ctx.globals();
@@ -2184,9 +1479,9 @@ impl SecureGlobalContext {
                     return Ok(registration_inactive("mcpRegistry.registerTool", &name));
                 }
 
-                // Check capability - reuse ManageGraphQL for MCP tools
-                if let Err(e) = user_ctx_register
-                    .require_capability(&crate::security::Capability::ManageGraphQL)
+                // Check capability - reuse ManageMcp for MCP tools
+                if let Err(e) =
+                    user_ctx_register.require_capability(&crate::security::Capability::ManageMcp)
                 {
                     let auditor_clone = auditor_register.clone();
                     let user_id = user_ctx_register.user_id.clone();
@@ -2196,7 +1491,7 @@ impl SecureGlobalContext {
                                 user_id,
                                 "mcp".to_string(),
                                 "register_tool".to_string(),
-                                "ManageGraphQL".to_string(),
+                                "ManageMcp".to_string(),
                             )
                             .await;
                     });
@@ -2296,9 +1591,9 @@ impl SecureGlobalContext {
                     return Ok(registration_inactive("mcpRegistry.registerPrompt", &name));
                 }
 
-                // Check capability - reuse ManageGraphQL for MCP prompts
+                // Check capability - reuse ManageMcp for MCP prompts
                 if let Err(e) =
-                    user_ctx_prompt.require_capability(&crate::security::Capability::ManageGraphQL)
+                    user_ctx_prompt.require_capability(&crate::security::Capability::ManageMcp)
                 {
                     let auditor_clone = auditor_prompt.clone();
                     let user_id = user_ctx_prompt.user_id.clone();
@@ -2308,7 +1603,7 @@ impl SecureGlobalContext {
                                 user_id,
                                 "mcp".to_string(),
                                 "register_prompt".to_string(),
-                                "ManageGraphQL".to_string(),
+                                "ManageMcp".to_string(),
                             )
                             .await;
                     });
@@ -2416,8 +1711,8 @@ impl SecureGlobalContext {
                 // than the `WriteAssets` its asset-route twin takes: what is
                 // being decided here is whether a solution publishes an MCP
                 // surface, not whether the asset may be written.
-                if let Err(e) = user_ctx_resource
-                    .require_capability(&crate::security::Capability::ManageGraphQL)
+                if let Err(e) =
+                    user_ctx_resource.require_capability(&crate::security::Capability::ManageMcp)
                 {
                     let auditor_clone = auditor_resource.clone();
                     let user_id = user_ctx_resource.user_id.clone();
@@ -2427,7 +1722,7 @@ impl SecureGlobalContext {
                                 user_id,
                                 "mcp".to_string(),
                                 "register_resource".to_string(),
-                                "ManageGraphQL".to_string(),
+                                "ManageMcp".to_string(),
                             )
                             .await;
                     });
@@ -4866,164 +4161,6 @@ impl SecureGlobalContext {
             },
         )?;
         database_obj.set("addUniqueIndex", add_unique_index)?;
-
-        // database.generateGraphQLForTable
-        let script_uri_graphql = script_uri_owned.clone();
-        let user_ctx_graphql = user_context.clone();
-        let config_graphql = self.config.clone();
-        let generate_graphql = Function::new(
-            ctx.clone(),
-            move |ctx_inner: rquickjs::Ctx<'_>,
-                  table_name: String,
-                  options: Opt<String>|
-                  -> JsResult<String> {
-                debug!(
-                    "database.generateGraphQLForTable called for script {} on table: {}",
-                    script_uri_graphql, table_name
-                );
-
-                if !user_ctx_graphql.has_capability(&Capability::ManageScriptDatabase) {
-                    return Ok(error_answer(capability_refusal(
-                        "database",
-                        &Capability::ManageScriptDatabase,
-                        &user_ctx_graphql,
-                    )));
-                }
-
-                // Parse options (default: ScriptInternal visibility)
-                let visibility = if let Some(opts_str) = options.0 {
-                    match serde_json::from_str::<serde_json::Value>(&opts_str) {
-                        Ok(opts) => opts
-                            .get("visibility")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("script_internal")
-                            .to_string(),
-                        Err(_) => "script_internal".to_string(),
-                    }
-                } else {
-                    "script_internal".to_string()
-                };
-
-                // Get table schema
-                let schema =
-                    match crate::repository::get_table_schema(&script_uri_graphql, &table_name) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            return Ok(error_answer(format!("Failed to get table schema: {}", e)));
-                        }
-                    };
-
-                // Get foreign keys
-                let foreign_keys =
-                    match crate::repository::get_foreign_keys(&script_uri_graphql, &table_name) {
-                        Ok(fks) => fks,
-                        Err(e) => {
-                            return Ok(error_answer(format!("Failed to get foreign keys: {}", e)));
-                        }
-                    };
-
-                // Generate GraphQL operations
-                let operations = crate::graphql_schema_gen::generate_table_operations(
-                    &table_name,
-                    &schema,
-                    &foreign_keys,
-                );
-
-                // Inject resolver functions into JavaScript context
-                for query in &operations.queries {
-                    // Evaluate resolver code in the current context
-                    if let Err(e) = ctx_inner.eval::<(), _>(query.resolver_code.as_str()) {
-                        return Ok(error_answer(format!(
-                            "Failed to inject resolver {}: {:?}",
-                            query.resolver_function_name, e
-                        )));
-                    }
-                }
-
-                for mutation in &operations.mutations {
-                    if let Err(e) = ctx_inner.eval::<(), _>(mutation.resolver_code.as_str()) {
-                        return Ok(error_answer(format!(
-                            "Failed to inject resolver {}: {:?}",
-                            mutation.resolver_function_name, e
-                        )));
-                    }
-                }
-
-                // Register queries
-                if config_graphql.is_dry_run() {
-                    for query in &operations.queries {
-                        config_graphql.collect(
-                            CollectedRegistration::new(
-                                RegistrationKind::GraphqlQuery,
-                                query.name.clone(),
-                            )
-                            .with_handler(query.resolver_function_name.clone()),
-                        );
-                    }
-                    for mutation in &operations.mutations {
-                        config_graphql.collect(
-                            CollectedRegistration::new(
-                                RegistrationKind::GraphqlMutation,
-                                mutation.name.clone(),
-                            )
-                            .with_handler(mutation.resolver_function_name.clone()),
-                        );
-                    }
-                    return Ok(
-                        serde_json::json!({ "dryRun": true, "table": table_name }).to_string()
-                    );
-                }
-
-                for query in &operations.queries {
-                    if let Err(e) = crate::graphql::register_graphql_query(
-                        query.name.clone(),
-                        query.sdl.clone(),
-                        query.resolver_function_name.clone(),
-                        script_uri_graphql.clone(),
-                        visibility.clone(),
-                    ) {
-                        return Ok(error_answer(format!(
-                            "Failed to register query {}: {}",
-                            query.name, e
-                        )));
-                    }
-                }
-
-                // Register mutations
-                for mutation in &operations.mutations {
-                    if let Err(e) = crate::graphql::register_graphql_mutation(
-                        mutation.name.clone(),
-                        mutation.sdl.clone(),
-                        mutation.resolver_function_name.clone(),
-                        script_uri_graphql.clone(),
-                        visibility.clone(),
-                    ) {
-                        return Ok(error_answer(format!(
-                            "Failed to register mutation {}: {}",
-                            mutation.name, e
-                        )));
-                    }
-                }
-
-                // Return success with operation names
-                let query_names: Vec<&str> =
-                    operations.queries.iter().map(|q| q.name.as_str()).collect();
-                let mutation_names: Vec<&str> = operations
-                    .mutations
-                    .iter()
-                    .map(|m| m.name.as_str())
-                    .collect();
-
-                // `{:?}` on a `Vec<String>` happens to look like a JSON array
-                // and escapes by Rust's rules, not JSON's.
-                Ok(success_answer(serde_json::json!({
-                    "table": table_name,
-                    "queries": query_names,
-                    "mutations": mutation_names,
-                })))
-            },
-        )?;
-        database_obj.set("generateGraphQLForTable", generate_graphql)?;
 
         // Transaction management functions
 
@@ -7669,7 +6806,6 @@ mod api_surface_tests {
             "schedulerService",
             "scriptTasks",
             "personalTasks",
-            "graphQLRegistry",
             "mcpRegistry",
             "database",
             "console",
@@ -7700,18 +6836,6 @@ mod api_surface_tests {
             ("routeRegistry.registerRoute('/r', 'h', 'GET')", "/r"),
             ("routeRegistry.registerStreamRoute('/s')", "/s"),
             ("routeRegistry.registerAssetRoute('/a', 'a.txt')", "/a"),
-            (
-                "graphQLRegistry.registerQuery('q', 'q: String', 'h', 'external')",
-                "q",
-            ),
-            (
-                "graphQLRegistry.registerMutation('m', 'm: String', 'h', 'external')",
-                "m",
-            ),
-            (
-                "graphQLRegistry.registerSubscription('s', 's: String', 'h', 'external')",
-                "s",
-            ),
             ("mcpRegistry.registerTool('t', 'd', '{}', 'h')", "t"),
             ("mcpRegistry.registerPrompt('p', 'd', '[]', 'h')", "p"),
             (

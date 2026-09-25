@@ -67,7 +67,13 @@ pub enum Capability {
     DeleteLogs,
     ViewLogs,
     ManageStreams,
-    ManageGraphQL,
+    /// Publish MCP tools, prompts and resources
+    /// (`mcpRegistry.register*`).
+    ///
+    /// Named `ManageGraphQL` while GraphQL existed, and reused for MCP from
+    /// the day MCP registration was added — so the name has never described
+    /// the whole of what it gates.
+    ManageMcp,
     /// Read rows from a script's tables.
     ///
     /// Split from [`Capability::WriteScriptData`], which used to share one
@@ -749,35 +755,6 @@ impl InputValidator {
         if value.len() > 8192 {
             return Err(SecurityError::InvalidUri(
                 "Header value too long".to_string(),
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Validate GraphQL schema
-    pub fn validate_graphql_schema(&self, schema: &str) -> Result<(), SecurityError> {
-        if schema.is_empty() {
-            return Err(SecurityError::InvalidUri(
-                "GraphQL schema cannot be empty".to_string(),
-            ));
-        }
-
-        // Check for dangerous patterns
-        let dangerous_patterns = ["__schema", "__type", "introspection"];
-        for pattern in &dangerous_patterns {
-            if schema.to_lowercase().contains(pattern) {
-                tracing::warn!(
-                    "GraphQL schema contains potentially sensitive introspection: {}",
-                    pattern
-                );
-            }
-        }
-
-        // Basic length check
-        if schema.len() > 1_000_000 {
-            return Err(SecurityError::InvalidUri(
-                "GraphQL schema too large".to_string(),
             ));
         }
 

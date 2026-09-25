@@ -67,7 +67,7 @@ this job" — use `database.acquireLease()` instead.
 
 ## Automatic Transaction Management
 
-All handler invocations (HTTP, GraphQL, MCP tools, scheduled jobs) automatically handle transaction lifecycle:
+All handler invocations (HTTP, MCP tools, scheduled jobs) automatically handle transaction lifecycle:
 
 ```javascript
 // Handler example
@@ -284,37 +284,6 @@ export function batchProcess(req) {
     status: 200,
     body: JSON.stringify({ results }),
   };
-}
-```
-
-### GraphQL Mutation with Transaction
-
-```javascript
-// Register GraphQL mutation
-registerGraphQL({
-  mutations: [
-    {
-      name: "createUserWithProfile",
-      sdl: "createUserWithProfile(email: String!, name: String!): User",
-      resolverFunctionName: "resolveCreateUserWithProfile",
-    },
-  ],
-});
-
-export function resolveCreateUserWithProfile(args) {
-  const { email, name } = args;
-
-  // Start transaction
-  database.beginTransaction();
-
-  // Create user
-  const userId = database.insert("users", { email });
-
-  // Create profile
-  database.insert("profiles", { user_id: userId, name });
-
-  // Auto-commits on normal return
-  return { id: userId, email, name };
 }
 ```
 
@@ -563,5 +532,4 @@ DATABASE_URL="postgresql://user:pass@localhost/testdb" \
 ## See Also
 
 - [Database Schema Management](./DATABASE_SCHEMA.md)
-- [GraphQL API](./GRAPHQL.md)
 - [Error Handling](./ERROR_HANDLING.md)

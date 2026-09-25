@@ -42,8 +42,8 @@ are not HTTP requests generate their own: one per scheduler tick, per message
 listener call, per MCP tool call, per stream customization. That is what makes a
 single tick separable from the hundreds around it.
 
-`kind` says what sort of invocation it was: `httpRoute`, `graphqlQuery`,
-`graphqlMutation`, `graphqlSubscription`, `scheduled`, `streamCustomization`,
+`kind` says what sort of invocation it was: `httpRoute`, `scheduled`,
+`streamCustomization`,
 `messageListener`, `mcpTool`, `mcpPrompt`, `init`, `eval` or `test`.
 
 `route` is the **registered pattern** (`/world/:id/move`), not the concrete path,

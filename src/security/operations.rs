@@ -133,31 +133,6 @@ impl SecureOperations {
         Ok(OperationResult::success(success_message))
     }
 
-    /// Secure wrapper for GraphQL schema management
-    pub async fn update_graphql_schema(
-        &self,
-        user: &UserContext,
-        schema: String,
-    ) -> Result<OperationResult<String>, StatusCode> {
-        // Check user capabilities (only admin can modify GraphQL schema)
-        if let Err(e) = user.require_capability(&Capability::ManageGraphQL) {
-            return Ok(OperationResult::error(format!("Access denied: {}", e)));
-        }
-
-        // Validate schema content
-        if let Err(e) = self.validator.validate_graphql_schema(&schema) {
-            return Ok(OperationResult::error(format!(
-                "Invalid GraphQL schema: {}",
-                e
-            )));
-        }
-
-        // TODO: Implement actual GraphQL schema update
-        Ok(OperationResult::success(
-            "GraphQL schema updated successfully".to_string(),
-        ))
-    }
-
     /// Secure wrapper for stream management
     pub async fn create_stream(
         &self,

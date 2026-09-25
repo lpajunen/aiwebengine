@@ -9,7 +9,7 @@ Scripts can now dynamically create database tables, add columns of various types
 ## Security
 
 - Schema operations (`createTable`, `ensureTable`, `add*Column`, `dropColumn`,
-  `dropTable`, `addUniqueIndex`, `createLeaseTable`, `generateGraphQLForTable`)
+  `dropTable`, `addUniqueIndex`, `createLeaseTable`)
   require the `ManageScriptDatabase` capability, granted to editors and admins.
   Changing the shape of a solution's data is authoring, not using.
 - Row operations (`query`, `insert`, `update`, `delete`, `upsert`, `deleteWhere`,

@@ -228,27 +228,21 @@ pub fn register_engine_streams() {
     }
 }
 
-/// Re-initialize a script after an upsert: clear its GraphQL/MCP
-/// registrations, run init(), and rebuild the GraphQL schema.
+/// Re-initialize a script after an upsert: clear its MCP registrations and
+/// run init().
 ///
 /// Every local deploy path funnels through here, so what a script upsert does
 /// to a script's registrations and what a batch asset write does to them
 /// cannot drift apart.
 async fn reinitialize_script(script_uri: &str) -> crate::script_init::InitResult {
-    crate::graphql::clear_script_graphql_registrations(script_uri);
     crate::mcp::clear_script_mcp_registrations(script_uri);
 
     let initializer = crate::script_init::ScriptInitializer::with_configured_timeout();
     match initializer.initialize_script(script_uri, false).await {
         Ok(result) => {
-            if result.success {
-                if let Err(e) = crate::graphql::rebuild_schema() {
-                    warn!(
-                        "Failed to rebuild GraphQL schema after script '{}' initialization: {:?}",
-                        script_uri, e
-                    );
-                }
-            } else if let Some(err) = &result.error {
+            if !result.success
+                && let Some(err) = &result.error
+            {
                 warn!("Script '{}' init failed after upsert: {}", script_uri, err);
             }
             result

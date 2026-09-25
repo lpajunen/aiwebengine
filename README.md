@@ -12,7 +12,7 @@ Excels when developing solutions using generative AI technologies.
 Supports JavaScript / TypeScript as the primary programming language. Also supports JSX / TSX for building user interfaces.
 
 Code first approach. Then provide tools for verification and testing.
-Verify code by providing automatic API descriptions such as OpenAPI, GraphQL schema, and MCP tool list.
+Verify code by providing automatic API descriptions such as OpenAPI and the MCP tool list.
 Test code by providing automatic test case generation and execution environment. A script carries its own tests as assets named `*.test.ts`; `POST /engine/run_tests?uri=<script>` runs them inside the same sandbox that serves the script and reports a verdict per case — see [Testing Solution Scripts](docs/SCRIPT_TESTS.md).
 
 Check code before deploying it. `POST /engine/check?uri=<script>` bundles a script with the engine's own module resolution and runs its `init()` with every registration withheld, reporting what a local `tsc` cannot see: import cycles the bundler refuses, registrations whose handler name does not resolve, an `init()` close to its deploy budget, and paths another script already serves — see [Checking Solution Scripts](docs/SCRIPT_CHECKS.md).
@@ -45,7 +45,7 @@ Solution development support is separate to own repositories. There are tools fo
 
 ## Overview
 
-**aiwebengine** (AI Web Engine) is an open-source project designed to facilitate the development of web-based solutions using JavaScript by providing a secure sandbox for executing untrusted code. It is an application engine for software written in the AI era. The engine implements core protocols and features needed for building websites, GraphQL APIs, web applications, and AI tools with minimal overhead. The solution developers can focus on writing JavaScript scripts to implement their business logic, while the engine handles the underlying infrastructure and common functionalities.
+**aiwebengine** (AI Web Engine) is an open-source project designed to facilitate the development of web-based solutions using JavaScript by providing a secure sandbox for executing untrusted code. It is an application engine for software written in the AI era. The engine implements core protocols and features needed for building websites, HTTP APIs, web applications, and AI tools with minimal overhead. The solution developers can focus on writing JavaScript scripts to implement their business logic, while the engine handles the underlying infrastructure and common functionalities.
 
 In addition to being a web application engine, aiwebengine provides an editorial environment for creating, testing, and deploying JavaScript and related web resource based solutions.
 
@@ -57,7 +57,7 @@ AI Web Engine consists of the following main components:
 - **Logging System**: A built-in logging mechanism for monitoring and debugging purposes.
 - **Editorial Environment**: A web-based interface for solution developers to create, test, and deploy their JavaScript-based solutions.
 
-**aiwebengine** is a lightweight web application engine built in Rust that enables developers to create secure solutions using JavaScript scripts. The project leverages the QuickJS JavaScript runtime to provide a simple yet powerful platform for building websites, GraphQL APIs, web applications, and AI tools with minimal overhead.
+**aiwebengine** is a lightweight web application engine built in Rust that enables developers to create secure solutions using JavaScript scripts. The project leverages the QuickJS JavaScript runtime to provide a simple yet powerful platform for building websites, HTTP APIs, web applications, and AI tools with minimal overhead.
 
 ## User Roles
 
@@ -75,10 +75,10 @@ Understanding the different roles in the aiwebengine ecosystem:
 
 ### What are "Solutions"?
 
-In the context of aiwebengine, a **solution** refers to any website, GraphQL API, web application, or AI tool built using the engine. Solutions are created by writing JavaScript scripts that handle HTTP requests, process data, and generate responses. Examples include:
+In the context of aiwebengine, a **solution** refers to any website, HTTP API, web application, or AI tool built using the engine. Solutions are created by writing JavaScript scripts that handle HTTP requests, process data, and generate responses. Examples include:
 
 - Public-facing websites and blogs
-- RESTful and GraphQL APIs
+- RESTful APIs and MCP servers
 - AI-powered tools and services
 - Custom web applications with dynamic content
 

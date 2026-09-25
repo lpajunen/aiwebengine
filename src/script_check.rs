@@ -591,9 +591,6 @@ fn missing_handler_diagnostic(script_uri: &str, missing: &MissingHandler) -> Dia
         RegistrationKind::Route => "route",
         RegistrationKind::Stream => "stream",
         RegistrationKind::AssetRoute => "asset route",
-        RegistrationKind::GraphqlQuery => "GraphQL query",
-        RegistrationKind::GraphqlMutation => "GraphQL mutation",
-        RegistrationKind::GraphqlSubscription => "GraphQL subscription",
         RegistrationKind::McpTool => "MCP tool",
         RegistrationKind::McpPrompt => "MCP prompt",
         // Reachable only in principle: a resource names an asset rather than a

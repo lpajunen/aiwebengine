@@ -128,7 +128,7 @@ impl Capability {
             Capability::DeleteLogs => "delete_logs",
             Capability::ViewLogs => "view_logs",
             Capability::ManageStreams => "manage_streams",
-            Capability::ManageGraphQL => "manage_graphql",
+            Capability::ManageMcp => "manage_mcp",
             Capability::ReadScriptData => "read_script_data",
             Capability::WriteScriptData => "write_script_data",
             Capability::ManageScriptDatabase => "manage_script_database",
@@ -163,7 +163,7 @@ impl Capability {
             Capability::DeleteLogs,
             Capability::ViewLogs,
             Capability::ManageStreams,
-            Capability::ManageGraphQL,
+            Capability::ManageMcp,
             Capability::ReadScriptData,
             Capability::WriteScriptData,
             Capability::ManageScriptDatabase,
@@ -406,7 +406,7 @@ impl UserContext {
             Capability::WriteAssets,
             Capability::DeleteAssets,
             Capability::DeleteLogs,
-            Capability::ManageGraphQL,
+            Capability::ManageMcp,
             Capability::ManageScriptDatabase,
         ]);
         capabilities
@@ -676,7 +676,7 @@ mod tests {
         assert!(!user.has_capability(&Capability::DeleteScripts));
         assert!(!user.has_capability(&Capability::DeleteLogs));
         assert!(!user.has_capability(&Capability::ManageScriptDatabase));
-        assert!(!user.has_capability(&Capability::ManageGraphQL));
+        assert!(!user.has_capability(&Capability::ManageMcp));
         assert!(!user.has_capability(&Capability::AdministerEngine));
     }
 
@@ -693,7 +693,7 @@ mod tests {
         assert!(user.has_capability(&Capability::DeleteScripts));
         assert!(user.has_capability(&Capability::WriteAssets));
         assert!(user.has_capability(&Capability::ManageScriptDatabase));
-        assert!(user.has_capability(&Capability::ManageGraphQL));
+        assert!(user.has_capability(&Capability::ManageMcp));
 
         // But nothing that reaches another author's work. `DeleteScripts` here
         // means "the ones I own"; the ownership check is what bounds it.
@@ -707,7 +707,7 @@ mod tests {
         assert!(user.is_authenticated);
         assert!(user.has_capability(&Capability::DeleteScripts));
         assert!(user.has_capability(&Capability::WriteScripts));
-        assert!(user.has_capability(&Capability::ManageGraphQL));
+        assert!(user.has_capability(&Capability::ManageMcp));
         assert!(user.has_capability(&Capability::DeleteLogs));
     }
 
@@ -722,7 +722,7 @@ mod tests {
 
         assert!(user.require_capability(&Capability::WriteScripts).is_err());
         assert!(user.require_capability(&Capability::DeleteScripts).is_err());
-        assert!(user.require_capability(&Capability::ManageGraphQL).is_err());
+        assert!(user.require_capability(&Capability::ManageMcp).is_err());
     }
 
     /// The tiers nest. Every one of them is built from the one below, and

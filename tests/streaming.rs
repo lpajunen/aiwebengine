@@ -501,7 +501,7 @@ async fn test_script_update_message_format() {
             });
             
             broadcastScriptUpdate('test3.js', 'removed', {
-                via: 'graphql'
+                via: 'mcp'
             });
             
             return { 

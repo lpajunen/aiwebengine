@@ -88,10 +88,6 @@ pub enum AppError {
     #[error("Request timeout")]
     Timeout,
 
-    // GraphQL errors
-    #[error("GraphQL error: {message}")]
-    Graphql { message: String },
-
     // Stream errors
     #[error("Stream error: {message}")]
     Stream { message: String },
@@ -167,7 +163,6 @@ impl AppError {
             AppError::InsufficientCapabilities { .. } => 403,
             AppError::Http { .. } => 502,
             AppError::Timeout => 504,
-            AppError::Graphql { .. } => 500,
             AppError::Stream { .. } => 500,
             AppError::FileSystem { .. } => 500,
             AppError::Internal { .. } => 500,
@@ -295,7 +290,6 @@ impl AppError {
             }
             AppError::Http { message } => (ErrorCode::BadGateway, message.as_str()),
             AppError::Timeout => (ErrorCode::GatewayTimeout, "Request timeout"),
-            AppError::Graphql { message } => (ErrorCode::InternalServerError, message.as_str()),
             AppError::Stream { message } => (ErrorCode::InternalServerError, message.as_str()),
             AppError::FileSystem { message } => (ErrorCode::InternalServerError, message.as_str()),
             AppError::Internal { message } => (ErrorCode::InternalServerError, message.as_str()),

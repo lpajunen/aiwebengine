@@ -85,7 +85,6 @@ pub struct Limits {
     pub size: SizeLimits,
     pub database: DatabaseLimits,
     pub fetch: FetchLimits,
-    pub graphql: GraphQlLimits,
     pub scheduler: SchedulerLimits,
     pub search: SearchLimits,
     pub retention: RetentionLimits,
@@ -193,15 +192,6 @@ pub struct FetchLimits {
     /// Content codings the engine asks for and can undo. A server answering
     /// in anything else is an error rather than an unreadable body.
     pub supported_encodings: &'static str,
-}
-
-/// GraphQL, as a script reaches it and as a client connects to it.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GraphQlLimits {
-    pub max_query_chars: usize,
-    pub max_variables_chars: usize,
-    pub max_subscriptions_per_connection: usize,
 }
 
 /// Scheduled jobs.
@@ -352,11 +342,6 @@ pub fn snapshot() -> Limits {
             allowed_schemes: vec!["http", "https"],
             private_addresses_blocked: true,
             supported_encodings: crate::http_client::SUPPORTED_ENCODINGS,
-        },
-        graphql: GraphQlLimits {
-            max_query_chars: crate::security::secure_globals::MAX_GRAPHQL_QUERY_CHARS,
-            max_variables_chars: crate::security::secure_globals::MAX_GRAPHQL_VARIABLES_CHARS,
-            max_subscriptions_per_connection: crate::graphql_ws::MAX_SUBSCRIPTIONS_PER_CONNECTION,
         },
         scheduler: SchedulerLimits {
             min_recurring_interval_ms: crate::scheduler::MIN_RECURRING_INTERVAL_MS,
@@ -514,7 +499,6 @@ fn placeholder_values(limits: &Limits) -> Vec<(String, String)> {
     let size = &limits.size;
     let database = &limits.database;
     let fetch = &limits.fetch;
-    let graphql = &limits.graphql;
     let scheduler = &limits.scheduler;
     let logs = &limits.retention.logs;
     let revisions = &limits.retention.revisions;
@@ -597,11 +581,6 @@ fn placeholder_values(limits: &Limits) -> Vec<(String, String)> {
         ("fetch.maxRedirects", count(fetch.max_redirects)),
         ("fetch.schemes", fetch.allowed_schemes.join(" and ")),
         ("fetch.encodings", fetch.supported_encodings.to_string()),
-        ("graphql.maxQueryChars", count(graphql.max_query_chars)),
-        (
-            "graphql.maxVariablesChars",
-            count(graphql.max_variables_chars),
-        ),
         (
             "scheduler.minRecurringInterval",
             duration(scheduler.min_recurring_interval_ms.max(0) as u64),

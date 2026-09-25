@@ -173,7 +173,7 @@ idle_in_transaction_timeout_ms = 300000
 # the connection rather than from a header the caller wrote.
 strict_ip_validation = false
 enable_cors = true
-# Origins allowed to read engine-owned responses (/engine, /auth, /graphql,
+# Origins allowed to read engine-owned responses (/engine, /auth,
 # /mcp). Each entry is an origin — scheme://host[:port], no path — matched
 # exactly. Empty means same-origin only. A named origin may send the session
 # cookie; "*" may not, since a browser refuses to pair a wildcard with

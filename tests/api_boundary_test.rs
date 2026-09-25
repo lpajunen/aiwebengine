@@ -6,7 +6,7 @@
 //! - Users without the required capability cannot access capability-gated APIs
 //! - All users can access public APIs
 //! - Any script can register routes on non-reserved paths; engine-owned
-//!   prefixes (/health, /graphql, /mcp, /auth, /.well-known, /engine) are rejected
+//!   prefixes (/health, /mcp, /auth, /.well-known, /engine) are rejected
 //!
 //! ## Test Coverage
 //!
@@ -18,7 +18,7 @@
 //!
 //! ### Capability-gated APIs:
 //! - **RouteRegistry**: sendStreamMessage() and the subscription publishing
-//!   paths require ManageStreams / ManageGraphQL
+//!   paths require ManageStreams
 //!
 //! Engine administration (scripts, assets, users, secrets, logs and route
 //! introspection) is not part of the JavaScript API — it lives on the `/engine/*`
@@ -307,7 +307,7 @@ async fn test_console_logging_available_for_all() {
 // Route Registration Tests - Reserved Prefix Policy
 //
 // Any script may register routes/streams/asset routes on non-reserved paths;
-// paths under the engine-owned prefixes (/health, /graphql, /mcp, /auth,
+// paths under the engine-owned prefixes (/health, /mcp, /auth,
 // /.well-known, /engine) are rejected regardless of script privilege.
 // ============================================================================
 
@@ -344,7 +344,7 @@ async fn test_register_route_denied_for_reserved_path() {
     repository::upsert_script("test://reserved-path-routes", "").expect("Failed to create script");
 
     let script = r#"
-        const reserved = ["/engine/fake", "/health", "/graphql", "/mcp", "/auth/login", "/auth/oauth2/token", "/.well-known/x"];
+        const reserved = ["/engine/fake", "/health", "/mcp", "/auth/login", "/auth/oauth2/token", "/.well-known/x"];
         for (const path of reserved) {
             try {
                 routeRegistry.registerRoute(path, "handler", "GET");
@@ -595,38 +595,6 @@ async fn test_send_stream_message_filtered_rejects_invalid_match_mode() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_send_subscription_message_filtered_accepts_optional_match_mode() {
-    setup_env().await;
-    if database::get_global_database().is_none() {
-        return;
-    }
-    let admin = UserContext::admin("admin".to_string());
-
-    repository::upsert_script("test://filtered-subscription-msg", "")
-        .expect("Failed to create script");
-
-    let script = r#"
-        const result = graphQLRegistry.sendSubscriptionMessageFiltered(
-            "missingSubscription",
-            JSON.stringify({ kind: "test" }),
-            JSON.stringify({ recipient_id: "a" }),
-            "overlap"
-        );
-
-        if (typeof result !== "string") {
-            throw new Error("Expected string result from sendSubscriptionMessageFiltered");
-        }
-    "#;
-
-    let result = execute_script_secure("test://filtered-subscription-msg", script, admin);
-    assert!(
-        result.success,
-        "Script should accept optional subscription match mode: {:?}",
-        result.error
-    );
-}
-
 /// The engine's script-update stream lives under the reserved `/engine` prefix
 /// so a script cannot register a stream on it. The stream registry replaces a
 /// registration that has no active connections, so an unreserved path would let
@@ -684,50 +652,6 @@ async fn test_script_update_broadcast_requires_capability() {
     assert!(
         result.success,
         "Broadcasting script updates without ManageStreams must be denied: {:?}",
-        result.error
-    );
-}
-
-/// Both GraphQL subscription publish paths require `ManageGraphQL`.
-///
-/// They broadcast to the same `/engine/graphql/subscription/{name}` stream, and
-/// a null filter matches every connection, so exempting the filtered variant
-/// made it a drop-in bypass of the check on the unfiltered one.
-#[tokio::test(flavor = "multi_thread")]
-async fn test_subscription_publish_requires_capability_on_both_paths() {
-    setup_env().await;
-    if database::get_global_database().is_none() {
-        return;
-    }
-    let user = create_user_with_capabilities("user", vec![]);
-
-    repository::upsert_script("test://subscription-publish-authz", "")
-        .expect("Failed to create script");
-
-    let script = r#"
-        const payload = JSON.stringify({ kind: "forged" });
-
-        const plain = graphQLRegistry.sendSubscriptionMessage("someSubscription", payload);
-        if (!plain.startsWith("Error:")) {
-            throw new Error("sendSubscriptionMessage should be denied, got: " + plain);
-        }
-
-        // Null filter: matches every connection, same reach as above.
-        const filtered = graphQLRegistry.sendSubscriptionMessageFiltered(
-            "someSubscription",
-            payload,
-            null,
-            null
-        );
-        if (!filtered.startsWith("Error:")) {
-            throw new Error("sendSubscriptionMessageFiltered should be denied, got: " + filtered);
-        }
-    "#;
-
-    let result = execute_script_secure("test://subscription-publish-authz", script, user);
-    assert!(
-        result.success,
-        "Subscription publishing without ManageGraphQL must be denied on both paths: {:?}",
         result.error
     );
 }

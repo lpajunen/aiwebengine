@@ -166,9 +166,6 @@ async fn test_openapi_contains_rust_endpoints() {
         "/engine/run_tests",
         "/engine/script_logs",
         "/engine/script_logs/stream",
-        "/graphql",
-        "/graphql/ws",
-        "/graphql/sse",
         "/mcp",
         // Every way in, federated or internal. These are handlers a client
         // has to be able to find, and each of them carried a `utoipa::path`
@@ -406,8 +403,6 @@ async fn test_openapi_has_schemas() {
     let required_schemas = vec![
         "HealthResponse",
         "ClusterHealthResponse",
-        "GraphQLRequest",
-        "GraphQLResponse",
         "McpRpcRequest",
         "McpRpcResponse",
         "ErrorResponse",
@@ -488,62 +483,12 @@ async fn test_openapi_has_tags() {
         .filter_map(|t| t["name"].as_str().map(String::from))
         .collect();
 
-    let expected_tags = vec!["Health", "GraphQL", "MCP"];
+    let expected_tags = vec!["Health", "MCP"];
     for expected in expected_tags {
         assert!(
             tag_names.contains(&expected.to_string()),
             "Tags should include {}",
             expected
-        );
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_openapi_graphql_endpoints_have_x_protocol() {
-    let engine = AdminServer::start().await.expect("server failed to start");
-    let port = engine.port();
-
-    let client = engine.client();
-    let url = format!("http://localhost:{}/engine/openapi.json", port);
-
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .expect("Failed to fetch OpenAPI spec");
-
-    let spec: Value = response.json().await.expect("Failed to parse JSON");
-    let paths = spec["paths"]
-        .as_object()
-        .expect("OpenAPI spec should have paths object");
-
-    // Check WebSocket endpoint has x-protocol
-    if let Some(ws_path) = paths.get("/graphql/ws")
-        && let Some(get_op) = ws_path["get"].as_object()
-    {
-        assert!(
-            get_op.contains_key("x-protocol"),
-            "/graphql/ws should have x-protocol extension"
-        );
-        assert_eq!(
-            get_op["x-protocol"].as_str(),
-            Some("graphql-ws"),
-            "/graphql/ws x-protocol should be 'graphql-ws'"
-        );
-    }
-
-    // Check SSE endpoint has x-protocol
-    if let Some(sse_path) = paths.get("/graphql/sse")
-        && let Some(get_op) = sse_path["get"].as_object()
-    {
-        assert!(
-            get_op.contains_key("x-protocol"),
-            "/graphql/sse should have x-protocol extension"
-        );
-        assert_eq!(
-            get_op["x-protocol"].as_str(),
-            Some("text/event-stream"),
-            "/graphql/sse x-protocol should be 'text/event-stream'"
         );
     }
 }
@@ -707,8 +652,7 @@ async fn test_openapi_asset_and_stream_default_groups() {
 }
 
 /// The log tail answers with an event stream, not a document. A client reading
-/// the spec has to be able to tell that apart before it opens the connection,
-/// the same way it can for the GraphQL subscription endpoints.
+/// the spec has to be able to tell that apart before it opens the connection.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_openapi_log_tail_is_marked_as_an_event_stream() {
     let engine = AdminServer::start().await.expect("server failed to start");
@@ -768,7 +712,6 @@ async fn test_openapi_publishes_the_limits_a_developer_can_meet() {
         "size",
         "database",
         "fetch",
-        "graphql",
         "scheduler",
         "search",
         "retention",

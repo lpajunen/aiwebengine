@@ -62,7 +62,7 @@ Every one of those is [`UserContext::attenuated`], an intersection that can
 only ever take away. The missing row is the one that would apply to
 _everything_, because it sits on the credential rather than on an execution —
 and every API in the engine starts from a credential. JavaScript, `/engine/*`,
-`/mcp` and GraphQL all resolve a session into a `UserContext` before they
+`/mcp` and the script routes all resolve a session into a `UserContext` before they
 authorize anything. Narrow it there and "the role caps what you can do
 regardless of the API" stops being a convention maintained in four places and
 becomes structural.
@@ -94,10 +94,10 @@ elevating, which is the property that makes this deployable at all.
 What is left over is two bundles, and they are two because the engine already
 asks exactly two questions:
 
-| Bundle       | What the page says                               | Capabilities                                                                                                                  | Role required |
-| ------------ | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `author`     | Create and change the scripts you own            | `write_scripts`, `delete_scripts`, `write_assets`, `delete_assets`, `delete_logs`, `manage_graphql`, `manage_script_database` | editor        |
-| `administer` | Act on scripts, users and secrets you do not own | `administer_engine`                                                                                                           | administrator |
+| Bundle       | What the page says                               | Capabilities                                                                                                              | Role required |
+| ------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `author`     | Create and change the scripts you own            | `write_scripts`, `delete_scripts`, `write_assets`, `delete_assets`, `delete_logs`, `manage_mcp`, `manage_script_database` | editor        |
+| `administer` | Act on scripts, users and secrets you do not own | `administer_engine`                                                                                                       | administrator |
 
 `author` on its own still cannot touch somebody else's script, because every
 write pairs the capability with an ownership check (`repository::user_owns_script`).

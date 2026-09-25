@@ -193,7 +193,7 @@ into the abandoned run.
 `init()` really runs. What the engine mediates is withheld:
 
 - **Registrations are recorded, not applied.** Routes, streams, asset routes,
-  GraphQL operations, MCP tools and prompts, scheduled jobs and message
+  MCP tools and prompts, scheduled jobs and message
   listeners are collected into the report and never reach the live registries.
   This is what makes it safe to check a candidate against a deployed script:
   without it, a broken candidate's `init()` would replace the running script's

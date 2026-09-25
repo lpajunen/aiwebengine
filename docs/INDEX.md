@@ -10,7 +10,6 @@ Welcome to the aiwebengine documentation! This guide helps you find the right in
 
 - **JavaScript-based development**: Write handler functions in JavaScript to process HTTP requests
 - **Real-time streaming**: Built-in Server-Sent Events (SSE) support for live updates
-- **GraphQL support**: Query and subscription capabilities out of the box
 - **Authentication & Authorization**: OAuth-based user management with role-based access control
 - **Built-in editor**: Web-based script editor with syntax highlighting
 - **Docker-ready**: Easy deployment with Docker and Docker Compose
@@ -172,7 +171,7 @@ docs/
 1. Start by creating a basic script in the web editor
 2. Explore the example scripts for streaming and real-time features
 3. Use Server-Sent Events (SSE) for live updates
-4. Optionally add GraphQL subscriptions for bidirectional communication
+4. Optionally add MCP tools so agents can drive the same solution
 
 ### Scenario 4: Adding AI Features
 

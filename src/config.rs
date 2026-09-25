@@ -469,7 +469,7 @@ pub struct SecurityConfig {
     pub enable_cors: bool,
 
     /// Origins allowed to read engine-owned responses (`/engine`, `/auth`,
-    /// `/graphql`, `/mcp`, …). Empty means same-origin only.
+    /// `/mcp`, …). Empty means same-origin only.
     ///
     /// Each entry is an origin — `scheme://host[:port]`, no path — matched
     /// exactly. `"*"` allows any origin *without credentials*, which is the

@@ -8,7 +8,7 @@
  * /// <reference path="https://your-engine.com/engine/types/v0.1.0/aiwebengine.d.ts" />
  *
  * IMPORTANT: Every script MUST export an init() function that registers routes,
- * GraphQL resolvers, or other initialization logic.
+ * MCP tools, or other initialization logic.
  *
  * @example
  * // Minimal script structure
@@ -28,7 +28,7 @@
 /**
  * Initialization function that must be exported by every script.
  * This function is called when the script is loaded and should register
- * routes, GraphQL resolvers, or perform other setup tasks.
+ * routes, MCP tools, or perform other setup tasks.
  *
  * @param context - Handler context (optional, may not be provided during init)
  * @example
@@ -36,14 +36,6 @@
  *   // Register HTTP routes
  *   routeRegistry.registerRoute("/api/users", "listUsers", "GET");
  *   routeRegistry.registerRoute("/api/users/:id", "getUser", "GET");
- *
- *   // Register GraphQL queries
- *   graphQLRegistry.registerQuery(
- *     "getUser",
- *     "getUser(id: ID!): User",
- *     "getUserResolver",
- *     "external",
- *   );
  *
  *   // Register streams
  *   routeRegistry.registerStreamRoute("/events/notifications");
@@ -60,7 +52,7 @@ declare function init(context?: HandlerContext): void;
 
 /**
  * Every global in this file is present in every execution context. A script
- * sees the same API whether it was entered through an HTTP route, a GraphQL
+ * sees the same API whether it was entered through an HTTP route, an MCP
  * resolver, an MCP tool, a scheduled job, a stream customizer, a message
  * listener or a test, so shared helpers never need `typeof x === "undefined"`
  * guards. What a call is *allowed* to do still depends on the caller's
@@ -70,7 +62,6 @@ declare function init(context?: HandlerContext): void;
  * `init()` runs in the registration phase. So these methods:
  *
  * - `routeRegistry.registerRoute` / `registerAssetRoute` / `registerStreamRoute`
- * - `graphQLRegistry.registerQuery` / `registerMutation` / `registerSubscription`
  * - `mcpRegistry.registerTool` / `registerPrompt` / `registerResource`
  * - `schedulerService.registerOnce` / `registerRecurring` / `clearAll`
  *
@@ -82,8 +73,7 @@ declare function init(context?: HandlerContext): void;
  *
  * Everything else — `database`, `assetStorage`, `secretStorage`,
  * `scriptStorage`, `personalStorage`, `fetch`, `convert`, `console`,
- * `McpClient`, `graphQLRegistry.executeGraphQL`,
- * `routeRegistry.sendStreamMessage` — works in every context.
+ * `McpClient`, `routeRegistry.sendStreamMessage` — works in every context.
  *
  * Register in `init()`. Registering from a request handler silently does
  * nothing, which is rarely what the script intended.
@@ -146,9 +136,7 @@ declare function init(context?: HandlerContext): void;
  * `security.max_request_body_bytes` ({{limits.size.maxRequestBody}}), or by
  * `repository.max_upload_size_bytes` plus framing when it is form-encoded or
  * multipart ({{limits.size.maxUpload}}); past either, the caller gets a 413
- * and your handler is never entered. A GraphQL query executed through
- * `graphQLRegistry` is at most {{limits.graphql.maxQueryChars}} characters
- * with {{limits.graphql.maxVariablesChars}} of variables.
+ * and your handler is never entered.
  *
  * **The script database.** {{limits.database.maxTablesPerScript}} tables per
  * script, {{limits.database.maxColumnsPerTable}} columns per table, and
@@ -223,7 +211,7 @@ interface HttpRequest {
    * The absolute URL the request arrived on, origin included.
    *
    * `path` cannot say which of the engine's hosts served a request; this can.
-   * Present only for HTTP routes — a GraphQL resolver, MCP tool or stream
+   * Present only for HTTP routes — an MCP tool or stream
    * customization has no URL behind it.
    * @example
    * console.log(req.url); // "https://example.com/api/notes?tag=a"
@@ -344,9 +332,6 @@ interface HttpResponse {
 /** What sort of invocation a handler is running under */
 type HandlerInvocationKind =
   | "httpRoute"
-  | "graphqlQuery"
-  | "graphqlMutation"
-  | "graphqlSubscription"
   | "streamCustomization"
   | "messageListener"
   | "init"
@@ -363,7 +348,7 @@ interface HandlerContext {
   /** HTTP request information (for HTTP route handlers) */
   request?: HttpRequest;
 
-  /** GraphQL or function arguments (for GraphQL resolvers) */
+  /** Function arguments */
   args?: Record<string, any>;
 
   /** Handler invocation type */
@@ -1292,138 +1277,6 @@ interface LinkInvitation {
 }
 
 // ============================================================================
-// GraphQL Registry API
-// ============================================================================
-
-/**
- * GraphQL schema and resolver registration
- */
-interface GraphQLRegistry {
-  /**
-   * Register a GraphQL query
-   * @param name - Query name
-   * @param sdl - GraphQL SDL (Schema Definition Language) for the query
-   * @param resolverFunction - Name of the resolver function
-   * @param visibility - Visibility level: "internal" (script-only), "engine" (all scripts), or "external" (authenticated API access)
-   * @returns Registration result message
-   * @example
-   * graphQLRegistry.registerQuery(
-   *   "getUser",
-   *   "getUser(id: ID!): User",
-   *   "getUserResolver",
-   *   "external"
-   * );
-   *
-   * Only takes effect during startup and `init()`. Called from a handler it
-   * returns a message saying nothing was registered, and does not throw.
-   */
-  registerQuery(
-    name: string,
-    sdl: string,
-    resolverFunction: string,
-    visibility: string,
-  ): string;
-
-  /**
-   * Register a GraphQL mutation
-   * @param name - Mutation name
-   * @param sdl - GraphQL SDL (Schema Definition Language) for the mutation
-   * @param resolverFunction - Name of the resolver function
-   * @param visibility - Visibility level: "internal" (script-only), "engine" (all scripts), or "external" (authenticated API access)
-   * @returns Registration result message
-   * @example
-   * graphQLRegistry.registerMutation(
-   *   "createUser",
-   *   "createUser(name: String!, email: String!): User",
-   *   "createUserResolver",
-   *   "external"
-   * );
-   *
-   * Only takes effect during startup and `init()`. Called from a handler it
-   * returns a message saying nothing was registered, and does not throw.
-   */
-  registerMutation(
-    name: string,
-    sdl: string,
-    resolverFunction: string,
-    visibility: string,
-  ): string;
-
-  /**
-   * Register a GraphQL subscription
-   * @param name - Subscription name
-   * @param sdl - GraphQL SDL (Schema Definition Language) for the subscription
-   * @param resolverFunction - Name of the resolver function
-   * @param visibility - Visibility level: "internal" (script-only), "engine" (all scripts), or "external" (authenticated API access)
-   * @returns Registration result message
-   * @example
-   * graphQLRegistry.registerSubscription(
-   *   "messageAdded",
-   *   "messageAdded(chatId: ID!): Message",
-   *   "messageAddedResolver",
-   *   "external"
-   * );
-   *
-   * Only takes effect during startup and `init()`. Called from a handler it
-   * returns a message saying nothing was registered, and does not throw.
-   */
-  registerSubscription(
-    name: string,
-    sdl: string,
-    resolverFunction: string,
-    visibility: string,
-  ): string;
-
-  /**
-   * Execute a GraphQL query internally
-   * @param query - GraphQL query string (1 to {{limits.graphql.maxQueryChars}} characters)
-   * @param variables - Query variables as JSON (optional, max {{limits.graphql.maxVariablesChars}} characters)
-   * @returns JSON string with query results
-   * @example
-   * const result = graphQLRegistry.executeGraphQL(
-   *   "query { getUser(id: \"123\") { name } }",
-   *   "{}"
-   * );
-   */
-  executeGraphQL(query: string, variables?: string): string;
-
-  /**
-   * Send a message to all connections subscribed to a GraphQL subscription
-   * @param subscriptionName - Name of the subscription
-   * @param message - Message to send (will be JSON serialized)
-   * @returns Send result message
-   * @example
-   * graphQLRegistry.sendSubscriptionMessage(
-   *   "messageAdded",
-   *   JSON.stringify({ id: "123", text: "Hello" })
-   * );
-   */
-  sendSubscriptionMessage(subscriptionName: string, message: string): string;
-
-  /**
-   * Send a message to filtered connections based on metadata
-   * @param subscriptionName - Name of the subscription
-   * @param message - Message to send (will be JSON serialized)
-   * @param filterJson - JSON filter criteria for connection metadata (optional)
-   * @param matchMode - Optional filter matching mode. Defaults to "subset".
-   * @returns Send result message
-   * @example
-   * graphQLRegistry.sendSubscriptionMessageFiltered(
-   *   "messageAdded",
-   *   JSON.stringify({ id: "123", text: "Admin message" }),
-   *   JSON.stringify({ role: "admin" }),
-   *   "subset"
-   * );
-   */
-  sendSubscriptionMessageFiltered(
-    subscriptionName: string,
-    message: string,
-    filterJson?: string,
-    matchMode?: "subset" | "overlap",
-  ): string;
-}
-
-// ============================================================================
 // MCP (Model Context Protocol) Registry API
 // ============================================================================
 
@@ -1513,10 +1366,9 @@ interface McpRegistry {
    * so that a listed resource is never one a client cannot read.
    *
    * Published on the hosts this script publishes on, like every other
-   * registration, and requires `manage_graphql` — the same capability the rest
-   * of `mcpRegistry` takes, since what is being decided is whether the
-   * solution exposes an MCP surface rather than whether the asset may be
-   * written.
+   * registration, and requires `manage_mcp` — the same capability the rest of
+   * `mcpRegistry` takes, since what is being decided is whether the solution
+   * exposes an MCP surface rather than whether the asset may be written.
    *
    * @param uri - How clients name it. Must carry a scheme (`docs://handbook`,
    *   `https://example.com/spec`), 3-500 characters, no whitespace.
@@ -2472,20 +2324,6 @@ interface Database {
    */
   addUniqueIndex(tableName: string, columns: string): DatabaseAnswer;
 
-  /**
-   * Auto-generate GraphQL operations for a table
-   * @param tableName - Table name
-   * @param options - JSON string with options (optional): {visibility: "script_internal" | "public" | "authenticated"}
-   * @returns JSON string with result: {success: boolean, table: string, queries: string[], mutations: string[]} or {error: string}
-   * @example
-   * const result = database
-   *   .generateGraphQLForTable("users", JSON.stringify({visibility: "authenticated"}))
-   *   .json();
-   * // Automatically creates queries like: getUser, listUsers
-   * // And mutations like: createUser, updateUser, deleteUser
-   */
-  generateGraphQLForTable(tableName: string, options?: string): DatabaseAnswer;
-
   // Transaction Management
 
   /**
@@ -2814,7 +2652,7 @@ type Capability =
   | "delete_logs"
   | "view_logs"
   | "manage_streams"
-  | "manage_graphql"
+  | "manage_mcp"
   | "read_script_data"
   | "write_script_data"
   | "manage_script_database"
@@ -3166,7 +3004,6 @@ declare var secretStorage: SecretStorage;
 declare var schedulerService: SchedulerService;
 declare var scriptTasks: ScriptTasks;
 declare var personalTasks: PersonalTasks;
-declare var graphQLRegistry: GraphQLRegistry;
 declare var mcpRegistry: McpRegistry;
 declare var mcp: Mcp;
 /**

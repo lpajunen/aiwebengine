@@ -7525,8 +7525,6 @@ impl Repository for PostgresRepository {
             metadata.hosts = hosts.to_vec();
         }
         crate::route_index::invalidate();
-        // The per-host GraphQL schemas were built from the old bindings
-        crate::graphql::invalidate_host_schemas();
 
         // Other instances cache the old bindings and would keep publishing the
         // script where it used to be. Reuse the upsert channel: their handler

@@ -100,7 +100,7 @@ secrets written, and outbound `fetch` calls are real and survive the run. A test
 that calls `database.commitTransaction()` itself commits the run's transaction
 and defeats the rollback.
 
-Registrations are switched off during a run — `routeRegistry`, `graphQLRegistry`,
+Registrations are switched off during a run — `routeRegistry`, `mcpRegistry`,
 and `schedulerService` calls do nothing, because a route or job registered by a
 test would outlive it and no rollback undoes that.
 
