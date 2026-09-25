@@ -361,8 +361,8 @@ thread_local! {
 /// Installs an exchange for as long as it is held, then gives it back.
 ///
 /// Restores whatever was in place rather than clearing, so a tool call reached
-/// from inside another execution — `dispatcher.sendMessage` builds a runtime
-/// inside a running host call — cannot erase its caller's exchange.
+/// from inside another execution — `sandbox.run` builds a runtime inside a
+/// running host call — cannot erase its caller's exchange.
 pub struct ExchangeGuard {
     previous: Option<Exchange>,
 }
@@ -751,7 +751,7 @@ mod tests {
 
     #[test]
     fn a_nested_execution_restores_the_exchange_it_interrupted() {
-        // `dispatcher.sendMessage` builds a runtime inside a running host call,
+        // `sandbox.run` builds a runtime inside a running host call,
         // so an inner tool call must not erase its caller's exchange.
         let outer = ExchangeGuard::install(Exchange::new(
             answers(&[("ask_0", "outer")]),

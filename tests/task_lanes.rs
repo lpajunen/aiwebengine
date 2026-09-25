@@ -21,7 +21,7 @@
 
 mod common;
 
-use aiwebengine::tasks::{self, NewTask, TaskKind};
+use aiwebengine::tasks::{self, NewTask};
 use chrono::Utc;
 use common::setup_env;
 use serde_json::json;
@@ -65,7 +65,6 @@ fn task(script_uri: &str, handler: &str, lane: Option<&str>) -> NewTask {
         run_at: None,
         max_attempts: Some(3),
         enqueued_by: None,
-        kind: TaskKind::Task,
         run_as: None,
         lane: lane.map(str::to_string),
     }

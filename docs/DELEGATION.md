@@ -48,10 +48,9 @@ in, rather than a new failure mode.
 ### Reading is the floor; `write` is the grant
 
 Without `write`, a delegated run holds no write capability at all: not the
-script's tables, not either storage, not the queue, not the message
-dispatcher. That is the **plan approved in advance** — a person authorising an
-app to go away and work out what to do, without authorising it to do the
-thing.
+script's tables, not either storage, not the queue. That is the **plan approved
+in advance** — a person authorising an app to go away and work out what to do,
+without authorising it to do the thing.
 
 It is enforced as a capability rather than as a scope check, which means it is
 the same gate every other caller meets, underneath the JavaScript, at every

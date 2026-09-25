@@ -290,7 +290,7 @@ pub fn snapshot() -> Limits {
              script database.",
             "There are no timers. setTimeout and setInterval do not exist, and a promise still \
              pending when a handler returns can never settle.",
-            "There is no concurrency. Every host call — fetch, database, dispatcher — blocks \
+            "There is no concurrency. Every host call — fetch, database, a script's tables — blocks \
              until it has an answer, so `await` sequences work rather than overlapping it, and \
              Promise.all over several fetches runs them one after another.",
             "Imports resolve to this script's own assets. A specifier is relative ('./x.ts', \

@@ -52,9 +52,9 @@
 //! re-check afterwards. The reduced context is proved to the things that check
 //! it by construction rather than by discipline.
 //!
-//! The engine already nests executions this way: `dispatcher.sendMessage`
-//! builds a whole runtime inside a running host call, and two mechanisms that
-//! would otherwise make nesting wrong are already right. A nested runtime's
+//! The engine already nests executions this way: a stream customization
+//! function builds a whole runtime inside a running host call, and two
+//! mechanisms that would otherwise make nesting wrong are already right. A nested runtime's
 //! budget is clamped to the parent's remaining time
 //! (`create_sandboxed_runtime` → `within_host_budget`), so a chain of
 //! sub-executions cannot outlive the request that started it. And
@@ -275,7 +275,6 @@ mod tests {
             Capability::UseNetwork,
             Capability::ReadSecrets,
             Capability::EnqueueTasks,
-            Capability::SendMessages,
         ] {
             assert!(
                 !narrowed.has_capability(&denied),

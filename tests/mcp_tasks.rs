@@ -318,7 +318,6 @@ async fn cancelling_before_the_worker_claims_it_stops_the_work() -> anyhow::Resu
         run_at: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
         max_attempts: Some(1),
         enqueued_by: None,
-        kind: aiwebengine::tasks::TaskKind::Task,
         run_as: None,
         lane: None,
     })

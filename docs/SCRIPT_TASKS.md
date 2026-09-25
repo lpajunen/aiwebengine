@@ -18,11 +18,9 @@ function runExport(context) {
 ```
 
 A script could not do this. `schedulerService.registerOnce` is phase-gated, so
-a handler could not schedule its own continuation; `dispatcher.sendMessage`
-only looks like a way out, because its listeners run inline, on the sender's
-budget and under the sender's context. The engine had no expression at all for
-"start something, answer, finish it later" — which is most of what an agent
-does.
+a handler could not schedule its own continuation. The engine had no expression
+at all for "start something, answer, finish it later" — which is most of what
+an agent does.
 
 `scriptTasks` is that expression: a durable queue a request writes to and a
 background worker picks up.
@@ -150,31 +148,6 @@ Three things worth knowing:
 The lane is on the row, so `list_tasks` and `/engine/tasks` answer "why has
 this not run" with "it is behind another task in its lane" rather than
 leaving you to guess.
-
-## Posting a message instead of sending it
-
-`dispatcher.sendMessage` runs every listener inline — in your execution, on
-your budget, under your context — and does not return until they all have.
-`dispatcher.post` fans out to the same listeners and queues one task each:
-
-```javascript
-function placeOrder(context) {
-  const { queued } = dispatcher.post("order.placed", { orderId });
-  return { status: 201, body: JSON.stringify({ orderId, queued }) };
-}
-```
-
-The listener is the same registration and the same code either way — it still
-reads `context.messageType` and `context.messageData`. That compatibility is
-the whole reason to post rather than calling `scriptTasks.enqueue` directly; a
-listener that had to be written twice would defeat it. A queued one also has
-`context.meta.task` if it wants to know it is a retry.
-
-Two differences. Listeners are resolved when you post, so the fan-out goes to
-whoever is listening at that moment rather than whenever the queue reaches it.
-And a queued listener runs in script context — it holds what its own script
-holds, not what you hold — because by the time it runs there is no caller left
-to borrow authority from.
 
 ## Seeing the queue
 

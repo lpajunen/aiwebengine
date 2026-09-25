@@ -8,7 +8,7 @@
 mod common;
 
 use aiwebengine::delegation::{self, Scope};
-use aiwebengine::tasks::{self, NewTask, TaskKind};
+use aiwebengine::tasks::{self, NewTask};
 use aiwebengine::{js_engine, repository};
 use chrono::{Duration, Utc};
 use common::setup_env;
@@ -33,7 +33,6 @@ fn personal_task(script_uri: &str, handler: &str, user_id: &str) -> NewTask {
         run_at: None,
         max_attempts: Some(3),
         enqueued_by: Some(user_id.to_string()),
-        kind: TaskKind::Task,
         run_as: Some(user_id.to_string()),
         lane: None,
     }
@@ -277,7 +276,6 @@ async fn an_undelegated_task_reaches_nobodys_storage() {
         run_at: None,
         max_attempts: Some(1),
         enqueued_by: None,
-        kind: TaskKind::Task,
         run_as: None,
         lane: None,
     })

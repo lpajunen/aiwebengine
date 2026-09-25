@@ -176,9 +176,8 @@ async fn open_database() -> Option<sqlx::PgPool> {
 /// stamping notifications with `"test"`. Every write the instance made then
 /// came back looking like a peer's, so a script was re-initialised a second
 /// time concurrently with the initialisation its own write had already
-/// spawned, and the two passes each cleared the script's listeners before
-/// registering their own — leaving the script listening twice. Which of the
-/// two dispatch tests saw it depended on which won the race.
+/// spawned, and the two passes raced over the same registrations. Which test
+/// saw it depended on which pass won.
 async fn build_globals() {
     let Some(pool) = open_database().await else {
         return;

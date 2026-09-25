@@ -147,9 +147,8 @@ Capture stops after 1,000 lines; anything past that is counted in
 
 - **Database writes roll back** with `rollback` (the default), including asset
   and secret writes, which go through the same transaction.
-- **Registrations do nothing.** `routeRegistry`, `graphQLRegistry`,
-  `schedulerService` and `dispatcher.registerListener` stay callable and report
-  that they did nothing — a route or job registered from a snippet would outlive
+- **Registrations do nothing.** `routeRegistry`, `graphQLRegistry` and
+  `schedulerService` stay callable and report that they did nothing — a route or job registered from a snippet would outlive
   the request with no rollback to undo it. This is the same rule a test run
   follows.
 - **Not isolated:** anything the engine does not mediate — an outbound `fetch`,

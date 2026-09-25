@@ -2,7 +2,7 @@ use base64::Engine;
 use chrono::Duration as ChronoDuration;
 use rquickjs::{Function, Result as JsResult, function::Opt};
 use std::collections::HashMap;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// The JavaScript half of `fetch()`: wraps the Rust call's JSON envelope in a
 /// response that can be awaited, read as an object, or parsed as a string.
@@ -88,8 +88,8 @@ fn optional_arg<'js, T: rquickjs::FromJs<'js>>(
 /// Read an argument a script may pass either as JSON text or as the value that
 /// text describes.
 ///
-/// The host bindings behind `sendStreamMessage`, `sendStreamMessageFiltered`
-/// and `dispatcher.sendMessage` took a `String`, while the type declarations
+/// The host bindings behind `sendStreamMessage` and
+/// `sendStreamMessageFiltered` took a `String`, while the type declarations
 /// typed the same argument `any` and every example passed an object — so the
 /// documented call raised `TypeError: Error converting from js 'object' into
 /// type 'string'` out of the binding, QuickJS having no coercion to offer it.
@@ -287,7 +287,6 @@ pub enum RegistrationKind {
     McpPrompt,
     McpResource,
     ScheduledJob,
-    MessageListener,
 }
 
 impl RegistrationKind {
@@ -305,7 +304,6 @@ impl RegistrationKind {
             RegistrationKind::McpPrompt => "mcpRegistry.registerPrompt",
             RegistrationKind::McpResource => "mcpRegistry.registerResource",
             RegistrationKind::ScheduledJob => "schedulerService",
-            RegistrationKind::MessageListener => "dispatcher.registerListener",
         }
     }
 }
@@ -496,10 +494,10 @@ pub struct GlobalSecurityConfig {
     ///
     /// This is what makes `/engine/check` safe to run against a deployed
     /// script. Only `registerRoute` collects by design — every other registry
-    /// (GraphQL, streams, asset routes, MCP, scheduler, dispatcher) is a
-    /// process-wide singleton written to directly, so a candidate's `init()`
-    /// would otherwise replace the deployed script's resolvers, listeners and
-    /// jobs with its own, and a broken candidate would take the live script
+    /// (GraphQL, streams, asset routes, MCP, scheduler) is a process-wide
+    /// singleton written to directly, so a candidate's `init()` would
+    /// otherwise replace the deployed script's resolvers and jobs with its
+    /// own, and a broken candidate would take the live script
     /// down with it. Nothing undoes those writes afterwards, which is why the
     /// test runner opts out of the registration phase entirely
     /// (`registration_phase: false`) rather than isolating it.
@@ -865,9 +863,6 @@ impl SecureGlobalContext {
         self.setup_graphql_functions(ctx, script_uri)?;
         self.setup_mcp_functions(ctx, script_uri)?;
         self.setup_scheduler_functions(ctx, script_uri)?;
-        self.setup_dispatcher_functions(ctx, script_uri)?;
-        // After the dispatcher: the queue's prelude installs `scriptTasks` and
-        // also puts `post` on the dispatcher, which has to be there already.
         self.setup_task_functions(ctx, script_uri)?;
         self.setup_sandbox_functions(ctx, script_uri)?;
         self.setup_crypto_object(ctx, script_uri)?;
@@ -2650,7 +2645,6 @@ impl SecureGlobalContext {
                     // `statusMessage`.
                     max_attempts: Some(1),
                     enqueued_by: user_ctx_task.user_id.clone(),
-                    kind: crate::tasks::TaskKind::Task,
                     // Script context. Running a queued tool call as the caller
                     // would need a delegation grant, and an MCP client holding
                     // a token is not the same as a person having consented to
@@ -6056,7 +6050,6 @@ impl SecureGlobalContext {
                     // Recorded as where the work came from, not as an authority
                     // it runs under: a task runs in script context.
                     enqueued_by: user_enqueue.user_id.clone(),
-                    kind: crate::tasks::TaskKind::Task,
                     // Script context. `personalTasks.enqueue` is the one that
                     // acts as somebody, and it takes a grant to do it.
                     run_as: None,
@@ -6269,7 +6262,6 @@ impl SecureGlobalContext {
                         .and_then(|v| v.as_i64())
                         .map(|n| n.clamp(i32::MIN as i64, i32::MAX as i64) as i32),
                     enqueued_by: Some(user_id.clone()),
-                    kind: crate::tasks::TaskKind::Task,
                     run_as: Some(user_id.clone()),
                     // Per person by default, and this is the correctness fix
                     // rather than a convenience. Two prompts from one person
@@ -6473,7 +6465,6 @@ impl SecureGlobalContext {
                     // having asked. `run_as` is the whole of the authority
                     // and it was worked out above, never taken from input.
                     enqueued_by: None,
-                    kind: crate::tasks::TaskKind::Task,
                     run_as: Some(user_id.clone()),
                     // Per person by default, as the caller-facing enqueue
                     // is, and here it is the case the lane key was written
@@ -6857,8 +6848,8 @@ impl SecureGlobalContext {
     /// context holding a chosen subset of what this one holds. What makes
     /// that affordable is that nothing here is new: `evaluate_snippet` already
     /// evaluates caller-authored source against a script's program with a
-    /// caller-chosen `UserContext`, and `dispatcher.sendMessage` already
-    /// builds a nested runtime from inside a running host call. This is those
+    /// caller-chosen `UserContext`, and a stream customization function
+    /// already builds a nested runtime from inside a running host call. This is those
     /// two facts put together and pointed at the calling script itself.
     fn setup_sandbox_functions(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
         let global = ctx.globals();
@@ -7141,353 +7132,6 @@ impl SecureGlobalContext {
     fn sandbox_failure(name: &str, message: &str) -> String {
         serde_json::json!({ "ok": false, "name": name, "message": message }).to_string()
     }
-
-    /// Setup message dispatcher functions for inter-script communication
-    fn setup_dispatcher_functions(
-        &self,
-        ctx: &rquickjs::Ctx<'_>,
-        script_uri: &str,
-    ) -> JsResult<()> {
-        let global = ctx.globals();
-        let dispatcher_obj = rquickjs::Object::new(ctx.clone())?;
-
-        // registerListener(messageType, handlerName)
-        let script_uri_register = script_uri.to_string();
-        let config_register = self.config.clone();
-        let register_listener = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  message_type: String,
-                  handler_name: String|
-                  -> JsResult<String> {
-                // Validate inputs
-                if message_type.is_empty() {
-                    return Ok(
-                        "dispatcher.registerListener: message type cannot be empty".to_string()
-                    );
-                }
-                if handler_name.is_empty() {
-                    return Ok(
-                        "dispatcher.registerListener: handler name cannot be empty".to_string()
-                    );
-                }
-
-                // The dispatcher appends listeners without de-duplicating, so a
-                // registration made outside the registration phase added one
-                // more copy of the same listener on every invocation - a script
-                // registering at top level ended up handling each message once
-                // per request it had ever served. Same phase rule as every
-                // other registry.
-                if !config_register.registration_phase {
-                    return Ok(registration_inactive(
-                        "dispatcher.registerListener",
-                        &message_type,
-                    ));
-                }
-
-                if let Some(reply) = config_register.collect(
-                    CollectedRegistration::new(
-                        RegistrationKind::MessageListener,
-                        message_type.clone(),
-                    )
-                    .with_handler(handler_name.clone()),
-                ) {
-                    return Ok(reply);
-                }
-
-                // Register the listener
-                match crate::dispatcher::GLOBAL_DISPATCHER.register_listener(
-                    message_type.clone(),
-                    script_uri_register.clone(),
-                    handler_name.clone(),
-                ) {
-                    Ok(()) => {
-                        debug!(
-                            "Registered listener for message type '{}' in script '{}': handler={}",
-                            message_type, script_uri_register, handler_name
-                        );
-                        Ok(format!(
-                            "Registered listener for message type '{}': handler '{}'",
-                            message_type, handler_name
-                        ))
-                    }
-                    Err(e) => {
-                        error!(
-                            "Failed to register listener for message type '{}' in script '{}': {}",
-                            message_type, script_uri_register, e
-                        );
-                        Ok(format!("Failed to register listener: {}", e))
-                    }
-                }
-            },
-        )?;
-
-        // sendMessage(messageType, messageData)
-        // `messageData` is whatever the script has: an object is serialized
-        // here, a JSON string is passed through, and an omitted argument is
-        // the empty object the listeners used to be handed.
-        let config_send = self.config.clone();
-        // Whoever is dispatching. A listener is part of serving that caller's
-        // invocation, so it runs as they do — see `execute_message_handler`.
-        let user_ctx_send = self.user_context.clone();
-        let send_message = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  message_type: String,
-                  message_data: Opt<rquickjs::Value<'_>>|
-                  -> JsResult<String> {
-                let message_data_json = match message_data.0 {
-                    Some(value) if !value.is_undefined() && !value.is_null() => {
-                        Some(json_arg(value, "messageData")?)
-                    }
-                    _ => None,
-                };
-                // Validate message type
-                if message_type.is_empty() {
-                    return Ok("dispatcher.sendMessage: message type cannot be empty".to_string());
-                }
-
-                if config_send.is_dry_run() {
-                    // Dispatching runs *other* scripts' listeners against live
-                    // data, and no transaction rolls that back. A check that
-                    // deploys nothing must not set the rest of the engine in
-                    // motion either.
-                    return Ok(format!(
-                        "dispatcher.sendMessage: '{}' not dispatched - this is a dry run",
-                        message_type
-                    ));
-                }
-
-                // A listener runs under the sending caller's context, so a
-                // narrowed execution that dispatches hands the listener
-                // exactly what it holds itself — the narrowing follows the
-                // message rather than being escaped by it. This gate is the
-                // other half: whether the narrowed turn may set anything in
-                // motion at all.
-                if !user_ctx_send.has_capability(&Capability::SendMessages) {
-                    return Ok(capability_refusal(
-                        "dispatcher.sendMessage",
-                        &Capability::SendMessages,
-                        &user_ctx_send,
-                    ));
-                }
-
-                // Get message data as JSON string
-                let message_data_json = message_data_json.unwrap_or_else(|| "{}".to_string());
-
-                // Get listeners for this message type
-                let listeners =
-                    match crate::dispatcher::GLOBAL_DISPATCHER.get_listeners(&message_type) {
-                        Ok(listeners) => listeners,
-                        Err(e) => {
-                            error!(
-                                "Failed to get listeners for message type '{}': {}",
-                                message_type, e
-                            );
-                            return Ok(format!("Failed to get listeners: {}", e));
-                        }
-                    };
-
-                if listeners.is_empty() {
-                    debug!(
-                        "No listeners registered for message type '{}'",
-                        message_type
-                    );
-                    return Ok(format!("No listeners for message type '{}'", message_type));
-                }
-
-                debug!(
-                    "Dispatching message type '{}' to {} listener(s)",
-                    message_type,
-                    listeners.len()
-                );
-
-                // Invoke each listener handler
-                let mut successful = 0;
-                let mut failed = 0;
-
-                for listener in listeners.iter() {
-                    debug!(
-                        "Invoking handler '{}' in script '{}' for message type '{}'",
-                        listener.handler_name, listener.script_uri, message_type
-                    );
-
-                    // Load the script content
-                    let script_content = match repository::fetch_script(&listener.script_uri) {
-                        Some(content) => content,
-                        None => {
-                            warn!(
-                                "Script '{}' not found for handler '{}'",
-                                listener.script_uri, listener.handler_name
-                            );
-                            failed += 1;
-                            continue;
-                        }
-                    };
-
-                    // Execute the handler in a new context
-                    match execute_message_handler(
-                        listener.script_uri.clone(),
-                        &script_content,
-                        &listener.handler_name,
-                        &message_type,
-                        &message_data_json,
-                        user_ctx_send.clone(),
-                    ) {
-                        Ok(_) => {
-                            debug!(
-                                "Successfully invoked handler '{}' in script '{}'",
-                                listener.handler_name, listener.script_uri
-                            );
-                            successful += 1;
-                        }
-                        Err(e) => {
-                            error!(
-                                "Failed to invoke handler '{}' in script '{}': {}",
-                                listener.handler_name, listener.script_uri, e
-                            );
-                            failed += 1;
-                        }
-                    }
-                }
-
-                Ok(format!(
-                    "Dispatched message type '{}': {} successful, {} failed",
-                    message_type, successful, failed
-                ))
-            },
-        )?;
-
-        // post(messageType, data) — the same fan-out, queued rather than run.
-        //
-        // `sendMessage` runs every listener inline: on the sender's budget, in
-        // the sender's execution, under the sender's context. That is right
-        // for a message whose result the sender needs, and wrong for anything
-        // slow, since one listener's work is charged to whoever set it off.
-        //
-        // Posting resolves the listeners now and enqueues one task each, so
-        // the sender returns immediately and each listener gets a budget, a
-        // retry and a visible state of its own. The listeners are resolved at
-        // post time, because the fan-out is to whoever was listening when the
-        // message was sent — not to whoever happens to be listening by the
-        // time the queue gets to it.
-        //
-        // The queued listener runs in *script context*, not the sender's.
-        // Inline it holds what the sender held, which is exactly as much as
-        // the sender could have done itself; queued, there is no sender left
-        // to borrow from, and the alternative — keeping a caller's authority
-        // alive in a row — is the delegation question, which is not answered
-        // by a convenience method on the dispatcher.
-        let config_post = self.config.clone();
-        let user_post = self.user_context.clone();
-        let post_message = Function::new(
-            ctx.clone(),
-            move |message_type: String, message_data_json: Opt<String>| -> JsResult<String> {
-                let message_type = message_type.trim().to_string();
-                if message_type.is_empty() {
-                    return Ok(Self::task_failure(
-                        "TypeError",
-                        "dispatcher.post: message type cannot be empty",
-                    ));
-                }
-
-                if config_post.is_dry_run() {
-                    return Ok(Self::task_failure(
-                        "DryRunError",
-                        &format!(
-                            "dispatcher.post: '{}' not queued - this is a dry run",
-                            message_type
-                        ),
-                    ));
-                }
-
-                let message_data: serde_json::Value = match message_data_json.0 {
-                    Some(raw) => match serde_json::from_str(&raw) {
-                        Ok(value) => value,
-                        Err(e) => {
-                            return Ok(Self::task_failure(
-                                "TypeError",
-                                &format!("dispatcher.post: message data is not valid JSON: {}", e),
-                            ));
-                        }
-                    },
-                    None => serde_json::json!({}),
-                };
-
-                let listeners =
-                    match crate::dispatcher::GLOBAL_DISPATCHER.get_listeners(&message_type) {
-                        Ok(listeners) => listeners,
-                        Err(e) => {
-                            return Ok(Self::task_failure(
-                                "Error",
-                                &format!("dispatcher.post: failed to read listeners: {}", e),
-                            ));
-                        }
-                    };
-
-                let mut queued = Vec::new();
-                for listener in listeners.iter() {
-                    let new_task = crate::tasks::NewTask {
-                        script_uri: listener.script_uri.clone(),
-                        handler_name: listener.handler_name.clone(),
-                        payload: serde_json::json!({
-                            "messageType": message_type,
-                            "messageData": message_data,
-                        }),
-                        run_at: None,
-                        max_attempts: None,
-                        enqueued_by: user_post.user_id.clone(),
-                        kind: crate::tasks::TaskKind::Message,
-                        // A queued listener runs in its own script's context:
-                        // there is no sender left to borrow authority from.
-                        run_as: None,
-                        // Posting is a fan-out: one message reaches every
-                        // listener, and the whole point is that they do not
-                        // wait on each other. A lane here would serialise
-                        // unrelated scripts because one message named them
-                        // together. A listener that must not run beside
-                        // itself is a different question, and one the
-                        // dispatcher has no vocabulary for yet.
-                        lane: None,
-                    };
-
-                    match crate::tasks::blocking::enqueue(new_task) {
-                        Ok(task) => queued.push(task.task_id.to_string()),
-                        Err(e) => {
-                            // Partially queued is reported rather than hidden:
-                            // some listeners will run and the caller has to
-                            // know which, since there is no transaction across
-                            // a fan-out.
-                            return Ok(Self::task_failure(
-                                "Error",
-                                &format!(
-                                    "dispatcher.post: queued {} of {} listeners for '{}', then: {}",
-                                    queued.len(),
-                                    listeners.len(),
-                                    message_type,
-                                    e
-                                ),
-                            ));
-                        }
-                    }
-                }
-
-                Ok(Self::task_ok(serde_json::json!({
-                    "messageType": message_type,
-                    "queued": queued.len(),
-                    "taskIds": queued,
-                })))
-            },
-        )?;
-
-        dispatcher_obj.set("registerListener", register_listener)?;
-        dispatcher_obj.set("sendMessage", send_message)?;
-        dispatcher_obj.set("__post", post_message)?;
-        global.set("dispatcher", dispatcher_obj)?;
-
-        debug!("Dispatcher functions initialized");
-        Ok(())
-    }
 }
 
 /// Extract the authenticated user_id from JavaScript `context.request.auth`.
@@ -7502,123 +7146,6 @@ fn get_auth_user_id(globals: &rquickjs::Object<'_>) -> Option<String> {
         return None;
     }
     auth_obj.get("userId").ok().flatten()
-}
-
-/// Execute a message handler function in a script
-fn execute_message_handler(
-    script_uri: String,
-    script_content: &str,
-    handler_name: &str,
-    message_type: &str,
-    message_data_json: &str,
-    user_context: UserContext,
-) -> Result<(), String> {
-    use rquickjs::Context;
-
-    // The same runtime every other entry point gets. Built bare, a listener ran
-    // with no memory limit, no stack limit and no interrupt handler — so the
-    // one execution path a script reaches by dispatching a message was the one
-    // path where `javascript.max_memory_bytes`, `stack_size_bytes` and
-    // `execution_timeout_ms` did not apply, and a listener that looped never
-    // stopped. The budget guard has to outlive the runtime; dropping it early
-    // would leave the handler's host calls unbounded again.
-    let (rt, _budget) =
-        crate::js_engine::create_sandboxed_runtime(&crate::js_engine::current_execution_limits())?;
-    let ctx = Context::full(&rt).map_err(|e| format!("Failed to create context: {}", e))?;
-
-    let setup = ctx.with(|ctx| -> Result<(), String> {
-        // The dispatching caller's own context, not one of the engine's.
-        //
-        // A listener used to run as `UserContext::admin("dispatcher")`, which
-        // made `dispatcher.sendMessage` a way to escalate: it is reachable from
-        // inside any script serving any request, so an anonymous visitor could
-        // set off a handler holding `ManageScriptDatabase`, `WriteAssets` and
-        // `AdministerEngine` — powers they do not have and the sending script
-        // did not have either. A listener is part of serving the invocation
-        // that dispatched to it, and a script serving a request runs under the
-        // requesting user's context, so it holds exactly what the sender held:
-        // no more, and no less.
-
-        // A listener is a plain handler invocation: it gets the same globals as
-        // any other, and only registration is off. It used to run without
-        // `assetStorage`, `secretStorage` or `schedulerService` in scope at all,
-        // which made shared helpers fail with `ReferenceError` depending on
-        // which entry point reached them.
-        let security_config = GlobalSecurityConfig {
-            registration_phase: false,
-            enable_audit_logging: false,
-            // A listener runs under the *sending* caller's context, which may
-            // be any script in the engine. Withheld so that dispatching a
-            // message is never a way to borrow the management surface from
-            // whoever happened to send it.
-            engine_api: false,
-            dry_run_sink: None,
-            console_sink: None,
-            // A dispatched message is its own invocation: without this its
-            // output is indistinguishable from whatever request happened to
-            // send the message.
-            log_context: crate::js_engine::HandlerInvocationKind::MessageListener.log_context(
-                &script_uri,
-                crate::middleware::generate_request_id(),
-                Some(message_type.to_string()),
-            ),
-            // Not acting for anybody: nothing to narrow.
-            delegated_scopes: None,
-        };
-
-        let secure_context = SecureGlobalContext::new_with_config(user_context, security_config);
-        secure_context
-            .setup_secure_functions(&ctx, &script_uri, None)
-            .map_err(|e| format!("Failed to setup secure functions: {}", e))?;
-
-        // Evaluate the script
-        ctx.eval::<(), _>(script_content)
-            .map_err(|e| format!("Script evaluation failed: {}", e))?;
-
-        Ok(())
-    });
-    setup.map_err(|e| format!("Context execution failed: {}", e))?;
-
-    crate::js_engine::call_and_settle(
-        &rt,
-        &ctx,
-        &script_uri,
-        &format!("Message listener '{}'", handler_name),
-        crate::js_engine::TransactionHandling::Auto,
-        |ctx| {
-            // Parse message data back to JavaScript value
-            let message_data_value: rquickjs::Value = ctx
-                .json_parse(message_data_json)
-                .map_err(|e| format!("Failed to parse message data: {}", e))?;
-
-            // Create context object with message data
-            let context_obj = rquickjs::Object::new(ctx.clone())
-                .map_err(|e| format!("Failed to create context object: {}", e))?;
-            context_obj
-                .set("messageType", message_type)
-                .map_err(|e| format!("Failed to set messageType: {}", e))?;
-            context_obj
-                .set("messageData", message_data_value)
-                .map_err(|e| format!("Failed to set messageData: {}", e))?;
-
-            // Get the handler function
-            let global = ctx.globals();
-            let handler: rquickjs::Function = global
-                .get(handler_name)
-                .map_err(|e| format!("Handler function '{}' not found: {}", handler_name, e))?;
-
-            // Call the handler with the context
-            let result = handler
-                .call::<_, rquickjs::Value>((context_obj,))
-                .map_err(|e| format!("Handler execution failed: {}", e))?;
-
-            crate::js_engine::promise_resolve(ctx, result)
-        },
-        |_ctx, _value| Ok(()),
-    )
-    .map_err(|e| format!("Context execution failed: {}", e))?;
-
-    Ok(())
 }
 
 impl SecureGlobalContext {
@@ -8146,7 +7673,6 @@ mod api_surface_tests {
             "mcpRegistry",
             "database",
             "console",
-            "dispatcher",
             "convert",
             "McpClient",
             "fetch",
@@ -8193,7 +7719,6 @@ mod api_surface_tests {
                 "h",
             ),
             ("schedulerService.registerRecurring({handler: 'h'})", "h"),
-            ("dispatcher.registerListener('type', 'h')", "type"),
         ] {
             let result = eval_outside_registration_phase(&format!("String({})", call));
             assert!(
@@ -8283,15 +7808,14 @@ mod api_surface_tests {
     /// The stream and dispatch calls take the object their examples pass. The
     /// assertion is that they answer at all: a conversion failure throws out
     /// of the binding before any of these can report anything.
-    // The stream and dispatch bindings file an audit event on a spawned task,
-    // so this one needs a runtime where the others do not.
+    // The stream binding files an audit event on a spawned task, so this one
+    // needs a runtime where the others do not.
     #[tokio::test]
     async fn the_data_arguments_take_the_object_their_examples_pass() {
         for call in [
             "routeRegistry.sendStreamMessage('/events/x', { type: 'alert', n: 1 })",
             "routeRegistry.sendStreamMessageFiltered('/events/x', { type: 'alert' }, \
              JSON.stringify({ role: 'admin' }))",
-            "dispatcher.sendMessage('marshalling.test.type', { userId: '123' })",
         ] {
             // The call is wrapped in JavaScript so a refusal comes back as
             // text: what is being asserted is which refusal it is, and an
@@ -8313,10 +7837,6 @@ mod api_surface_tests {
     /// the same way wherever it is made, rather than being masked by the phase.
     #[test]
     fn argument_validation_runs_before_the_phase_check() {
-        assert!(
-            eval_outside_registration_phase("dispatcher.registerListener('', 'h')")
-                .contains("cannot be empty")
-        );
         assert!(
             eval_outside_registration_phase("routeRegistry.registerStreamRoute('no-slash')")
                 .contains("must start with"),

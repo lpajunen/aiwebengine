@@ -97,8 +97,8 @@ pub enum Scope {
     /// Change things, rather than only reading them.
     ///
     /// Without it a delegated run holds no write capability at all: not the
-    /// script's tables, not either storage, not the queue, not the message
-    /// dispatcher. That is the "plan approved in advance" this vocabulary
+    /// script's tables, not either storage, not the queue. That is the "plan
+    /// approved in advance" this vocabulary
     /// could not express — a person authorising an app to go away and *work
     /// out* what to do, without authorising it to do the thing.
     Write,
@@ -207,7 +207,6 @@ impl Scope {
                 // cannot be a long one. If that turns out to matter the
                 // answer is another scope, not a hole in this one.
                 Capability::EnqueueTasks,
-                Capability::SendMessages,
             ],
         }
     }
@@ -1291,7 +1290,6 @@ mod tests {
             Capability::WriteScriptData,
             Capability::WriteStorage,
             Capability::EnqueueTasks,
-            Capability::SendMessages,
         ] {
             assert!(
                 !context.has_capability(&denied),

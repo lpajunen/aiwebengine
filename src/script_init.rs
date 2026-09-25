@@ -234,28 +234,6 @@ impl ScriptInitializer {
         // that would wake any of them.
         scheduler::clear_script_jobs_async(script_uri).await;
 
-        // And stale listeners, for the same reason — the dispatcher appends
-        // rather than replaces, and this pass runs the script's program and
-        // its `init()` again, so a script re-initialised once per upsert would
-        // handle every message once per time it had been written since the
-        // engine started.
-        //
-        // Staged rather than cleared up front, unlike the scheduled jobs. What
-        // a script listens to has to change *once*, when `init()` has finished
-        // saying what it listens to, because the clear and the re-registration
-        // do not happen together: between them the script is registered for
-        // nothing, and a message dispatched in that window is dropped by a
-        // listener that exists both before and after. Registrations made from
-        // here on go to a staging area, and the swap below installs them.
-        // Routes already work this way — the repository installs a rebuilt
-        // table when `init()` reports one, not one route at a time.
-        if let Err(e) = crate::dispatcher::GLOBAL_DISPATCHER.begin_script_registration(script_uri) {
-            warn!(
-                "Failed to stage message listeners for script '{}': {}",
-                script_uri, e
-            );
-        }
-
         debug!("Initializing script: {}", script_uri);
 
         // Create init context
@@ -299,19 +277,6 @@ impl ScriptInitializer {
         })
         .await;
         debug!("Blocking task finished for {}", script_uri);
-
-        // Whatever `init()` got as far as registering becomes what the script
-        // listens to, in one step. An `init()` that failed part way through has
-        // its partial set installed for the same reason a partial route table
-        // is offered: it is what the script asked for before it broke, and the
-        // alternative is a script listening to nothing with no record of why.
-        if let Err(e) = crate::dispatcher::GLOBAL_DISPATCHER.commit_script_registration(script_uri)
-        {
-            warn!(
-                "Failed to install message listeners for script '{}': {}",
-                script_uri, e
-            );
-        }
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
 

@@ -197,10 +197,8 @@ into the abandoned run.
   listeners are collected into the report and never reach the live registries.
   This is what makes it safe to check a candidate against a deployed script:
   without it, a broken candidate's `init()` would replace the running script's
-  resolvers, listeners and jobs with its own, and nothing would undo that.
+  resolvers and jobs with its own, and nothing would undo that.
 - **`schedulerService.clearAll()` clears nothing.**
-- **`dispatcher.sendMessage()` dispatches nothing.** Dispatching runs _other_
-  scripts' listeners against live data, and no rollback covers that.
 - **Database writes roll back** with `rollback` (the default), including assets
   and secrets, which go through the same transaction. A script that calls
   `database.commitTransaction()` itself commits the check's transaction and

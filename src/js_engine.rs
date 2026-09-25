@@ -434,8 +434,6 @@ pub enum HandlerInvocationKind {
     GraphqlMutation,
     GraphqlSubscription,
     StreamCustomization,
-    /// A listener invoked by `dispatcher.sendMessage`.
-    MessageListener,
     Init,
     Scheduled,
     McpTool,
@@ -455,7 +453,6 @@ impl HandlerInvocationKind {
             HandlerInvocationKind::GraphqlMutation => "graphqlMutation",
             HandlerInvocationKind::GraphqlSubscription => "graphqlSubscription",
             HandlerInvocationKind::StreamCustomization => "streamCustomization",
-            HandlerInvocationKind::MessageListener => "messageListener",
             HandlerInvocationKind::Init => "init",
             HandlerInvocationKind::Scheduled => "scheduled",
             HandlerInvocationKind::McpTool => "mcpTool",
@@ -2168,33 +2165,6 @@ pub fn execute_task_handler(
             let handler_context = builder
                 .build(ctx)
                 .map_err(|e| format!("build context: {}", e))?;
-
-            // A posted message reaches a listener the way an inline
-            // `sendMessage` does. The listener is the same registration either
-            // way, so it must not have to be written twice — `messageType` and
-            // `messageData` sit alongside `meta.task`, which stays available
-            // for a handler that wants to know it is a retry.
-            if invocation.kind == crate::tasks::TaskKind::Message {
-                let message_type = invocation
-                    .payload
-                    .get("messageType")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or_default();
-                let message_data = invocation
-                    .payload
-                    .get("messageData")
-                    .cloned()
-                    .unwrap_or_else(|| serde_json::json!({}));
-
-                handler_context
-                    .set("messageType", message_type)
-                    .map_err(|e| format!("set messageType: {}", e))?;
-                let message_value = serde_json_to_js_value(ctx, &message_data)
-                    .map_err(|e| format!("convert messageData: {}", e))?;
-                handler_context
-                    .set("messageData", message_value)
-                    .map_err(|e| format!("set messageData: {}", e))?;
-            }
 
             global
                 .set("context", handler_context.clone())

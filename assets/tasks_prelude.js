@@ -54,32 +54,6 @@
     },
   };
 
-  // `dispatcher.post` is the queue's face on the dispatcher, so it is built
-  // here rather than in `dispatcher`'s own setup: it needs the same unwrapping,
-  // and the thing it enqueues onto is this module.
-  //
-  // `sendMessage` runs every listener inline, on the caller's budget. `post`
-  // queues one task per listener instead, so the caller returns at once and
-  // each listener gets a budget, a retry and a visible state of its own. The
-  // listener itself is the same registration and the same code either way.
-  var dispatcher = globalThis.dispatcher;
-  if (dispatcher && typeof dispatcher.__post === "function") {
-    var hostPost = dispatcher.__post;
-    dispatcher.post = function (messageType, messageData) {
-      return unwrap(
-        hostPost(
-          String(messageType),
-          messageData === undefined ? undefined : JSON.stringify(messageData),
-        ),
-      );
-    };
-    try {
-      delete dispatcher.__post;
-    } catch (e) {
-      /* the documented interface is `post` either way */
-    }
-  }
-
   // `personalTasks` — the same queue, acting as the person who asked.
   //
   // Separate from `scriptTasks` rather than an option on it, because the two

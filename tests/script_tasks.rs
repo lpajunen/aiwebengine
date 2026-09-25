@@ -19,7 +19,6 @@ fn new_task(script_uri: &str, handler: &str) -> NewTask {
         run_at: None,
         max_attempts: None,
         enqueued_by: None,
-        kind: tasks::TaskKind::Task,
         run_as: None,
         lane: None,
     }
@@ -55,7 +54,6 @@ async fn a_task_runs_its_handler_with_the_payload_it_carried() {
         payload: task.payload.clone(),
         attempts: 0,
         max_attempts: task.max_attempts,
-        kind: tasks::TaskKind::Task,
         run_as: None,
     };
 
@@ -369,89 +367,5 @@ async fn a_request_handler_can_enqueue_work_that_runs_after_it_answers() {
     assert!(
         tasks::get(task_id).await.expect("lookup").is_none(),
         "a completed task keeps no row"
-    );
-}
-
-/// `dispatcher.post` fans out the way `sendMessage` does, but queues each
-/// listener instead of running it inline.
-///
-/// The listener is the same registration and the same code either way — it
-/// reads `context.messageType` and `context.messageData` exactly as it would
-/// for an inline send. That compatibility is the point: reusing the
-/// dispatcher's registrations is the only reason to post rather than calling
-/// `scriptTasks.enqueue` directly.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_posted_message_reaches_its_listener_through_the_queue() {
-    setup_env().await;
-
-    let listener_uri = "test://tasks/posted-listener";
-    repository::upsert_script(
-        listener_uri,
-        r#"
-        function init() {
-          dispatcher.registerListener("tasks.posted.test", "onPosted");
-        }
-
-        function onPosted(context) {
-          console.log("got " + context.messageType + " for " + context.messageData.who);
-        }
-        "#,
-    )
-    .expect("listener script should store");
-    repository::clear_log_messages(listener_uri).expect("logs should clear");
-
-    aiwebengine::script_init::ScriptInitializer::with_configured_timeout()
-        .initialize_script(listener_uri, false)
-        .await
-        .expect("the listener should register");
-
-    let sender_uri = "test://tasks/posted-sender";
-    repository::upsert_script(
-        sender_uri,
-        r#"
-        function send(context) {
-          const result = dispatcher.post("tasks.posted.test", { who: "the queue" });
-          return { status: 200, body: String(result.queued), contentType: "text/plain" };
-        }
-        "#,
-    )
-    .expect("sender script should store");
-
-    let (status, body, _) = tokio::task::spawn_blocking(move || {
-        js_engine::execute_script_for_request(
-            sender_uri,
-            "send",
-            "/send",
-            "GET",
-            Default::default(),
-            Default::default(),
-            None,
-        )
-    })
-    .await
-    .expect("no panic")
-    .expect("the sender should answer");
-
-    assert_eq!(status, 200);
-    assert_eq!(body.trim(), "1", "one listener should have been queued");
-
-    // Nothing has run yet: posting returns before the listener does anything.
-    let logs_before = repository::fetch_log_messages(listener_uri);
-    assert!(
-        !logs_before
-            .iter()
-            .any(|entry| entry.message.contains("got tasks.posted.test")),
-        "posting should not run the listener inline"
-    );
-
-    tasks::run_due_now("test-worker").await;
-
-    let logs = repository::fetch_log_messages(listener_uri);
-    assert!(
-        logs.iter().any(|entry| entry
-            .message
-            .contains("got tasks.posted.test for the queue")),
-        "the listener should have run from the queue, in message shape: {:?}",
-        logs
     );
 }

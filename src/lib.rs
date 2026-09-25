@@ -25,7 +25,6 @@ pub mod db_schema_utils;
 pub mod delegation;
 pub mod deployments;
 pub mod desktop;
-pub mod dispatcher;
 pub mod embedded_db;
 pub mod engine_api;
 pub mod error;

@@ -124,13 +124,6 @@ pub enum Capability {
     /// Queueing work is how an execution outlives itself, so a context that
     /// may not write must not be able to queue a write for later.
     EnqueueTasks,
-    /// Dispatch a message to another script's listeners
-    /// (`dispatcher.sendMessage`).
-    ///
-    /// A listener runs under the *sending* caller's context, so this is
-    /// narrowing that follows the message: a restricted execution that
-    /// dispatches hands the listener what it holds itself.
-    SendMessages,
 }
 
 /// Comprehensive input validator - ALL VALIDATION IN RUST

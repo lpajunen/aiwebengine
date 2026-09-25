@@ -139,7 +139,6 @@ impl Capability {
             Capability::ReadStorage => "read_storage",
             Capability::WriteStorage => "write_storage",
             Capability::EnqueueTasks => "enqueue_tasks",
-            Capability::SendMessages => "send_messages",
         }
     }
 
@@ -153,7 +152,7 @@ impl Capability {
             .find(|capability| capability.as_str() == value.trim())
     }
 
-    pub fn all() -> [Capability; 21] {
+    pub fn all() -> [Capability; 20] {
         [
             Capability::ReadScripts,
             Capability::WriteScripts,
@@ -175,7 +174,6 @@ impl Capability {
             Capability::ReadStorage,
             Capability::WriteStorage,
             Capability::EnqueueTasks,
-            Capability::SendMessages,
         ]
     }
 }
@@ -374,7 +372,6 @@ impl UserContext {
             Capability::ReadStorage,
             Capability::WriteStorage,
             Capability::EnqueueTasks,
-            Capability::SendMessages,
         ]
         .into_iter()
         .collect()
@@ -772,7 +769,6 @@ mod tests {
             Capability::ReadStorage,
             Capability::WriteStorage,
             Capability::EnqueueTasks,
-            Capability::SendMessages,
         ] {
             assert!(
                 anonymous.has_capability(&held),

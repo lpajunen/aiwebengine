@@ -70,7 +70,6 @@ so **read-only was inexpressible**.
 | `read_storage`           | Reading `scriptStorage` and `personalStorage`                                   |
 | `write_storage`          | Writing or clearing either                                                      |
 | `enqueue_tasks`          | `scriptTasks` and `personalTasks` — enqueue and cancel                          |
-| `send_messages`          | `dispatcher.sendMessage`                                                        |
 
 The seven script-side names at the bottom of that table are new, and **adding
 them took nothing away from anybody**. Every tier that could already do the

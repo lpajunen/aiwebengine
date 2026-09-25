@@ -601,7 +601,6 @@ fn missing_handler_diagnostic(script_uri: &str, missing: &MissingHandler) -> Dia
         // this arm exists so that adding a kind makes the compiler ask.
         RegistrationKind::McpResource => "MCP resource",
         RegistrationKind::ScheduledJob => "scheduled job",
-        RegistrationKind::MessageListener => "listener",
     };
 
     let detail = match &missing.found_type {

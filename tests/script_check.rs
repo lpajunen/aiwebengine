@@ -457,41 +457,6 @@ async fn a_dry_run_leaves_the_graphql_registry_alone() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_dry_run_leaves_the_dispatcher_alone() {
-    let _guard = fixtures().await;
-    setup_env().await;
-
-    let uri = "test://check/dispatcher-isolation";
-    deploy(uri, "function init() {}");
-
-    let message_type = "check.isolation.message";
-    let report = check_candidate(
-        uri,
-        &format!(
-            r#"
-            function onMessage(context) {{ return "ok"; }}
-            function init() {{
-                dispatcher.registerListener("{}", "onMessage");
-            }}
-            "#,
-            message_type
-        ),
-    );
-
-    assert!(report.ok, "{:?}", report.diagnostics);
-    assert_eq!(report.registrations.len(), 1);
-
-    let listeners = aiwebengine::dispatcher::GLOBAL_DISPATCHER
-        .get_listeners(message_type)
-        .expect("listener lookup should succeed");
-    assert!(
-        listeners.is_empty(),
-        "a dry run must not register a listener, found {:?}",
-        listeners
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn a_dry_run_leaves_the_stream_registry_alone() {
     let _guard = fixtures().await;
     setup_env().await;
@@ -516,32 +481,6 @@ async fn a_dry_run_leaves_the_stream_registry_alone() {
             .is_none(),
         "a dry run must not register a stream"
     );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_dry_run_does_not_dispatch_messages_to_live_listeners() {
-    let _guard = fixtures().await;
-    setup_env().await;
-
-    let uri = "test://check/no-dispatch";
-    deploy(uri, "function init() {}");
-
-    // The reply is what tells the script nothing was dispatched; the point of
-    // the assertion is that init() completes rather than setting the rest of
-    // the engine in motion.
-    let report = check_candidate(
-        uri,
-        r#"
-        function init() {
-            const reply = dispatcher.sendMessage("check.no.dispatch", "{}");
-            if (reply.indexOf("dry run") === -1) {
-                throw new Error("expected the dispatch to be suppressed, got: " + reply);
-            }
-        }
-        "#,
-    );
-
-    assert!(report.ok, "{:?}", report.diagnostics);
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -73,7 +73,6 @@ declare function init(context?: HandlerContext): void;
  * - `graphQLRegistry.registerQuery` / `registerMutation` / `registerSubscription`
  * - `mcpRegistry.registerTool` / `registerPrompt` / `registerResource`
  * - `schedulerService.registerOnce` / `registerRecurring` / `clearAll`
- * - `dispatcher.registerListener`
  *
  * take effect during startup and `init()`, and elsewhere return a string saying
  * the entry was not registered. They never throw for being called at the wrong
@@ -83,7 +82,7 @@ declare function init(context?: HandlerContext): void;
  *
  * Everything else — `database`, `assetStorage`, `secretStorage`,
  * `scriptStorage`, `personalStorage`, `fetch`, `convert`, `console`,
- * `McpClient`, `dispatcher.sendMessage`, `graphQLRegistry.executeGraphQL`,
+ * `McpClient`, `graphQLRegistry.executeGraphQL`,
  * `routeRegistry.sendStreamMessage` — works in every context.
  *
  * Register in `init()`. Registering from a request handler silently does
@@ -2748,70 +2747,6 @@ interface Console {
 }
 
 // ============================================================================
-// Message Dispatcher API
-// ============================================================================
-
-/**
- * Message dispatcher for inter-script communication
- */
-interface MessageDispatcher {
-  /**
-   * Register a listener for a message type
-   * @param messageType - Type of message to listen for (e.g., "user.created")
-   * @param handlerName - Name of the handler function to call
-   * @returns Registration result message
-   * @throws If messageType or handlerName is empty
-   * @example
-   * dispatcher.registerListener("user.created", "handleUserCreated");
-   *
-   * Only takes effect during startup and `init()`. Called from a handler it
-   * returns a message saying nothing was registered, and does not throw.
-   */
-  registerListener(messageType: string, handlerName: string): string;
-
-  /**
-   * Send a message to all listeners of a message type
-   * @param messageType - Type of message to send
-   * @param messageData - Optional data to send with the message (will be JSON serialized)
-   * @returns Send result message with delivery count
-   * @example
-   * dispatcher.sendMessage("user.created", { userId: "123", email: "user@example.com" });
-   */
-  sendMessage(messageType: string, messageData?: any): string;
-
-  /**
-   * The same fan-out, queued rather than run.
-   *
-   * `sendMessage` runs every listener inline: in your execution, on your
-   * budget, under your context, and it does not return until they all have.
-   * `post` enqueues one task per listener instead, so this returns at once and
-   * each listener gets a budget of its own ({{limits.execution.jobTimeout}}),
-   * its own retries, and a row in `/engine/tasks` saying how it went.
-   *
-   * The listener is the same registration and the same code either way — it
-   * still reads `context.messageType` and `context.messageData`. A queued one
-   * additionally has `context.meta.task` if it wants to know it is a retry.
-   *
-   * Two differences worth knowing. Listeners are resolved now, so the fan-out
-   * goes to whoever is listening at this moment rather than whenever the queue
-   * gets to it. And a queued listener runs in **script context** — it holds
-   * what its own script holds, not what you hold — because there is no caller
-   * left to borrow authority from by the time it runs.
-   *
-   * @returns What was queued: `{messageType, queued, taskIds}`.
-   * @throws Error if the message type is empty or the queue could not accept
-   *   them. A partial failure says how many were queued before it.
-   * @example
-   * // Answer now; let the listeners do the slow part.
-   * const { queued } = dispatcher.post("order.placed", { orderId });
-   */
-  post(
-    messageType: string,
-    messageData?: any,
-  ): { messageType: string; queued: number; taskIds: string[] };
-}
-
-// ============================================================================
 // Conversion Functions API
 // ============================================================================
 
@@ -3421,7 +3356,6 @@ interface EngineApi {
 
 declare var database: Database;
 declare var console: Console;
-declare var dispatcher: MessageDispatcher;
 declare var sandbox: Sandbox;
 declare var convert: Convert;
 declare var crypto: Crypto;
