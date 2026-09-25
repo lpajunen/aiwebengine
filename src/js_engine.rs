@@ -1159,6 +1159,10 @@ pub fn execute_script_secure(
                         ),
                         // Not acting for anybody: nothing to narrow.
                         delegated_scopes: None,
+                        // Startup runs every script in the engine as a
+                        // synthetic administrator. Nothing here came from a
+                        // credential, so nothing here administers.
+                        engine_api: false,
                     };
 
                     // Create the register function that captures registrations
@@ -1481,6 +1485,10 @@ pub fn execute_script_for_request_secure(
         let security_config = GlobalSecurityConfig {
             enable_audit_logging: false, // Disable for tests to avoid runtime conflicts
             log_context: log_context.clone(),
+            // A script serving a request runs as whoever made it, so the
+            // management surface is authorized against a real credential —
+            // the same one `/engine/*` and `/mcp` would check.
+            engine_api: true,
             ..Default::default()
         };
 
@@ -2074,6 +2082,12 @@ pub fn execute_task_handler(
             // for an ordinary task, which acts for nobody and so narrows
             // nothing — the scopes only ever take things away.
             delegated_scopes: delegated.map(|d| d.grant.scopes.clone()),
+            // Queued work reaches the management tools, which is the whole
+            // point of `Scope::Author` and `Scope::Administer`: the person
+            // consented on a page that named what they were consenting to. An
+            // *undelegated* task acts for nobody and gets the engine's own
+            // context, which holds no management capability to spend.
+            engine_api: true,
             ..Default::default()
         };
 
@@ -2410,6 +2424,11 @@ fn install_and_collect_tests<'js>(
         ),
         // Not acting for anybody: nothing to narrow.
         delegated_scopes: None,
+        // A test run is not somebody administering the engine: it
+        // executes a script's own cases, and giving it the management
+        // surface would make `run_tests` a way to spend whatever the
+        // caller holds on tools nobody named.
+        engine_api: false,
     };
 
     setup_secure_global_functions(
@@ -3433,6 +3452,12 @@ fn run_snippet(
             ),
             // Not acting for anybody: nothing to narrow.
             delegated_scopes: None,
+            // Shared by `/engine/eval` and `sandbox.run`, so it fails
+            // closed for the second: model-authored code must not reach the
+            // management tools, and the capability subset cannot say so —
+            // `read_logs` is gated on `view_logs`, which an agent grants for
+            // `console`, and takes any script's URI as an argument.
+            engine_api: false,
         };
 
         let mut outcome = EvalOutcome::default();
@@ -4016,6 +4041,9 @@ fn run_registration_pass(
                 ),
                 // Not acting for anybody: nothing to narrow.
                 delegated_scopes: None,
+                // `init()` runs as a synthetic administrator. Nothing here
+                // came from a credential.
+                engine_api: false,
             };
 
             // Create the register function that captures registrations

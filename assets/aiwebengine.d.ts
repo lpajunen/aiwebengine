@@ -3357,12 +3357,75 @@ interface HmacVerifyOptions {
   encoding?: "hex" | "base64";
 }
 
+/**
+ * The engine's own management tools, called from a script.
+ *
+ * The same tools `/mcp` publishes — `list_users`, `write_file`, `read_logs`,
+ * `list_revisions` and the rest — dispatched through the same function, with
+ * the same authorization. **Every call is checked against whoever is calling**,
+ * so holding this global grants nothing: a script reaches exactly what the
+ * person driving it could reach over HTTP.
+ *
+ * **It is not always there.** `engine` is `undefined` outside the two
+ * executions whose authority came from a credential — a script serving a
+ * request, and a delegated task where somebody consented to `author` or
+ * `administer`. A scheduled job, `init()`, a message listener, a test run,
+ * `/engine/eval` and `sandbox.run` do not get it, because those run as the
+ * engine's own synthetic administrator or with a capability subset that cannot
+ * express the difference between reading your own `console` and reading every
+ * script's logs. Check for it before using it.
+ *
+ * @example Answering "who are the users"
+ * ```ts
+ * if (!engine) throw new Error("no management tools in this execution");
+ * const { users, count } = engine.call("list_users", {});
+ * ```
+ *
+ * @example Discovering what this engine serves
+ * ```ts
+ * const { tools } = engine.call ? engine.tools("revision") : { tools: [] };
+ * // → list_revisions, diff_revisions, label_revision, revert_script
+ * ```
+ */
+interface EngineApi {
+  /**
+   * The tools this engine serves, optionally narrowed to those whose name or
+   * description mentions `area`.
+   *
+   * Names and descriptions only — the input schemas are large, and
+   * `/engine/openapi.json` publishes them. Read this rather than hard-coding a
+   * list: what a deployment serves is a property of the deployment.
+   */
+  tools(area?: string): {
+    tools: { name: string; description: string }[];
+    count: number;
+  };
+
+  /**
+   * Call a tool and return its result.
+   *
+   * Throws an `Error` named `EngineError` when the tool refuses — which is
+   * what a missing capability, a script you do not own, or a bad argument all
+   * look like. Throws a plain `Error` when no tool has that name.
+   */
+  call(name: string, args?: Record<string, unknown>): any;
+
+  /**
+   * The same call, returning the tool's envelope instead of throwing.
+   *
+   * A refusal arrives as `{ error: string }`, which is the shape `/mcp` hands
+   * its clients. For a caller that would rather branch than catch.
+   */
+  callRaw(name: string, args?: Record<string, unknown>): any;
+}
+
 declare var database: Database;
 declare var console: Console;
 declare var dispatcher: MessageDispatcher;
 declare var sandbox: Sandbox;
 declare var convert: Convert;
 declare var crypto: Crypto;
+declare var engine: EngineApi | undefined;
 
 // ============================================================================
 // Testing

@@ -25,6 +25,7 @@ const TASKS_PRELUDE: &str = include_str!("../../assets/tasks_prelude.js");
 /// Builds `sandbox` over the host call that runs a narrowed sub-execution.
 const SANDBOX_PRELUDE: &str = include_str!("../../assets/sandbox_prelude.js");
 const CRYPTO_PRELUDE: &str = include_str!("../../assets/crypto_prelude.js");
+const ENGINE_PRELUDE: &str = include_str!("../../assets/engine_prelude.js");
 const MCP_PRELUDE: &str = include_str!("../../assets/mcp_prelude.js");
 
 /// What `secretStorage`'s mutating methods answer in a delegated execution.
@@ -533,6 +534,31 @@ pub struct GlobalSecurityConfig {
     /// reaches this person's storage and *not* their secrets, which is what
     /// the consent page said and what was previously only decoration.
     pub delegated_scopes: Option<Vec<crate::delegation::Scope>>,
+    /// Whether this execution may reach the engine's own management tools
+    /// through the `engine` global.
+    ///
+    /// **False by default, and every construction site states its answer**,
+    /// because the capability check underneath is not enough on its own. Two
+    /// kinds of execution hold capabilities that were never a person's:
+    ///
+    /// - The engine's own actors. A scheduled job runs as
+    ///   `UserContext::admin("scheduler")` and `init()` as
+    ///   `admin("script-init")` — synthetic administrators with nobody behind
+    ///   them. `engine.call` there would mean any script in the engine
+    ///   administers it from a cron line, which is not a capability anybody
+    ///   granted.
+    ///
+    /// - A narrowed sub-execution. `sandbox.run` hands model-authored code a
+    ///   chosen subset, and the subset cannot express this: the agent grants
+    ///   `view_logs` so that `console` works, and `read_logs` is gated on
+    ///   exactly that capability while taking *any* script's URI as an
+    ///   argument. Granting one would hand over the other.
+    ///
+    /// So it is on for the two executions whose authority came from a
+    /// credential — a script serving a request, and a delegated task, where
+    /// the person consented on a page that named what they were consenting to
+    /// — and off everywhere else.
+    pub engine_api: bool,
 }
 
 impl Default for GlobalSecurityConfig {
@@ -547,6 +573,9 @@ impl Default for GlobalSecurityConfig {
             log_context: repository::LogContext::default(),
             // Not acting for anybody, so nothing to narrow.
             delegated_scopes: None,
+            // Fail closed, like `registration_phase` above: an execution that
+            // did not ask for the management surface does not get it.
+            engine_api: false,
         }
     }
 }
@@ -842,6 +871,7 @@ impl SecureGlobalContext {
         self.setup_task_functions(ctx, script_uri)?;
         self.setup_sandbox_functions(ctx, script_uri)?;
         self.setup_crypto_object(ctx, script_uri)?;
+        self.setup_engine_object(ctx, script_uri)?;
 
         // Setup JSX factory functions for server-side HTML generation
         self.setup_jsx_functions(ctx)?;
@@ -7517,6 +7547,11 @@ fn execute_message_handler(
         let security_config = GlobalSecurityConfig {
             registration_phase: false,
             enable_audit_logging: false,
+            // A listener runs under the *sending* caller's context, which may
+            // be any script in the engine. Withheld so that dispatching a
+            // message is never a way to borrow the management surface from
+            // whoever happened to send it.
+            engine_api: false,
             dry_run_sink: None,
             console_sink: None,
             // A dispatched message is its own invocation: without this its
@@ -7771,6 +7806,118 @@ impl SecureGlobalContext {
         Ok(())
     }
 
+    /// `engine` — the engine's own management tools, reachable from a script.
+    ///
+    /// Engine administration was deliberately not exposed to JavaScript: all
+    /// scripts are equal, so exposing it would have meant every script seeing
+    /// it. What answers that is not a privileged-script list but the thing the
+    /// capability model already does — **every call is authorized against the
+    /// calling `UserContext`, by the same function `/mcp` calls
+    /// ([`crate::engine_api::execute_native_mcp_tool`])**. A script holding
+    /// this global holds nothing its caller does not, and there is one
+    /// implementation of each tool rather than an in-process copy that could
+    /// drift from the HTTP one.
+    ///
+    /// Installed only where [`GlobalSecurityConfig::engine_api`] says so,
+    /// which is the request path and a delegated task. That flag exists
+    /// because the capability check is not sufficient on its own: a scheduled
+    /// job and `init()` run as synthetic administrators with nobody behind
+    /// them, and a `sandbox.run` subset cannot distinguish "my own `console`"
+    /// from "every script's logs". Its documentation has the argument.
+    ///
+    /// What is *not* here is a second authorization model. This adds no
+    /// capability, no bypass and no special case; it adds a way to reach
+    /// functions that were previously only reachable over HTTP, with the
+    /// checks they already had.
+    fn setup_engine_object(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
+        if !self.config.engine_api {
+            return Ok(());
+        }
+
+        let global = ctx.globals();
+        let host = rquickjs::Object::new(ctx.clone())?;
+
+        // Discovery, so a script never embeds a tool list that drifts from
+        // what this engine actually serves. Names and descriptions only: the
+        // schemas are large, and a caller that wants one can read the
+        // published `/engine/openapi.json`.
+        let tools = Function::new(ctx.clone(), move |area: String| -> String {
+            let area = area.trim().to_ascii_lowercase();
+            let listed: Vec<serde_json::Value> = crate::engine_api::native_mcp_tool_descriptors()
+                .into_iter()
+                .filter(|tool| {
+                    area.is_empty()
+                        || tool.name.contains(&area)
+                        || tool.description.to_ascii_lowercase().contains(&area)
+                })
+                .map(|tool| {
+                    serde_json::json!({
+                        "name": tool.name,
+                        "description": tool.description,
+                    })
+                })
+                .collect();
+            serde_json::json!({ "tools": listed, "count": listed.len() }).to_string()
+        })?;
+
+        let user_ctx_call = self.user_context.clone();
+        let uri_for_audit = script_uri.to_string();
+        let call = Function::new(
+            ctx.clone(),
+            move |name: String, args_json: String| -> JsResult<String> {
+                let args: serde_json::Value = serde_json::from_str(&args_json).map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "engine.call",
+                        "type_error",
+                        &format!("engine.call: arguments are not valid JSON: {}", e),
+                    )
+                })?;
+
+                // Named rather than found, so a name this engine does not
+                // serve is a thrown error at the call site instead of a
+                // refusal that reads like a permission problem.
+                let Some(answer) =
+                    crate::engine_api::execute_native_mcp_tool(&name, &args, &user_ctx_call)
+                else {
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "engine.call",
+                        "unknown_tool",
+                        &format!(
+                            "engine.call: this engine has no tool called '{}' —                              engine.tools() lists them",
+                            name
+                        ),
+                    ));
+                };
+
+                debug!(
+                    script = %uri_for_audit,
+                    tool = %name,
+                    user = ?user_ctx_call.user_id,
+                    "engine.call"
+                );
+
+                Ok(answer.to_string())
+            },
+        )?;
+
+        host.set("tools", tools)?;
+        host.set("call", call)?;
+        global.set("__hostEngine", host)?;
+
+        crate::bytecode::eval_program(ctx, "engine://engine-prelude", ENGINE_PRELUDE).map_err(
+            |e| {
+                rquickjs::Error::new_from_js_message(
+                    "engine",
+                    "prelude",
+                    &format!("engine prelude failed to load: {}", e),
+                )
+            },
+        )?;
+
+        debug!("engine API initialized for script: {}", script_uri);
+        Ok(())
+    }
+
     /// Setup JSX factory functions for server-side HTML generation
     fn setup_jsx_functions(&self, ctx: &rquickjs::Ctx<'_>) -> JsResult<()> {
         // Define the h() function and Fragment in JavaScript to properly handle variadic arguments
@@ -7966,6 +8113,7 @@ mod api_surface_tests {
             let config = GlobalSecurityConfig {
                 registration_phase: false,
                 enable_audit_logging: false,
+                engine_api: false,
                 dry_run_sink: None,
                 console_sink: None,
                 log_context: repository::LogContext::default(),

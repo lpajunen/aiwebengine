@@ -96,35 +96,25 @@ against production.
 
 ## 3. The plan
 
-### Phase 1 — an in-process engine API, authorized against the caller
+### Phase 1 — an in-process engine API — **done**
 
-**The single change that removes 2.1, 2.3 and 2.4 at once.**
+`engine.call(name, args)` and `engine.tools(area?)`, dispatching through
+`engine_api::execute_native_mcp_tool` — the same function `/mcp` calls, with the
+same authorization. See [`docs/ENGINE_API_FROM_JS.md`](docs/ENGINE_API_FROM_JS.md).
 
-CLAUDE.md says engine administration is deliberately not exposed to JavaScript.
-Read the reason: _all scripts are equal_, so exposing it would have meant every
-script seeing it. That argument has since been answered by the capability model
-itself.
+No credential to store, no rotation, nothing to launder, and it works on
+localhost — which the token route never could, since `HttpClient::is_private_ip`
+refuses loopback.
 
-A global — `engine.call(tool, args)` — dispatching to the same `native_tools()`
-functions, authorized against the **calling user's `UserContext`**, identically
-to how `/mcp` authorizes them. A script "having" it holds nothing its caller
-does not. That is consistent with "all scripts are equal", and it means:
-
-- no credential to store, no rotation, no laundering;
-- the delegation cap actually binds, because the call is in-process;
-- it works on localhost.
-
-Work:
-
-- `engine.call(name, argsJson)` in `secure_globals`, dispatching through the
-  existing `native_tools()` table so there is one implementation of each tool.
-- A refusal that carries structure, not a string (see Phase 2's
-  `AppError::ElevationRequired` — the same variant serves both).
-- `engine.tools(area?)` for discovery, so a script never embeds a tool list
-  that drifts.
-- Deliberately **not** reachable from `sandbox.run`: model-authored code must
-  never see it, or the argument in `../aiwebengine-agent/agent/capabilities.ts`
-  collapses.
+**The capability check turned out not to be sufficient on its own**, which is
+the finding worth keeping from this. Two kinds of execution hold capabilities
+that were never a person's: the engine's own actors (a scheduled job runs as
+`UserContext::admin("scheduler")`, `init()` as `admin("script-init")`), and a
+`sandbox.run` subset that cannot express the distinction — an agent grants
+`view_logs` for `console`, and `read_logs` is gated on exactly that while
+taking any script's URI as an argument. So `GlobalSecurityConfig::engine_api`
+decides, it is false by default, and every construction site states its answer
+because the compiler makes it.
 
 ### Phase 2 — session elevation (step-up)
 
@@ -372,4 +362,9 @@ Not done:
 4. Session elevation proper (`docs/SESSION_ELEVATION.md`), `administer` gated
    first.
 5. `engine.call` in-process, once refusals carry structure.
-6. The agent's two meta-tools and the rendering decision.
+6. The agent's two meta-tools and the rendering decision. **Next, and the
+   last piece before an agent can answer "who are the users".** Two tools
+   rather than fifty-two — `engine_tools(area)` to look, `engine_call(name,
+args)` to act — since 52 schemas is 10–15k tokens resent every turn. Plus
+   how a listing is shown: 200 users as prose is worse than the table already
+   in `aiwebengine-dev/admin/main.js`.
