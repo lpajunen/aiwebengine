@@ -1105,10 +1105,12 @@ pub fn build_schema_filtered(
                             Some(filter_criteria)
                         };
 
-                        let connection = match crate::stream_manager::StreamConnectionManager::new()
-                            .create_connection(&stream_path, client_metadata)
-                            .await
-                        {
+                        let connection = match crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                            .open_connection(
+                                &stream_path,
+                                client_metadata,
+                                crate::stream_registry::StreamLimits::current(),
+                            ) {
                             Ok(connection) => connection,
                             Err(e) => {
                                 error!(
@@ -1123,31 +1125,24 @@ pub fn build_schema_filtered(
                         };
 
                         let mut receiver = connection.receiver;
-                        let connection_id = connection.connection_id.clone();
-                        let path_for_cleanup = stream_path.clone();
+                        // Closes the connection when the subscription stream is
+                        // dropped, which covers a client that goes away without
+                        // the `recv()` loop ever ending. The explicit cleanup
+                        // this replaces ran only after the loop finished, and
+                        // named an id the registry had never stored.
+                        let guard = crate::stream_registry::ConnectionGuard::new(
+                            stream_path.clone(),
+                            connection.connection_id.clone(),
+                        );
 
                         let stream = async_stream::stream! {
+                            let _guard = guard;
                             while let Ok(message) = receiver.recv().await {
                                 let parsed_message = match parse_json_to_graphql_value(&message) {
                                     Ok(graphql_value) => graphql_value,
                                     Err(_) => async_graphql::Value::String(message.clone()),
                                 };
                                 yield Ok(parsed_message);
-                            }
-
-                            if let Err(cleanup_err) =
-                                crate::stream_registry::GLOBAL_STREAM_REGISTRY
-                                    .remove_connection(&path_for_cleanup, &connection_id)
-                            {
-                                error!(
-                                    "Failed to cleanup GraphQL subscription connection {}: {}",
-                                    connection_id, cleanup_err
-                                );
-                            } else {
-                                debug!(
-                                    "Cleaned up GraphQL subscription connection {} for {}",
-                                    connection_id, path_for_cleanup
-                                );
                             }
                         };
 

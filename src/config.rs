@@ -241,6 +241,29 @@ pub struct ServerConfig {
 
     /// Shutdown timeout in seconds
     pub shutdown_timeout_secs: u64,
+
+    /// Server-Sent Events connections one stream path may hold at once.
+    ///
+    /// A backstop against one runaway client rather than a capacity figure.
+    /// These have been written down since streams were added but were read by
+    /// nothing: the manager that checked them was rebuilt per connection, so
+    /// it always compared against an empty map. Making them live means a
+    /// deployment already above them starts refusing, which is why they are
+    /// settable rather than constant.
+    #[serde(default = "default_max_connections_per_stream")]
+    pub max_connections_per_stream: usize,
+
+    /// Server-Sent Events connections this engine may hold across all streams.
+    #[serde(default = "default_max_total_stream_connections")]
+    pub max_total_stream_connections: usize,
+}
+
+fn default_max_connections_per_stream() -> usize {
+    crate::stream_registry::DEFAULT_MAX_CONNECTIONS_PER_STREAM
+}
+
+fn default_max_total_stream_connections() -> usize {
+    crate::stream_registry::DEFAULT_MAX_TOTAL_CONNECTIONS
 }
 
 /// Logging configuration
@@ -627,11 +650,21 @@ impl Default for ServerConfig {
             trusted_proxies: Vec::new(),
             graceful_shutdown: true,
             shutdown_timeout_secs: 30,
+            max_connections_per_stream: default_max_connections_per_stream(),
+            max_total_stream_connections: default_max_total_stream_connections(),
         }
     }
 }
 
 impl ServerConfig {
+    /// The stream connection ceilings, as the registry wants them.
+    pub fn stream_limits(&self) -> crate::stream_registry::StreamLimits {
+        crate::stream_registry::StreamLimits {
+            max_connections_per_stream: self.max_connections_per_stream,
+            max_total_connections: self.max_total_stream_connections,
+        }
+    }
+
     /// Get the base URL for the server
     /// If base_url is configured, use it. Otherwise construct from host and port.
     pub fn get_base_url(&self) -> String {

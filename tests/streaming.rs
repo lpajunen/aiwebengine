@@ -42,9 +42,12 @@ async fn test_native_script_update_streaming() {
     info!("Script updates stream successfully registered");
 
     // Create a connection to the stream
-    let connection = aiwebengine::stream_manager::StreamConnectionManager::new()
-        .create_connection(ENGINE_SCRIPT_UPDATES_STREAM, None)
-        .await
+    let connection = GLOBAL_STREAM_REGISTRY
+        .open_connection(
+            ENGINE_SCRIPT_UPDATES_STREAM,
+            None,
+            aiwebengine::stream_registry::StreamLimits::default(),
+        )
         .expect("Failed to create stream connection");
 
     let mut receiver = connection.receiver;
@@ -205,9 +208,12 @@ async fn test_basic_streaming_functionality() {
     info!("Test stream registered successfully");
 
     // Create a connection to the stream
-    let connection = aiwebengine::stream_manager::StreamConnectionManager::new()
-        .create_connection("/test_stream", None)
-        .await
+    let connection = GLOBAL_STREAM_REGISTRY
+        .open_connection(
+            "/test_stream",
+            None,
+            aiwebengine::stream_registry::StreamLimits::default(),
+        )
         .expect("Failed to create stream connection");
 
     let mut receiver = connection.receiver;
@@ -287,9 +293,11 @@ async fn test_direct_stream_message() {
     info!("Testing direct stream message sending");
 
     // Create a connection first
-    let _connection = aiwebengine::stream_manager::StreamConnectionManager::new()
-        .create_connection("/direct_test", None)
-        .await;
+    let _connection = GLOBAL_STREAM_REGISTRY.open_connection(
+        "/direct_test",
+        None,
+        aiwebengine::stream_registry::StreamLimits::default(),
+    );
 
     // The connection might fail if the stream isn't registered yet, which is expected
 
@@ -302,9 +310,12 @@ async fn test_direct_stream_message() {
     );
 
     // Now create a connection after the stream is registered
-    let connection = aiwebengine::stream_manager::StreamConnectionManager::new()
-        .create_connection("/direct_test", None)
-        .await
+    let connection = GLOBAL_STREAM_REGISTRY
+        .open_connection(
+            "/direct_test",
+            None,
+            aiwebengine::stream_registry::StreamLimits::default(),
+        )
         .expect("Failed to create connection to direct_test stream");
 
     let mut receiver = connection.receiver;

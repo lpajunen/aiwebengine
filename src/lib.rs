@@ -65,7 +65,6 @@ pub mod script_test;
 pub mod security;
 pub mod source_view;
 pub mod sql_dialect;
-pub mod stream_manager;
 pub mod stream_registry;
 pub mod tasks;
 pub mod transpiler;
@@ -959,14 +958,26 @@ async fn handle_stream_request(req: Request<Body>) -> Response {
         }
     };
 
-    // Create a connection with the stream manager
-    let connection = match stream_manager::StreamConnectionManager::new()
-        .create_connection(&path, client_metadata)
-        .await
-    {
+    // The registry accepts the connection or refuses it, under one lock, and
+    // hands back the id it stored. Closing with that id is what the guard
+    // below does; anything else leaks the connection.
+    let connection = match stream_registry::GLOBAL_STREAM_REGISTRY.open_connection(
+        &path,
+        client_metadata,
+        stream_registry::StreamLimits::current(),
+    ) {
         Ok(conn) => conn,
+        Err(e) if e.is_capacity() => {
+            warn!("Refusing stream connection for '{}': {}", path, e);
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [("content-type", "text/plain")],
+                e.to_string(),
+            )
+                .into_response();
+        }
         Err(e) => {
-            error!("Failed to create stream connection for '{}': {}", path, e);
+            error!("Failed to open stream connection for '{}': {}", path, e);
             return build_stream_error_response(&format!(
                 "Failed to create stream connection: {}",
                 e
@@ -974,48 +985,32 @@ async fn handle_stream_request(req: Request<Body>) -> Response {
         }
     };
 
-    let connection_id = connection.connection_id.clone();
-    info!(
-        "Created stream connection {} for path '{}'",
-        connection_id, path
-    );
-
-    // Convert broadcast receiver to tokio stream
     let receiver_stream = BroadcastStream::new(connection.receiver);
 
-    // Clone connection_id for use in the closure
-    let connection_id_for_stream = connection_id.clone();
+    // Dropped when the SSE response is dropped, which is the only event a
+    // client disconnect produces here. See `ConnectionGuard`.
+    let guard = stream_registry::ConnectionGuard::new(path.clone(), connection.connection_id);
 
-    // Convert to SSE events, handling both messages and errors
-    let path_for_cleanup = path.clone();
     let sse_stream = tokio_stream::StreamExt::map(receiver_stream, move |result| {
+        // Captured so the guard lives exactly as long as the stream, and
+        // referenced so it is not dropped early as an unused capture.
+        let connection_id = guard.connection_id();
         match result {
             Ok(msg) => {
                 debug!(
                     "Sending SSE message to connection {}: {}",
-                    connection_id_for_stream, msg
+                    connection_id, msg
                 );
                 Ok::<Event, std::convert::Infallible>(Event::default().data(msg))
             }
             Err(e) => {
+                // Lag, not disconnect: the receiver fell behind and dropped
+                // messages. The connection is still live and the guard still
+                // owns its removal, so this only reports.
                 error!(
                     "Broadcast receiver error for connection {}: {}",
-                    connection_id_for_stream, e
+                    connection_id, e
                 );
-                // This indicates the connection has failed, we should clean it up
-                if let Err(cleanup_err) = stream_registry::GLOBAL_STREAM_REGISTRY
-                    .remove_connection(&path_for_cleanup, &connection_id_for_stream)
-                {
-                    error!(
-                        "Failed to cleanup failed connection {}: {}",
-                        connection_id_for_stream, cleanup_err
-                    );
-                } else {
-                    debug!(
-                        "Cleaned up failed connection {} from stream {}",
-                        connection_id_for_stream, path_for_cleanup
-                    );
-                }
                 Ok::<Event, std::convert::Infallible>(Event::default().data(
                     serde_json::json!({ "error": format!("Stream error: {}", e) }).to_string(),
                 ))
@@ -1702,6 +1697,13 @@ pub async fn start_server_with_config(
     // shipped with.
     if !limits::configure(&config) {
         debug!("Developer-facing limits were already configured");
+    }
+
+    // How many SSE connections this engine will hold. Read on every connection
+    // rather than baked into a per-request manager, which is what made these
+    // settings dead before.
+    if !stream_registry::StreamLimits::configure(config.server.stream_limits()) {
+        debug!("Stream connection limits were already configured");
     }
 
     // Test budgets: one per test module, one for a whole run.

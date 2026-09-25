@@ -57,6 +57,19 @@ trusted_proxies = []
 graceful_shutdown = true
 shutdown_timeout_secs = 30
 
+# Server-Sent Events connections this engine will hold: per stream path, and
+# across every stream. A backstop against one runaway client rather than a
+# tuned capacity figure — each open connection costs a broadcast channel
+# buffering up to 1000 messages.
+#
+# These numbers have been written down since streams were added but were read
+# by nothing: the manager that checked them was rebuilt for each connection, so
+# it always compared against an empty map and never refused anything. They now
+# refuse, which is a real change for a deployment already above them. Raise
+# them rather than rediscovering the old behaviour.
+max_connections_per_stream = 100
+max_total_stream_connections = 1000
+
 [logging]
 # APP_LOGGING__LEVEL=debug on a developer's machine; json format wherever logs
 # are aggregated.

@@ -1,9 +1,175 @@
+//! Stream paths, the connections attached to them, and the broadcast that
+//! reaches them.
+//!
+//! This is where a connection's state lives, which is why opening one lives
+//! here too. It used to be split: `stream_manager.rs` held a
+//! `StreamConnectionManager` that tracked connections and enforced limits,
+//! while the connections themselves were stored here. That manager was
+//! constructed fresh at each call site, used once and dropped, so its maps
+//! were always empty — and two things followed from that.
+//!
+//! The limits never fired: `check_connection_limits` compared the length of a
+//! newly created map against `max_total_connections`, so it evaluated
+//! `0 >= limit` on every connection and those settings did nothing.
+//!
+//! And every disconnect leaked. `create_connection` discarded the id this
+//! registry assigned and returned an `ActiveConnection` carrying a second,
+//! unrelated `Uuid::new_v4()`. The SSE handler then removed by *that* id,
+//! which was never a key here, so the removal matched nothing and the
+//! connection stayed — holding a `broadcast::Sender` with a 1000-message
+//! buffer — until the process restarted. Nothing aged it out either:
+//! `cleanup_stale_connections` was only ever called from its own unit test.
+//!
+//! [`StreamRegistry::open_connection`] replaces both. It takes the registry
+//! lock once, so the limit check and the insert cannot race, and it returns
+//! the *same* id it stored, which is what makes [`Self::close_connection`]
+//! able to find it again.
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+
+/// Connections one stream path may hold at once.
+///
+/// Carried over from `ConnectionManagerConfig`, which is where these numbers
+/// were written down while nothing read them. They are a backstop against one
+/// runaway client rather than a tuned capacity figure, and
+/// [`StreamLimits::from_config`] is how a deployment says otherwise.
+pub const DEFAULT_MAX_CONNECTIONS_PER_STREAM: usize = 100;
+
+/// Connections the engine may hold across every stream at once.
+pub const DEFAULT_MAX_TOTAL_CONNECTIONS: usize = 1000;
+
+/// How many connections a registry will hold.
+#[derive(Debug, Clone, Copy)]
+pub struct StreamLimits {
+    pub max_connections_per_stream: usize,
+    pub max_total_connections: usize,
+}
+
+impl Default for StreamLimits {
+    fn default() -> Self {
+        Self {
+            max_connections_per_stream: DEFAULT_MAX_CONNECTIONS_PER_STREAM,
+            max_total_connections: DEFAULT_MAX_TOTAL_CONNECTIONS,
+        }
+    }
+}
+
+/// Why a connection was refused.
+///
+/// Separate from the string errors the rest of this module returns, because
+/// the caller has to answer a refused connection with 503 and a lock failure
+/// with 500, and it should not have to read a message to tell them apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenError {
+    /// No stream is registered at this path.
+    NotRegistered(String),
+    /// This path is already holding [`StreamLimits::max_connections_per_stream`].
+    StreamFull { path: String, limit: usize },
+    /// The engine is already holding [`StreamLimits::max_total_connections`].
+    EngineFull { limit: usize },
+    /// The registry lock was poisoned.
+    Internal(String),
+}
+
+impl std::fmt::Display for OpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotRegistered(path) => {
+                write!(f, "Stream path '{}' is not registered", path)
+            }
+            Self::StreamFull { path, limit } => write!(
+                f,
+                "Maximum connections per stream reached for '{}' ({})",
+                path, limit
+            ),
+            Self::EngineFull { limit } => {
+                write!(f, "Maximum total connections reached ({})", limit)
+            }
+            Self::Internal(message) => write!(f, "{}", message),
+        }
+    }
+}
+
+impl OpenError {
+    /// True when the caller should answer 503 rather than 500: the engine is
+    /// working, it is simply full, and retrying later is the right advice.
+    pub fn is_capacity(&self) -> bool {
+        matches!(self, Self::StreamFull { .. } | Self::EngineFull { .. })
+    }
+}
+
+/// Removes a connection from the registry when the SSE response is dropped.
+///
+/// A drop guard rather than a cleanup call, because there is no point in the
+/// SSE pipeline where a client disconnect is observable as an event. Axum
+/// drops the response body, which drops the stream and everything the stream's
+/// closure captured; nothing is polled and no branch runs. The previous code
+/// removed the connection only from the *error* arm of the message closure, so
+/// even with matching ids it would have cleaned up after a lagging receiver
+/// and never after a client that simply went away — which is every client.
+///
+/// Holding this in the closure's captures means the removal happens on the one
+/// event that always occurs: the stream being dropped.
+#[derive(Debug)]
+pub struct ConnectionGuard {
+    path: String,
+    connection_id: String,
+}
+
+impl ConnectionGuard {
+    pub fn new(path: String, connection_id: String) -> Self {
+        Self {
+            path,
+            connection_id,
+        }
+    }
+
+    /// The id this guard will close, for logging.
+    pub fn connection_id(&self) -> &str {
+        &self.connection_id
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        GLOBAL_STREAM_REGISTRY.close_connection(&self.path, &self.connection_id);
+    }
+}
+
+static CONFIGURED_LIMITS: std::sync::OnceLock<StreamLimits> = std::sync::OnceLock::new();
+
+impl StreamLimits {
+    /// Records the configured ceilings at startup, the way
+    /// [`crate::limits::configure`] records the rest. Returns false if they
+    /// were already recorded.
+    pub fn configure(limits: StreamLimits) -> bool {
+        CONFIGURED_LIMITS.set(limits).is_ok()
+    }
+
+    /// What is in force. The defaults until something records otherwise, so a
+    /// test or a tool that never configured anything still gets a ceiling
+    /// rather than none.
+    pub fn current() -> StreamLimits {
+        CONFIGURED_LIMITS.get().copied().unwrap_or_default()
+    }
+}
+
+/// A connection that has been accepted and inserted into the registry.
+///
+/// `connection_id` is the registry's own key. Handing back anything else is
+/// what leaked connections before this existed, so the SSE handler closes
+/// with exactly this value.
+#[derive(Debug)]
+pub struct OpenConnection {
+    pub connection_id: String,
+    pub stream_path: String,
+    pub receiver: broadcast::Receiver<String>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -539,6 +705,110 @@ impl StreamRegistry {
             Err(e) => {
                 error!("Failed to acquire stream registry lock: {}", e);
                 Err("Failed to add connection: registry lock error".to_string())
+            }
+        }
+    }
+
+    /// Accept a connection on `path`, or say why not.
+    ///
+    /// The limit check and the insert happen under one acquisition of the
+    /// registry lock. Splitting them — which is what checking in one module
+    /// and inserting in another forced — means two connections arriving
+    /// together can both read a count below the limit and both be admitted.
+    ///
+    /// The returned [`OpenConnection::connection_id`] is the key this registry
+    /// stored, so passing it back to [`Self::close_connection`] removes the
+    /// connection this call created.
+    pub fn open_connection(
+        &self,
+        path: &str,
+        client_metadata: Option<HashMap<String, String>>,
+        limits: StreamLimits,
+    ) -> Result<OpenConnection, OpenError> {
+        let mut streams = self.streams.lock().map_err(|e| {
+            error!("Failed to acquire stream registry lock: {}", e);
+            OpenError::Internal("Failed to open connection: registry lock error".to_string())
+        })?;
+
+        if !streams.contains_key(path) {
+            return Err(OpenError::NotRegistered(path.to_string()));
+        }
+
+        // Counted while the lock is held, so this is the count the insert
+        // below lands on rather than one that was true a moment ago.
+        let total: usize = streams.values().map(|reg| reg.connection_count()).sum();
+        if total >= limits.max_total_connections {
+            warn!(
+                "Refusing stream connection on '{}': engine holds {} connections (limit {})",
+                path, total, limits.max_total_connections
+            );
+            return Err(OpenError::EngineFull {
+                limit: limits.max_total_connections,
+            });
+        }
+
+        let Some(registration) = streams.get_mut(path) else {
+            return Err(OpenError::NotRegistered(path.to_string()));
+        };
+
+        let existing = registration.connection_count();
+        if existing >= limits.max_connections_per_stream {
+            warn!(
+                "Refusing stream connection on '{}': stream holds {} connections (limit {})",
+                path, existing, limits.max_connections_per_stream
+            );
+            return Err(OpenError::StreamFull {
+                path: path.to_string(),
+                limit: limits.max_connections_per_stream,
+            });
+        }
+
+        let connection = match client_metadata {
+            Some(metadata) => StreamConnection::with_metadata(metadata),
+            None => StreamConnection::new(),
+        };
+        let receiver = connection.subscribe();
+        let connection_id = registration.add_connection(connection);
+
+        info!(
+            "Opened stream connection {} on '{}' ({} on this stream, {} total)",
+            connection_id,
+            path,
+            existing + 1,
+            total + 1
+        );
+
+        Ok(OpenConnection {
+            connection_id,
+            stream_path: path.to_string(),
+            receiver,
+        })
+    }
+
+    /// Close a connection opened by [`Self::open_connection`].
+    ///
+    /// Returns whether a connection was actually removed. `false` means the
+    /// id named nothing here, which is the shape of the bug this pair
+    /// replaced, so the caller logs it rather than ignoring it.
+    pub fn close_connection(&self, path: &str, connection_id: &str) -> bool {
+        match self.remove_connection(path, connection_id) {
+            Ok(removed) => {
+                if removed {
+                    debug!("Closed stream connection {} on '{}'", connection_id, path);
+                } else {
+                    warn!(
+                        "Stream connection {} on '{}' was not in the registry at close",
+                        connection_id, path
+                    );
+                }
+                removed
+            }
+            Err(e) => {
+                error!(
+                    "Failed to close stream connection {} on '{}': {}",
+                    connection_id, path, e
+                );
+                false
             }
         }
     }

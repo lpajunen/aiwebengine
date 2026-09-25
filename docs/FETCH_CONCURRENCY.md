@@ -89,7 +89,7 @@ text a model is generating.
 
 ## The pieces that were already there
 
-The outbound half of streaming was built before this: `stream_manager` and
+The outbound half of streaming was built before this: `stream_registry` and
 `routeRegistry.sendStreamMessage` push to a person's open page today. What
 was missing was a `fetch` that hands back a reader, and the bridge between
 the two is the `for...of` in the example at the top.
