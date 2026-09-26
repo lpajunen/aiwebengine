@@ -47,6 +47,7 @@ pub mod notifications;
 pub mod openapi_schemas;
 pub mod parsers;
 pub mod repository;
+pub mod resource_access;
 pub mod revisions;
 pub mod route_index;
 pub mod safe_helpers;
@@ -76,6 +77,7 @@ pub mod auth;
 mod test_db;
 
 use repository::Repository;
+use resource_access::AccessDecision;
 use security::UserContext;
 
 // Re-export the unified error type
@@ -733,14 +735,16 @@ fn get_stream_client_metadata(
     path: &str,
     query_params: &HashMap<String, String>,
     auth_user: Option<&auth::AuthUser>,
-) -> Result<Option<HashMap<String, String>>, String> {
+) -> Result<AccessDecision, String> {
     let stream_info = stream_registry::GLOBAL_STREAM_REGISTRY.get_stream_info(path);
 
     if let Some((script_uri, Some(func_name))) = stream_info {
-        // Execute customization function to get filter criteria
+        // The callback is the only place per-resource authorization can live:
+        // whose order `/orders/1234/events` is, is a fact about the script's
+        // data model. See `resource_access`.
         let auth_context = auth_user.map(|user| create_js_auth_context(Some(user)));
 
-        let filter_criteria = js_engine::execute_stream_customization_function(
+        let decision = js_engine::execute_stream_customization_function(
             &script_uri,
             &func_name,
             path,
@@ -749,22 +753,34 @@ fn get_stream_client_metadata(
         )?;
 
         info!(
-            "Customization function '{}' returned filter criteria: {:?}",
-            func_name, filter_criteria
+            "Customization function '{}' decided: {:?}",
+            func_name, decision
         );
-        return Ok(if filter_criteria.is_empty() {
-            None
-        } else {
-            Some(filter_criteria)
-        });
+        return Ok(decision);
     }
 
     // No customization function, use query params as fallback
-    Ok(if query_params.is_empty() {
-        None
-    } else {
-        Some(query_params.clone())
-    })
+    Ok(AccessDecision::Allow(query_params.clone()))
+}
+
+/// Answer a refusal the way the callback asked to.
+///
+/// Not [`build_stream_error_response`], which is a 500: a denied subscription
+/// is not the server failing, and answering one told the client to retry
+/// something that would be refused again and put the script's message in the
+/// body of it.
+fn build_stream_denied_response(status: u16, reason: Option<&str>) -> Response {
+    let code = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
+    Response::builder()
+        .status(code)
+        .header("content-type", "text/plain")
+        .body(Body::from(reason.map(str::to_string).unwrap_or_else(
+            || code.canonical_reason().unwrap_or("Forbidden").to_string(),
+        )))
+        .unwrap_or_else(|err| {
+            error!("Failed to build denied response: {}", err);
+            Response::new(Body::from("Forbidden"))
+        })
 }
 
 /// Helper: Build error response for stream errors
@@ -796,8 +812,29 @@ async fn handle_stream_request(req: Request<Body>) -> Response {
     // Get client metadata from customization function or query params
     let client_metadata = match get_stream_client_metadata(&path, &query_params, auth_user.as_ref())
     {
-        Ok(metadata) => metadata,
+        Ok(AccessDecision::Allow(criteria)) => {
+            if criteria.is_empty() {
+                None
+            } else {
+                Some(criteria)
+            }
+        }
+        Ok(AccessDecision::Deny { status, reason }) => {
+            info!(
+                "Stream '{}' refused the connection with {}{}",
+                path,
+                status,
+                reason
+                    .as_deref()
+                    .map(|r| format!(": {}", r))
+                    .unwrap_or_default()
+            );
+            return build_stream_denied_response(status, reason.as_deref());
+        }
         Err(e) => {
+            // A throw is still a 500, because it still means the callback
+            // itself failed rather than that it decided. That is the whole
+            // reason a decision has a spelling of its own.
             error!("Customization function failed for stream '{}': {}", path, e);
             return build_stream_error_response(&format!(
                 "Stream customization function failed: {}",

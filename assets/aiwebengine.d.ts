@@ -458,8 +458,37 @@ interface RouteRegistry {
 
   /**
    * Register a Server-Sent Events (SSE) stream endpoint
+   *
+   * `customizationFunction` names the function that **decides who may
+   * subscribe**, and it is the only place that decision can live: whose order
+   * `/orders/1234/events` is, is a fact about your data model, not one the
+   * engine can know. Without one, anyone who can reach the host gets the
+   * stream.
+   *
+   * It runs under the subscriber's own context and returns either filter
+   * criteria — a flat object of strings, matched against what
+   * `sendStreamMessage` targets — or a refusal:
+   *
+   * ```ts
+   * function authorizeOrder(context) {
+   *   if (!context.auth?.userId) return { deny: 401 };
+   *   const orderId = context.request.queryParams.orderId;
+   *   if (!ownsOrder(context.auth.userId, orderId)) {
+   *     return { deny: 403, reason: "not your order" };
+   *   }
+   *   return { orderId };
+   * }
+   * ```
+   *
+   * `deny` is `true` for a plain refusal or any 4xx status to choose one —
+   * `401` to say "sign in", `403` "not yours", `404` "and I will not tell you
+   * it exists". `reason` is optional, is returned to whoever was refused, and
+   * is trimmed to 200 characters. Throwing is **not** how you deny: it means
+   * the function itself failed and still answers 500.
+   *
    * @param path - URL path for the stream (must start with /)
-   * @param customizationFunction - Optional name of a function that returns connection filter criteria
+   * @param customizationFunction - Name of the function that authorizes a
+   *   connection and returns its filter criteria
    * @param metadata - Optional OpenAPI metadata. `tags` sets the Swagger group
    *   (defaults to "Streams"); `summary`/`description` override the
    *   auto-generated documentation text.

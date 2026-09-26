@@ -2846,7 +2846,7 @@ pub fn execute_stream_customization_function(
     path: &str,
     query_params: &std::collections::HashMap<String, String>,
     auth_context: Option<crate::auth::JsAuthContext>,
-) -> Result<std::collections::HashMap<String, String>, String> {
+) -> Result<crate::resource_access::AccessDecision, String> {
     let script_uri_owned = script_uri.to_string();
     let function_name_owned = function_name.to_string();
     let path_owned = path.to_string();
@@ -2965,13 +2965,52 @@ pub fn execute_stream_customization_function(
             promise_resolve(ctx, result_value)
         },
         |_ctx, result_value| {
-            // Convert result to HashMap
-            let mut filter_criteria = std::collections::HashMap::new();
+            use crate::resource_access::{AccessDecision, deny_reason, deny_status};
 
             let Some(result_obj) = result_value.as_object() else {
                 return Err("Expected object result".to_string());
             };
 
+            // A refusal is named rather than thrown. Throwing was the only way
+            // to deny, and it landed as a 500 with the message in the body —
+            // which tells the client to retry something that will be refused
+            // again, and leaks whatever the script said. A `deny` key is the
+            // one shape both this and an asset route answer in.
+            if let Ok(deny) = result_obj.get::<_, rquickjs::Value>("deny")
+                && !deny.is_undefined()
+                && !deny.is_null()
+            {
+                // `{ deny: true }` is the short spelling of "refuse"; a number
+                // is the status to refuse with.
+                let requested = match deny.as_bool() {
+                    Some(true) => None,
+                    Some(false) => {
+                        return Err(
+                            "deny: false is not a decision — return the filter criteria to allow"
+                                .to_string(),
+                        );
+                    }
+                    None => match deny.as_number() {
+                        Some(status) => Some(status as i64),
+                        None => {
+                            return Err(
+                                "deny must be true or an HTTP status number, e.g. { deny: 403 }"
+                                    .to_string(),
+                            );
+                        }
+                    },
+                };
+                let reason = result_obj
+                    .get::<_, rquickjs::Value>("reason")
+                    .ok()
+                    .and_then(|value| value.as_string().and_then(|s| s.to_string().ok()));
+                return Ok(AccessDecision::Deny {
+                    status: deny_status(requested),
+                    reason: deny_reason(reason),
+                });
+            }
+
+            let mut filter_criteria = std::collections::HashMap::new();
             for key_str in result_obj.keys::<String>().flatten() {
                 if let Ok(value) = result_obj.get::<_, rquickjs::Value>(&key_str) {
                     if let Some(value_str) = value.as_string().and_then(|s| s.to_string().ok()) {
@@ -2982,16 +3021,16 @@ pub fn execute_stream_customization_function(
                 }
             }
 
-            Ok(filter_criteria)
+            Ok(AccessDecision::Allow(filter_criteria))
         },
     );
 
-    let filter_criteria =
+    let decision =
         result_exec.map_err(|e| format!("Customization function execution error: {}", e))?;
 
     // Ensure clean shutdown
     drop(ctx);
-    Ok(filter_criteria)
+    Ok(decision)
 }
 
 /// What to evaluate, and under which budget.

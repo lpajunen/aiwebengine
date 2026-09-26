@@ -9,6 +9,9 @@
 //! Driven through `execute_stream_customization_function` directly, because
 //! what the function returns is connection filter criteria: it never reaches
 //! the client, so an HTTP test could not read the verdict back.
+//!
+//! Its other half — that the function is also where a connection is
+//! *refused*, and how — is `tests/stream_authorization.rs`.
 
 mod common;
 
@@ -34,7 +37,7 @@ async fn verdict_for(auth: Option<JsAuthContext>) -> String {
     let uri = "test_stream_customization_authority";
     let _ = repository::upsert_script(uri, SCRIPT);
 
-    let criteria = aiwebengine::js_engine::execute_stream_customization_function(
+    let decision = aiwebengine::js_engine::execute_stream_customization_function(
         uri,
         "customize",
         "/stream-authority",
@@ -43,10 +46,13 @@ async fn verdict_for(auth: Option<JsAuthContext>) -> String {
     )
     .expect("the customization function should run");
 
-    criteria
-        .get("verdict")
-        .cloned()
-        .unwrap_or_else(|| "<no verdict>".to_string())
+    match decision {
+        aiwebengine::resource_access::AccessDecision::Allow(criteria) => criteria
+            .get("verdict")
+            .cloned()
+            .unwrap_or_else(|| "<no verdict>".to_string()),
+        other => panic!("expected criteria, got {:?}", other),
+    }
 }
 
 /// A connection with no session cannot reach a schema change.

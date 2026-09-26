@@ -219,23 +219,33 @@ A two-valued `access: "public" | "authenticated"` flag was considered and is
 not enough — being authenticated is frequently not the question. Asset routes
 need the same callback shape streams have.
 
-### What is wrong with the callback today
+### What was wrong with the callback
 
-Three fixable defects, none of them a reason to remove it:
+Three fixable defects, none of them a reason to remove it. The first two are
+**done**:
 
-- **It cannot refuse cleanly.** It returns a `HashMap<String, String>` of filter
-  criteria, so the only way to deny is to **throw** — which lands in
-  `build_stream_error_response` as an **HTTP 500** with the throw message in the
-  body. A denied subscription should be 401 or 403; a 500 tells the client to
-  retry and leaks the message. It needs a real deny: a `{ deny: 403 }` return,
-  or `false`, mapped to a status.
-- **Its authorization role is undocumented.** `aiwebengine.d.ts` calls it
-  "Optional name of a function that returns connection filter criteria", and
-  `tests/stream_customization_authority.rs` reinforces the filter framing.
-  Nobody writing a stream will discover that throwing is how you deny.
-- **Deny-by-omission is the default.** `registerStreamRoute("/events/x")` with no
-  callback means anyone who can reach the host gets the stream — the same
-  open-by-default shape as assets.
+- ~~**It cannot refuse cleanly.**~~ It returned a `HashMap<String, String>` of
+  filter criteria, so the only way to deny was to **throw** — which landed in
+  `build_stream_error_response` as an **HTTP 500** with the throw message in
+  the body, telling the client to retry something that would be refused again
+  and leaking whatever the script said. A refusal is now a value:
+  `{ deny: true | <4xx>, reason? }`, parsed in `resource_access.rs` and
+  answered with that status. Any 4xx is the caller's to choose — `401` "sign
+  in", `403` "not yours", `404` "and I will not tell you it exists", `429` to
+  throttle — and a 5xx is not, since a refusal is not the server failing.
+  `reason` is trimmed to 200 characters, because it is a script-written string
+  returned to whoever was refused. A throw still means the callback itself
+  failed, which is the distinction that was missing.
+- ~~**Its authorization role is undocumented.**~~ `aiwebengine.d.ts` now leads
+  with it: the callback is what **decides who may subscribe**, and without one
+  anyone who can reach the host gets the stream.
+- **Deny-by-omission is still the default.** `registerStreamRoute("/events/x")`
+  with no callback means anyone who can reach the host gets the stream — the
+  same open-by-default shape as assets. Closing that is the same decision as
+  closing it for `public/`, so the two go together.
+
+`resource_access.rs` is the shape, settled once, so the asset-route hook below
+answers the same way rather than inventing a second convention.
 
 ### Per case
 
