@@ -44,6 +44,44 @@ root-versus-asset branch.
 
 This goes first because everything below it gets cheaper once it lands.
 
+### Done: the storage merge
+
+`scripts.content` and `script_revisions.root_sha256` are gone. A script's
+entrypoint is a row of `assets` named `main.{ts,js,tsx,jsx}` — the four names
+`git_sync::ENTRY_NAMES` already used, so a repository's layout and the
+engine's storage now agree instead of being translated between. The name is
+chosen from the tree and falls back, for a script with no files yet, to the
+extension the URI carries, which is the one thing the URI was ever
+load-bearing for.
+
+What that removed:
+
+- `revisions::record` stores the whole tree in one statement rather than the
+  root in one and the assets in another, so the two can no longer be read
+  against different snapshots. `diff` loops over the manifest instead of
+  splicing the root into both sides and reading it separately; `plan_revert`
+  compares one list instead of a list and a digest; `RevertPlan::root_changes`
+  and `RevertOutcome::changed_anything` are derived from the file lists rather
+  than tracked beside them — the latter was the bug where a revert that
+  restored only the entrypoint reported two empty lists.
+- `git_sync` neither splits a directory into a script row plus an asset set on
+  the way in nor reconstructs the entry's repository path on the way out. It
+  had to guess that path from the script URI's extension; the tree carries it.
+- `ScriptFilesChange` has no `root` field. `content` on `/engine/assets/batch`
+  and `write_assets` is sugar that appends one entry to the batch.
+- `search_files` walks the tree once. It used to walk the root and then the
+  assets, which over a merged tree reported the entrypoint twice.
+
+What it did **not** change, deliberately: writing or deleting a `main.*` still
+takes `WriteScripts` / `DeleteScripts` and ownership, wherever the request
+arrives. Merging the storage must not make `WriteAssets` a way to replace a
+script's program, and the delete side needed the same line drawn explicitly —
+otherwise what you could not overwrite you could remove. The root also keeps
+the 1MB source ceiling rather than inheriting the 10MB file one.
+
+Still to do in §1: the surface. Thirteen tool names are still thirteen, and
+`assetStorage` still has four methods of its own.
+
 ## 2. Exposure belongs to the tree, not to `init()`
 
 Assets are read four ways, and all four already key off `(script_uri, path)`
@@ -453,6 +491,7 @@ the operation.
 ## Order of work
 
 1. **Merge script and asset into one tree** (§1). Everything else gets cheaper.
+   _(storage done; the duplicated tool and endpoint names are what remains.)_
 2. ~~**Drop the two unused RPC surfaces**~~ _(done, §7)._
 3. **Exposure by directory** (§2), plus `.md`/`.txt` string modules.
 4. **Name and mount** (§4), including the move to `scripts.id` for physical

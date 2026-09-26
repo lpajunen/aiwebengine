@@ -323,10 +323,17 @@ async fn a_revision_holds_the_files_that_were_there() {
 
     let names =
         |files: &[revisions::RevisionFile]| files.iter().map(|f| f.uri.clone()).collect::<Vec<_>>();
-    assert_eq!(names(&before), vec!["server/gone.ts", "server/kept.ts"]);
+    // The entrypoint is in the manifest beside the modules, because it is one
+    // of the script's files. It used to sit outside, in a column of the
+    // revision row, which is what made a manifest a description of only part
+    // of what a revision held.
+    assert_eq!(
+        names(&before),
+        vec!["main.js", "server/gone.ts", "server/kept.ts"]
+    );
     assert_eq!(
         names(&after),
-        vec!["server/kept.ts"],
+        vec!["main.js", "server/kept.ts"],
         "a file a revision does not contain is absent from it, not tombstoned"
     );
 }
@@ -733,13 +740,23 @@ async fn deploy_unnoticed(script_uri: &str, content: &str, asset: (&str, &str)) 
         .pool()
         .clone();
 
-    sqlx::query("INSERT INTO scripts (uri, content, name) VALUES ($1, $2, $3)")
+    sqlx::query("INSERT INTO scripts (uri, name) VALUES ($1, $2)")
         .bind(script_uri)
-        .bind(content)
         .bind(script_uri.rsplit('/').next().unwrap_or(script_uri))
         .execute(&pool)
         .await
         .expect("storing the script should succeed");
+
+    // The root is a file of the tree, written like the asset below it.
+    sqlx::query(
+        "INSERT INTO assets (uri, name, mimetype, content, script_uri)
+         VALUES ('main.ts', 'main.ts', 'text/typescript', $1, $2)",
+    )
+    .bind(content.as_bytes())
+    .bind(script_uri)
+    .execute(&pool)
+    .await
+    .expect("storing the root should succeed");
 
     let first = aiwebengine::revisions::record(script_uri, revisions::Origin::Script, None)
         .await
@@ -1706,12 +1723,21 @@ async fn a_backfilled_baseline_records_the_schema_it_found() {
         .expect("database should be initialized")
         .pool()
         .clone();
-    sqlx::query("INSERT INTO scripts (uri, content, name) VALUES ($1, 'function init() {}', $2)")
+    sqlx::query("INSERT INTO scripts (uri, name) VALUES ($1, $2)")
         .bind(uri)
         .bind("backfill.ts")
         .execute(&pool)
         .await
         .expect("storing the script should succeed");
+    sqlx::query(
+        "INSERT INTO assets (uri, name, mimetype, content, script_uri)
+         VALUES ('main.ts', 'main.ts', 'text/typescript', $1, $2)",
+    )
+    .bind(b"function init() {}".as_slice())
+    .bind(uri)
+    .execute(&pool)
+    .await
+    .expect("storing the root should succeed");
     declare_table(uri, "matches", &["id"]).await;
 
     // Scoped to this script. The unscoped pass is what startup runs, and
@@ -2121,18 +2147,20 @@ async fn a_revert_that_restores_only_the_entrypoint_says_something_happened() {
         .expect("head should read")
         .expect("deploying records a revision");
 
-    // Only the entrypoint moves: no assets are written, deleted or involved.
+    // Only the entrypoint moves: no other file is written, deleted or
+    // involved.
     deploy_over(uri, "function init() { return 2; }\n").await;
 
     let outcome = revert(uri, &target.to_string(), true).await;
 
     assert!(outcome.entrypoint_changed);
-    assert!(outcome.assets_written.is_empty());
-    assert!(outcome.assets_deleted.is_empty());
-    assert!(
-        outcome.changed_anything(),
-        "the counts are of assets, and this revert has none — a caller reading \
-         them alone would conclude nothing happened when the entrypoint is \
-         exactly what it restored"
+    assert_eq!(
+        outcome.assets_written,
+        vec!["main.ts".to_string()],
+        "the entrypoint is one of the files a revert restores, so it is in the \
+         list of them — it used to be reported only by a flag beside a list \
+         that was empty"
     );
+    assert!(outcome.assets_deleted.is_empty());
+    assert!(outcome.changed_anything());
 }

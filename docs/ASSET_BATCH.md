@@ -60,6 +60,14 @@ that has already happened.
 program the engine executes. It is not the `content` accepted inside a `files`
 entry, which is an alias for `content_base64`.
 
+It is also sugar. A script's entrypoint is the file named `main.*` in its
+tree, so `content` is a shorthand for one more entry of `files`, named after
+whichever root file the script already has. Naming it in `files` directly does
+the same thing, and doing both in one request describes the entrypoint twice
+and is refused as a duplicate. What does not change either way is the
+permission: writing a `main.*` takes `WriteScripts` and ownership, not
+`WriteAssets`, however the request spells it.
+
 Each entry in `files`:
 
 | Field            | Default                     | Meaning                                          |
@@ -164,9 +172,10 @@ without a read-back round trip.
 
 `root` says what happened to the root source — `updated`, or `unchanged` when
 it already held what was sent — and is present only when the request carried
-`content`. `deleted` counts the removals that removed something, and is present
-only when there were any. So a caller written against the asset-only batch sees
-exactly the body it always saw.
+`content`. The entrypoint also appears in `results` and counts towards
+`written` like the file it is, so a change that writes two modules and the
+root reports three. `deleted` counts the removals that removed something, and
+is present only when there were any.
 
 `revision` is the one revision recorded for the whole change — the number a
 `revert` goes back to — and is `null` when nothing reached storage.

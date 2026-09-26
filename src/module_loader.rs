@@ -352,7 +352,7 @@ pub fn prepare_test_program_in(
     test_modules: &[String],
     view: &SourceView,
 ) -> Result<PreparedExecutable, ModuleLoaderError> {
-    let root_path = root_module_path(script_uri)?;
+    let root_path = root_module_path_in(script_uri, view)?;
     let root_content = build_test_root(&root_path, test_modules)?;
     prepare_program(script_uri, &root_content, ProgramKind::Test, view)
 }
@@ -421,7 +421,7 @@ fn build_executable_program(
         ));
     }
 
-    let root_path = root_module_path(script_uri)?;
+    let root_path = root_module_path_in(script_uri, view)?;
     let mut linker = ModuleLinker::new(script_uri, view);
     let root_code = linker.compile_root_module(&root_path, root_content)?;
 
@@ -461,7 +461,11 @@ fn build_executable_program(
 
     bundled.push_str(&root_code);
 
-    let code = transpiler::transpile_if_needed(script_uri, &bundled).map_err(|error| {
+    // Keyed by the root's file name rather than by the script URI. Both spell
+    // the same extension today, and the tree is the one that means it: the
+    // URI's extension is a fact about an identifier, while `main.ts` is a
+    // statement about what the file contains.
+    let code = transpiler::transpile_if_needed(&root_path, &bundled).map_err(|error| {
         ModuleLoaderError::Transpilation(format!(
             "Failed transpiling bundled asset-backed program for '{}': {}",
             script_uri, error
@@ -934,19 +938,64 @@ fn transform_json_module(content: &str, module_path: &str) -> Result<String, Mod
     Ok(format!("exports.default = {};", parsed))
 }
 
-pub fn root_module_path(script_uri: &str) -> Result<String, ModuleLoaderError> {
-    let file_name = script_uri
+/// The names a script's root module may have, in the order a tree holding
+/// more than one of them is resolved.
+///
+/// The root is a file of the tree like any other, so it needs a name the tree
+/// can carry. `main.*` is the name a repository already gives it — `git_sync`
+/// has inferred a script from exactly these four file names since it shipped
+/// — so a pulled repository and what the engine stores agree rather than
+/// being translated between.
+///
+/// Four rather than every extension the bundler reads: the extension is
+/// load-bearing only insofar as [`crate::transpiler::needs_transpilation`]
+/// reads it, and that is true of `.ts`, `.tsx` and `.jsx` alone. A `main.mjs`
+/// would be a fifth spelling of `main.js`.
+pub const ROOT_MODULE_NAMES: [&str; 4] = ["main.ts", "main.js", "main.tsx", "main.jsx"];
+
+/// Whether `path` is one of the names a root module may have.
+pub fn is_root_module_name(path: &str) -> bool {
+    ROOT_MODULE_NAMES.contains(&path)
+}
+
+/// The root module's name for a script that has no files yet.
+///
+/// Carried over from the script URI's last segment, which is the only thing
+/// the URI was ever load-bearing for. A script created as `.../shop.ts` gets a
+/// `main.ts`, so its source is transpiled as the caller wrote it. Everything
+/// else is `main.js`, which is what those scripts already were.
+pub fn default_root_module_name(script_uri: &str) -> &'static str {
+    let extension = script_uri
         .rsplit('/')
         .next()
-        .filter(|segment| !segment.is_empty())
-        .ok_or_else(|| {
-            ModuleLoaderError::InvalidSpecifier(format!(
-                "Script URI '{}' does not contain a module file name",
-                script_uri
-            ))
-        })?;
+        .and_then(|segment| segment.rsplit_once('.'))
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "ts" => "main.ts",
+        "tsx" => "main.tsx",
+        "jsx" => "main.jsx",
+        _ => "main.js",
+    }
+}
 
-    Ok(file_name.to_string())
+/// Which of the script's files is its root module, under `view`.
+///
+/// Read from the tree rather than derived from the identifier, because the
+/// tree is where the answer now lives: renaming `main.ts` to `main.js` is how
+/// a solution developer says the root is no longer TypeScript, and a rule that
+/// went on consulting the URI would ignore them.
+///
+/// A tree holding none of the names has not been written yet — the create path
+/// reaches here before the first file exists — so the derived default answers,
+/// which is the name that write is about to use.
+pub fn root_module_path_in(
+    script_uri: &str,
+    view: &SourceView,
+) -> Result<String, ModuleLoaderError> {
+    Ok(view
+        .root_path(script_uri)
+        .unwrap_or_else(|| default_root_module_name(script_uri).to_string()))
 }
 
 pub fn load_owned_asset_module(
@@ -1162,8 +1211,11 @@ pub struct PreparedSnippet {
 pub fn prepare_snippet(
     root_script_uri: &str,
     source: &str,
+    view: &SourceView,
 ) -> Result<PreparedSnippet, ModuleLoaderError> {
-    let root_path = root_module_path(root_script_uri)?;
+    // The same view the program was bundled from, because the snippet's
+    // imports have to resolve against the graph that program actually holds.
+    let root_path = root_module_path_in(root_script_uri, view)?;
     let normalized = split_leading_imports(source);
     let transformed = transform_module_source(&normalized, &root_path, false)?;
 
@@ -1271,6 +1323,7 @@ mod tests {
         let prepared = prepare_snippet(
             "https://example.com/app",
             "import { total } from \"./basket.ts\";\ntotal([])",
+            &SourceView::Live,
         )
         .expect("a supported import should rewrite");
         assert!(
@@ -1295,6 +1348,7 @@ mod tests {
         let prepared = prepare_snippet(
             "https://example.com/app",
             "import { total } from \"./basket.ts\"; total([{ cents: 1 }])",
+            &SourceView::Live,
         )
         .expect("a one-line import should rewrite");
         assert!(
@@ -1321,6 +1375,7 @@ mod tests {
         let prepared = prepare_snippet(
             "https://example.com/app",
             "import a from \"./a.ts\"; import { b } from \"./b.ts\"; a(b)",
+            &SourceView::Live,
         )
         .expect("both imports should rewrite");
         assert_eq!(
@@ -1341,6 +1396,7 @@ mod tests {
         let error = prepare_snippet(
             "https://example.com/app",
             "const x = 1;\nimport { b } from \"./b.ts\"; b(x)",
+            &SourceView::Live,
         )
         .expect_err("an import after code is not a leading import");
         assert!(
@@ -1352,7 +1408,7 @@ mod tests {
 
     #[test]
     fn a_snippet_without_imports_is_unchanged() {
-        let prepared = prepare_snippet("https://example.com/app", "1 + 1")
+        let prepared = prepare_snippet("https://example.com/app", "1 + 1", &SourceView::Live)
             .expect("a plain expression is a valid snippet");
         assert_eq!(snippet_body(&prepared), "1 + 1");
         assert!(prepared.dependencies.is_empty());
@@ -1363,6 +1419,7 @@ mod tests {
         let error = prepare_snippet(
             "https://example.com/app",
             "import * as basket from \"./basket.ts\";\nbasket.total([])",
+            &SourceView::Live,
         )
         .expect_err("namespace imports are not supported by the linker");
         let message = error.to_string();
@@ -1371,8 +1428,12 @@ mod tests {
 
     #[test]
     fn a_snippet_cannot_export() {
-        let error = prepare_snippet("https://example.com/app", "export const x = 1;")
-            .expect_err("a snippet has no module record to export into");
+        let error = prepare_snippet(
+            "https://example.com/app",
+            "export const x = 1;",
+            &SourceView::Live,
+        )
+        .expect_err("a snippet has no module record to export into");
         assert!(error.to_string().contains("export syntax"), "{}", error);
     }
 
@@ -1384,10 +1445,37 @@ mod tests {
     }
 
     #[test]
-    fn root_module_path_uses_script_basename() {
-        let logical_root = root_module_path("https://example.com/apps/main.ts")
-            .expect("script uri basename should be extracted");
-        assert_eq!(logical_root, "main.ts");
+    fn default_root_module_name_carries_the_uri_extension() {
+        assert_eq!(
+            default_root_module_name("https://example.com/apps/shop.ts"),
+            "main.ts"
+        );
+        assert_eq!(
+            default_root_module_name("https://example.com/apps/shop.tsx"),
+            "main.tsx"
+        );
+        assert_eq!(
+            default_root_module_name("https://example.com/apps/shop.jsx"),
+            "main.jsx"
+        );
+        assert_eq!(
+            default_root_module_name("https://example.com/apps/shop.js"),
+            "main.js"
+        );
+    }
+
+    #[test]
+    fn a_uri_with_no_extension_roots_at_plain_javascript() {
+        // `needs_transpilation` is false for these already, so naming them
+        // `main.js` changes how they are spelled and not how they run.
+        assert_eq!(
+            default_root_module_name("https://example.com/core"),
+            "main.js"
+        );
+        assert_eq!(
+            default_root_module_name("https://example.com/apps/shop.mjs"),
+            "main.js"
+        );
     }
 
     #[test]

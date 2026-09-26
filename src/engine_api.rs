@@ -917,31 +917,43 @@ pub fn search_files_authorized(
             break;
         }
 
-        if options.scope.reads_scripts() {
-            let matches = matches_in(&meta.content);
-            if !matches.is_empty() {
-                results.push(json!({
-                    "uri": meta.uri,
-                    "matchCount": matches.len(),
-                    "matches": matches,
-                }));
-            }
-        }
-
         // Reading a script's assets through `/engine/*` is a permission of its
         // own, so a caller who may list the scripts is still asked for it
-        // before their modules are searched.
-        if !options.scope.reads_assets()
-            || !can_access_assets(user, &meta.uri, &Capability::ReadAssets)
-        {
-            continue;
-        }
-        for (name, asset) in repository::fetch_assets(&meta.uri) {
+        // before their modules are searched. The entrypoint is not one of
+        // those: it is the script's source, and reading it is what listing the
+        // script already granted.
+        let may_read_assets = options.scope.reads_assets()
+            && can_access_assets(user, &meta.uri, &Capability::ReadAssets);
+
+        // One pass over the tree. This used to be two — the root read off the
+        // metadata, the modules read from the asset rows — which is why a
+        // search over a merged tree reported the entrypoint twice.
+        let mut files: Vec<(String, Vec<u8>)> = repository::fetch_assets(&meta.uri)
+            .into_iter()
+            .map(|(name, asset)| (name, asset.content))
+            .collect();
+        // A stable order, so the same search reports the same list twice.
+        // `fetch_assets` hands back a map, and the root used to come first
+        // because it came from somewhere else entirely.
+        files.sort_by(|(left, _), (right, _)| {
+            let rank = |name: &str| u8::from(!crate::module_loader::is_root_module_name(name));
+            rank(left).cmp(&rank(right)).then_with(|| left.cmp(right))
+        });
+
+        for (name, content) in files {
             if results.len() >= MAX_SEARCH_FILES {
                 truncated = true;
                 break;
             }
-            let Ok(text) = std::str::from_utf8(&asset.content) else {
+            let allowed = if crate::module_loader::is_root_module_name(&name) {
+                options.scope.reads_scripts()
+            } else {
+                may_read_assets
+            };
+            if !allowed {
+                continue;
+            }
+            let Ok(text) = std::str::from_utf8(&content) else {
                 continue;
             };
             let matches = matches_in(text);
@@ -2141,6 +2153,22 @@ pub fn upsert_assets_synced(
     if !can_access_assets(user, script_uri, &Capability::WriteAssets) {
         return Err(AssetWriteError::AccessDenied("Access denied".to_string()));
     }
+    // A removal that takes the entrypoint with it takes what removing a script
+    // takes, the same line [`delete_asset_authorized`] draws. A change that
+    // also writes a root is a rename rather than a removal — `main.js` out,
+    // `main.ts` in — and the caller writing the new one has already been
+    // asked for script-write rights by the time this runs.
+    if options.delete.iter().any(|path| {
+        crate::module_loader::is_root_module_name(path)
+            && !files
+                .iter()
+                .any(|file| crate::module_loader::is_root_module_name(&file.name))
+    }) && !can_access_assets(user, script_uri, &Capability::DeleteScripts)
+    {
+        return Err(AssetWriteError::AccessDenied(
+            "Removing a script's entrypoint takes the right to delete the script".to_string(),
+        ));
+    }
     if files.is_empty() && options.delete.is_empty() {
         return Err(AssetWriteError::Validation(
             "No files to write: 'files' must contain at least one entry".to_string(),
@@ -2292,11 +2320,15 @@ pub fn upsert_assets_synced(
     })
 }
 
-/// One change to a script's files: its root source, its assets, and whatever
-/// the change removes.
+/// One change to a script's files, and whatever the change removes.
+///
+/// There is no separate root here, and that is the point. A script's
+/// entrypoint is the file named `main.*` in its tree, so writing it is one
+/// entry of `writes` like any other — which is what lets a change that
+/// rewrites the entrypoint and two of its modules be one request, one
+/// transaction and one revision, rather than a batch with a special case
+/// bolted to the front of it.
 pub struct ScriptFilesChange<'a> {
-    /// The root source as the change leaves it, or `None` to leave it alone.
-    pub root: Option<&'a str>,
     pub writes: &'a [AssetWrite],
     /// Asset paths that must not survive this change.
     pub delete: &'a [String],
@@ -2331,11 +2363,14 @@ impl Default for ScriptWriteOptions {
 
 /// What a change to a script's files did.
 pub struct ScriptFilesOutcome {
-    /// Whether the root source was stored, as opposed to left alone or found
-    /// to already hold what was sent.
+    /// Whether the change stored a new entrypoint.
+    ///
+    /// Derived from the per-file results rather than tracked separately: the
+    /// root is one of the files, so this is a question about the list.
     pub root_changed: bool,
     /// `inserted` when the change created the script, `updated` when it did
-    /// not, and `None` when the change did not carry a root at all.
+    /// not, and `None` when the change carried no root and so could not have
+    /// created one.
     pub action: Option<UpsertAction>,
     pub assets: BatchWriteOutcome,
     /// The one revision describing everything this change did, or `None` when
@@ -2347,8 +2382,48 @@ impl ScriptFilesOutcome {
     /// Whether anything reached storage — which is also whether re-initializing
     /// the script afterwards would be anything but cost.
     pub fn changed(&self) -> bool {
-        self.root_changed || self.assets.written > 0 || self.assets.deleted > 0
+        self.assets.written > 0 || self.assets.deleted > 0
     }
+}
+
+/// Fold a caller's `content` argument into `writes` as the script's root file.
+///
+/// `content` is the older spelling of "and also the entrypoint", from when the
+/// root was a column and a batch could not carry it as a file. It is kept
+/// because it is what callers send, and it is sugar now rather than a second
+/// write path: the text becomes one more entry of the batch, named after
+/// whichever root file the script already has, or after the name a first write
+/// would give it.
+///
+/// A caller who sends `content` *and* names a root file in `files` has
+/// described the entrypoint twice, and the batch refuses the duplicate rather
+/// than picking one.
+fn with_root_content(writes: &mut Vec<AssetWrite>, script_uri: &str, content: Option<&str>) {
+    let Some(content) = content else {
+        return;
+    };
+    let name = crate::module_loader::root_module_path_in(
+        script_uri,
+        &crate::source_view::SourceView::Live,
+    )
+    .unwrap_or_else(|_| crate::module_loader::default_root_module_name(script_uri).to_string());
+    writes.push(AssetWrite {
+        name,
+        mimetype: None,
+        content: content.as_bytes().to_vec(),
+        expected_sha256: None,
+    });
+}
+
+/// Which of `writes` is the change's root module, if any.
+///
+/// The first by [`crate::module_loader::ROOT_MODULE_NAMES`] order, which is
+/// the rule the tree itself is read by, so a change carrying both a `main.ts`
+/// and a `main.js` resolves the same way the resulting tree would.
+fn root_write(writes: &[AssetWrite]) -> Option<&AssetWrite> {
+    crate::module_loader::ROOT_MODULE_NAMES
+        .iter()
+        .find_map(|name| writes.iter().find(|write| write.name == *name))
 }
 
 /// Write a script's files as one change: one transaction per store, one
@@ -2361,14 +2436,17 @@ impl ScriptFilesOutcome {
 /// exactly such a change in one request. That asymmetry is what this removes:
 /// the request that describes a change is now the request that applies it.
 ///
-/// The ordering is the root first, then the assets, then the removals, because
-/// that is the order in which a program stops being able to refer to something
-/// it no longer has.
+/// What remains asymmetric is the script *row*, and only the row. Every file
+/// references it, so a change carrying the first file of a script that does
+/// not exist yet has to create it first — and creating a script is a
+/// different permission from writing to one that is already there, which is
+/// why that step is authorized separately and why a change with no root
+/// cannot bring a script into being.
 ///
-/// `record_revision: false` on the asset write is what keeps the change one
-/// revision rather than two, and is why a caller cannot simply call the two
-/// writes in sequence: the revision is recorded here, once, after both have
-/// landed. A change that stored nothing records none at all, since the
+/// `record_revision: false` on the file write is what keeps the change one
+/// revision rather than two, and is why a caller cannot simply call the
+/// pieces in sequence: the revision is recorded here, once, after everything
+/// has landed. A change that stored nothing records none at all, since the
 /// previous revision already describes exactly this content.
 pub fn write_script_files_authorized(
     user: &UserContext,
@@ -2376,40 +2454,40 @@ pub fn write_script_files_authorized(
     change: ScriptFilesChange<'_>,
     options: ScriptWriteOptions,
 ) -> Result<ScriptFilesOutcome, AssetWriteError> {
-    // A root whose bytes already match is not rewritten. The write itself is
-    // cheap, but it is what decides whether this change produced a revision,
-    // and recording one for a script nothing changed would put noise in the
-    // history a person reads to find the change they are looking for.
-    let (root_changed, action) = match change.root {
-        None => (false, None),
+    // The script row has to exist before any of its files can, since every
+    // file references it. `authorize_script_write` is what decides whether
+    // this caller may create or replace this script at all — a stricter
+    // question than "may they write its assets", and the one writing a root
+    // has always been asked.
+    let action = match root_write(change.writes) {
+        None => None,
         Some(root) => {
-            let stored = repository::fetch_script_head(script_uri);
-            if stored.as_deref() == Some(root) {
-                (false, Some(UpsertAction::Updated))
-            } else {
-                // `upsert_script_for_sync` refuses for one of two reasons, and
-                // they are not the same answer: a caller who may not write
-                // this script is forbidden, and one who sent no content asked
-                // for something impossible.
-                let action = upsert_script_for_sync(user, script_uri, root).map_err(|message| {
-                    let message = message
-                        .strip_prefix("Error: ")
-                        .unwrap_or(&message)
-                        .to_string();
-                    if message.starts_with("Script '") {
-                        AssetWriteError::Validation(message)
-                    } else {
-                        AssetWriteError::AccessDenied(message)
-                    }
-                })?;
-                (true, Some(action))
+            if root.content.is_empty() {
+                return Err(AssetWriteError::Validation(format!(
+                    "Script '{}' has no content: '{}' is empty",
+                    script_uri, root.name
+                )));
             }
+            let existed = authorize_script_write(user, script_uri).map_err(|message| {
+                let message = message
+                    .strip_prefix("Error: ")
+                    .unwrap_or(&message)
+                    .to_string();
+                AssetWriteError::AccessDenied(message)
+            })?;
+            repository::ensure_script(script_uri, user.user_id.as_deref())
+                .map_err(|e| AssetWriteError::Storage(format!("Error storing script: {}", e)))?;
+            Some(if existed {
+                UpsertAction::Updated
+            } else {
+                UpsertAction::Inserted
+            })
         }
     };
 
-    // The asset write refuses an empty batch — right for a caller who sent an
-    // empty request, wrong for a change that is only to the root, since a
-    // script can legitimately be one file.
+    // The file write refuses an empty batch — right for a caller who sent an
+    // empty request, and there is nothing else for this to be now that a root
+    // is one of the files.
     let assets = if change.writes.is_empty() && change.delete.is_empty() {
         BatchWriteOutcome {
             results: Vec::new(),
@@ -2427,12 +2505,16 @@ pub fn write_script_files_authorized(
                 origin: options.origin,
                 max_total_bytes: options.max_total_bytes,
                 max_files: options.max_files,
-                // One revision covers the root and the assets together; it is
-                // recorded below, once both have landed.
+                // One revision covers the whole change; it is recorded below,
+                // once every file has landed.
                 record_revision: false,
             },
         )?
     };
+
+    let root_changed = assets.results.iter().any(|result| {
+        crate::module_loader::is_root_module_name(&result.name) && result.status != "unchanged"
+    });
 
     let mut outcome = ScriptFilesOutcome {
         root_changed,
@@ -2716,7 +2798,17 @@ pub fn delete_asset_authorized(
     script_uri: &str,
     asset_uri: &str,
 ) -> Result<(bool, Option<i32>), AssetFetchError> {
-    if !can_access_assets(user, script_uri, &Capability::DeleteAssets) {
+    // Removing a script's entrypoint is removing its source, so it takes what
+    // removing a script takes. The write side already draws this line —
+    // `WriteAssets` is not a way to write a root — and leaving the delete side
+    // at `DeleteAssets` would make the tree merge a way around it: what you
+    // could not overwrite you could delete.
+    let required = if crate::module_loader::is_root_module_name(asset_uri) {
+        Capability::DeleteScripts
+    } else {
+        Capability::DeleteAssets
+    };
+    if !can_access_assets(user, script_uri, &required) {
         let auditor = auditor();
         let user_id = user.user_id.clone();
         tokio::task::spawn(async move {
@@ -2725,7 +2817,7 @@ pub fn delete_asset_authorized(
                     user_id,
                     "asset".to_string(),
                     "delete_for_uri".to_string(),
-                    "DeleteAssets".to_string(),
+                    format!("{:?}", required),
                 )
                 .await;
         });
@@ -3965,9 +4057,9 @@ pub async fn check_route(
     // without a deployed script — the root, whether it arrived as `content` or
     // as the candidate file that carries it.
     let has_candidate = content.is_some()
-        || crate::module_loader::root_module_path(&uri)
-            .ok()
-            .is_some_and(|root| matches!(files.get(&root), Some(Some(_))));
+        || files.iter().any(|(path, candidate)| {
+            candidate.is_some() && crate::module_loader::is_root_module_name(path)
+        });
     let authorized = tokio::task::spawn_blocking(move || {
         authorize_check(&user_for_auth, &uri_for_auth, has_candidate)
     })
@@ -5179,11 +5271,11 @@ pub async fn assets_batch_route(
     let script_cl = script.clone();
     let root = parsed.content;
     let result = tokio::task::spawn_blocking(move || {
+        with_root_content(&mut writes, &script_cl, root.as_deref());
         write_script_files_authorized(
             &user,
             &script_cl,
             ScriptFilesChange {
-                root: root.as_deref(),
                 writes: &writes,
                 delete: &remove,
             },
@@ -7163,10 +7255,13 @@ pub struct RevertOutcome {
 
 impl RevertOutcome {
     /// Whether the revert moved anything at all.
+    ///
+    /// The file lists are the whole answer, because the entrypoint is one of
+    /// the files they list. They used to be only part of it — a revert that
+    /// restored nothing but the root reported two empty lists, and a caller
+    /// reading them would have concluded nothing happened.
     pub fn changed_anything(&self) -> bool {
-        self.entrypoint_changed
-            || !self.assets_written.is_empty()
-            || !self.assets_deleted.is_empty()
+        !self.assets_written.is_empty() || !self.assets_deleted.is_empty()
     }
 
     fn to_json(&self) -> Value {
@@ -7267,7 +7362,7 @@ pub async fn revert_authorized(
         target,
         assets_written: plan.writes.iter().map(|file| file.uri.clone()).collect(),
         assets_deleted: plan.deletes.clone(),
-        entrypoint_changed: plan.root_changes,
+        entrypoint_changed: plan.root_changes(),
         revision: None,
         dry_run,
         schema_warnings,
@@ -7277,7 +7372,7 @@ pub async fn revert_authorized(
         return Ok(outcome);
     }
 
-    let (root, writes) = revisions::revert_content(script_uri, target, &plan)
+    let writes = revisions::revert_content(script_uri, target, &plan)
         .await
         .map_err(|e| RevertRefusal::Storage(format!("Failed to read revision content: {}", e)))?;
 
@@ -7285,7 +7380,7 @@ pub async fn revert_authorized(
     let deletes = plan.deletes.clone();
     let user_id = user.user_id.clone();
     let applied = tokio::task::spawn_blocking(move || {
-        apply_revert(&script, target, root, writes, deletes, user_id.as_deref())
+        apply_revert(&script, target, writes, deletes, user_id.as_deref())
     })
     .await
     .map_err(|e| RevertRefusal::Storage(format!("join error: {}", e)))?
@@ -7305,7 +7400,6 @@ pub async fn revert_authorized(
 fn apply_revert(
     script_uri: &str,
     target: i32,
-    root: Option<String>,
     writes: Vec<(String, String, Vec<u8>)>,
     deletes: Vec<String>,
     user_id: Option<&str>,
@@ -7314,11 +7408,9 @@ fn apply_revert(
         .map_err(|e| format!("Failed to open revert transaction: {}", e))?;
 
     let result = (|| -> Result<Option<i32>, String> {
-        if let Some(root) = root {
-            repository::upsert_script(script_uri, &root)
-                .map_err(|e| format!("Failed to restore script source: {}", e))?;
-        }
-
+        // The entrypoint is one of the writes. It used to need a call of its
+        // own here, before them, because restoring it was a different kind of
+        // write to a different table.
         if !writes.is_empty() {
             let now = std::time::SystemTime::now();
             let assets = writes
@@ -10384,9 +10476,9 @@ fn tool_check_script(args: &Value, user: &UserContext) -> Value {
     };
 
     let has_candidate = content.is_some()
-        || crate::module_loader::root_module_path(uri)
-            .ok()
-            .is_some_and(|root| matches!(files.get(&root), Some(Some(_))));
+        || files.iter().any(|(path, candidate)| {
+            candidate.is_some() && crate::module_loader::is_root_module_name(path)
+        });
 
     match authorize_check(user, uri, has_candidate) {
         Ok(()) => {}
@@ -11396,11 +11488,12 @@ fn tool_write_assets(args: &Value, user: &UserContext) -> Value {
         });
     }
 
+    with_root_content(&mut writes, script, root);
+
     match write_script_files_authorized(
         user,
         script,
         ScriptFilesChange {
-            root,
             writes: &writes,
             delete: &remove,
         },

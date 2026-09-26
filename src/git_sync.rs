@@ -268,7 +268,12 @@ pub struct ScriptLayout {
     pub name: Option<String>,
     /// Path of the entry within the repository, for error messages.
     pub entry_path: String,
-    /// The entry's bytes, which become the script row rather than an asset.
+    /// The entry's bytes.
+    ///
+    /// Kept beside [`Self::assets`] rather than in it because inference needs
+    /// to name it — a directory is a script because it holds one of these —
+    /// and because the URI is composed from its extension. It is written as
+    /// an ordinary file of the tree, under [`Self::entry_file_name`].
     pub entry: Vec<u8>,
     /// Every other file, keyed by its path relative to the script's root —
     /// which is exactly the asset name the engine stores.
@@ -1060,34 +1065,51 @@ fn write_script(
         ))
     })?;
 
-    let writes: Vec<crate::engine_api::AssetWrite> = layout
-        .assets
-        .iter()
-        .map(|(name, content)| crate::engine_api::AssetWrite {
-            name: name.clone(),
-            mimetype: None,
-            content: content.clone(),
-            expected_sha256: None,
-        })
-        .collect();
+    // The entry is written as a file of the tree under its own name, which is
+    // one of `main.{ts,js,tsx,jsx}` — the same names the engine stores a root
+    // module under. The two sides used to disagree about what a root is: the
+    // repository had a file and the engine had a column, so a pull split them
+    // apart here and a push joined them back together further down.
+    let mut writes: Vec<crate::engine_api::AssetWrite> = vec![crate::engine_api::AssetWrite {
+        name: layout.entry_file_name().to_string(),
+        mimetype: None,
+        content: entry.clone().into_bytes(),
+        expected_sha256: None,
+    }];
+    writes.extend(
+        layout
+            .assets
+            .iter()
+            .map(|(name, content)| crate::engine_api::AssetWrite {
+                name: name.clone(),
+                mimetype: None,
+                content: content.clone(),
+                expected_sha256: None,
+            }),
+    );
 
     // Anything the script holds that the repository does not is a file removed
     // upstream. Leaving it would let the script keep building against a module
     // its source of truth no longer has.
+    //
+    // A root the repository no longer holds under the same name is removed
+    // like any other file, which is how renaming `main.js` to `main.ts`
+    // upstream arrives here as a rename rather than as two entrypoints.
+    let held: std::collections::HashSet<&str> =
+        writes.iter().map(|write| write.name.as_str()).collect();
     let removed: Vec<String> = crate::repository::fetch_assets(script_uri)
         .into_keys()
-        .filter(|existing| !layout.assets.contains_key(existing))
+        .filter(|existing| !held.contains(existing.as_str()))
         .collect();
 
-    // The root and the assets as one change, under one revision — the unit a
-    // person reverts, and the unit the repository actually changed. A pull is
-    // the same shape of write as the batch endpoint's, differing in its
-    // ceilings and in what the revision says it came from.
+    // The whole tree as one change, under one revision — the unit a person
+    // reverts, and the unit the repository actually changed. A pull is the
+    // same shape of write as the batch endpoint's, differing in its ceilings
+    // and in what the revision says it came from.
     let outcome = crate::engine_api::write_script_files_authorized(
         user,
         script_uri,
         crate::engine_api::ScriptFilesChange {
-            root: Some(&entry),
             writes: &writes,
             delete: &removed,
         },
@@ -1532,34 +1554,30 @@ fn check_divergence(
 }
 
 /// The repository paths a script's files occupy, with their content.
+///
+/// One pass over the tree, the entrypoint included. It used to be two, and the
+/// entry's repository path had to be *reconstructed* — `main` plus whatever
+/// extension the script URI happened to end in — because the engine held the
+/// root under no file name at all. The tree now carries its own name for it,
+/// which is the same name the repository uses, so the mapping is the prefix
+/// and nothing else.
 fn engine_files(
     script_uri: &str,
     known: Option<&SyncRow>,
 ) -> Result<BTreeMap<String, Vec<u8>>, SyncError> {
-    // Head, because the assets below come from the stored rows: pushing a
-    // pinned script's served root beside them would commit a tree that exists
-    // in neither the engine nor the repository.
-    let Some(root) = crate::repository::fetch_script_head(script_uri) else {
+    // Head, because a push publishes what the engine stores: pushing a pinned
+    // script's served revision would commit a tree that exists in neither the
+    // engine nor the repository.
+    if crate::repository::fetch_script_head(script_uri).is_none() {
         return Err(SyncError::Layout(format!(
             "No script '{}' to push",
             script_uri
         )));
-    };
+    }
 
     let prefix = script_prefix(script_uri, known);
-    let extension = script_uri
-        .rfind('.')
-        .map(|dot| &script_uri[dot..])
-        .filter(|ext| !ext.contains('/'))
-        .unwrap_or(".js");
 
     let mut files = BTreeMap::new();
-    let entry = match &prefix {
-        Some(dir) => format!("{}/main{}", dir, extension),
-        None => format!("main{}", extension),
-    };
-    files.insert(entry, root.into_bytes());
-
     for (name, asset) in crate::repository::fetch_assets(script_uri) {
         let path = match &prefix {
             Some(dir) => format!("{}/{}", dir, name),

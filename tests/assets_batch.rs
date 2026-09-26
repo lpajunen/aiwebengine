@@ -25,7 +25,13 @@ use std::collections::HashSet;
 /// paths of its own.
 fn deploy(script_uri: &str, content: &str) {
     repository::upsert_script(script_uri, content).expect("script should be stored");
+    // Everything but the entrypoint. A script's root module is a file of its
+    // tree now, so clearing the tree wholesale would clear the script's source
+    // with it and leave nothing to run.
     for existing in repository::fetch_assets(script_uri).keys() {
+        if aiwebengine::module_loader::is_root_module_name(existing) {
+            continue;
+        }
         repository::delete_asset(script_uri, existing);
     }
 }
@@ -999,7 +1005,9 @@ async fn the_root_source_travels_with_the_modules_as_one_change() {
 
     assert_eq!(status, 200, "{}", body);
     assert_eq!(body["root"], json!("updated"), "{}", body);
-    assert_eq!(body["written"], json!(1), "{}", body);
+    // Two, because `content` is sugar for writing the entrypoint file: the
+    // root travels with the modules by being one of them.
+    assert_eq!(body["written"], json!(2), "{}", body);
     assert_eq!(
         repository::fetch_script(uri).as_deref(),
         Some(root),
@@ -1145,12 +1153,20 @@ async fn writing_the_root_in_a_batch_takes_script_write_rights() {
         network_scope: None,
     };
 
+    // `main.js` is the script's entrypoint, so writing it is writing the
+    // script — the same act it was when the root lived in a column of its own,
+    // and still not something WriteAssets alone may do.
+    let root_write = [aiwebengine::engine_api::AssetWrite {
+        name: "main.js".to_string(),
+        mimetype: None,
+        content: b"function init() { /* mine now */ }".to_vec(),
+        expected_sha256: None,
+    }];
     let result = aiwebengine::engine_api::write_script_files_authorized(
         &asset_writer,
         uri,
         aiwebengine::engine_api::ScriptFilesChange {
-            root: Some("function init() { /* mine now */ }"),
-            writes: &[],
+            writes: &root_write,
             delete: &[],
         },
         aiwebengine::engine_api::ScriptWriteOptions::default(),
@@ -1209,7 +1225,8 @@ async fn the_mcp_tool_writes_the_whole_change_too() {
 
     assert_eq!(result["success"], json!(true), "{}", result);
     assert_eq!(result["root"], json!("updated"), "{}", result);
-    assert_eq!(result["written"], json!(1), "{}", result);
+    // The entrypoint is one of the files written, so it is one of the two.
+    assert_eq!(result["written"], json!(2), "{}", result);
     assert_eq!(result["deleted"], json!(1), "{}", result);
     assert_eq!(repository::fetch_script(uri).as_deref(), Some(root));
     assert!(stored(uri, "assets_batch_mcp_root/old.ts").is_none());

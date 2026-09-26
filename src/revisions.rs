@@ -90,7 +90,6 @@ pub struct RevisionFile {
 pub struct Revision {
     pub revision: i32,
     pub parent: Option<i32>,
-    pub root_sha256: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub created_by: Option<String>,
     pub origin: String,
@@ -278,13 +277,14 @@ async fn record_in(
         .await
         .map_err(|e| db_error("locking script for revision", e))?;
 
-    // Store the root's bytes and report their digest in one statement.
+    // Store every file's bytes and report their identity in one statement.
     //
     // A revision is recorded after every write, including a patch that touched
     // three lines, so what it costs is what a write costs. Hashing in the
     // database and copying blob-side keeps that cost off the wire entirely:
     // nothing here reads a byte of the script's content, however large the
     // tree is.
+    //
     // `ON CONFLICT DO UPDATE` rather than `DO NOTHING`, for a reason that has
     // nothing to do with the column it sets. `DO NOTHING` leaves an existing
     // blob untouched and so unlocked, and a collector running beside this one
@@ -293,33 +293,12 @@ async fn record_in(
     // below, which would then fail on the foreign key and lose the revision.
     // Touching the row locks it for the rest of this transaction and moves it
     // out of the collector's grace period.
-    let root_sha: Option<String> = sqlx::query_scalar(
-        "WITH root AS (
-             SELECT convert_to(content, 'UTF8') AS bytes FROM scripts WHERE uri = $1
-         ), stored AS (
-             INSERT INTO asset_blobs (sha256, bytes, content)
-             SELECT encode(sha256(bytes), 'hex'), octet_length(bytes), bytes FROM root
-             ON CONFLICT (sha256) DO UPDATE SET created_at = NOW()
-             RETURNING 1
-         )
-         SELECT encode(sha256(bytes), 'hex') FROM root",
-    )
-    .bind(script_uri)
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(|e| db_error("storing revision root", e))?;
-
-    // A revision of a script that is not there is not a revision of anything.
-    // The delete path reaches this when the script itself was removed: its
-    // assets went with it, and the history it already has is what remains.
-    let Some(root_sha) = root_sha else {
-        return Ok(None);
-    };
-
-    // The same shape for the assets: their blobs are stored and their identity
-    // reported by one statement, so both see one snapshot of the table. Read
-    // separately, a file rewritten in between would be described by a manifest
-    // row whose digest names a blob nothing ever stored.
+    //
+    // The root used to need a statement of its own, because it was a column of
+    // `scripts` rather than a row of `assets`. One statement now covers the
+    // whole tree, which also means the two halves cannot be read against
+    // different snapshots — a file rewritten between them would have been
+    // described by a manifest row whose digest named a blob nothing stored.
     let rows = sqlx::query(
         "WITH current_files AS (
              SELECT uri, name, mimetype, content, encode(sha256(content), 'hex') AS sha256
@@ -339,6 +318,23 @@ async fn record_in(
     .await
     .map_err(|e| db_error("storing revision blobs", e))?;
 
+    // A revision of a script that is not there is not a revision of anything.
+    // The delete path reaches this when the script itself was removed: its
+    // files went with it, and the history it already has is what remains.
+    //
+    // Asked of the `scripts` row rather than of the file count, because a
+    // script with an empty tree is a script — somebody deleted its last file
+    // and that is a change worth recording — while a script that has been
+    // deleted is not.
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM scripts WHERE uri = $1)")
+        .bind(script_uri)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|e| db_error("checking the script exists", e))?;
+    if !exists {
+        return Ok(None);
+    }
+
     let files: Vec<FileEntry> = rows
         .into_iter()
         .map(|row| FileEntry {
@@ -350,7 +346,7 @@ async fn record_in(
         .collect();
 
     let previous = sqlx::query(
-        "SELECT id, revision, root_sha256 FROM script_revisions
+        "SELECT id, revision FROM script_revisions
          WHERE script_uri = $1 ORDER BY revision DESC LIMIT 1",
     )
     .bind(script_uri)
@@ -369,8 +365,9 @@ async fn record_in(
     let latest = match &previous {
         Some(row) => {
             let previous_id: i64 = row.get("id");
-            let previous_root: String = row.get("root_sha256");
-            if previous_root == root_sha && manifest_matches(conn, previous_id, &files).await? {
+            // The manifest is the whole answer now that the root is one of its
+            // entries. It used to be half of it, and the root digest the other.
+            if manifest_matches(conn, previous_id, &files).await? {
                 return Ok(None);
             }
             let revision: i32 = row.get("revision");
@@ -383,14 +380,13 @@ async fn record_in(
     let next = latest.unwrap_or(0) + 1;
     let revision_id: i64 = sqlx::query_scalar(
         "INSERT INTO script_revisions
-             (script_uri, revision, parent, root_sha256, created_by, origin, tables)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+             (script_uri, revision, parent, created_by, origin, tables)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id",
     )
     .bind(script_uri)
     .bind(next)
     .bind(parent)
-    .bind(&root_sha)
     .bind(created_by)
     .bind(origin.as_str())
     .bind(serde_json::Value::Object(tables))
@@ -479,7 +475,6 @@ fn revision_from_row(row: &sqlx::postgres::PgRow) -> Revision {
     Revision {
         revision: row.get("revision"),
         parent: row.get("parent"),
-        root_sha256: row.get("root_sha256"),
         created_at: row.get("created_at"),
         created_by: row.get("created_by"),
         origin: row.get("origin"),
@@ -536,7 +531,7 @@ pub async fn list(script_uri: &str, limit: i64) -> AppResult<Vec<Revision>> {
     with_read_connection(move |conn| {
         Box::pin(async move {
             let rows = sqlx::query(
-                "SELECT r.revision, r.parent, r.root_sha256, r.created_at, r.created_by,
+                "SELECT r.revision, r.parent, r.created_at, r.created_by,
                         r.origin, r.label, r.init_ok, r.init_error,
                         COUNT(f.uri) AS file_count,
                         COALESCE(SUM(b.bytes), 0)::bigint AS total_bytes
@@ -565,7 +560,7 @@ pub async fn get(script_uri: &str, revision: i32) -> AppResult<Option<Revision>>
     with_read_connection(move |conn| {
         Box::pin(async move {
             let row = sqlx::query(
-                "SELECT r.revision, r.parent, r.root_sha256, r.created_at, r.created_by,
+                "SELECT r.revision, r.parent, r.created_at, r.created_by,
                         r.origin, r.label, r.init_ok, r.init_error,
                         COUNT(f.uri) AS file_count,
                         COALESCE(SUM(b.bytes), 0)::bigint AS total_bytes
@@ -778,6 +773,43 @@ pub async fn files_for(
     .await
 }
 
+/// Which file of the tree a revision held was its root module.
+///
+/// The same rule the live tree follows — the first of
+/// [`crate::module_loader::ROOT_MODULE_NAMES`] the manifest lists — asked of a
+/// manifest rather than of the `assets` rows.
+pub async fn root_path(script_uri: &str, revision: i32) -> AppResult<Option<String>> {
+    let script_uri = script_uri.to_string();
+    with_read_connection(move |conn| {
+        Box::pin(async move {
+            sqlx::query_scalar(
+                "SELECT f.uri
+                 FROM script_revisions r
+                 JOIN script_revision_files f ON f.revision_id = r.id
+                 WHERE r.script_uri = $1 AND r.revision = $2
+                   AND f.uri = ANY($3::text[])
+                 ORDER BY array_position($3::text[], f.uri)
+                 LIMIT 1",
+            )
+            .bind(&script_uri)
+            .bind(revision)
+            .bind(root_name_list())
+            .fetch_optional(conn)
+            .await
+            .map_err(|e| db_error("resolving revision root", e))
+        })
+    })
+    .await
+}
+
+/// The root module names, as a bindable array.
+fn root_name_list() -> Vec<String> {
+    crate::module_loader::ROOT_MODULE_NAMES
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
 /// The root source as a revision held it.
 pub async fn root_content(script_uri: &str, revision: i32) -> AppResult<Option<String>> {
     let script_uri = script_uri.to_string();
@@ -786,11 +818,16 @@ pub async fn root_content(script_uri: &str, revision: i32) -> AppResult<Option<S
             let content: Option<Vec<u8>> = sqlx::query_scalar(
                 "SELECT b.content
                  FROM script_revisions r
-                 JOIN asset_blobs b ON b.sha256 = r.root_sha256
-                 WHERE r.script_uri = $1 AND r.revision = $2",
+                 JOIN script_revision_files f ON f.revision_id = r.id
+                 JOIN asset_blobs b ON b.sha256 = f.sha256
+                 WHERE r.script_uri = $1 AND r.revision = $2
+                   AND f.uri = ANY($3::text[])
+                 ORDER BY array_position($3::text[], f.uri)
+                 LIMIT 1",
             )
             .bind(&script_uri)
             .bind(revision)
+            .bind(root_name_list())
             .fetch_optional(conn)
             .await
             .map_err(|e| db_error("reading revision root", e))?;
@@ -1056,30 +1093,29 @@ pub async fn backfill_missing(scope: Option<&str>) {
 async fn backfill_missing_inner(scope: Option<String>) -> AppResult<()> {
     with_transaction(move |conn| {
         Box::pin(async move {
-            // Blobs first, in their own statement: a revision row references
-            // its root digest, and an insert of both in one statement would
-            // rely on the order two CTEs happen to run in.
+            // Blobs first, in their own statement: the manifest rows below
+            // reference their digests, and an insert of both in one statement
+            // would rely on the order two CTEs happen to run in.
             //
-            // The union covers root sources and assets together, so a root
-            // whose bytes match an asset's is one blob — inserting them from
-            // two CTEs of one statement could not have used ON CONFLICT to
-            // find that out, since neither sees the other's rows.
+            // One pass over `assets` covers the whole tree, the root included.
+            // It used to be a union of the `scripts.content` column with the
+            // asset rows, spelled that way so a root whose bytes matched an
+            // asset's became one blob rather than two inserts neither of which
+            // could see the other.
             sqlx::query(
                 "WITH missing AS (
-                     SELECT s.uri, s.content FROM scripts s
+                     SELECT s.uri FROM scripts s
                      WHERE NOT EXISTS (
                          SELECT 1 FROM script_revisions r WHERE r.script_uri = s.uri
                      )
                      AND ($1::text IS NULL OR s.uri = $1)
-                 ), all_bytes AS (
-                     SELECT convert_to(m.content, 'UTF8') AS bytes FROM missing m
-                     UNION
-                     SELECT a.content FROM assets a JOIN missing m ON m.uri = a.script_uri
                  )
                  INSERT INTO asset_blobs (sha256, bytes, content)
-                 SELECT DISTINCT ON (encode(sha256(bytes), 'hex'))
-                        encode(sha256(bytes), 'hex'), octet_length(bytes), bytes
-                 FROM all_bytes
+                 SELECT DISTINCT ON (encode(sha256(a.content), 'hex'))
+                        encode(sha256(a.content), 'hex'),
+                        octet_length(a.content),
+                        a.content
+                 FROM assets a JOIN missing m ON m.uri = a.script_uri
                  ORDER BY 1
                  ON CONFLICT (sha256) DO UPDATE SET created_at = NOW()",
             )
@@ -1093,9 +1129,8 @@ async fn backfill_missing_inner(scope: Option<String>) -> AppResult<()> {
             // and the one that loses simply has nothing to record.
             let created: Vec<(i64, String)> = sqlx::query_as(
                 "INSERT INTO script_revisions
-                     (script_uri, revision, parent, root_sha256, origin, tables)
-                 SELECT s.uri, 1, NULL,
-                        encode(sha256(convert_to(s.content, 'UTF8')), 'hex'), 'bootstrap',
+                     (script_uri, revision, parent, origin, tables)
+                 SELECT s.uri, 1, NULL, 'bootstrap',
                         -- The schema this baseline ran against, so a revert to
                         -- it can say how the data has moved since. Left out,
                         -- every backfilled revision would report that it
@@ -1162,14 +1197,29 @@ pub struct RevertPlan {
     /// shadowing nothing and imported by nobody, until it is imported again by
     /// the next person who assumes it is current.
     pub deletes: Vec<String>,
-    /// Whether the script's root source differs from the target's.
-    pub root_changes: bool,
 }
 
 impl RevertPlan {
     /// Whether the deployed files already are the target revision.
     pub fn is_empty(&self) -> bool {
-        self.writes.is_empty() && self.deletes.is_empty() && !self.root_changes
+        self.writes.is_empty() && self.deletes.is_empty()
+    }
+
+    /// Whether restoring would change the script's entrypoint.
+    ///
+    /// Derived rather than tracked. It used to be a field, because the root
+    /// was a column and comparing it was a second query beside the manifest
+    /// comparison; now it is one of the files, and this is a question about
+    /// the list rather than a separate fact about the plan. It is still worth
+    /// reporting, because "this revert rewrites the entrypoint" is what a
+    /// person reads a dry run for.
+    pub fn root_changes(&self) -> bool {
+        let root_names = crate::module_loader::ROOT_MODULE_NAMES;
+        self.writes
+            .iter()
+            .map(|file| file.uri.as_str())
+            .chain(self.deletes.iter().map(String::as_str))
+            .any(|uri| root_names.contains(&uri))
     }
 }
 
@@ -1179,16 +1229,18 @@ impl RevertPlan {
 /// the deployment already has is not rewritten. That keeps a revert to a
 /// nearby revision as small as the change that caused it, and keeps the
 /// revision it records honest about what moved.
+///
+/// The root needs no clause of its own here. It used to need two — a read of
+/// `scripts.content` beside the read of `assets`, and a digest compared
+/// separately — because it was stored apart from the files it is the
+/// entrypoint to.
 pub async fn plan_revert(script_uri: &str, target: i32) -> AppResult<Option<RevertPlan>> {
     let Some(files) = files(script_uri, target).await? else {
         return Ok(None);
     };
-    let Some(target_root) = root_content(script_uri, target).await? else {
-        return Ok(None);
-    };
 
     let script_uri_owned = script_uri.to_string();
-    let current = with_read_connection(move |conn| {
+    let stored = with_read_connection(move |conn| {
         Box::pin(async move {
             let rows = sqlx::query(
                 "SELECT uri, encode(sha256(content), 'hex') AS sha256
@@ -1199,37 +1251,16 @@ pub async fn plan_revert(script_uri: &str, target: i32) -> AppResult<Option<Reve
             .await
             .map_err(|e| db_error("reading deployed files", e))?;
 
-            let root: Option<String> = sqlx::query_scalar(
-                "SELECT encode(sha256(convert_to(content, 'UTF8')), 'hex')
-                 FROM scripts WHERE uri = $1",
-            )
-            .bind(&script_uri_owned)
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(|e| db_error("reading deployed root", e))?;
-
             let stored: std::collections::HashMap<String, String> = rows
                 .into_iter()
                 .map(|row| (row.get("uri"), row.get("sha256")))
                 .collect();
-            Ok((stored, root))
+            Ok(stored)
         })
     })
     .await?;
 
-    let (stored, stored_root) = current;
-
-    let target_root_sha = {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(target_root.as_bytes());
-        hex::encode(hasher.finalize())
-    };
-
-    let mut plan = RevertPlan {
-        root_changes: stored_root.as_deref() != Some(target_root_sha.as_str()),
-        ..RevertPlan::default()
-    };
+    let mut plan = RevertPlan::default();
 
     for file in &files {
         if stored.get(&file.uri) != Some(&file.sha256) {
@@ -1254,19 +1285,13 @@ pub async fn revert_content(
     script_uri: &str,
     target: i32,
     plan: &RevertPlan,
-) -> AppResult<(Option<String>, Vec<(String, String, Vec<u8>)>)> {
-    let root = if plan.root_changes {
-        root_content(script_uri, target).await?
-    } else {
-        None
-    };
-
+) -> AppResult<Vec<(String, String, Vec<u8>)>> {
     let paths: Vec<String> = plan.writes.iter().map(|file| file.uri.clone()).collect();
     let contents = read_files(script_uri, target, &paths).await?;
 
     // Ordered by the plan rather than by whatever the map yields, so a revert
     // writes files in the order it reported them.
-    let writes = plan
+    Ok(plan
         .writes
         .iter()
         .filter_map(|file| {
@@ -1274,9 +1299,7 @@ pub async fn revert_content(
                 .get(&file.uri)
                 .map(|(content, mimetype)| (file.uri.clone(), mimetype.clone(), content.clone()))
         })
-        .collect();
-
-    Ok((root, writes))
+        .collect())
 }
 
 // ============================================================================
@@ -1468,9 +1491,6 @@ async fn collect_blobs(retention: Retention) -> u64 {
                        AND NOT EXISTS (
                            SELECT 1 FROM script_revision_files f WHERE f.sha256 = b.sha256
                        )
-                       AND NOT EXISTS (
-                           SELECT 1 FROM script_revisions r WHERE r.root_sha256 = b.sha256
-                       )
                      FOR UPDATE SKIP LOCKED
                  )
                  DELETE FROM asset_blobs
@@ -1585,11 +1605,6 @@ pub struct RevisionDiff {
     pub truncated: bool,
 }
 
-/// The root's path within the script, which is how its imports name it.
-fn root_path(script_uri: &str) -> String {
-    crate::module_loader::root_module_path(script_uri).unwrap_or_else(|_| script_uri.to_string())
-}
-
 /// What changed between two revisions of a script.
 ///
 /// The counterpart to editing without sending a file. An agent that has just
@@ -1600,6 +1615,11 @@ fn root_path(script_uri: &str) -> String {
 /// Files whose digest is the same in both revisions are not read at all: the
 /// blobs are shared, so equal digests are equal bytes and there is nothing to
 /// render.
+///
+/// The root is in the manifest, so it is diffed by the same loop as everything
+/// else. It used to be spliced into both sides afterwards, excluded from the
+/// bulk read, and then read one revision at a time by a helper that existed
+/// for it alone.
 pub async fn diff(
     script_uri: &str,
     from: i32,
@@ -1613,27 +1633,13 @@ pub async fn diff(
         return Ok(None);
     };
 
-    let root = root_path(script_uri);
-    let from_root = get(script_uri, from).await?.map(|r| r.root_sha256);
-    let to_root = get(script_uri, to).await?.map(|r| r.root_sha256);
-
     let index = |list: &[RevisionFile]| -> std::collections::BTreeMap<String, String> {
         list.iter()
             .map(|file| (file.uri.clone(), file.sha256.clone()))
             .collect()
     };
-    let mut before = index(&from_files);
-    let mut after = index(&to_files);
-
-    // The root is a file of the script like any other from the caller's side —
-    // it is what its imports are relative to — so it belongs in the same list
-    // rather than in a section of its own.
-    if let Some(sha) = from_root {
-        before.insert(root.clone(), sha);
-    }
-    if let Some(sha) = to_root {
-        after.insert(root.clone(), sha);
-    }
+    let before = index(&from_files);
+    let after = index(&to_files);
 
     let mut paths: Vec<&String> = before.keys().chain(after.keys()).collect();
     paths.sort_unstable();
@@ -1645,7 +1651,6 @@ pub async fn diff(
     let moved: Vec<String> = paths
         .iter()
         .filter(|path| before.get(**path) != after.get(**path))
-        .filter(|path| ***path != root)
         .map(|path| (*path).clone())
         .collect();
     let old_files = read_files(script_uri, from, &moved).await?;
@@ -1684,13 +1689,12 @@ pub async fn diff(
             continue;
         }
 
-        let is_root = *path == root;
         let old_text = match from_sha {
-            Some(_) => revision_text(script_uri, from, path, is_root, &old_files).await?,
+            Some(_) => revision_text(path, &old_files),
             None => Some(String::new()),
         };
         let new_text = match to_sha {
-            Some(_) => revision_text(script_uri, to, path, is_root, &new_files).await?,
+            Some(_) => revision_text(path, &new_files),
             None => Some(String::new()),
         };
 
@@ -1722,22 +1726,13 @@ pub async fn diff(
 }
 
 /// One file of a revision as text, or `None` when it is not UTF-8.
-///
-/// Takes the already-fetched contents rather than reading again; only the root
-/// is read here, since it lives outside the manifest.
-async fn revision_text(
-    script_uri: &str,
-    revision: i32,
+fn revision_text(
     path: &str,
-    is_root: bool,
     fetched: &std::collections::HashMap<String, (Vec<u8>, String)>,
-) -> AppResult<Option<String>> {
-    if is_root {
-        return root_content(script_uri, revision).await;
-    }
-    Ok(fetched
+) -> Option<String> {
+    fetched
         .get(path)
-        .and_then(|(content, _)| String::from_utf8(content.clone()).ok()))
+        .and_then(|(content, _)| String::from_utf8(content.clone()).ok())
 }
 
 // ============================================================================

@@ -42,10 +42,11 @@ in a single transaction. And the changes worth undoing span modules — a schema
 step plus the modules that read it — where restoring one file at a time
 reintroduces exactly the inconsistent state you were escaping.
 
-A revision is therefore the whole script: its root source and the complete list
-of its files. A per-file history is a query over those manifests; the reverse
-does not hold, because a manifest cannot be reassembled from independent
-per-file logs without guessing which versions were current together.
+A revision is therefore the whole script: the complete list of its files,
+entrypoint included. A per-file history is a query over those manifests; the
+reverse does not hold, because a manifest cannot be reassembled from
+independent per-file logs without guessing which versions were current
+together.
 
 This is affordable because content is addressed by digest and stored once. A
 revision of a forty-file script that changed one module adds one blob and forty
@@ -251,9 +252,9 @@ undo rather than inferring it from a list of digests.
 
 Files whose digest is the same in both revisions are left out entirely and
 never read — the blobs are shared, so equal digests are equal bytes and there
-is nothing to render. The root source appears under its own path, the one its
-imports are relative to, because from the caller's side it is a file of the
-script like any other.
+is nothing to render. The root source appears under its own path — `main.*`,
+the one its imports are relative to — because it is a file of the script like
+any other.
 
 With neither `from` nor `to`, `to` is head and `from` is what head was computed
 against. That makes the bare question — "what changed?" — the newest change,

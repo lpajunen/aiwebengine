@@ -490,13 +490,52 @@ pub fn get_db_pool() -> Option<std::sync::Arc<crate::database::Database>> {
     None
 }
 
-/// Drop the caches that depend on one of a script's assets: the compiled
+/// Drop the caches that depend on one of a script's files: the compiled
 /// bytecode (keyed by root URI), the prepared program bundle, and the cached
-/// source of the asset that changed. The script's *other* module sources stay
-/// cached, so the rebuild re-reads one asset rather than all of them.
-fn invalidate_script_asset_caches(script_uri: &str, asset_path: &str) {
+/// source of the file that changed. The script's *other* module sources stay
+/// cached, so the rebuild re-reads one file rather than all of them.
+///
+/// The root module goes through here too, because it is one of the files now.
+/// It needs more than the others: the in-memory metadata cache holds the root
+/// source, and it is what every execution path reads — a write that
+/// invalidated only the module caches would leave requests running the
+/// previous entrypoint until the entry aged out, which it never does. That is
+/// the work [`Repository::upsert_script`] does after its own write, and it is
+/// the same work here because it is the same write.
+///
+/// `content` is what was just stored, when the caller has it. `None` means a
+/// removal, or a write whose bytes were not kept: the cached source is then
+/// dropped rather than corrected, and the next read loads it from the
+/// database.
+fn invalidate_script_asset_caches(script_uri: &str, asset_path: &str, content: Option<&[u8]>) {
     crate::bytecode::invalidate(script_uri);
     crate::module_loader::invalidate_asset(script_uri, asset_path);
+
+    if !crate::module_loader::is_root_module_name(asset_path) {
+        return;
+    }
+
+    // A pinned script serves a revision, so a write to its files is not a
+    // change to what is running. Refreshing the cache or dropping the prepared
+    // program here would swap the deployment for head — which is the one thing
+    // pinning exists to prevent.
+    if crate::deployments::pinned(script_uri).is_some() {
+        return;
+    }
+
+    match content.map(|bytes| std::str::from_utf8(bytes)) {
+        // Refresh in place rather than evicting: eviction would also drop the
+        // script's route registrations, 404ing every one of its routes until
+        // the re-init that follows this write completes.
+        Some(Ok(text)) => refresh_cached_script_source(script_uri, text),
+        _ => {
+            if let Ok(mut guard) = safe_lock_scripts() {
+                guard.remove(script_uri);
+            }
+        }
+    }
+    crate::route_index::invalidate();
+    crate::module_loader::invalidate_program(script_uri);
 }
 
 /// How many times a script's stored source has changed under this process.
@@ -686,14 +725,114 @@ async fn send_script_notification(
     Ok(())
 }
 
+/// The root module names, as a bindable array.
+///
+/// The order is significant: a tree holding both `main.ts` and `main.js` has
+/// one root, and it is the first of [`crate::module_loader::ROOT_MODULE_NAMES`]
+/// it holds. `array_position` against this array is how the SQL below says the
+/// same thing.
+fn root_names() -> Vec<String> {
+    crate::module_loader::ROOT_MODULE_NAMES
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
+/// Which file of `uri`'s tree is its root module, or `None` when it holds none.
+async fn db_root_path<'e, E>(executor: E, uri: &str) -> AppResult<Option<String>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    sqlx::query_scalar(
+        r#"
+        SELECT uri FROM assets
+        WHERE script_uri = $1 AND uri = ANY($2::text[])
+        ORDER BY array_position($2::text[], uri)
+        LIMIT 1
+        "#,
+    )
+    .bind(uri)
+    .bind(root_names())
+    .fetch_optional(executor)
+    .await
+    .map_err(|e| {
+        error!("Database error resolving root module for {}: {}", uri, e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })
+}
+
+/// A root's stored bytes as source text.
+///
+/// The root lives in `assets.content`, which is `BYTEA`, so unlike the `TEXT`
+/// column it replaced it can hold bytes that are not text — a caller may write
+/// anything to any path in the tree, including this one. That is reported
+/// rather than lost: a lossy decode would hand the bundler a root with
+/// replacement characters in it and blame the resulting syntax error on the
+/// author.
+fn root_source(uri: &str, bytes: Vec<u8>) -> AppResult<String> {
+    String::from_utf8(bytes).map_err(|_| AppError::Database {
+        message: format!(
+            "The root module of '{}' is not valid UTF-8, so it is not source text",
+            uri
+        ),
+        source: None,
+    })
+}
+
+/// Create the script row if it is not there.
+///
+/// The identity half of [`db_upsert_script`], for a caller whose content is
+/// arriving as ordinary files of the tree rather than as a root to write here.
+async fn db_ensure_script_row(
+    mut executor: crate::database::TransactionExecutor<'_>,
+    uri: &str,
+) -> AppResult<()> {
+    let now = chrono::Utc::now();
+    let name = uri.rsplit('/').next().unwrap_or(uri);
+
+    const ENSURE: &str = r#"
+        INSERT INTO scripts (uri, name, created_at, updated_at)
+        VALUES ($1, $2, $3, $3)
+        ON CONFLICT (uri) DO NOTHING
+        "#;
+
+    match executor {
+        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
+            sqlx::query(ENSURE)
+                .bind(uri)
+                .bind(name)
+                .bind(now)
+                .execute(&mut ***tx)
+                .await
+        }
+        crate::database::TransactionExecutor::Pool(pool) => {
+            sqlx::query(ENSURE)
+                .bind(uri)
+                .bind(name)
+                .bind(now)
+                .execute(pool)
+                .await
+        }
+    }
+    .map_err(store_error)?;
+
+    Ok(())
+}
+
 /// Database-backed upsert script.
 ///
-/// One statement rather than an UPDATE followed by an INSERT when it matched
-/// nothing. Those two are not a unit: between them, another instance creating
-/// the same script — or the same caller redeploying after a delete — leaves a
-/// row where the UPDATE found none, and the INSERT then fails on the unique
-/// constraint with a duplicate-key error for what is an ordinary write. The
-/// upsert has no window to lose.
+/// Two statements rather than one, because a script is now two things: the
+/// `scripts` row that *is* the script — its identity, the row every foreign
+/// key points at — and the file in its tree that holds its source. The row has
+/// to exist before the file, since `assets.script_uri` references it.
+///
+/// Each statement is an upsert for the reason the single one was: an UPDATE
+/// followed by an INSERT when it matched nothing are not a unit, and between
+/// them another instance creating the same script leaves a row where the
+/// UPDATE found none.
 ///
 /// `name` is only filled in when the row has none, which is what the UPDATE
 /// did with `COALESCE(name, $4)`: it is a display label a caller may have
@@ -713,58 +852,123 @@ async fn db_upsert_script(
     // Extract name from URI (last segment after /)
     let name = uri.rsplit('/').next().unwrap_or(uri);
 
-    const UPSERT: &str = r#"
-        INSERT INTO scripts (uri, content, name, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $4)
+    const UPSERT_SCRIPT: &str = r#"
+        INSERT INTO scripts (uri, name, created_at, updated_at)
+        VALUES ($1, $2, $3, $3)
         ON CONFLICT (uri) DO UPDATE
-        SET content = EXCLUDED.content,
-            updated_at = EXCLUDED.updated_at,
+        SET updated_at = EXCLUDED.updated_at,
             name = COALESCE(scripts.name, EXCLUDED.name)
         "#;
 
+    // The root goes to whichever root name the tree already holds, and to the
+    // one derived from the URI when it holds none. Resolving the target inside
+    // the statement rather than in a read before it keeps the write one
+    // round trip and leaves no window in which the answer changes: a
+    // concurrent writer resolves the same way, because both would derive the
+    // same default from the same URI.
+    //
+    // `mimetype` is set on insert and left alone on conflict. The conflict
+    // arm may be updating a `main.ts` while `$4` describes the `main.js` the
+    // default would have created, and the stored row already says what it is.
+    const UPSERT_ROOT: &str = r#"
+        INSERT INTO assets (script_uri, uri, mimetype, content, created_at, updated_at)
+        SELECT $1,
+               COALESCE(
+                   (SELECT a.uri FROM assets a
+                    WHERE a.script_uri = $1 AND a.uri = ANY($2::text[])
+                    ORDER BY array_position($2::text[], a.uri)
+                    LIMIT 1),
+                   $3),
+               $4, $5, $6, $6
+        ON CONFLICT (script_uri, uri) DO UPDATE
+        SET content = EXCLUDED.content,
+            updated_at = EXCLUDED.updated_at
+        "#;
+
+    let default_root = crate::module_loader::default_root_module_name(uri);
+    let mimetype = if default_root.ends_with(".ts") || default_root.ends_with(".tsx") {
+        "text/typescript"
+    } else {
+        "text/javascript"
+    };
+
     match executor {
         crate::database::TransactionExecutor::Transaction(ref mut tx) => {
-            sqlx::query(UPSERT)
+            sqlx::query(UPSERT_SCRIPT)
                 .bind(uri)
-                .bind(content)
                 .bind(name)
                 .bind(now)
                 .execute(&mut ***tx)
                 .await
+                .map_err(store_error)?;
+            sqlx::query(UPSERT_ROOT)
+                .bind(uri)
+                .bind(root_names())
+                .bind(default_root)
+                .bind(mimetype)
+                .bind(content.as_bytes())
+                .bind(now)
+                .execute(&mut ***tx)
+                .await
+                .map_err(store_error)?;
         }
         crate::database::TransactionExecutor::Pool(pool) => {
-            sqlx::query(UPSERT)
+            sqlx::query(UPSERT_SCRIPT)
                 .bind(uri)
-                .bind(content)
                 .bind(name)
                 .bind(now)
                 .execute(pool)
                 .await
+                .map_err(store_error)?;
+            sqlx::query(UPSERT_ROOT)
+                .bind(uri)
+                .bind(root_names())
+                .bind(default_root)
+                .bind(mimetype)
+                .bind(content.as_bytes())
+                .bind(now)
+                .execute(pool)
+                .await
+                .map_err(store_error)?;
         }
     }
-    .map_err(|e| {
-        error!("Database error storing script: {}", e);
-        AppError::Database {
-            message: format!("Database error: {}", e),
-            source: None,
-        }
-    })?;
 
     debug!("✓ Successfully stored script in database: {}", uri);
     Ok(())
 }
 
-/// Database-backed get script
+fn store_error(e: sqlx::Error) -> AppError {
+    error!("Database error storing script: {}", e);
+    AppError::Database {
+        message: format!("Database error: {}", e),
+        source: None,
+    }
+}
+
+/// Database-backed get script.
+///
+/// `None` means the script is not there. A script whose tree holds no root
+/// module answers with empty source rather than with absence: the script
+/// exists, is owned by someone, has a history and is listed in the editor —
+/// it just has nothing to run, which is a state to show them rather than one
+/// to hide by making the script disappear.
 async fn db_get_script<'e, E>(executor: E, uri: &str) -> AppResult<Option<String>>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
 {
     let row = sqlx::query(
         r#"
-        SELECT content FROM scripts WHERE uri = $1
+        SELECT (
+            SELECT a.content FROM assets a
+            WHERE a.script_uri = s.uri AND a.uri = ANY($2::text[])
+            ORDER BY array_position($2::text[], a.uri)
+            LIMIT 1
+        ) AS content
+        FROM scripts s WHERE s.uri = $1
         "#,
     )
     .bind(uri)
+    .bind(root_names())
     .fetch_optional(executor)
     .await
     .map_err(|e| {
@@ -775,17 +979,21 @@ where
         }
     })?;
 
-    if let Some(row) = row {
-        let content: String = row.try_get("content").map_err(|e| {
-            error!("Database error getting content: {}", e);
-            AppError::Database {
-                message: format!("Database error: {}", e),
-                source: None,
+    match row {
+        Some(row) => {
+            let content: Option<Vec<u8>> = row.try_get("content").map_err(|e| {
+                error!("Database error getting content: {}", e);
+                AppError::Database {
+                    message: format!("Database error: {}", e),
+                    source: None,
+                }
+            })?;
+            match content {
+                Some(bytes) => root_source(uri, bytes).map(Some),
+                None => Ok(Some(String::new())),
             }
-        })?;
-        Ok(Some(content))
-    } else {
-        Ok(None)
+        }
+        None => Ok(None),
     }
 }
 
@@ -796,9 +1004,16 @@ where
 {
     let rows = sqlx::query(
         r#"
-        SELECT uri, content FROM scripts ORDER BY uri
+        SELECT s.uri, (
+            SELECT a.content FROM assets a
+            WHERE a.script_uri = s.uri AND a.uri = ANY($1::text[])
+            ORDER BY array_position($1::text[], a.uri)
+            LIMIT 1
+        ) AS content
+        FROM scripts s ORDER BY s.uri
         "#,
     )
+    .bind(root_names())
     .fetch_all(executor)
     .await
     .map_err(|e| {
@@ -818,13 +1033,23 @@ where
                 source: None,
             }
         })?;
-        let content: String = row.try_get("content").map_err(|e| {
+        let content: Option<Vec<u8>> = row.try_get("content").map_err(|e| {
             error!("Database error getting content: {}", e);
             AppError::Database {
                 message: format!("Database error: {}", e),
                 source: None,
             }
         })?;
+        // One script whose root is not text must not stop the listing that
+        // boots every other one. It is reported and left with no source, which
+        // is the same state a script with no root module is in.
+        let content = match content {
+            Some(bytes) => root_source(&uri, bytes).unwrap_or_else(|e| {
+                warn!("{}", e);
+                String::new()
+            }),
+            None => String::new(),
+        };
         scripts.insert(uri, content);
     }
 
@@ -5220,6 +5445,28 @@ pub fn fetch_script(uri: &str) -> Option<String> {
     }
 }
 
+/// Which file of `script_uri`'s tree is its root module.
+///
+/// `None` when the tree holds none of the root names, which is a script that
+/// has not been written yet or one whose entrypoint was removed. Callers that
+/// need a name regardless go through
+/// [`crate::module_loader::root_module_path_in`], which falls back to the name
+/// a first write would use.
+pub fn find_root_asset(script_uri: &str) -> Option<String> {
+    // Tolerant of there being no repository at all, unlike most accessors
+    // here. This one is reached from the module loader, whose unit tests
+    // resolve specifiers without a database; "no repository" and "no tree"
+    // are the same answer to this question.
+    let repo = get_repository_opt()?;
+    match run_bounded(async { repo.root_path(script_uri).await }) {
+        Ok(path) => path,
+        Err(e) => {
+            warn!("Failed resolving the root module of {}: {}", script_uri, e);
+            None
+        }
+    }
+}
+
 /// The script's root source as it is *stored*, whatever it currently serves.
 ///
 /// [`fetch_script`] answers with the served source, which for a pinned script
@@ -5453,6 +5700,38 @@ pub async fn upsert_script_async(uri: &str, content: &str) -> AppResult<()> {
 
     let repo = get_repository();
     repo.upsert_script(uri, content).await
+}
+
+/// Make sure the script row exists, and give a new one its first owner.
+///
+/// The identity half of creating a script, with no content in it. The files
+/// carry the content now, and `assets.script_uri` references this row, so a
+/// change that writes a script's first file has to create the row before it
+/// can write anything into the tree.
+///
+/// Idempotent: an existing script keeps its name, its timestamps and its
+/// owners. Returns whether the row was already there, which is what a caller
+/// reports as `inserted` against `updated`.
+pub fn ensure_script(uri: &str, owner_user_id: Option<&str>) -> AppResult<bool> {
+    let repo = get_repository();
+    let existed = run_bounded(async { repo.get_script(uri).await })?.is_some();
+
+    if !existed {
+        run_bounded(async { repo.ensure_script_row(uri).await })?;
+        note_script_write();
+    }
+
+    // Ownership is assigned when the script has none — for a new script that
+    // is its creator, and for an existing one it is the backfill
+    // `upsert_script_with_owner` has always done.
+    if let Some(user_id) = owner_user_id {
+        let owner_count = run_bounded(async { repo.count_script_owners(uri).await }).unwrap_or(0);
+        if owner_count == 0 {
+            run_bounded(async { repo.add_script_owner(uri, user_id).await })?;
+        }
+    }
+
+    Ok(existed)
 }
 
 /// Upsert script and set owner if it's a new script
@@ -5979,10 +6258,19 @@ fn validate_asset(asset: &Asset) -> AppResult<()> {
         return Err(RepositoryError::InvalidData("Asset URI cannot be empty".to_string()).into());
     }
 
-    if asset.content.len() > MAX_ASSET_CONTENT_BYTES {
-        return Err(
-            RepositoryError::InvalidData("Asset content too large (>10MB)".to_string()).into(),
-        );
+    // The entrypoint is source rather than payload, so it meets the ceiling
+    // source has always met. The two used to apply to two different stores
+    // and could not disagree; now that the root is a file of the same tree,
+    // taking the file ceiling for it would have raised the limit on a
+    // script's source from 1MB to 10MB by way of a storage change nobody
+    // meant as a policy change.
+    let (ceiling, label) = if crate::module_loader::is_root_module_name(&asset.uri) {
+        (MAX_SCRIPT_CONTENT_BYTES, "Script content too large (>1MB)")
+    } else {
+        (MAX_ASSET_CONTENT_BYTES, "Asset content too large (>10MB)")
+    };
+    if asset.content.len() > ceiling {
+        return Err(RepositoryError::InvalidData(label.to_string()).into());
     }
 
     if asset.mimetype.trim().is_empty() {
@@ -6442,6 +6730,10 @@ use async_trait::async_trait;
 pub trait Repository: Send + Sync {
     // Script operations
     async fn get_script(&self, uri: &str) -> AppResult<Option<String>>;
+    /// Which file of the script's tree is its root module.
+    async fn root_path(&self, uri: &str) -> AppResult<Option<String>>;
+    /// Create the script row if it is not there, with no content.
+    async fn ensure_script_row(&self, uri: &str) -> AppResult<()>;
     async fn list_scripts(&self) -> AppResult<HashMap<String, String>>;
     async fn upsert_script(&self, uri: &str, content: &str) -> AppResult<()>;
     async fn delete_script(&self, uri: &str) -> AppResult<bool>;
@@ -6705,6 +6997,23 @@ impl Repository for PostgresRepository {
         }
     }
 
+    async fn ensure_script_row(&self, uri: &str) -> AppResult<()> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        db_ensure_script_row(executor, uri).await?;
+        send_script_notification(&self.pool, uri, "upserted", &self.server_id).await?;
+        Ok(())
+    }
+
+    async fn root_path(&self, uri: &str) -> AppResult<Option<String>> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_root_path(&mut **tx, uri).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => db_root_path(pool, uri).await,
+        }
+    }
+
     async fn list_scripts(&self) -> AppResult<HashMap<String, String>> {
         let executor = crate::database::get_current_executor(&self.pool);
         match executor {
@@ -6960,7 +7269,7 @@ impl Repository for PostgresRepository {
         // An imported asset is part of the owning script's prepared program, so
         // its change must invalidate the same caches a script edit does — both
         // locally and (via the refresh notification) on other cluster nodes.
-        invalidate_script_asset_caches(&asset.script_uri, &asset.uri);
+        invalidate_script_asset_caches(&asset.script_uri, &asset.uri, Some(&asset.content));
         send_script_notification(&self.pool, &asset.script_uri, "upserted", &self.server_id)
             .await?;
         Ok(())
@@ -7012,7 +7321,7 @@ impl Repository for PostgresRepository {
         }
 
         for asset in &assets {
-            invalidate_script_asset_caches(script_uri, &asset.uri);
+            invalidate_script_asset_caches(script_uri, &asset.uri, Some(&asset.content));
         }
         send_script_notification(&self.pool, script_uri, "upserted", &self.server_id).await?;
         Ok(())
@@ -7096,10 +7405,10 @@ impl Repository for PostgresRepository {
         // Caches and peers are told only once the transaction has landed, so
         // nothing is invalidated on behalf of a write that rolled back.
         for asset in &assets {
-            invalidate_script_asset_caches(script_uri, &asset.uri);
+            invalidate_script_asset_caches(script_uri, &asset.uri, Some(&asset.content));
         }
         for uri in &delete {
-            invalidate_script_asset_caches(script_uri, uri);
+            invalidate_script_asset_caches(script_uri, uri, None);
         }
         send_script_notification(&self.pool, script_uri, "upserted", &self.server_id).await?;
         Ok(deleted)
@@ -7117,7 +7426,7 @@ impl Repository for PostgresRepository {
         };
 
         if result {
-            invalidate_script_asset_caches(script_uri, uri);
+            invalidate_script_asset_caches(script_uri, uri, None);
             send_script_notification(&self.pool, script_uri, "upserted", &self.server_id).await?;
         }
         Ok(result)

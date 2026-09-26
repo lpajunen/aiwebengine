@@ -3285,7 +3285,11 @@ fn run_snippet(
 
         // Rewrite the snippet's imports the way every module's are rewritten, so
         // `import` means in a snippet exactly what it means in the script.
-        let snippet = match module_loader::prepare_snippet(&params.script_uri, &params.source) {
+        let snippet = match module_loader::prepare_snippet(
+            &params.script_uri,
+            &params.source,
+            &params.view,
+        ) {
             Ok(snippet) => snippet,
             Err(e) => {
                 outcome.error = Some(e.to_string());

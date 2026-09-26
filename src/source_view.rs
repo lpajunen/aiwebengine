@@ -129,44 +129,57 @@ impl SourceView {
         }
     }
 
-    /// The script's root source under this view.
+    /// Which of the script's files is its root module under this view, or
+    /// `None` when the view holds none of the root names.
     ///
-    /// The root is addressed by the script's URI rather than by an asset path,
-    /// so an overlay names it the way the module loader does — by its last
-    /// path segment.
-    pub fn root_content(&self, script_uri: &str) -> Option<String> {
+    /// The root used to be addressed by the script's URI, because it was not a
+    /// file: it was a column, and an overlay had to name it the way the module
+    /// loader guessed it. Now it is one entry of the tree like every other, so
+    /// the question is which entry — and the tree answers, in the order
+    /// [`crate::module_loader::ROOT_MODULE_NAMES`] lists.
+    ///
+    /// `Live` asks the database for the one row rather than listing the tree,
+    /// because this is on the build path and a script's tree is every bundle
+    /// and image it owns.
+    pub fn root_path(&self, script_uri: &str) -> Option<String> {
+        let names = crate::module_loader::ROOT_MODULE_NAMES;
         match self {
-            // Head, matching what `fetch` below reads for the assets. The
-            // assets have always come from the stored rows, so reading the
-            // served root here made `Live` mean two versions at once for a
-            // pinned script — its modules as they are, its root as it was.
-            // What a pinned script serves is `SourceView::Revision`, which
-            // `deployments::serving_view` answers with.
-            SourceView::Live => repository::fetch_script_head(script_uri),
-            SourceView::Revision(revision) => {
-                match crate::database::run_blocking(revisions::root_content(script_uri, *revision))
-                {
-                    Ok(content) => content,
-                    Err(e) => {
-                        tracing::warn!(
-                            script = script_uri,
-                            revision = *revision,
-                            "Failed reading revision root source: {}",
-                            e
-                        );
-                        None
-                    }
-                }
+            SourceView::Live => repository::find_root_asset(script_uri),
+            SourceView::Revision(_) => {
+                let held = self.list_paths(script_uri);
+                names
+                    .iter()
+                    .find(|name| held.iter().any(|path| path == *name))
+                    .map(|name| (*name).to_string())
             }
             SourceView::Overlay { base, files } => {
-                let root_path = crate::module_loader::root_module_path(script_uri).ok();
-                match root_path.and_then(|path| files.get(&path).cloned()) {
-                    Some(OverlayEntry::Written(file)) => String::from_utf8(file.content).ok(),
-                    Some(OverlayEntry::Deleted) => None,
-                    None => base.root_content(script_uri),
+                // A root the overlay writes wins over one the base holds, and
+                // a root the overlay *deletes* must not fall through to the
+                // base — deleting the entrypoint is a candidate change like
+                // any other, and a check that kept building against the old
+                // one would pass on a program that cannot be built.
+                for name in names {
+                    match files.get(name) {
+                        Some(OverlayEntry::Written(_)) => return Some(name.to_string()),
+                        Some(OverlayEntry::Deleted) => continue,
+                        None => {}
+                    }
                 }
+                base.root_path(script_uri)
+                    .filter(|path| !matches!(files.get(path), Some(OverlayEntry::Deleted)))
             }
         }
+    }
+
+    /// The script's root source under this view.
+    ///
+    /// One file of the tree, read the way every other one is. What used to
+    /// stand here was a third arm per view, because the root lived in a column
+    /// and the rest lived in rows.
+    pub fn root_content(&self, script_uri: &str) -> Option<String> {
+        let path = self.root_path(script_uri)?;
+        let file = self.fetch(script_uri, &path)?;
+        String::from_utf8(file.content).ok()
     }
 
     /// One of the script's files under this view, or `None` when the view does

@@ -80,7 +80,13 @@ fn deploy(script_uri: &str, content: &str) {
 fn deploy_with_assets(script_uri: &str, content: &str, assets: &[(&str, &str)]) {
     deploy(script_uri, content);
 
+    // Everything but the entrypoint. A script's root module is a file of its
+    // tree now, so clearing the tree wholesale would clear the script's source
+    // with it and leave nothing to run.
     for existing in repository::fetch_assets(script_uri).keys() {
+        if aiwebengine::module_loader::is_root_module_name(existing) {
+            continue;
+        }
         repository::delete_asset(script_uri, existing);
     }
 
@@ -318,11 +324,12 @@ async fn a_cycle_that_closes_on_the_entrypoint_names_the_entrypoint() {
         "#,
         &[(
             "check_root_cycle/helper.ts",
-            // Imports the root module back by its own logical path. A root
-            // module cannot export, so the cycle can only be a side-effect
-            // import — which is exactly the shape that used to be caught one
-            // level too deep, naming the wrong module.
-            "import \"../cycle-root\";\nexport const helper = 1;",
+            // Imports the root module back by its own logical path, which is
+            // the file it occupies in the tree. A root module cannot export,
+            // so the cycle can only be a side-effect import — which is
+            // exactly the shape that used to be caught one level too deep,
+            // naming the wrong module.
+            "import \"../main.js\";\nexport const helper = 1;",
         )],
     );
 

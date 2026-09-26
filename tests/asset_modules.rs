@@ -11,6 +11,7 @@ use aiwebengine::repository;
 use aiwebengine::scheduler::{ScheduledInvocation, ScheduledInvocationKind};
 use aiwebengine::script_init::InitContext;
 use aiwebengine::security::UserContext;
+use aiwebengine::source_view::SourceView;
 use chrono::Utc;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -789,10 +790,16 @@ async fn nested_asset_relative_import_chain_executes_in_request_path() {
     assert!(repository::delete_asset(script_uri, world_domain_uri));
 }
 
+/// A script with no files yet has no root to find, so the name is derived —
+/// and the one thing the URI was ever load-bearing for is its extension, which
+/// decides whether the entrypoint is transpiled.
 #[test]
-fn root_module_path_keeps_last_path_segment() {
-    let path = module_loader::root_module_path("https://example.com/scripts/app/main.ts")
-        .expect("script uri should yield root module path");
+fn a_script_with_no_tree_roots_at_the_name_its_first_write_would_use() {
+    let path = module_loader::root_module_path_in(
+        "https://example.com/scripts/app/shop.ts",
+        &SourceView::Live,
+    )
+    .expect("a script uri should yield a root module path");
     assert_eq!(path, "main.ts");
 }
 

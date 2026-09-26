@@ -26,7 +26,13 @@ use axum::extract::Query;
 fn script_with_test_modules(script_uri: &str, modules: &[(&str, &str)]) {
     repository::upsert_script(script_uri, "function init() {}").expect("script should be stored");
 
+    // Everything but the entrypoint. A script's root module is a file of its
+    // tree now, so clearing the tree wholesale would clear the script's source
+    // with it and leave nothing to run.
     for existing in repository::fetch_assets(script_uri).keys() {
+        if aiwebengine::module_loader::is_root_module_name(existing) {
+            continue;
+        }
         repository::delete_asset(script_uri, existing);
     }
 

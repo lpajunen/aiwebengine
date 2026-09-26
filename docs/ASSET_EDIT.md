@@ -2,8 +2,9 @@
 
 A change to three lines of a module is three lines. `PATCH /engine/assets`
 sends that much: the text to find and the text to put in its place, against an
-asset the engine already has. `POST /engine/edit_script` does the same for the
-one file of a script that is not an asset — its root source.
+asset the engine already has. `POST /engine/edit_script` does the same aimed at
+a script's entrypoint, under what writing a script takes rather than what
+writing a file inside one takes.
 
 ```bash
 curl -X PATCH "https://your-engine/engine/assets?script=myapp&asset=server/move-player.ts" \
@@ -104,10 +105,11 @@ change"}`, since there is nothing for it to pick up.
 
 ## The root source
 
-A script's modules are assets; the file the engine executes is not. It is the
-one that registers every route the modules serve, which makes it both the file
-an editor is least able to reproduce faithfully from memory and the one where
-losing something in a resend costs the most — so it has a patch of its own.
+A script's root source is the file named `main.*` in its tree — one file among
+its modules, stored and versioned exactly as they are. What is still its own
+is the _permission_: it is the file that registers every route the modules
+serve, so changing it is changing the script rather than changing something
+the script uses, and `/engine/edit_script` is the patch that asks for that.
 
 ```bash
 curl -X POST "https://your-engine/engine/edit_script" \
@@ -132,7 +134,10 @@ script rather than a file inside one:
 
 - **It takes what writing a script takes** — the `WriteScripts` capability, plus
   ownership of the script or administrator. `WriteAssets` is not the question
-  here: a patch is a write, and this is the script.
+  here: a patch is a write, and this is the script. That line holds wherever
+  the entrypoint is reached, including through `/engine/assets` and the batch
+  write, which refuse a caller holding only `WriteAssets` a `main.*` and
+  refuse a caller holding only `DeleteAssets` its removal.
 - **It cannot create one.** A patch of a URI nothing is stored under is `404`,
   not a script with a first line in it. `POST /engine/upsert_script` creates.
 - **It cannot empty one.** Edits that would delete the whole source are refused

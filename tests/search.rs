@@ -20,7 +20,13 @@ use serde_json::{Value, json};
 
 fn deploy(script_uri: &str, content: &str) {
     repository::upsert_script(script_uri, content).expect("script should be stored");
+    // Everything but the entrypoint. A script's root module is a file of its
+    // tree now, so clearing the tree wholesale would clear the script's source
+    // with it and leave nothing to run.
     for existing in repository::fetch_assets(script_uri).keys() {
+        if aiwebengine::module_loader::is_root_module_name(existing) {
+            continue;
+        }
         repository::delete_asset(script_uri, existing);
     }
 }
@@ -143,8 +149,16 @@ async fn a_root_source_and_its_module_are_separate_hits() {
     let (status, body) = search(&format!("query=searchBothMarker&script={}", uri)).await;
     assert_eq!(status, 200, "{}", body);
 
+    // Two hits in two files, and the entrypoint is named like any other file
+    // of the tree. It used to come back with no name at all, because it was
+    // not a file — the result carried the script's URI and nothing to say
+    // which part of it matched.
     let found = hits(&body);
-    assert!(found.contains(&(uri.to_string(), None)), "{:?}", found);
+    assert!(
+        found.contains(&(uri.to_string(), Some("main.js".to_string()))),
+        "{:?}",
+        found
+    );
     assert!(
         found.contains(&(uri.to_string(), Some("search_both/util.ts".to_string()))),
         "{:?}",

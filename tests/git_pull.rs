@@ -202,7 +202,13 @@ fn asset_text(script_uri: &str, asset_uri: &str) -> Option<String> {
 /// Remove whatever an earlier run of the same test left behind, so a test that
 /// asserts on deletion is asserting on this run's deletion.
 fn clear(script_uri: &str) {
+    // Everything but the entrypoint. A script's root module is a file of its
+    // tree now, so clearing the tree wholesale would clear the script's source
+    // with it and leave nothing to run.
     for existing in repository::fetch_assets(script_uri).keys() {
+        if aiwebengine::module_loader::is_root_module_name(existing) {
+            continue;
+        }
         repository::delete_asset(script_uri, existing);
     }
 }
@@ -263,9 +269,18 @@ async fn a_repository_with_a_root_entry_becomes_one_script() {
         asset_text(uri, ".gitignore").is_none(),
         "dotfiles are dropped"
     );
-    assert!(
-        asset_text(uri, "main.ts").is_none(),
-        "the entry is the script row, not one of its assets"
+    // The entry is a file of the tree under the same name the repository gave
+    // it, which is what stops a pull having to split a directory into a script
+    // row and an asset set and a push having to put them back together.
+    assert_eq!(
+        asset_text(uri, "main.ts").as_deref(),
+        Some("function init() {}"),
+        "the entry is a file of the tree, named as the repository named it"
+    );
+    assert_eq!(
+        repository::fetch_script(uri).as_deref(),
+        Some("function init() {}"),
+        "and it is what the script runs"
     );
 }
 
@@ -407,11 +422,14 @@ async fn a_pull_records_one_revision_for_the_whole_script() {
         .expect("pull should succeed");
     let after = aiwebengine::revisions::current(uri).unwrap_or(0);
 
-    assert_eq!(report.scripts[0].written, 3, "three assets written");
+    // Four, not three: the entrypoint is a file of the tree like the modules
+    // beside it, so a pull writes it through the same path and counts it the
+    // same way.
+    assert_eq!(report.scripts[0].written, 4, "four files written");
     assert_eq!(
         after - before,
         1,
-        "three files are one change, so they are one revision"
+        "four files are one change, so they are one revision"
     );
     assert_eq!(report.scripts[0].revision, Some(after));
 }
