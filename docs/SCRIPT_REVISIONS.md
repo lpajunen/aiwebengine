@@ -377,9 +377,9 @@ revisions and the newest that initialised.
 
 Every host serves the same revision. Running `staging.example.com` on 42 while
 `example.com` stays on 40 needs the route index to carry a revision, and
-scheduled jobs and message listeners to be scoped by host — neither has a host
-dimension today, so two live revisions of one script would fire its cron twice.
-The table is a per-script pin until those exist.
+scheduled jobs to be scoped by host — which has no host dimension today, so two
+live revisions of one script would fire its cron twice. The table is a
+per-script pin until those exist.
 
 ## What is not versioned
 

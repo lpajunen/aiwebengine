@@ -456,9 +456,9 @@ impl HandlerInvocationKind {
     /// Attribute a script's log output to one invocation of this kind.
     ///
     /// `route` names what was being served — the registered route pattern for
-    /// an HTTP route, otherwise the job, stream, resolver or tool name — so
-    /// that filtering by it collects every run of the same handler rather than
-    /// one concrete path per parameter value.
+    /// an HTTP route, otherwise the job, stream or tool name — so that
+    /// filtering by it collects every run of the same handler rather than one
+    /// concrete path per parameter value.
     pub fn log_context(
         self,
         script_uri: &str,
@@ -2333,8 +2333,8 @@ fn install_and_collect_tests<'js>(
     let invocation_id = crate::middleware::generate_request_id();
     let security_config = GlobalSecurityConfig {
         // A test must not mutate registries that outlive the run: routes,
-        // resolvers, streams, and jobs registered here would stay registered,
-        // and no rollback undoes them. `registration_phase: false` is what
+        // streams, and jobs registered here would stay registered, and no
+        // rollback undoes them. `registration_phase: false` is what
         // enforces that - the APIs stay callable and report that they did
         // nothing, rather than disappearing from the test's global scope.
         registration_phase: false,

@@ -38,18 +38,17 @@ management host.
 `requestId` groups the lines one invocation emitted. For an HTTP request it is
 the request's `x-request-id` — the header the response carries back — so a
 client that saw something go wrong can name the exact call. Invocations that
-are not HTTP requests generate their own: one per scheduler tick, per message
-listener call, per MCP tool call, per stream customization. That is what makes a
-single tick separable from the hundreds around it.
+are not HTTP requests generate their own: one per scheduler tick, per MCP tool
+call, per stream customization. That is what makes a single tick separable from
+the hundreds around it.
 
 `kind` says what sort of invocation it was: `httpRoute`, `scheduled`,
-`streamCustomization`,
-`messageListener`, `mcpTool`, `mcpPrompt`, `init`, `eval` or `test`.
+`streamCustomization`, `mcpTool`, `mcpPrompt`, `init`, `eval` or `test`.
 
 `route` is the **registered pattern** (`/world/:id/move`), not the concrete path,
 so filtering by it collects every call to a handler instead of one bucket per
 parameter value. For invocations that are not HTTP routes it names the job,
-stream, resolver or tool.
+stream or tool.
 
 `seq` is the entry's place in the engine's write order. It breaks timestamp ties
 and doubles as a cursor — see [Reading forward](#reading-forward).

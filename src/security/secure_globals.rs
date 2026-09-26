@@ -4843,9 +4843,9 @@ impl SecureGlobalContext {
     fn setup_scheduler_functions(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
         // `schedulerService` used to be omitted entirely outside the
         // registration phase, which made a shared helper that touches it throw
-        // `ReferenceError` when reached from a message listener or a test. The
-        // object is now always present; the three registration methods below
-        // are the part that depends on the phase.
+        // `ReferenceError` when reached from a test. The object is now always
+        // present; the three registration methods below are the part that
+        // depends on the phase.
         let global = ctx.globals();
         let scheduler_obj = rquickjs::Object::new(ctx.clone())?;
         let scheduler_handle = scheduler::get_scheduler();

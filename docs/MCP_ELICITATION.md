@@ -154,9 +154,9 @@ const title = mcp.canAsk()
   : defaultTitle(repo);
 ```
 
-`canAsk` is also false wherever there is no client at all — a scheduled job, a
-delegated task, a message listener. Background work runs for somebody who is not
-there, which is the same reason `delegation.rs` caps it at `authenticated`.
+`canAsk` is also false wherever there is no client at all — a scheduled job or a
+delegated task. Background work runs for somebody who is not there, which is
+the same reason `delegation.rs` caps it at `authenticated`.
 
 ## Three answers, not two
 

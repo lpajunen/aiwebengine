@@ -333,7 +333,6 @@ interface HttpResponse {
 type HandlerInvocationKind =
   | "httpRoute"
   | "streamCustomization"
-  | "messageListener"
   | "init"
   | "scheduled"
   | "mcpTool"
@@ -3141,8 +3140,8 @@ interface HmacVerifyOptions {
  * **It is not always there.** `engine` is `undefined` outside the two
  * executions whose authority came from a credential — a script serving a
  * request, and a delegated task where somebody consented to `author` or
- * `administer`. A scheduled job, `init()`, a message listener, a test run,
- * `/engine/eval` and `sandbox.run` do not get it, because those run as the
+ * `administer`. A scheduled job, `init()`, a test run, `/engine/eval` and
+ * `sandbox.run` do not get it, because those run as the
  * engine's own synthetic administrator or with a capability subset that cannot
  * express the difference between reading your own `console` and reading every
  * script's logs. Check for it before using it.

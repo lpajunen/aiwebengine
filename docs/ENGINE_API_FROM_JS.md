@@ -47,7 +47,6 @@ is **two** executions:
 | A scheduled job            | no     | runs as `UserContext::admin("scheduler")`        |
 | `init()`                   | no     | runs as `admin("script-init")`                   |
 | Startup                    | no     | runs every script as a synthetic administrator   |
-| A message listener         | no     | runs under the _sending_ caller's context        |
 | A test run                 | no     | executes a script's cases, not somebody's intent |
 | `/engine/eval`             | no     | shares its path with `sandbox.run`               |
 | `sandbox.run`              | no     | see below                                        |
