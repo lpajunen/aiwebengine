@@ -65,7 +65,7 @@ tar = { version = "0.4", default-features = false }
 flate2 = "1"
 
 # TypeScript/JSX transpilation
-oxc = { version = "0.148.0", features = ["full"] }
+oxc = { version = "0.151.0", features = ["full"] }
 
 # Security and encryption (Phase 0.5)
 aes-gcm = "0.11"
