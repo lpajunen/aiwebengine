@@ -124,48 +124,6 @@ pub struct SystemInfo {
 }
 
 // ============================================================================
-// GraphQL Schemas (HTTP Transport Layer)
-// ============================================================================
-
-/// GraphQL request - generic JSON payload
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct GraphQLRequest {
-    /// GraphQL query string
-    pub query: String,
-    /// Optional operation name
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "operationName")]
-    pub operation_name: Option<String>,
-    /// Optional variables as JSON object
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub variables: Option<serde_json::Value>,
-}
-
-/// GraphQL response - generic JSON payload
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct GraphQLResponse {
-    /// Response data (null if errors occurred)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-    /// Errors encountered during execution
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub errors: Option<Vec<GraphQLError>>,
-}
-
-/// GraphQL error object
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct GraphQLError {
-    /// Error message
-    pub message: String,
-    /// Optional path to the field that caused the error
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<Vec<serde_json::Value>>,
-    /// Optional extensions with additional error information
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extensions: Option<serde_json::Value>,
-}
-
-// ============================================================================
 // MCP (Model Context Protocol) JSON-RPC Schemas
 // ============================================================================
 

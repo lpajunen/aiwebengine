@@ -105,295 +105,6 @@ Improve system prompts and provide context for AI to understand APIs and scripts
 
 ---
 
-### 6. GraphQL Resolver Return Type Validation
-
-**Problem:**
-When resolvers incorrectly return JSON strings instead of objects, the error messages are unclear and the behavior is inconsistent.
-
-**Current Behavior:**
-
-```javascript
-// Incorrect - returns JSON string
-function channelsResolver(req, args) {
-  const channels = loadChannels();
-  return JSON.stringify(channels); // ✗ Creates parsing issues
-}
-
-// Correct - returns object
-function channelsResolver(req, args) {
-  const channels = loadChannels();
-  return channels; // ✓ GraphQL handles serialization
-}
-```
-
-**What Happens:**
-
-- Sometimes appears to work initially
-- Client receives double-encoded JSON
-- Parsing errors occur on client side
-- Error message doesn't clearly indicate the root cause
-
-**Impact:**
-
-- Wasted debugging time
-- Confusing for developers new to GraphQL
-- Easy mistake to make coming from REST APIs
-
-**Suggested Solution:**
-
-**Runtime Validation:**
-
-```javascript
-// In GraphQL resolver execution
-function executeResolver(resolverName, req, args) {
-  const result = callUserResolver(resolverName, req, args);
-
-  if (typeof result === "string") {
-    // Try to parse it - if it works, it's likely a mistake
-    try {
-      JSON.parse(result);
-      console.error(`Warning: Resolver '${resolverName}' returned a JSON string. 
-        Return the object directly instead - GraphQL will handle serialization.`);
-    } catch (e) {
-      // It's a legitimate string return
-    }
-  }
-
-  return result;
-}
-```
-
-**Documentation:**
-Add clear examples in docs showing:
-
-- ✓ Correct: `return { id: '123', name: 'Test' }`
-- ✗ Incorrect: `return JSON.stringify({ id: '123', name: 'Test' })`
-
-**Estimated Effort:** Small (2-3 hours)
-
----
-
-### 7. sendSubscriptionMessageFiltered Data Format
-
-**Problem:**
-The `sendSubscriptionMessageFiltered` API has ambiguous expectations for the `data` parameter:
-
-- Currently expects a JSON string
-- GraphQL framework then parses this string
-- Final client receives it wrapped in GraphQL response format
-- Creates confusion about who handles serialization
-
-**Current Usage:**
-
-```javascript
-function sendMessageResolver(req, args) {
-  const message = { id: "123", text: "Hello", sender: "Alice" };
-
-  // Must stringify the data
-  const data = JSON.stringify(message);
-  const filter = JSON.stringify({ channelId: "channel_1" });
-
-  graphQLRegistry.sendSubscriptionMessageFiltered(
-    "chatUpdates",
-    data, // JSON string expected
-    filter, // JSON string expected
-  );
-}
-
-// Client receives:
-// {"data": {"chatUpdates": {"id": "123", "text": "Hello", "sender": "Alice"}}}
-```
-
-**Confusion Points:**
-
-- Why does data need to be stringified?
-- Who is responsible for parsing?
-- What if data is already a string vs object?
-
-**Suggested Solutions:**
-
-#### Option A: Accept Objects (Recommended)
-
-```rust
-// Change signature to accept objects
-pub fn send_subscription_message_filtered(
-    name: &str,
-    data: JsValue,  // Accept JS object directly
-    filter: JsValue
-) {
-    let data_json = JSON::stringify(&data)?;
-    let filter_json = JSON::stringify(&filter)?;
-    // ... rest of implementation
-}
-```
-
-#### Option B: Clear Documentation
-
-If there's a reason to keep JSON strings, document it clearly:
-
-```javascript
-/**
- * Send filtered subscription message
- * @param {string} name - Subscription name
- * @param {string} data - JSON string of the data (will be parsed and wrapped in GraphQL response)
- * @param {string} filter - JSON string of filter criteria (must match subscriber filters)
- */
-```
-
-**Recommended:** Option A - accept objects and handle serialization internally
-
-**Estimated Effort:** Small-Medium (3-5 hours)
-
----
-
-### 8. SSE Endpoint Documentation and Discovery
-
-**Problem:**
-The GraphQL subscription endpoint behavior is undocumented and must be discovered through trial and error:
-
-- Endpoint is `/graphql/sse` (not `/graphql`)
-- Must use POST method (not GET)
-- Variables must be passed as URL query parameters
-- Request body contains the subscription query
-
-**What Developers Try First:**
-
-```javascript
-// ✗ Doesn't work - wrong endpoint
-const eventSource = new EventSource("/graphql?query=subscription{chatUpdates}");
-
-// ✗ Doesn't work - EventSource only supports GET
-// Need to use fetch with ReadableStream instead
-
-// ✓ What actually works
-fetch("/graphql/sse?channelId=123", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ query: "subscription { chatUpdates }" }),
-});
-```
-
-**Impact:**
-
-- Wasted development time
-- Trial and error required
-- Non-standard compared to other GraphQL implementations
-- No clear error messages guide to correct approach
-
-**Suggested Solutions:**
-
-#### 1. Documentation
-
-Add to engine documentation:
-
-````markdown
-## GraphQL Subscriptions
-
-### Endpoint
-
-`GET /graphql/sse`
-
-### Client Implementation
-
-```javascript
-// Pass query and variables as URL query parameters
-const channelId = "channel_123";
-const query =
-  "subscription ($channelId: String!) { chatUpdates(channelId: $channelId) }";
-const variables = JSON.stringify({ channelId });
-
-const url = `/graphql/sse?query=${encodeURIComponent(query)}&variables=${encodeURIComponent(variables)}`;
-
-// GET request with query parameters
-const eventSource = new EventSource(
-  url + "?query=" + encodeURIComponent(query),
-  {
-    headers: {
-      Accept: "text/event-stream",
-    },
-  },
-);
-
-eventSource.onmessage = function (event) {
-  const data = JSON.parse(event.data);
-  // Process SSE data...
-};
-```
-````
-
-#### 2. Better Error Messages
-
-```rust
-// When POST /graphql receives subscription query
-if query_contains_subscription(&query) {
-    return error_response(
-        "Subscriptions must use the /graphql/sse endpoint.
-         Example: GET /graphql/sse?query=subscription+{+chatUpdates+}&variables={}"
-    );
-}
-
-// When POST /graphql/sse is used
-if method == "POST" {
-    return error_response(
-        "Subscription endpoint requires GET method.
-         Send subscription query as query parameter: /graphql/sse?query=..."
-    );
-}
-```
-
-#### 3. Example Scripts
-
-Add to `scripts/example_scripts/`:
-
-- `graphql_subscription_client.js` - Reusable client helper
-- Update existing examples to show subscription usage
-
-**Estimated Effort:** Medium (4-6 hours)
-
----
-
-### 9. Subscription Filter Matching Algorithm
-
-**Problem:**
-The filter matching mechanism lacks clear documentation:
-
-- Resolver returns object with string values
-- Converted to `HashMap<String, String>` internally
-- `sendSubscriptionMessageFiltered` matches filters
-- Exact matching algorithm unclear
-- No examples of complex filtering
-
-**Current Understanding:**
-
-```javascript
-// Subscriber filter: { channelId: 'channel_1', userId: 'user_123' }
-// Broadcast filter: { channelId: 'channel_1' }
-// Result: MATCH (broadcast is subset of subscriber)
-
-// Subscriber filter: { channelId: 'channel_1' }
-// Broadcast filter: { channelId: 'channel_1', role: 'admin' }
-// Result: NO MATCH (broadcast requires role, subscriber doesn't have it)
-
-// Subscriber filter: { channelId: 'channel_2' }
-// Broadcast filter: { channelId: 'channel_1' }
-// Result: NO MATCH (values don't match)
-```
-
-**Unknown Behaviors:**
-
-- Is it exact match or subset match?
-- If subscriber has `{channelId: 'channel_1', userId: 'user_123'}` and broadcast filter is `{channelId: 'channel_1'}`, does it match?
-- What about multiple filter criteria - AND or OR logic?
-- Can filter values be anything other than strings?
-- Are null/undefined values handled specially?
-
-**Suggested Solution:**
-
-#### 1. Document Algorithm Clearly
-
-````markdown
-## Subscription Filtering
-
 ### Matching Algorithm
 
 sendSubscriptionMessageFiltered uses **subset matching**:
@@ -417,6 +128,7 @@ sendSubscriptionMessageFiltered uses **subset matching**:
 // Broadcast filter: { channelId: 'channel_2' }
 // Result: NO MATCH (values don't match)
 ```
+
 ````
 
 #### 2. Add Unit Tests
@@ -588,13 +300,10 @@ Confusing routing for developers.
     - asset management
     - solution secret management (addition to engine secrets in config)
     - log management
-  - /engine/graphql for graphql test console
   - /engine/admin for admin operations
     - user management
   - /engine/docs for docs and api reference
   - /engine/api/... for engine related api endpoints
-- /graphql/... for GraphQL related endpoints
-  - implement GraphQL queries, mutations, subscriptions
 - /mcp/... for Model-Context-Protocol related endpoints
   - implement MCP interactions
 
@@ -691,88 +400,6 @@ scheduleTask({
 **Recommended:** Option B (more predictable in server context)
 
 **Estimated Effort:** Large (12-20 hours)
-
----
-
-### 14. Enhanced Error Context in Resolvers
-
-**Problem:**
-When errors occur in GraphQL resolvers, the error messages and stack traces could be more helpful.
-
-**Current Experience:**
-
-```
-Error: Failed to send message
-  at sendMessageResolver
-```
-
-**Desired Experience:**
-
-```
-GraphQLError: Failed to send message: Channel not found
-  at sendMessageResolver (chat_app.js:185)
-  Field: sendMessage
-  Operation: mutation
-  Variables: {"channelId":"channel_999","text":"Hello"}
-  User: lasse@example.com
-  Request ID: req_abc123
-```
-
-**Suggested Improvements:**
-
-1. **Automatic Context Injection**
-   - Current operation type (query/mutation/subscription)
-   - Field name being resolved
-   - Input variables (sanitized)
-   - User information
-   - Request ID for tracing
-
-2. **Structured Error Responses**
-
-   ```javascript
-   // In resolver
-   throw new GraphQLError("Channel not found", {
-     code: "CHANNEL_NOT_FOUND",
-     channelId: args.channelId,
-     hint: "Use the channels query to see available channels",
-   });
-   ```
-
-3. **Development vs Production Modes**
-   - Dev: Full stack traces, variable values, debug info
-   - Prod: Sanitized errors, no sensitive data, request IDs only
-
-**Estimated Effort:** Medium (6-8 hours)
-
----
-
-### 15. GraphQL Playground / IDE Integration
-
-**Problem:**
-No built-in way to explore and test GraphQL API during development.
-
-**Current Workflow:**
-
-- Write JavaScript test code
-- Use curl commands
-- Build custom test UI
-
-**Suggested Addition:**
-Enable GraphQL Playground or GraphiQL at `/graphql/playground` in development mode:
-
-- Schema introspection
-- Query/mutation testing
-- Subscription testing
-- Auto-complete
-- Documentation explorer
-
-**Implementation Options:**
-
-1. Embed GraphQL Playground (static HTML/JS)
-2. Integrate GraphiQL
-3. Build minimal custom explorer
-
-**Estimated Effort:** Medium (8-12 hours)
 
 ---
 
@@ -926,28 +553,17 @@ For the remaining improvements:
 
 ### Phase 1: Developer Experience (Weeks 1-2)
 
-1. GraphQL Resolver Return Type Validation
-2. sendSubscriptionMessageFiltered Data Format
-3. Structured Error Responses
+1. Structured Error Responses
 
 **Rationale:** These directly impact developer experience and API predictability
 
-### Phase 2: Documentation (Week 3)
-
-1. SSE endpoint documentation
-2. Filter matching algorithm docs
-
-**Rationale:** Quick wins that prevent future confusion
-
-### Phase 3: Advanced Features (Future)
+### Phase 2: Advanced Features (Future)
 
 1. Timer APIs in QuickJS
-2. Enhanced error context
-3. GraphQL Playground
-4. Middleware support
-5. Database transaction API
-6. Method-specific routing
-7. Relational Storage API
+2. Middleware support
+3. Database transaction API
+4. Method-specific routing
+5. Relational Storage API
 
 **Rationale:** Nice-to-have improvements for mature product
 
@@ -1002,7 +618,7 @@ For improvements requiring breaking changes:
 
 ## Contribution Notes
 
-These improvements are sourced from real implementation experience building production-ready applications with GraphQL subscriptions, authentication, and persistent storage.
+These improvements are sourced from real implementation experience building production-ready applications with streaming, authentication, and persistent storage.
 
 **Primary Pain Points Encountered:**
 
@@ -1031,20 +647,20 @@ These improvements are sourced from real implementation experience building prod
 
 ---
 
-**Last Updated:** December 11, 2025  
-**Contributor:** Development team feedback from various implementations  
+**Last Updated:** December 11, 2025
+**Contributor:** Development team feedback from various implementations
 **Status:** Planning phase - ready for prioritization and implementation
 
 ---
 
 ## JavaScript API Capabilities Analysis
 
-**Analysis Date:** December 11, 2025  
+**Analysis Date:** December 11, 2025
 **Source:** Comprehensive codebase review of JavaScript capabilities exposed by Rust engine
 
 ### Current JavaScript Capabilities Assessment
 
-The engine provides an impressive array of JavaScript APIs with excellent security, streaming, GraphQL, and asset management capabilities. However, several critical gaps exist that limit the ability to build production-ready applications.
+The engine provides an impressive array of JavaScript APIs with excellent security, streaming, MCP, and asset management capabilities. However, several critical gaps exist that limit the ability to build production-ready applications.
 
 ---
 
@@ -1079,12 +695,6 @@ inside the sandbox.
 - ✅ Base64 encoding/decoding
 - ✅ MIME type support
 - ✅ 10MB size limits
-
-#### 5. GraphQL Support (`graphQLRegistry`)
-
-- ✅ Query, mutation, subscription registration
-- ✅ Direct GraphQL execution from JS
-- ✅ Subscription messaging (broadcast and filtered)
 
 #### 6. MCP (Model Context Protocol) (`mcpRegistry`)
 
@@ -1752,6 +1362,7 @@ For each implemented capability:
 
 ### Conclusion
 
-The engine has a **solid foundation** with excellent security, streaming, GraphQL, and asset management capabilities. The biggest gap is **database access** - without it, scripts are limited to simple applications. Adding database queries, crypto functions, and better request/response handling would make this production-ready for real-world applications.
+The engine has a **solid foundation** with excellent security, streaming, MCP, and asset management capabilities. The biggest gap is **database access** - without it, scripts are limited to simple applications. Adding database queries, crypto functions, and better request/response handling would make this production-ready for real-world applications.
 
 The implementation roadmap prioritizes critical gaps first (database, crypto, request handling), followed by developer experience improvements (response builders, validation), and finally advanced features (email, scheduling, caching). This phased approach ensures the engine becomes production-ready quickly while building toward a comprehensive platform.
+````

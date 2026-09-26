@@ -195,7 +195,7 @@ See [04-SECRETS-AND-SECURITY.md](04-SECRETS-AND-SECURITY.md) for comprehensive s
 │  │         JavaScript Engine (QuickJS)          │   │
 │  │  • Script Execution                          │   │
 │  │  • HTTP Handlers                             │   │
-│  │  • GraphQL                                   │   │
+│  │  • MCP Tools                                 │   │
 │  └──────────────────────────────────────────────┘   │
 │                                                      │
 │  • Authentication & Authorization                    │

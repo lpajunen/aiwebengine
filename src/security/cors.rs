@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     fn only_engine_paths_are_covered() {
-        for engine in ["/engine/scripts", "/auth/login", "/mcp", "/graphql"] {
+        for engine in ["/engine/scripts", "/auth/login", "/mcp", "/health"] {
             assert!(is_engine_path(engine), "{engine}");
         }
         for script in ["/", "/shop/items", "/engineering", "/mcpx"] {

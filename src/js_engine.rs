@@ -201,18 +201,15 @@ pub(crate) fn create_sandboxed_runtime(
 
 /// What a request-driven invocation runs as: the calling user, or nobody.
 ///
-/// GraphQL resolvers and stream customization functions used to run as
-/// `UserContext::admin(...)` while the caller's own identity was passed
-/// alongside for the JavaScript `auth` object to read — so `auth.isAdmin`
-/// could say false in the same invocation that held `AdministerEngine`. Both
-/// are entered by a request, and a script serving a request runs under the
-/// requesting user's context.
+/// Stream customization functions used to run as `UserContext::admin(...)`
+/// while the caller's own identity was passed alongside for the JavaScript
+/// `auth` object to read — so `auth.isAdmin` could say false in the same
+/// invocation that held `AdministerEngine`. It is entered by a request, and a
+/// script serving a request runs under the requesting user's context.
 ///
 /// `JsAuthContext::to_user_context` already mapped an identity onto its tier
-/// and had no caller anywhere in the engine. Absent identity means anonymous:
-/// every GraphQL path inserts a context and an unauthenticated one is already
-/// `JsAuthContext::anonymous`, so `None` is the stream connection that arrived
-/// with no session.
+/// and had no caller anywhere in the engine. Absent identity means anonymous,
+/// so `None` is the stream connection that arrived with no session.
 fn caller_context(auth_context: Option<&crate::auth::JsAuthContext>) -> UserContext {
     auth_context
         .map(|identity| identity.to_user_context())
@@ -1008,7 +1005,7 @@ fn setup_validation_helpers(ctx: &rquickjs::Ctx<'_>) -> Result<(), rquickjs::Err
 /// Sets up common global functions for JavaScript execution contexts (LEGACY)
 ///
 /// This function consolidates the repeated pattern of setting up global functions
-/// across different execution contexts (script registration, request handling, GraphQL resolution)
+/// across different execution contexts (script registration, request handling, tests)
 ///
 /// Represents the result of executing a JavaScript script
 #[derive(Debug, Clone)]
@@ -1435,7 +1432,7 @@ pub fn execute_script_for_request_secure(
     let phase = Instant::now();
     ctx.with(|ctx| -> Result<(), rquickjs::Error> {
         // Set up all secure global functions
-        // For request handling, we don't need GraphQL registration but enable everything else
+        // For request handling, registrations are not collected but everything else is enabled
         let security_config = GlobalSecurityConfig {
             enable_audit_logging: false, // Disable for tests to avoid runtime conflicts
             log_context: log_context.clone(),
@@ -1784,7 +1781,7 @@ pub fn execute_script_for_request(
 
     ctx.with(|ctx| -> Result<(), rquickjs::Error> {
         // Set up all global functions using the secure helper function
-        // For request handling, we don't need full GraphQL registration (no-ops)
+        // For request handling, registrations are no-ops
         let config = GlobalSecurityConfig {
             enable_audit_logging: false, // Disable audit logging to avoid runtime conflicts
             log_context: log_context.clone(),
@@ -3016,8 +3013,8 @@ pub struct EvalParams {
     ///
     /// A snippet has no parameter list — it is a program, not a function — so
     /// an argument has to arrive somewhere a program can read. `context.args`
-    /// is where a GraphQL resolver's arguments already arrive, so a script
-    /// reading it is reading something it knows.
+    /// is where a handler's arguments already arrive, so a script reading it
+    /// is reading something it knows.
     pub input: Option<JsonValue>,
     /// Who the snippet runs as, as JavaScript sees it.
     ///

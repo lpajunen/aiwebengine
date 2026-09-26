@@ -12,7 +12,7 @@
 //! And the leftovers were *executed*. `execute_startup_scripts` runs every
 //! script it finds, so each new test server ran the accumulated scripts of
 //! unrelated tests before the test under way had done anything. What a test
-//! saw in the route index, the GraphQL registry and the log table therefore
+//! saw in the route index, the MCP registry and the log table therefore
 //! depended on which tests had run before it — in this run and in every run
 //! before it. Several test comments already work around one face of this by
 //! hand: a rate-limit bucket keyed by a fixed string carries its drained state

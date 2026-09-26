@@ -2,7 +2,7 @@
 //!
 //! A deployment serves one default host (`server.base_url`) plus any extras in
 //! `server.additional_base_urls`. A script's registrations — HTTP routes, asset
-//! routes, streams, GraphQL operations and MCP tools — are published on the
+//! routes, streams and MCP tools — are published on the
 //! default host unless it is bound to specific hosts, so a single-host
 //! deployment behaves exactly as it did before hosts existed.
 //!

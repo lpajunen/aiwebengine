@@ -29,7 +29,6 @@ This guide covers performance best practices for aiwebengine development. While 
 | Static files        | <50ms  | 200ms   |
 | Script registration | <100ms | 500ms   |
 | Script execution    | <200ms | 2s      |
-| GraphQL queries     | <100ms | 1s      |
 
 ### Resource Limits
 

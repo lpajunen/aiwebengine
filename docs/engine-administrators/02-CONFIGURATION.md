@@ -298,7 +298,7 @@ max_script_size_bytes = 1048576          # Maximum script size (bytes, 1MB)
 ### CORS
 
 `cors_allowed_origins` names the origins allowed to read **engine-owned**
-responses — `/engine`, `/auth`, `/graphql`, `/mcp`, `/health`, `/.well-known`.
+responses — `/engine`, `/auth`, `/mcp`, `/health`, `/.well-known`.
 Empty, the default, means same-origin only.
 
 The engine does not apply a policy to script routes. A solution serving a

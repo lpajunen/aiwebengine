@@ -85,7 +85,7 @@ struct IndexInner {
     /// Param and wildcard patterns, competing on specificity at lookup time
     patterns: Vec<PatternRoute>,
     /// script URI -> hosts it publishes on, for the registrations that are not
-    /// routes (asset paths, streams, GraphQL operations, MCP tools). Cached
+    /// routes (asset paths, streams, MCP tools). Cached
     /// here so it is rebuilt and invalidated together with the routes above.
     /// Covers every script, including ones with no routes of their own.
     script_hosts: HashMap<String, Vec<String>>,
@@ -214,7 +214,7 @@ pub async fn lookup(host: &str, path: &str, method: &str) -> Result<RouteLookup,
 /// The scripts publishing on `host`, or `None` when host binding is not in
 /// force and every script should be treated as publishing everywhere.
 ///
-/// For registries that filter a whole collection at once — the GraphQL schema
+/// For registries that filter a whole collection at once — the MCP registry
 /// and the MCP tool list — rather than checking one script at a time.
 pub async fn scripts_for_host(host: &str) -> Option<std::collections::HashSet<String>> {
     if !crate::hosts::is_configured() {
@@ -239,7 +239,7 @@ pub async fn scripts_for_host(host: &str) -> Option<std::collections::HashSet<St
 
 /// Whether `script_uri` publishes on `host`.
 ///
-/// For the registrations that are not routes — asset paths, streams, GraphQL
+/// For the registrations that are not routes — asset paths, streams, MCP
 /// operations and MCP tools — which are looked up by their own registries and
 /// then checked against the script that owns them.
 ///

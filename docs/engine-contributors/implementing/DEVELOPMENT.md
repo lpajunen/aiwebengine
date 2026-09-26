@@ -119,7 +119,6 @@ src/
 ├── error.rs            // Error types and handling
 ├── middleware.rs       // HTTP middleware
 ├── js_engine.rs        // JavaScript execution
-├── graphql.rs          // GraphQL schema and resolvers
 ├── repository.rs       // Data storage
 └── bin/
     └── server.rs       // Server binary
@@ -223,32 +222,28 @@ mod tests {
 
 ```rust
 #[tokio::test]
-async fn test_graphql_endpoint_with_registered_query() {
+async fn test_route_endpoint_with_registered_handler() {
     let app = create_test_app().await;
 
-    // Register a GraphQL query via JavaScript
+    // Register an HTTP route via JavaScript
     let script = r#"
-        registerGraphQLQuery('user', 'User', 'id: String!', function(args) {
-            return { id: args.id, name: 'Test User' };
-        });
+        function getUser(context) {
+            return { status: 200, body: JSON.stringify({ id: context.request.params.id, name: 'Test User' }) };
+        }
+
+        function init() {
+            routeRegistry.registerRoute('/users/:id', 'getUser', 'GET');
+        }
     "#;
 
-    register_script(&app, "test-query", script).await;
+    register_script(&app, "test-route", script).await;
 
-    // Execute GraphQL query
-    let query = r#"{ user(id: "123") { id name } }"#;
-    let response = app
-        .request()
-        .method("POST")
-        .uri("/graphql")
-        .json(&json!({"query": query}))
-        .send()
-        .await;
+    let response = app.request().method("GET").uri("/users/123").send().await;
 
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response.json().await;
-    assert_eq!(body["data"]["user"]["id"], "123");
-    assert_eq!(body["data"]["user"]["name"], "Test User");
+    assert_eq!(body["id"], "123");
+    assert_eq!(body["name"], "Test User");
 }
 ```
 
@@ -761,7 +756,7 @@ pub fn execute_script(
 1. **Branch Naming**: Use descriptive prefixes
 
    ```bash
-   feature/graphql-subscriptions
+   feature/mcp-resources
    fix/memory-leak-in-js-engine
    refactor/error-handling-consolidation
    docs/api-documentation-update
@@ -770,9 +765,9 @@ pub fn execute_script(
 2. **Commit Messages**: Follow conventional commits
 
    ```
-   feat: add GraphQL subscription support with Server-Sent Events
+   feat: add MCP resource support
 
-   - Implement SSE endpoint for real-time GraphQL subscriptions
+   - Implement asset-backed MCP resources
    - Add subscription registration API for JavaScript handlers
    - Include comprehensive tests for subscription lifecycle
 
@@ -823,7 +818,6 @@ pub mod config;      // No internal dependencies
 pub mod error;       // Depends on: serde
 pub mod middleware;  // Depends on: error
 pub mod js_engine;   // Depends on: error, config
-pub mod graphql;     // Depends on: js_engine, error
 pub mod server;      // Depends on: all above
 ```
 

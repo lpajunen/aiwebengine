@@ -473,7 +473,7 @@ pub struct GlobalSecurityConfig {
     ///
     /// This is what makes `/engine/check` safe to run against a deployed
     /// script. Only `registerRoute` collects by design — every other registry
-    /// (GraphQL, streams, asset routes, MCP, scheduler) is a process-wide
+    /// (streams, asset routes, MCP, scheduler) is a process-wide
     /// singleton written to directly, so a candidate's `init()` would
     /// otherwise replace the deployed script's resolvers and jobs with its
     /// own, and a broken candidate would take the live script
@@ -6001,8 +6001,7 @@ impl SecureGlobalContext {
                 if config_run.is_dry_run() {
                     // A sub-execution runs real code against live data, and
                     // only its database writes are undone. A check that
-                    // deploys nothing must not set that in motion, for the
-                    // reason `dispatcher.sendMessage` must not.
+                    // deploys nothing must not set that in motion.
                     return Ok(Self::sandbox_failure(
                         "DryRunError",
                         "sandbox.run: nothing was run - this is a dry run",

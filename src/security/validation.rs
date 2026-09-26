@@ -67,12 +67,10 @@ pub enum Capability {
     DeleteLogs,
     ViewLogs,
     ManageStreams,
-    /// Publish MCP tools, prompts and resources
-    /// (`mcpRegistry.register*`).
+    /// Publish MCP tools, prompts and resources (`mcpRegistry.register*`).
     ///
-    /// Named `ManageGraphQL` while GraphQL existed, and reused for MCP from
-    /// the day MCP registration was added — so the name has never described
-    /// the whole of what it gates.
+    /// What is being decided is whether the solution exposes an MCP surface,
+    /// not whether the asset behind a resource may be written.
     ManageMcp,
     /// Read rows from a script's tables.
     ///

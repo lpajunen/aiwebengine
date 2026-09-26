@@ -144,7 +144,6 @@ mod tests {
             "/engine/scripts",
             "/auth/login",
             "/mcp",
-            "/graphql",
             "/.well-known/oauth-authorization-server",
             "/health",
         ] {

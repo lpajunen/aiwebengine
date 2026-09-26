@@ -16,7 +16,7 @@ Quieter commands = cheaper tool results. Build/test output gets read back into c
 
 # developer-experience improvements (JS/TS framework API)
 
-Context: aiwebengine competes with Firebase/Supabase/Workers (a multi-tenant BaaS/PaaS), not Node/Deno/Express. The architecture (capability sandbox, built-in auth/GraphQL/MCP/scheduler, zero-build hot-reload, multi-instance leases) is a genuine strength. The weaknesses are almost all at the **JS↔Rust ergonomic boundary**. Priority order below.
+Context: aiwebengine competes with Firebase/Supabase/Workers (a multi-tenant BaaS/PaaS), not Node/Deno/Express. The architecture (capability sandbox, built-in auth/MCP/scheduler, zero-build hot-reload, multi-instance leases) is a genuine strength. The weaknesses are almost all at the **JS↔Rust ergonomic boundary**. Priority order below.
 
 1. **Kill the JSON-string boundary (biggest daily friction).** Nearly every API in aiwebengine.d.ts takes/returns JSON _strings_, forcing manual `JSON.stringify` in / `JSON.parse` out on every call, and mixes success values with error strings (`{error: string}`, or `"Error: ..."` — e.g. `personalStorage.getItem` returns "value or error message" indistinguishably). Return/accept real objects (rquickjs supports this) and `throw` real `Error`s instead of encoding errors in return values. Fixes ergonomics + error handling + unlocks generics in one move.
 

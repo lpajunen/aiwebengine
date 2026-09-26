@@ -14,7 +14,6 @@ This document provides a prioritized view of all development work needed for aiw
 
 - **Core Functionality:** ✅ Operational
 - **JavaScript Engine:** ✅ Working with QuickJS
-- **GraphQL Support:** ✅ Queries, mutations, subscriptions
 - **Security Framework:** 🚧 Implemented but not fully integrated
 - **Authentication:** ❌ Not implemented
 - **Database Layer:** ❌ Not implemented
@@ -113,7 +112,6 @@ These **MUST** be completed before authentication or any other major feature wor
 
 - Current: 125/126 tests passing (99.2%) - need 100%
 - No security integration tests
-- Missing tests for `graphql.rs` module
 - No property-based testing for critical algorithms
 - Code coverage unknown (no reports generated)
 
@@ -121,7 +119,6 @@ These **MUST** be completed before authentication or any other major feature wor
 
 - [ ] Fix failing test: `test_register_web_stream_invalid_path`
 - [ ] Create `tests/security_integration.rs` with 10+ comprehensive tests
-- [ ] Add missing unit tests for `graphql.rs` module
 - [ ] Add tests for error handling paths
 - [ ] Set up coverage reporting with `cargo llvm-cov`
 - [ ] Achieve >80% line coverage (>90% for new code)

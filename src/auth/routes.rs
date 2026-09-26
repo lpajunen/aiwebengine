@@ -6139,8 +6139,8 @@ mod tests {
             "softagen.com/mcp"
         );
         assert_eq!(
-            resource_audience("https://softagen.com/graphql"),
-            "softagen.com/graphql"
+            resource_audience("https://softagen.com/health"),
+            "softagen.com/health"
         );
         assert_eq!(
             resource_audience("https://MANAGE.softagen.com:443/mcp/"),

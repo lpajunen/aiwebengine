@@ -99,14 +99,13 @@ Users should be able to view all posts and individual post details."
 
 **Preconditions**:
 
-- Engine supports GraphQL subscriptions
 - Engine supports stream management
 - AI understands real-time patterns
 
 **Main Flow**:
 
 1. Developer describes collaborative feature to AI (e.g., "shared todo list")
-2. AI generates code using GraphQL subscriptions or streaming APIs
+2. AI generates code using streaming APIs
 3. Multiple users connect to the application simultaneously
 4. User actions broadcast to all connected users in real-time
 5. Engine manages stream lifecycle and cleanup
@@ -148,7 +147,7 @@ Users should be able to view all posts and individual post details."
 
 1. **Project Manager** defines requirements and creates initial project structure
 2. **Developer + AI** builds backend logic (API handlers, data models)
-   - AI generates REST/GraphQL endpoints
+   - AI generates REST endpoints
    - Developer tests in development environment
    - Commits working handlers
 3. **Designer + AI** creates UI/UX concurrently
@@ -688,7 +687,7 @@ Use cases for developers building web applications with HTML/CSS/JavaScript fron
 
 ## API Developer Use Cases
 
-Use cases for developers building REST or GraphQL APIs.
+Use cases for developers building REST APIs and MCP tools.
 
 ### UC-201: RESTful CRUD API
 
@@ -736,41 +735,6 @@ Use cases for developers building REST or GraphQL APIs.
   "createdAt": "2025-10-15T10:00:00Z"
 }
 ```
-
----
-
-### UC-202: GraphQL API with Queries and Mutations
-
-**Priority**: HIGH  
-**Actors**: API Developer + AI  
-**Goal**: Create a GraphQL API with type-safe queries and mutations
-
-**Preconditions**:
-
-- Engine supports GraphQL
-- Engine provides schema definition capabilities
-- AI knows GraphQL syntax
-
-**Main Flow**:
-
-1. Developer describes data model to AI
-2. AI generates GraphQL schema
-3. AI generates resolvers for queries and mutations
-4. Developer deploys schema and resolvers
-5. Client sends GraphQL queries
-6. Engine validates queries against schema
-7. Resolvers fetch/modify data
-8. Engine returns properly formatted GraphQL response
-
-**Expected Results**:
-
-- ✅ Schema validation works correctly
-- ✅ Queries return requested fields only
-- ✅ Mutations modify data correctly
-- ✅ Type safety enforced
-- ✅ Error handling is clear
-
-**Related Requirements**: REQ-GQL-001, REQ-GQL-002, REQ-DATA-001
 
 ---
 
@@ -879,52 +843,6 @@ Use cases for building collaborative, real-time applications.
 - Stock price updates
 - Server monitoring dashboard
 - IoT sensor data feeds
-
----
-
-### UC-302: GraphQL Subscriptions for Real-Time Updates
-
-**Priority**: CRITICAL  
-**Actors**: Real-Time Developer + AI, Multiple End Users  
-**Goal**: Use GraphQL subscriptions for type-safe real-time updates
-
-**Preconditions**:
-
-- Engine supports GraphQL subscriptions
-- WebSocket or streaming transport available
-
-**Main Flow**:
-
-1. Developer describes real-time feature to AI
-2. AI generates GraphQL subscription schema
-3. AI generates subscription resolver
-4. Clients subscribe via GraphQL
-5. Events occur (data changes)
-6. Subscription resolver publishes updates
-7. Engine delivers updates to subscribers
-8. Clients receive typed, filtered data
-
-**Expected Results**:
-
-- ✅ Subscriptions work reliably
-- ✅ Type safety maintained
-- ✅ Only relevant updates sent (filtering works)
-- ✅ Subscription cleanup on disconnect
-
-**Related Requirements**: REQ-GQL-003, REQ-RT-001, REQ-RT-002
-
-**Example**:
-
-```graphql
-subscription OnMessageAdded($chatId: ID!) {
-  messageAdded(chatId: $chatId) {
-    id
-    text
-    author
-    timestamp
-  }
-}
-```
 
 ---
 
@@ -1149,7 +1067,7 @@ End-to-end scenarios combining multiple features.
 
 - User authentication
 - Channel management
-- Real-time message delivery (GraphQL subscriptions)
+- Real-time message delivery (Server-Sent Events)
 - Message history (data repository)
 - User presence
 - File sharing
@@ -1174,7 +1092,6 @@ End-to-end scenarios combining multiple features.
 - API authentication (JWT)
 - Role-based access control
 - Rate limiting per tenant
-- GraphQL API
 - Webhook support
 - Admin API
 
@@ -1423,11 +1340,10 @@ Response: {
 **Components Integrated**:
 
 - Web application (customer portal)
-- GraphQL API (for data access)
 - MCP Tools (order lookup, ticket creation, refund processing)
 - MCP Prompts (product context, customer history)
 - MCP Resources (knowledge base, FAQ, policies)
-- Real-time chat (GraphQL subscriptions)
+- Real-time chat (Server-Sent Events)
 - Authentication (customer login)
 
 **Architecture**:
@@ -1447,7 +1363,7 @@ Customer <-> Web Portal <-> aiwebengine <-> AI Agent (via MCP)
 
 1. **Developer + AI builds system**:
    - AI generates customer portal (HTML/JS)
-   - AI creates GraphQL schema for data
+   - AI creates the data model
    - AI generates MCP tools for actions
    - AI creates MCP prompts for context
    - AI exposes knowledge base as MCP resources
@@ -1483,7 +1399,7 @@ Customer <-> Web Portal <-> aiwebengine <-> AI Agent (via MCP)
 - ✅ Support team can monitor AI interactions
 - ✅ System maintains audit trail
 
-**Related Requirements**: All MCP, GraphQL, Auth, Real-time, Security requirements
+**Related Requirements**: All MCP, Auth, Real-time, Security requirements
 
 **Example MCP Setup**:
 

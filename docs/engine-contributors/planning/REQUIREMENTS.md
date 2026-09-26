@@ -21,16 +21,15 @@ This document defines the complete requirements for the aiwebengine project, cov
    - [Logging & Monitoring](#logging--monitoring)
 3. [Real-Time Features](#real-time-features)
 4. [Model Context Protocol (MCP) Support](#model-context-protocol-mcp-support)
-5. [GraphQL Support](#graphql-support)
-6. [Data Management](#data-management)
-7. [JavaScript APIs](#javascript-apis)
-8. [Asset Management](#asset-management)
-9. [Editor and Developer Tools](#editor-and-developer-tools)
-10. [Development Requirements](#development-requirements)
-11. [Documentation Requirements](#documentation-requirements)
-12. [Testing Requirements](#testing-requirements)
-13. [Performance Requirements](#performance-requirements)
-14. [Deployment Requirements](#deployment-requirements)
+5. [Data Management](#data-management)
+6. [JavaScript APIs](#javascript-apis)
+7. [Asset Management](#asset-management)
+8. [Editor and Developer Tools](#editor-and-developer-tools)
+9. [Development Requirements](#development-requirements)
+10. [Documentation Requirements](#documentation-requirements)
+11. [Testing Requirements](#testing-requirements)
+12. [Performance Requirements](#performance-requirements)
+13. [Deployment Requirements](#deployment-requirements)
 
 ---
 
@@ -344,7 +343,7 @@ The engine MUST support script initialization through an `init` function:
 - Setting up periodic tasks or timers
 - Initializing database connections or external service clients
 - Loading configuration or precomputing values
-- Registering GraphQL resolvers or subscriptions
+- Registering MCP tools, prompts and resources
 
 ---
 
@@ -1156,70 +1155,6 @@ registerMCPResource(
 
 ---
 
-## GraphQL Support
-
-### REQ-GQL-001: GraphQL Server
-
-**Priority**: HIGH  
-**Status**: IMPLEMENTED
-
-The engine MUST support GraphQL:
-
-- Schema definition in JavaScript
-- Query execution
-- Mutation execution
-- Subscription execution via SSE
-- Standard GraphQL error handling
-
-### REQ-GQL-002: JavaScript GraphQL API
-
-**Priority**: HIGH  
-**Status**: IMPLEMENTED
-
-The engine MUST expose to JavaScript:
-
-- `registerGraphQLQuery(name, schema, resolverFn)`
-- `registerGraphQLMutation(name, schema, resolverFn)`
-- `registerGraphQLSubscription(name, schema, resolverFn)`
-- `sendSubscriptionMessage(name, data)`
-
-### REQ-GQL-003: GraphQL Subscriptions
-
-**Priority**: HIGH  
-**Status**: IMPLEMENTED
-
-The engine MUST support GraphQL subscriptions:
-
-- SSE-based subscription transport
-- Native `schema.execute_stream()` integration
-- Automatic stream path management
-- Multiple concurrent subscriptions
-- Subscription lifecycle management
-
-### REQ-GQL-004: GraphQL Introspection
-
-**Priority**: MEDIUM  
-**Status**: IMPLEMENTED
-
-The engine SHOULD:
-
-- Support introspection queries
-- Allow introspection to be disabled in production
-- Provide schema documentation
-
-### REQ-GQL-005: GraphQL Playground
-
-**Priority**: LOW  
-**Status**: PLANNED
-
-The engine MAY:
-
-- Provide GraphQL Playground UI
-- Support GraphiQL interface
-- Enable in development mode only
-
----
-
 ## Data Management
 
 ### REQ-DATA-001: In-Memory Repository
@@ -1343,18 +1278,6 @@ The engine MUST expose:
 
 - `registerWebStream(path)` - SSE stream registration
 - `sendStreamMessageToPath(path, data)` - targeted broadcast
-
-### REQ-JSAPI-003: GraphQL APIs
-
-**Priority**: HIGH  
-**Status**: IMPLEMENTED
-
-The engine MUST expose:
-
-- `registerGraphQLQuery(name, schema, resolver)`
-- `registerGraphQLMutation(name, schema, resolver)`
-- `registerGraphQLSubscription(name, schema, resolver)`
-- `sendSubscriptionMessage(name, data)`
 
 ### REQ-JSAPI-004: MCP APIs
 
@@ -1589,9 +1512,6 @@ The project SHOULD maintain consistent JavaScript API naming:
 **Future API Naming Improvements**:
 
 - Consider: `register` → `registerWebHandler`
-- Consider: `registerGraphQLQuery` → `registerQueryHandler`
-- Consider: `registerGraphQLMutation` → `registerMutationHandler`
-- Consider: `registerGraphQLSubscription` → `registerSubscriptionHandler`
 
 Note: API renaming is a breaking change and requires careful migration planning.
 
@@ -1774,8 +1694,7 @@ The editor SHOULD provide testing tools:
 - Log viewer with real-time updates
 - Performance profiler
 - Error reporting and stack traces
-- GraphQL query/mutation tester
-- Subscription testing interface
+- MCP tool tester
 
 ### REQ-EDITOR-005: Collaboration Features
 
@@ -1931,7 +1850,6 @@ The project MUST provide:
 The project MUST document:
 
 - **docs/streaming.md** - Real-time streaming guide
-- **docs/graphql-subscriptions.md** - GraphQL subscriptions guide
 - **docs/AUTH_JS_API.md** - Authentication API reference
 - **docs/CONFIGURATION.md** - Configuration guide
 
@@ -1958,7 +1876,7 @@ The project MUST provide example scripts:
   - Basic handler examples
   - Form handling examples
   - Streaming examples
-  - GraphQL examples
+  - MCP tool examples
   - Authentication examples
 - **docs/examples.md** - Example documentation
 
@@ -2029,7 +1947,7 @@ The project MUST have integration tests for:
 - HTTP request handling (all methods)
 - JavaScript script execution
 - Streaming functionality
-- GraphQL queries, mutations, subscriptions
+- MCP tools, prompts and resources
 - Authentication flows
 - Asset management
 - Error handling
@@ -2383,7 +2301,6 @@ The engine MUST support:
 
 - ECMAScript standards for JavaScript
 - Server-Sent Events (W3C)
-- GraphQL specification
 - JSON (RFC 8259)
 
 ---
@@ -2401,7 +2318,6 @@ The engine MUST support:
 - **Email Support**: SMTP integration for notifications
 - **File Storage**: S3-compatible object storage
 - **Search Integration**: Elasticsearch/OpenSearch
-- **GraphQL Playground**: Interactive GraphQL IDE (development mode only)
 - **API Version Migration Tools**: Automated migration for breaking changes
 - **Additional Scripting Languages**: Lua, Python, Rhai runtime support (see REQ-JS-008)
 

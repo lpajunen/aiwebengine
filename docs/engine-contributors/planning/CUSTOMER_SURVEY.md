@@ -166,17 +166,17 @@
     - [ ] Easy - well supported by my framework
     - [ ] Not applicable
 
-### 3.3 GraphQL Support
+### 3.3 MCP (Model Context Protocol) Support
 
-17. **Do you use GraphQL in your projects?**
-    - [ ] Yes, extensively
-    - [ ] Yes, for some projects
+17. **Do you expose your applications to AI agents?**
+    - [ ] Yes, over MCP
+    - [ ] Yes, through a custom tool API
     - [ ] Tried it but switched away
-    - [ ] Interested but haven't used it
-    - [ ] No, prefer REST
+    - [ ] Interested but haven't done it
+    - [ ] No, but expect to
     - [ ] No, not interested
 
-18. **If a platform provided built-in GraphQL support with subscriptions, would you use it?**
+18. **If a platform published your endpoints as MCP tools without extra work, would you use it?**
     - [ ] Definitely yes
     - [ ] Probably yes
     - [ ] Maybe
@@ -431,7 +431,7 @@
 ## Section 8: Feature Prioritization
 
 44. **Rank these planned features by importance to you** (1 = most important, 10 = least important)
-    - [ ] Enhanced GraphQL with subscriptions
+    - [ ] Richer MCP surface (tools, prompts, resources)
     - [ ] Database integration (PostgreSQL, MySQL, etc.)
     - [ ] Advanced authentication (SSO, MFA)
     - [ ] WebSocket support for real-time features

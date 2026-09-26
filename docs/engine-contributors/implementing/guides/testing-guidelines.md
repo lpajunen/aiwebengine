@@ -334,7 +334,6 @@ tests/
 │   ├── mod.rs       // Shared test utilities
 │   └── fixtures.rs  // Test data
 ├── auth_tests.rs    // Authentication integration tests
-├── graphql_tests.rs // GraphQL integration tests
 └── api_tests.rs     // API integration tests
 ```
 

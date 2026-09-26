@@ -415,7 +415,7 @@ mod tests {
             requested_resource(&headers, "/mcp"),
             Some("game.example.com/mcp".to_string())
         );
-        assert_eq!(requested_resource(&headers, "/graphql"), None);
+        assert_eq!(requested_resource(&headers, "/health"), None);
     }
 
     #[test]

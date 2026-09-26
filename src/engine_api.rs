@@ -122,14 +122,8 @@ fn is_admin_or_owner(user: &UserContext, script_uri: &str) -> bool {
 /// or asset routes at or under these prefixes; every other path is open to
 /// any script. `/` and `/favicon.ico` are intentionally not reserved — the
 /// engine serves defaults for them only when no script claims them.
-pub const RESERVED_ROUTE_PREFIXES: &[&str] = &[
-    "/health",
-    "/graphql",
-    "/mcp",
-    "/auth",
-    "/.well-known",
-    "/engine",
-];
+pub const RESERVED_ROUTE_PREFIXES: &[&str] =
+    &["/health", "/mcp", "/auth", "/.well-known", "/engine"];
 
 /// The engine-owned SSE stream carrying script change notifications.
 ///
@@ -8208,7 +8202,7 @@ pub fn get_script_hosts_authorized(
 
 /// Replace a script's host bindings. Administrators only.
 ///
-/// Where a script's routes, assets, streams, GraphQL operations and MCP tools
+/// Where a script's routes, assets, streams and MCP tools
 /// are published decides which origins can reach them, so this is an
 /// administrator's call rather than a script owner's — an owner could
 /// otherwise move their own script onto the management host.
@@ -9439,7 +9433,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
                         "after_seq": { "type": "integer", "description": "Only entries written after this seq; pass the highest seq from a previous read to see only what is new" },
                         "contains": { "type": "string", "description": "Only entries whose message contains this substring" },
                         "request_id": { "type": "string", "description": "Only the entries one invocation emitted, by x-request-id or a non-HTTP invocation's id" },
-                        "kind": { "type": "string", "description": "Only entries from invocations of this kind: httpRoute, graphqlQuery, graphqlMutation, graphqlSubscription, scheduled, streamCustomization, mcpTool, mcpPrompt, init, eval, test" },
+                        "kind": { "type": "string", "description": "Only entries from invocations of this kind: httpRoute, scheduled, streamCustomization, mcpTool, mcpPrompt, init, eval, test" },
                         "route": { "type": "string", "description": "Only entries logged while serving this registered route pattern, e.g. /things/:id" },
                         "revision": { "type": "integer", "description": "Only entries written while this revision of the script was running. Use with list_revisions to find when a failure started." },
                         "limit": { "type": "integer", "description": "Keep at most this many of the newest matching entries" }
@@ -11879,7 +11873,6 @@ mod tests {
             Some("/.well-known")
         );
         assert_eq!(reserved_route_prefix("/health"), Some("/health"));
-        assert_eq!(reserved_route_prefix("/graphql/sse"), Some("/graphql"));
         assert_eq!(reserved_route_prefix("/mcp"), Some("/mcp"));
         assert_eq!(
             reserved_route_prefix("/engine/health/cluster"),

@@ -125,24 +125,6 @@ script-context queue first and alone. The script queue needs none of it —
 nobody's credential is involved — and it is what unblocks the "start work,
 return, pick it up later" shape that items 1–3 are really about.
 
-## Async dispatch is delivery, not a third API
-
-`dispatcher.sendMessage` runs its listeners inline, on the sender's budget and
-under the sender's context. The reasoning for that context choice
-(`secure_globals.rs:5079`) is sound and should not be disturbed: a listener is
-part of serving the invocation that dispatched to it, so it holds what the
-sender held, no more and no less.
-
-What is missing is the asynchronous form — `dispatcher.post(type, data)`,
-which enqueues onto the task queue instead of running listeners now. Small
-change, real value, and it is what makes the dispatcher usable for fan-out
-rather than only for synchronous delegation within one execution.
-
-It raises the same "under whose context" question, and the answer should be the
-conservative one: an asynchronous dispatch runs in **script context**. Personal
-context requires the explicit grant above. Keeping the escalation story to one
-sentence is worth more than the convenience of the alternative.
-
 ## Naming
 
 `scriptWorker` / `personalWorker` parallels `scriptStorage` / `personalStorage`
@@ -211,14 +193,7 @@ All six items are built.
    invocation id — while a failure keeps its row and its last error, which is
    the one somebody has to read.
 
-4. ~~**`dispatcher.post`**~~ _(done)_ onto that queue. The listener is the same
-   registration and the same code either way, which needed a `kind` on the
-   queued row: a posted message is handed to its handler as `messageType` and
-   `messageData`, the shape an inline `sendMessage` uses. Without that a
-   listener would behave differently depending on how the message reached it,
-   and reusing the dispatcher's registrations is the only reason to post
-   rather than enqueue directly.
-5. ~~**The delegation record**~~ _(done)_ — consent page, grant table,
+4. ~~**The delegation record**~~ _(done)_ — consent page, grant table,
    run-time intersection, `/auth/sessions` surfacing, cancellation on revoke —
    and then `personalTasks` on top of it. See `docs/DELEGATION.md`.
 
@@ -231,7 +206,7 @@ All six items are built.
    and retrying is the engine repeatedly asking to act as somebody who has
    said no.
 
-6. ~~**Per-script limits.**~~ _(done)_ See `docs/SCRIPT_LIMITS.md`. The note
+5. ~~**Per-script limits.**~~ _(done)_ See `docs/SCRIPT_LIMITS.md`. The note
    called this plumbing and it was, but it named the wrong beneficiary:
    raising a ceiling for an agent is the obvious use and _lowering_ one is the
    valuable one, since containing a script that has started holding execution

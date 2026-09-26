@@ -7,7 +7,7 @@ and the settings themselves in
 [02-CONFIGURATION.md](docs/engine-administrators/02-CONFIGURATION.md).
 
 In every option below, the engine is reached the same way — over HTTP, by a
-browser, an MCP client, a GraphQL client or anything else that speaks HTTP.
+browser, an MCP client or anything else that speaks HTTP.
 There is no other entry point, and no deployment mode changes the API surface.
 What differs is where the database lives, what terminates TLS, and how many
 engine processes there are.
@@ -24,7 +24,7 @@ A deployment is a point on two axes, not a name:
 | **Server, clustered**   | Postgres container, or managed        | Caddy                            | 2+               |
 
 Everything else — the JavaScript API, the capability model, `/engine/*`, MCP,
-GraphQL, scheduled jobs, revisions and deployments — is identical across all
+scheduled jobs, revisions and deployments — is identical across all
 four. That is the property worth protecting: a solution developed against a
 desktop install must run unchanged on a cluster.
 

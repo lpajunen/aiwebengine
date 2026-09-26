@@ -60,9 +60,9 @@ turned out to depend on neither, and on a decision rather than a mechanism.
   push/pop mask over the running context could not close.
 
   The mechanism was nearly free: `evaluate_snippet` already ran caller-authored
-  source against a script's program with a caller-chosen `UserContext`,
-  `dispatcher.sendMessage` already built a nested runtime inside a running host
-  call, nested budgets were already clamped to the parent's remaining time, and
+  source against a script's program with a caller-chosen `UserContext`, a
+  stream customization function already built a nested runtime inside a running
+  host call, nested budgets were already clamped to the parent's remaining time, and
   a nested rollback was already a `SAVEPOINT`. What the work actually consisted
   of was **item 3** — the vocabulary. Attenuating the old `Capability` enum
   bought nothing an agent cares about: `fetch` was gated by nothing at all,

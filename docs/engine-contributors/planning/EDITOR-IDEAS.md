@@ -6,7 +6,7 @@ This document collects ideas for improving the aiwebengine editor, with a focus 
 
 ### Multi-Script Context Options
 
-Currently, the AI assistant only includes the current script in its context when providing answers. This limits the AI's ability to help with scenarios where scripts interact with each other (e.g., one script provides a GraphQL API and another consumes it).
+Currently, the AI assistant only includes the current script in its context when providing answers. This limits the AI's ability to help with scenarios where scripts interact with each other (e.g., one script publishes MCP tools and another consumes them).
 
 #### Option 1: Script Selection UI (Recommended)
 
@@ -31,14 +31,13 @@ Currently, the AI assistant only includes the current script in its context when
 AI Assistant
 ├─ Additional Scripts: [▼]
 │  ├─ ☑ core.js
-│  ├─ ☐ graphql-api.js
 │  └─ ☐ auth-helpers.js
 └─ Token Budget: 2,450 / 8,000 tokens used
 ```
 
 #### Option 2: Automatic Dependency Detection
 
-**Description:** Analyze the current script for references to other scripts (e.g., GraphQL endpoints, API calls) and automatically include them.
+**Description:** Analyze the current script for references to other scripts (e.g., HTTP endpoints, MCP tools, API calls) and automatically include them.
 
 **Advantages:**
 
@@ -53,7 +52,6 @@ AI Assistant
 
 **Detection Patterns:**
 
-- `executeGraphQL()` calls → include GraphQL schema registration scripts
 - `fetch('/api/users')` calls → include scripts that register that route
 - `registerWebStream()` references → include related stream handlers
 
@@ -128,7 +126,6 @@ Implement techniques similar to GitHub Copilot for intelligent context gathering
 1. Pre-process user prompt to extract key terms
 2. Search script names and content for keyword matches
 3. Detect common patterns:
-   - GraphQL queries/mutations/subscriptions
    - API endpoint paths
    - Function names
    - Variable references
@@ -138,10 +135,6 @@ Implement techniques similar to GitHub Copilot for intelligent context gathering
 **Example Patterns:**
 
 ```javascript
-// Detect GraphQL operations
-const graphqlPatterns = [
-  /registerGraphQL(Query|Mutation|Subscription)\s*\(/g,
-  /executeGraphQL\s*\(/g,
 ];
 
 // Detect route registrations
@@ -155,7 +148,7 @@ const routePatterns = [
 
 ```
 AI Assistant
-└─ Auto-included: core.js, graphql-schema.js, auth.js [?]
+└─ Auto-included: core.js, tools.js, auth.js [?]
    (click to see why these were included)
 ```
 
@@ -170,12 +163,10 @@ AI Assistant
   "core.js": {
     "provides": ["/api/users", "/api/posts"],
     "consumes": [],
-    "graphql": ["getUser", "createPost"]
   },
   "client.js": {
     "provides": ["/app/dashboard"],
     "consumes": ["/api/users"],
-    "graphql": []
   }
 }
 ```
@@ -343,10 +334,10 @@ const tests = [
 **Example Interaction:**
 
 ```
-User: "My GraphQL query is returning undefined"
+User: "My fetch call is returning undefined"
 
 AI: I found the issue in your script:
-1. Line 45: You're calling `executeGraphQL()` without await
+1. Line 45: You're calling `fetchAll()` without handling its result
 2. The function is async but you're not handling the Promise
 3. Suggested fix: Add `await` or use `.then()`
 
@@ -421,7 +412,6 @@ function init(context) {
   // User types: "regi"
   // AI suggests:
   //   - register(path, handler, method)
-  //   - registerGraphQLQuery(...)
   //   - registerWebStream(path)
 }
 ```
@@ -463,7 +453,6 @@ const data = JSON.parse(JSON.parse(response).body);
 **Template Categories:**
 
 - REST APIs (CRUD)
-- GraphQL schemas
 - Web pages (HTML)
 - File upload handlers
 - WebSocket/SSE streams
@@ -519,10 +508,10 @@ AI: I'll refactor your script:
 
 3. **API + Client Pattern:**
    - "Create a task management API and a client script that uses it"
-   - AI creates: `tasks-api.js` (GraphQL schema), `tasks-client.js` (queries/mutations)
+   - AI creates: `tasks-api.js` (routes), `tasks-client.js` (calls)
 
 4. **Migration:**
-   - "Convert all REST APIs to GraphQL"
+   - "Publish all REST APIs as MCP tools too"
    - AI modifies: `users-api.js`, `posts-api.js`, `comments-api.js`, etc.
 
 5. **Testing:**
@@ -734,7 +723,7 @@ class FileTransaction {
     {
       "type": "create_script",
       "script_name": "posts-api.js",
-      "explanation": "GraphQL API for managing blog posts",
+      "explanation": "REST API for managing blog posts",
       "code": "// full script content...",
       "dependencies": ["core.js"]
     },
@@ -819,10 +808,10 @@ BEST PRACTICES:
 
 1. "Create a complete task management system"
 2. "Refactor my API scripts to use shared authentication"
-3. "Add GraphQL subscriptions to all my APIs"
+3. "Add Server-Sent Event streams to all my APIs"
 4. "Create integration tests for my existing scripts"
 5. "Split core.js into separate feature modules"
-6. "Migrate from REST to GraphQL across all endpoints"
+6. "Expose every endpoint as an MCP tool as well"
 
 #### Technical Challenges
 

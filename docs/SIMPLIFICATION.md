@@ -354,7 +354,7 @@ Prelude-wrapped globals return real objects and throw real `Error`s:
 
 Raw host globals return **JSON inside a string** and `"Error: ..."` as a
 _value_: `assetStorage`, `secretStorage`, `database`, `routeRegistry`,
-`schedulerService`, `graphQLRegistry`, `mcpRegistry`, `dispatcher`. That is 45
+`schedulerService`, `mcpRegistry`. That is 45
 bare `: string` returns in `aiwebengine.d.ts` and 16 `"Error: ..."` formats in
 `secure_globals.rs`.
 
@@ -378,34 +378,23 @@ the change solution developers feel first.
   does.
 - `acquireLease` + `createLeaseTable` — `scriptTasks` lanes now do this
   properly, in the queue rather than in each caller
-- `generateGraphQLForTable` — **zero callers** anywhere in `src`, `scripts`,
-  `tests` or `assets`
 
 27 becomes about 10.
 
 ## 7. Features to drop — and one that stays
 
-**GraphQL.** `graphql.rs` (1,211) + `graphql_ws.rs` (438) +
-`graphql_schema_gen.rs` (355), plus `graphQLRegistry`, plus subscriptions over
-both WebSocket and SSE, plus a schema rebuild on every script write in
-`notifications.rs`. Every user in the repository is a test fixture —
-`graphql_test.js`, `test_graphql_execution.js`, `test_subscription_schema.js`,
-`test_selective_broadcasting.js`. No solution uses it. It is a third RPC
-surface beside HTTP routes and MCP, and MCP is the one with momentum and an
-auth story. Coupling is thin: 7 references in `lib.rs`, 3 in `notifications.rs`,
-2 in `engine_api.rs`. This is the largest single drop, and it takes a class of
-schema-rebuild ordering bugs with it.
-
-**`dispatcher`.** 658 lines, one test fixture uses it, and it is a fourth
-registration kind with its own invalidation path. `scriptTasks` is strictly
-better at the same job — durable, laned, retried, with a real error story — and
-`engine.call` covers the synchronous case.
+**Done: the two RPC surfaces nothing used.** A third way to reach a script and
+a fourth registration kind, each with an invalidation path of its own, and
+every user of either was a test fixture. Both are gone, along with the
+capability that gated one of them and the queue's task-kind column that existed
+only for the other. `scriptTasks` covers what the removed dispatch did and
+covers it better — durable, laned, retried, with a state somebody can read.
 
 **Not a drop: `stream_manager.rs` (690).** SSE is not in question — the streams
 themselves are valuable and `stream_registry.rs` (1,408) is what implements
 them. But `stream_manager.rs` is a tracking layer wrapped around that registry,
 and it is dead: `StreamConnectionManager::new()` is constructed fresh at each
-call site (`lib.rs:963`, `graphql.rs:1108`), used once and dropped, so its
+call site, used once and dropped, so its
 `connection_metadata` and `connections_by_stream` maps are always empty. Two
 things are broken as a result, both verified:
 
@@ -464,17 +453,16 @@ the operation.
 ## Order of work
 
 1. **Merge script and asset into one tree** (§1). Everything else gets cheaper.
-2. **Drop GraphQL and `dispatcher`** (§7). Pure deletion; do it while the
-   surface is still big.
+2. ~~**Drop the two unused RPC surfaces**~~ _(done, §7)._
 3. **Exposure by directory** (§2), plus `.md`/`.txt` string modules.
 4. **Name and mount** (§4), including the move to `scripts.id` for physical
    table names and foreign keys.
 5. **Collapse routes and tools into one operation table** (§3); generate HTTP
    and OpenAPI from it.
 6. **Prelude every global** (§5); trim `database` to about ten methods (§6).
-7. **Fold `stream_manager` into `stream_registry`** (fixing the connection leak
-   and the never-firing limits) **and `asset_registry` into `route_index`**
-   (§7, §2).
+7. ~~**Fold `stream_manager` into `stream_registry`**~~ _(done)_ — the
+   connection leak and the never-firing limits — **and `asset_registry` into
+   `route_index`** (§7, §2).
 
 ## Open questions
 

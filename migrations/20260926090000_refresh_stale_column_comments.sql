@@ -1,0 +1,11 @@
+-- Column comments that still name invocation kinds the engine no longer has.
+--
+-- `logs.kind` was documented as including `graphqlQuery`, which went with
+-- GraphQL. The comment lives in the database rather than in a file, so a
+-- reader running \d+ on the table is told about a kind nothing can write.
+--
+-- A new migration rather than an edit to 20260822000000: sqlx checksums every
+-- applied migration and refuses to start against a database whose recorded
+-- checksum differs (`MigrateError::VersionMismatch`), so rewriting history
+-- here would break every deployment that has already run it.
+COMMENT ON COLUMN logs.kind IS 'What sort of invocation emitted this line: httpRoute, scheduled, streamCustomization, mcpTool, mcpPrompt, init, eval, test. NULL for engine-internal writes.';

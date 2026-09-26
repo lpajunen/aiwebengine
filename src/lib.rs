@@ -190,9 +190,6 @@ What a script may spend is worth knowing before writing one: each invocation get
             openapi_schemas::DatabaseStatus,
             openapi_schemas::ScriptStatus,
             openapi_schemas::SystemInfo,
-            openapi_schemas::GraphQLRequest,
-            openapi_schemas::GraphQLResponse,
-            openapi_schemas::GraphQLError,
             openapi_schemas::McpRpcRequest,
             openapi_schemas::McpRpcResponse,
             openapi_schemas::McpRpcError,
@@ -219,7 +216,6 @@ What a script may spend is worth knowing before writing one: each invocation get
     modifiers(&SecurityAddon),
     tags(
         (name = "Health", description = "Health check and monitoring endpoints"),
-        (name = "GraphQL", description = "GraphQL API endpoints for queries, mutations, and subscriptions"),
         (name = "MCP", description = "Model Context Protocol (JSON-RPC 2.0) endpoints for AI tool integration"),
         (name = "Authentication", description = "OAuth2 authentication and authorization endpoints"),
         (name = "Assets", description = "Static assets served from the asset registry"),
@@ -1148,7 +1144,7 @@ async fn initialize_components(config: &config::Config) -> AppResult<()> {
     // script or connection can reference them
     engine_api::register_engine_streams();
 
-    // Execute all scripts at startup to populate GraphQL registry
+    // Execute all scripts at startup so their registrations exist
     execute_startup_scripts().await?;
 
     // Initialize all scripts by calling their init() functions if they exist
@@ -1161,9 +1157,9 @@ async fn initialize_components(config: &config::Config) -> AppResult<()> {
     Ok(())
 }
 
-/// Execute all scripts at startup to populate GraphQL registry
+/// Execute all scripts at startup so their registrations exist
 async fn execute_startup_scripts() -> AppResult<()> {
-    info!("Executing all scripts at startup to populate GraphQL registry...");
+    info!("Executing all scripts at startup to populate their registrations...");
     let scripts = repository::get_repository()
         .list_scripts()
         .await
@@ -2975,7 +2971,7 @@ async fn setup_routes(
     // Build the router
     let mut app = Router::new();
 
-    // Add GraphQL and editor routes with authentication requirement if auth is enabled
+    // Add the authenticated routes if auth is enabled
     if let Some(auth_mgr) = auth_manager {
         info!("✅ Authentication ENABLED - mounting auth routes and middleware");
 
