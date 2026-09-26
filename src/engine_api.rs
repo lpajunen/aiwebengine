@@ -497,25 +497,16 @@ pub fn upsert_script_authorized(
     Ok((action, revision))
 }
 
-/// Edit a script's root source in place, by replacing strings within it.
+/// Edit a script's entrypoint in place, by replacing strings within it.
 ///
-/// [`patch_asset_authorized`] for the one file of a script that is not an
-/// asset. A script's modules could already be changed a few lines at a time
-/// while its root could only be replaced whole — and the root is the file that
-/// registers every route the others serve, so it is both the one an editor
-/// reproduces least faithfully from memory and the one where losing something
-/// in the resend costs the most.
-///
-/// The checks are the ones a patch of an asset makes, for the same reasons:
-/// `base_sha256` establishes *which* version is being edited, and a unique
-/// `old_string` establishes *where*. What differs is the authorization, which
-/// is a script write's rather than an asset write's — `WriteScripts`, plus
-/// ownership or `AdministerEngine` — since that is what this file is.
+/// [`patch_file_authorized`] aimed at whichever file of the tree is the root,
+/// which is what `POST /engine/edit_script` means by "the script": the caller
+/// names a script and not a path, so the path is resolved here.
 ///
 /// It deliberately does not run `init()`. A whole write re-initialises on its
 /// way out; a patch leaves that to the caller's `reinit`, so a change spanning
-/// the root and three modules initialises once at the end rather than once per
-/// file.
+/// the entrypoint and three modules initialises once at the end rather than
+/// once per file.
 pub fn patch_script_authorized(
     user: &UserContext,
     uri: &str,
@@ -528,33 +519,70 @@ pub fn patch_script_authorized(
             "Script name cannot be empty".to_string(),
         ));
     }
+    let path =
+        crate::module_loader::root_module_path_in(uri, &crate::source_view::SourceView::Live)
+            .map_err(|_| PatchError::NotFound)?;
+    patch_file_authorized(user, uri, &path, edits, base_sha256, via)
+}
+
+/// Edit one file of a script's tree in place.
+///
+/// This was two functions with ninety near-identical lines each, because a
+/// patch of the root wrote a column and a patch of a module wrote a row. What
+/// actually differs is policy, and it is gathered here rather than spread
+/// across two copies of the same arithmetic:
+///
+/// - **Who may.** The entrypoint takes `WriteScripts` and ownership, every
+///   other file takes `WriteAssets` and ownership. The same line the whole
+///   write and the delete draw.
+/// - **How big.** Source meets the 1MB script ceiling; an asset meets the
+///   10MB one.
+/// - **Whether it may be emptied.** Edits that leave the entrypoint empty are
+///   refused — a script with no program is not a state to store, and deleting
+///   it is what `delete_script` is. Any other file may legitimately become
+///   empty.
+pub fn patch_file_authorized(
+    user: &UserContext,
+    script_uri: &str,
+    path: &str,
+    edits: &[StringEdit],
+    base_sha256: Option<&str>,
+    via: Option<&str>,
+) -> Result<PatchOutcome, PatchError> {
+    let is_root = crate::module_loader::is_root_module_name(path);
 
     // `authorize_script_write` answers "may this caller write here", and
-    // reports whether anything is there. A patch needs both: the same rule a
-    // whole write applies, and a file to apply the edits to.
-    let exists = authorize_script_write(user, uri).map_err(|message| {
-        // Its refusals are phrased for callers that render them as they stand;
-        // a patch's are wrapped, so the prefix would be said twice.
-        PatchError::AccessDenied(
-            message
-                .strip_prefix("Error: ")
-                .unwrap_or(&message)
-                .to_string(),
-        )
-    })?;
-    if !exists {
-        return Err(PatchError::NotFound);
+    // reports whether anything is there. A patch of the entrypoint needs
+    // both: the same rule a whole write applies, and a file to apply the
+    // edits to.
+    if is_root {
+        let exists = authorize_script_write(user, script_uri).map_err(|message| {
+            // Its refusals are phrased for callers that render them as they
+            // stand; a patch's are wrapped, so the prefix would be said twice.
+            PatchError::AccessDenied(
+                message
+                    .strip_prefix("Error: ")
+                    .unwrap_or(&message)
+                    .to_string(),
+            )
+        })?;
+        if !exists {
+            return Err(PatchError::NotFound);
+        }
+    } else if !can_access_assets(user, script_uri, &Capability::WriteAssets) {
+        return Err(PatchError::AccessDenied("Access denied".to_string()));
     }
-    // The stored root rather than the served one. Basing the edits on a pin
-    // and writing the result to head is how a patch after a batch reverted the
-    // batch, and `base_sha256` could not catch it: the digest was taken from
-    // the same pinned content the edits were applied to, so the precondition
-    // agreed with itself while disagreeing with what was stored.
-    let Some(stored) = repository::fetch_script_head(uri) else {
+
+    // The stored file rather than the served one. Basing the edits on a pin
+    // and writing the result to head is how a patch after a batch reverted
+    // the batch, and `base_sha256` could not catch it: the digest was taken
+    // from the same pinned content the edits were applied to, so the
+    // precondition agreed with itself while disagreeing with what was stored.
+    let Some(file) = repository::fetch_asset(script_uri, path) else {
         return Err(PatchError::NotFound);
     };
 
-    let original_digest = sha256_hex(stored.as_bytes());
+    let original_digest = sha256_hex(&file.content);
     if let Some(expected) = base_sha256
         && !expected.eq_ignore_ascii_case(&original_digest)
     {
@@ -564,43 +592,71 @@ pub fn patch_script_authorized(
         });
     }
 
-    let mut text = stored.clone();
-    let replacements = apply_string_edits(&mut text, edits, uri).map_err(PatchError::Validation)?;
+    let mut text = String::from_utf8(file.content.clone()).map_err(|_| {
+        PatchError::Validation(format!(
+            "'{}' is not UTF-8 text, so it cannot be edited as strings: write it whole \
+             with POST /engine/assets or /engine/assets/batch",
+            path
+        ))
+    })?;
 
-    // The two bounds a whole write gets from its own request body, asked here
-    // of the content the edits produced — since the point of a patch is that
-    // its body is not the content, so neither bound can be read off it.
-    if text.is_empty() {
+    let replacements =
+        apply_string_edits(&mut text, edits, path).map_err(PatchError::Validation)?;
+
+    // The bounds a whole write gets from its own request body, asked here of
+    // the content the edits produced — since the point of a patch is that its
+    // body is not the content, so neither bound can be read off it.
+    if is_root && text.is_empty() {
         return Err(PatchError::Validation(format!(
             "The edits would leave script '{}' empty; delete it instead if that is what was meant",
-            uri
+            script_uri
         )));
     }
-    if text.len() > repository::MAX_SCRIPT_CONTENT_BYTES {
+    let ceiling = if is_root {
+        repository::MAX_SCRIPT_CONTENT_BYTES
+    } else {
+        MAX_ASSET_BYTES
+    };
+    if text.len() > ceiling {
         return Err(PatchError::Validation(format!(
-            "Script too large after the edits: {} bytes (max {})",
+            "'{}' too large after the edits: {} bytes (max {})",
+            path,
             text.len(),
-            repository::MAX_SCRIPT_CONTENT_BYTES
+            ceiling
         )));
     }
 
-    let unchanged = text == stored;
+    let content = text.into_bytes();
+    let unchanged = content == file.content;
     let digest = if unchanged {
         original_digest
     } else {
-        sha256_hex(text.as_bytes())
+        sha256_hex(&content)
     };
-    let bytes = text.len();
+    let bytes = content.len();
 
-    if !unchanged
-        && let Err(e) = repository::upsert_script_with_owner(uri, &text, user.user_id.as_deref())
-    {
-        return Err(PatchError::Storage(format!("Error patching script: {}", e)));
+    if !unchanged {
+        // Through the batch write, so a patch reaches storage the same way a
+        // deploy does: one transaction, one notification to the cluster.
+        repository::upsert_assets(
+            script_uri,
+            vec![repository::Asset {
+                uri: file.uri.clone(),
+                name: file.name.clone(),
+                mimetype: file.mimetype.clone(),
+                content,
+                created_at: file.created_at,
+                updated_at: std::time::SystemTime::now(),
+                script_uri: script_uri.to_string(),
+            }],
+        )
+        .map_err(|e| PatchError::Storage(format!("Error patching '{}': {}", path, e)))?;
     }
 
     let auditor = auditor();
     let user_id = user.user_id.clone();
-    let uri_owned = uri.to_string();
+    let script_uri_owned = script_uri.to_string();
+    let path_owned = path.to_string();
     let edit_count = edits.len();
     tokio::task::spawn(async move {
         let _ = auditor
@@ -610,9 +666,10 @@ pub fn patch_script_authorized(
                     SecuritySeverity::Medium,
                     user_id,
                 )
-                .with_resource("script".to_string())
+                .with_resource("file".to_string())
                 .with_action("patch_for_uri".to_string())
-                .with_detail("uri", &uri_owned)
+                .with_detail("uri", &path_owned)
+                .with_detail("script_uri", &script_uri_owned)
                 .with_detail("edits", edit_count.to_string())
                 .with_detail("replacements", replacements.to_string())
                 .with_detail("content_size", bytes.to_string()),
@@ -621,13 +678,21 @@ pub fn patch_script_authorized(
     });
 
     let revision = (!unchanged)
-        .then(|| revisions::record_blocking(uri, revisions::Origin::Patch, user.user_id.as_deref()))
+        .then(|| {
+            revisions::record_blocking(
+                script_uri,
+                revisions::Origin::Patch,
+                user.user_id.as_deref(),
+            )
+        })
         .flatten();
 
-    // Watchers of `/engine/script_updates` see a root-source patch the way
-    // they see a whole write: the file they are tracking changed, and how much
-    // of it travelled to say so is not something they should have to know.
-    if !unchanged {
+    // Watchers of `/engine/script_updates` see a patch of the entrypoint the
+    // way they see a whole write: the file they are tracking changed, and how
+    // much of it travelled to say so is not something they should have to
+    // know. A patch of any other file is not a change to the script's program
+    // and is not broadcast, which is what it did before this.
+    if is_root && !unchanged {
         let mut details = vec![
             ("contentLength", json!(bytes)),
             ("previousExists", json!(true)),
@@ -636,7 +701,7 @@ pub fn patch_script_authorized(
         if let Some(via) = via {
             details.push(("via", json!(via)));
         }
-        broadcast_script_update(uri, UpsertAction::Updated.as_str(), &details);
+        broadcast_script_update(script_uri, UpsertAction::Updated.as_str(), &details);
     }
 
     Ok(PatchOutcome {
@@ -733,52 +798,90 @@ pub fn get_script_authorized(user: &UserContext, uri: &str) -> Option<String> {
     repository::fetch_script(uri)
 }
 
-/// Read a script's root source, whole or scoped to a line range and/or a
+/// Read a script's entrypoint, whole or scoped to a line range and/or a
 /// pattern.
 ///
-/// [`read_asset_authorized`] for the one file of a script that is not an
-/// asset, and the other half of what [`patch_script_authorized`] made
-/// possible: an editor could change the root without sending it, while still
-/// having to receive all of it to find what to change. A root source is the
-/// file most likely to be long — it registers everything the modules serve —
-/// so it is the one where that costs most.
+/// [`read_file_authorized`] aimed at whichever file of the tree is the root,
+/// for `GET /engine/read_script`, whose caller names a script rather than a
+/// path.
 ///
-/// Every read reports the digest of the whole script, not of the part
-/// returned, because that digest is what a following patch has to send to
-/// prove it edited the version it read.
+/// Every read reports the digest of the whole file, not of the part returned,
+/// because that digest is what a following patch has to send to prove it
+/// edited the version it read.
 pub fn read_script_authorized(
     user: &UserContext,
     uri: &str,
     options: &FileReadOptions,
 ) -> Result<FileRead, FileReadError> {
-    if !may_administer(user) || user.require_capability(&Capability::ReadScripts).is_err() {
+    let path =
+        crate::module_loader::root_module_path_in(uri, &crate::source_view::SourceView::Live)
+            .map_err(|_| FileReadError::NotFound)?;
+    read_file_authorized(user, uri, &path, options)
+}
+
+/// Whether `user` may read one file of `script_uri`'s tree.
+///
+/// The two halves of a script used to be read under two different rules, and
+/// merging the storage must not quietly pick one of them. The entrypoint is
+/// the script's source and is read under `ReadScripts`, which asks nothing
+/// about ownership — a solution's code has always been readable by any reader.
+/// Every other file is an asset and takes `ReadAssets` *plus* ownership.
+/// Collapsing to the first rule would publish every script's private files;
+/// collapsing to the second would make source unreadable to anyone but its
+/// owner.
+fn can_read_file(user: &UserContext, script_uri: &str, path: &str) -> bool {
+    if crate::module_loader::is_root_module_name(path) {
+        may_administer(user) && user.require_capability(&Capability::ReadScripts).is_ok()
+    } else {
+        can_access_assets(user, script_uri, &Capability::ReadAssets)
+    }
+}
+
+/// Read one file of a script's tree — its entrypoint or any other.
+///
+/// Head, not what the script serves: this read is the first half of an edit,
+/// and its digest is what the following patch sends back as `base_sha256`. A
+/// pinned script serves an older revision, and reading that one would have the
+/// caller editing a version its write cannot land on. `GET /engine/deploy` is
+/// where a caller asks what is being served.
+pub fn read_file_authorized(
+    user: &UserContext,
+    script_uri: &str,
+    path: &str,
+    options: &FileReadOptions,
+) -> Result<FileRead, FileReadError> {
+    if !can_read_file(user, script_uri, path) {
         return Err(FileReadError::AccessDenied);
     }
-    // Head, not what the script serves: this read is the first half of an
-    // edit, and its digest is what the following patch sends back as
-    // `base_sha256`. A pinned script serves an older revision, and reading
-    // that one would have the caller editing a version its write cannot land
-    // on. `GET /engine/deploy` is where a caller asks what is being served.
-    let Some(content) = repository::fetch_script_head(uri) else {
+    let Some(file) = repository::fetch_asset(script_uri, path) else {
         return Err(FileReadError::NotFound);
     };
 
-    let sha256 = sha256_hex(content.as_bytes());
-    let bytes = content.len();
+    let sha256 = sha256_hex(&file.content);
+    let bytes = file.content.len();
 
-    // A root source is text by construction — it is a program the engine
-    // executes — so the unscoped read hands it back as text rather than as the
-    // base64 an asset needs, an asset being anything at all.
     if !options.is_scoped() {
+        // Text when the bytes are text, base64 otherwise — the rule
+        // `resources/read` already applies, and the rule a *scoped* read of
+        // any file has always applied. The unscoped read was the one place
+        // the two halves disagreed: a root came back as text because it is a
+        // program, and every other file came back as base64 because an asset
+        // is anything at all. That made a module answer in base64 whole and
+        // in text by the line.
         return Ok(FileRead {
-            view: FileView::Whole { content },
+            view: match String::from_utf8(file.content.clone()) {
+                Ok(content) => FileView::Whole { content },
+                Err(_) => FileView::Full {
+                    content_base64: base64::engine::general_purpose::STANDARD.encode(&file.content),
+                },
+            },
             sha256,
             bytes,
             total_lines: None,
         });
     }
 
-    let (view, total_lines) = scoped_view(content.as_bytes(), options, uri, "Script")?;
+    let (view, total_lines) = scoped_view(&file.content, options, path, "File")?;
     Ok(FileRead {
         view,
         sha256,
@@ -1609,7 +1712,13 @@ impl FileRead {
     /// caller named.
     pub fn to_json(&self) -> Value {
         let mut body = match &self.view {
-            FileView::Full { content_base64 } => json!({ "content": content_base64 }),
+            // Said rather than implied. One `read_file` answers with either
+            // spelling depending on whether the bytes are text, so a caller
+            // branches on a field that is present rather than on one that is
+            // absent.
+            FileView::Full { content_base64 } => {
+                json!({ "encoding": "base64", "content": content_base64 })
+            }
             FileView::Whole { content } => json!({ "encoding": "utf8", "content": content }),
             FileView::Range {
                 content,
@@ -1674,54 +1783,6 @@ fn truncate_chars(line: &str, max: usize) -> (String, bool) {
         Some((index, _)) => (line[..index].to_string(), true),
         None => (line.to_string(), false),
     }
-}
-
-/// Read one asset, whole or scoped to a line range and/or a pattern.
-///
-/// The unscoped read is the original contract — the whole file, base64 — and
-/// stays that way for callers already parsing it. `lines` and `grep` are for a
-/// caller that wants to look at part of a file, or to find out where to look,
-/// without pulling the whole thing across; both require the asset to be UTF-8
-/// text, since neither means anything otherwise.
-///
-/// Every read reports the digest of the whole asset, not of the part
-/// returned, because that digest is what a following patch has to send to
-/// prove it edited the version it read.
-pub fn read_asset_authorized(
-    user: &UserContext,
-    script_uri: &str,
-    asset_uri: &str,
-    options: &FileReadOptions,
-) -> Result<FileRead, FileReadError> {
-    if !can_access_assets(user, script_uri, &Capability::ReadAssets) {
-        return Err(FileReadError::AccessDenied);
-    }
-    let Some(asset) = repository::fetch_asset(script_uri, asset_uri) else {
-        return Err(FileReadError::NotFound);
-    };
-
-    let sha256 = sha256_hex(&asset.content);
-    let bytes = asset.content.len();
-
-    if !options.is_scoped() {
-        return Ok(FileRead {
-            view: FileView::Full {
-                content_base64: base64::engine::general_purpose::STANDARD.encode(&asset.content),
-            },
-            sha256,
-            bytes,
-            total_lines: None,
-        });
-    }
-
-    let (view, total_lines) = scoped_view(&asset.content, options, asset_uri, "Asset")?;
-
-    Ok(FileRead {
-        view,
-        sha256,
-        bytes,
-        total_lines: Some(total_lines),
-    })
 }
 
 /// The part of a file a scoped read asked for, and how many lines the whole of
@@ -1913,40 +1974,92 @@ pub fn write_asset_authorized(
         .map_err(|e| {
             AssetWriteError::Validation(format!("Error decoding base64 content: {}", e))
         })?;
-    write_asset_bytes_authorized(user, script_uri, asset_uri, mimetype, content, if_absent)
+    write_file_bytes_authorized(user, script_uri, asset_uri, mimetype, content, if_absent)
 }
 
-/// [`write_asset_authorized`], given the bytes rather than a spelling of them.
+/// Write one file of a script's tree, whole, given the bytes rather than a
+/// spelling of them.
 ///
 /// The transfer encoding is the request's business, and a module arrives as
-/// text: the batch takes `text`, and so do `write_asset` and `create_asset`,
-/// which are the same write of the same kind of file.
-pub fn write_asset_bytes_authorized(
+/// text: `write_file` and `create_file` take `text`, and so does the batch.
+///
+/// The entrypoint differs from the rest in three ways, and all three are
+/// here rather than in a second copy of this function:
+///
+/// - It takes `WriteScripts` and ownership rather than `WriteAssets`, the
+///   line the patch and the delete also draw.
+/// - Writing it can *create* the script, because a script is brought into
+///   being by its program. Every file references the `scripts` row, so that
+///   row has to exist first; a write of any other file to a script that is
+///   not there is a write with nothing to belong to.
+/// - It meets the 1MB source ceiling rather than the 10MB file one.
+pub fn write_file_bytes_authorized(
     user: &UserContext,
     script_uri: &str,
-    asset_uri: &str,
+    path: &str,
     mimetype: &str,
     content: Vec<u8>,
     if_absent: bool,
 ) -> Result<Option<i32>, AssetWriteError> {
-    if !can_access_assets(user, script_uri, &Capability::WriteAssets) {
-        return Err(AssetWriteError::AccessDenied("Access denied".to_string()));
+    let is_root = crate::module_loader::is_root_module_name(path);
+
+    validate_asset_uri(path)?;
+    if if_absent && repository::fetch_asset(script_uri, path).is_some() {
+        return Err(AssetWriteError::Exists(path.to_string()));
+    }
+    let ceiling = if is_root {
+        repository::MAX_SCRIPT_CONTENT_BYTES
+    } else {
+        MAX_ASSET_BYTES
+    };
+    if content.len() > ceiling {
+        return Err(AssetWriteError::Validation(format!(
+            "'{}' too large: {} bytes (max {})",
+            path,
+            content.len(),
+            ceiling
+        )));
     }
 
-    validate_asset_uri(asset_uri)?;
-    if if_absent && repository::fetch_asset(script_uri, asset_uri).is_some() {
-        return Err(AssetWriteError::Exists(asset_uri.to_string()));
+    // Writing the entrypoint *is* writing the script, so it goes the way
+    // writing a script goes: the same permission, the same ownership on
+    // creation, the same revision, the same broadcast to `/engine/script_updates`
+    // and the same `init()`. Delegating rather than repeating that is what
+    // the merge is for — there is one way to replace a script's program,
+    // whichever name the caller reached for.
+    if is_root {
+        let text = String::from_utf8(content).map_err(|_| {
+            AssetWriteError::Validation(format!(
+                "'{}' is a script's program, so it has to be text",
+                path
+            ))
+        })?;
+        return upsert_script_authorized(user, script_uri, &text, Some("file"))
+            .map(|(_, revision)| revision)
+            .map_err(|message| {
+                let message = message
+                    .strip_prefix("Error: ")
+                    .unwrap_or(&message)
+                    .to_string();
+                // Its two refusals are not the same answer: a caller who may
+                // not write this script is forbidden, and one who sent no
+                // content asked for something impossible.
+                if message.starts_with("Script name and content cannot be empty") {
+                    AssetWriteError::Validation(message)
+                } else {
+                    AssetWriteError::AccessDenied(message)
+                }
+            });
     }
-    if content.len() > MAX_ASSET_BYTES {
-        return Err(AssetWriteError::Validation(
-            "Asset too large (max 10MB)".to_string(),
-        ));
+
+    if !can_access_assets(user, script_uri, &Capability::WriteAssets) {
+        return Err(AssetWriteError::AccessDenied("Access denied".to_string()));
     }
 
     let auditor = auditor();
     let user_id = user.user_id.clone();
     let script_uri_owned = script_uri.to_string();
-    let asset_uri_owned = asset_uri.to_string();
+    let path_owned = path.to_string();
     let content_len = content.len();
     let mimetype_owned = mimetype.to_string();
     tokio::task::spawn(async move {
@@ -1957,9 +2070,9 @@ pub fn write_asset_bytes_authorized(
                     SecuritySeverity::Medium,
                     user_id,
                 )
-                .with_resource("asset".to_string())
+                .with_resource("file".to_string())
                 .with_action("upsert_for_uri".to_string())
-                .with_detail("uri", &asset_uri_owned)
+                .with_detail("uri", &path_owned)
                 .with_detail("script_uri", &script_uri_owned)
                 .with_detail("content_size", content_len.to_string())
                 .with_detail("mimetype", &mimetype_owned),
@@ -1969,8 +2082,8 @@ pub fn write_asset_bytes_authorized(
 
     let now = std::time::SystemTime::now();
     let asset = repository::Asset {
-        uri: asset_uri.to_string(),
-        name: Some(asset_uri.to_string()),
+        uri: path.to_string(),
+        name: Some(path.to_string()),
         mimetype: mimetype.to_string(),
         content,
         created_at: now,
@@ -2662,137 +2775,7 @@ fn apply_string_edits(
     Ok(replacements)
 }
 
-/// Edit an asset in place, by replacing strings within it.
-///
-/// This exists so a caller that wants to change three lines of a file does not
-/// have to send the file back. That makes it the one asset write whose request
-/// does not carry the content being stored — so it has to be careful about
-/// two things the full writes get for free.
-///
-/// The first is *what* is being edited: `base_sha256`, when given, is checked
-/// against the stored bytes before anything is applied, so a patch computed
-/// against a version someone has since replaced is refused rather than merged
-/// blind.
-///
-/// The second is *where*: an `old_string` that appears more than once is
-/// refused unless the caller said `replace_all`, because an edit meant for one
-/// of three identical lines cannot be aimed by content alone. Every edit is
-/// checked and applied in memory before the asset is written, so a patch whose
-/// third edit does not match leaves the stored file exactly as it was.
-pub fn patch_asset_authorized(
-    user: &UserContext,
-    script_uri: &str,
-    asset_uri: &str,
-    edits: &[StringEdit],
-    base_sha256: Option<&str>,
-) -> Result<PatchOutcome, PatchError> {
-    if !can_access_assets(user, script_uri, &Capability::WriteAssets) {
-        return Err(PatchError::AccessDenied("Access denied".to_string()));
-    }
-
-    let Some(asset) = repository::fetch_asset(script_uri, asset_uri) else {
-        return Err(PatchError::NotFound);
-    };
-
-    let original_digest = sha256_hex(&asset.content);
-    if let Some(expected) = base_sha256
-        && !expected.eq_ignore_ascii_case(&original_digest)
-    {
-        return Err(PatchError::Conflict {
-            expected: expected.to_string(),
-            actual: original_digest,
-        });
-    }
-
-    let mut text = String::from_utf8(asset.content.clone()).map_err(|_| {
-        PatchError::Validation(format!(
-            "Asset '{}' is not UTF-8 text, so it cannot be edited as strings: write it whole \
-             with POST /engine/assets or /engine/assets/batch",
-            asset_uri
-        ))
-    })?;
-
-    let replacements =
-        apply_string_edits(&mut text, edits, asset_uri).map_err(PatchError::Validation)?;
-
-    if text.len() > MAX_ASSET_BYTES {
-        return Err(PatchError::Validation(
-            "Asset too large after the edits (max 10MB)".to_string(),
-        ));
-    }
-
-    let content = text.into_bytes();
-    let unchanged = content == asset.content;
-    let digest = if unchanged {
-        original_digest
-    } else {
-        sha256_hex(&content)
-    };
-    let bytes = content.len();
-
-    if !unchanged {
-        let now = std::time::SystemTime::now();
-        // Through the batch write, so a patch reaches storage the same way a
-        // deploy does: one transaction, one notification to the cluster.
-        repository::upsert_assets(
-            script_uri,
-            vec![repository::Asset {
-                uri: asset.uri.clone(),
-                name: asset.name.clone(),
-                mimetype: asset.mimetype.clone(),
-                content,
-                created_at: asset.created_at,
-                updated_at: now,
-                script_uri: script_uri.to_string(),
-            }],
-        )
-        .map_err(|e| PatchError::Storage(format!("Error patching asset: {}", e)))?;
-    }
-
-    let auditor = auditor();
-    let user_id = user.user_id.clone();
-    let script_uri_owned = script_uri.to_string();
-    let asset_uri_owned = asset_uri.to_string();
-    let edit_count = edits.len();
-    tokio::task::spawn(async move {
-        let _ = auditor
-            .log_event(
-                SecurityEvent::new(
-                    SecurityEventType::SystemSecurityEvent,
-                    SecuritySeverity::Medium,
-                    user_id,
-                )
-                .with_resource("asset".to_string())
-                .with_action("patch_for_uri".to_string())
-                .with_detail("uri", &asset_uri_owned)
-                .with_detail("script_uri", &script_uri_owned)
-                .with_detail("edits", edit_count.to_string())
-                .with_detail("replacements", replacements.to_string())
-                .with_detail("content_size", bytes.to_string()),
-            )
-            .await;
-    });
-
-    let revision = (!unchanged)
-        .then(|| {
-            revisions::record_blocking(
-                script_uri,
-                revisions::Origin::Patch,
-                user.user_id.as_deref(),
-            )
-        })
-        .flatten();
-
-    Ok(PatchOutcome {
-        sha256: digest,
-        revision,
-        bytes,
-        replacements,
-        status: if unchanged { "unchanged" } else { "updated" },
-    })
-}
-
-/// Delete an asset.
+/// Delete one file of a script.
 pub fn delete_asset_authorized(
     user: &UserContext,
     script_uri: &str,
@@ -5026,7 +5009,7 @@ pub async fn assets_get_route(
             };
             let (user, script_cl, asset_cl) = (user, script.clone(), asset.clone());
             let result = tokio::task::spawn_blocking(move || {
-                read_asset_authorized(&user, &script_cl, &asset_cl, &options)
+                read_file_authorized(&user, &script_cl, &asset_cl, &options)
             })
             .await
             .unwrap_or(Err(FileReadError::NotFound));
@@ -5421,12 +5404,13 @@ pub async fn assets_patch_route(
     let (script_cl, asset_cl) = (script.clone(), asset.clone());
     let base_sha256 = parsed.base_sha256.clone();
     let result = tokio::task::spawn_blocking(move || {
-        patch_asset_authorized(
+        patch_file_authorized(
             &user,
             &script_cl,
             &asset_cl,
             &prepared,
             base_sha256.as_deref(),
+            None,
         )
     })
     .await
@@ -9394,106 +9378,31 @@ fn missing_arg(name: &str) -> Value {
 fn native_tools() -> &'static [NativeToolEntry] {
     &[
         (
-            "read_file",
-            "Fetch a script's root source by URI: the whole file, or, with 'lines' or 'grep', part of it. Reads the stored file (head), which for a pinned script is not the revision it serves; the reply then carries a 'deployment' block saying so. Every reply carries the sha256 of the whole script, which edit_file takes as base_sha256.",
+            "list_scripts",
+            "List the scripts in this engine, optionally filtered by a pattern over their URIs. A script is a tree of files; list_files lists one script's files.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "Script URI (e.g., 'https://example.com/myscript')" },
-                        "lines": { "type": "string", "description": "Inclusive 1-based line range, e.g. '120-180', '120-' to the end, or '120' alone" },
-                        "grep": { "type": "string", "description": "Regular expression; answers with the matching line numbers and their text instead of the file. Searches within 'lines' when both are given." }
-                    },
-                    "required": ["uri"]
-                })
-            },
-            tool_read_file,
-        ),
-        (
-            "write_file",
-            "Create or update a file (script) on the server",
-            || {
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "uri": { "type": "string", "description": "Script URI" },
-                        "content": { "type": "string", "description": "File content (JavaScript code)" }
-                    },
-                    "required": ["uri", "content"]
-                })
-            },
-            tool_write_file,
-        ),
-        (
-            "edit_file",
-            "Edit a script's root source in place by replacing strings in it, without resending the file, then run the script's init() once. Edits the stored file (head), the same version read_file and edit_asset act on; a pinned script goes on serving its pinned revision until it is deployed or unpinned, and the answer says so. The counterpart of edit_asset for the one file of a script that is not an asset. Each old_string must be present and unique unless replace_all is set; nothing is written unless every edit applies. Requires WriteScripts and ownership of the script, or administrator.",
-            || {
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "uri": { "type": "string", "description": "Script URI whose root source to edit" },
-                        "edits": {
-                            "type": "array",
-                            "description": "Edits to apply in order (max 128). Each is checked and applied in memory before anything is stored.",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "old_string": { "type": "string", "description": "Text to find. Must appear exactly once unless replace_all is set." },
-                                    "new_string": { "type": "string", "description": "Text to put in its place; empty string deletes." },
-                                    "replace_all": { "type": "boolean", "description": "Replace every occurrence rather than requiring exactly one (default false)" }
-                                },
-                                "required": ["old_string", "new_string"]
-                            }
-                        },
-                        "base_sha256": { "type": "string", "description": "SHA-256 the root source is expected to have right now, as read_file reported it. The patch is refused if the stored content has moved on." },
-                        "reinit": { "type": "string", "enum": ["after", "never"], "description": "Run the script's init() once the edits land (default 'after'), or leave it alone" }
-                    },
-                    "required": ["uri", "edits"]
-                })
-            },
-            tool_edit_file,
-        ),
-        (
-            "create_file",
-            "Create a new file (script) on the server. Fails if file already exists.",
-            || {
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "uri": { "type": "string", "description": "Script URI" },
-                        "content": { "type": "string", "description": "File content (JavaScript code)", "default": "" }
-                    },
-                    "required": ["uri"]
-                })
-            },
-            tool_create_file,
-        ),
-        (
-            "list_files",
-            "List all files (scripts) in the system, optionally filtered by pattern",
-            || {
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "pattern": { "type": "string", "description": "Optional regex pattern to filter files by URI" }
+                        "pattern": { "type": "string", "description": "Optional regex pattern to filter scripts by URI" }
                     }
                 })
             },
-            tool_list_files,
+            tool_list_scripts,
         ),
         (
-            "delete_file",
-            "Remove a file (script) from the server",
+            "delete_script",
+            "Delete a script and everything that belongs to it: its files, its revisions, its tables and its queued work. To remove one file of a script, use delete_file.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "Script URI to delete" }
+                        "uri": { "type": "string", "description": "URI of the script to delete" }
                     },
                     "required": ["uri"]
                 })
             },
-            tool_delete_file,
+            tool_delete_script,
         ),
         (
             "search_files",
@@ -9573,62 +9482,62 @@ fn native_tools() -> &'static [NativeToolEntry] {
             tool_read_init_status,
         ),
         (
-            "list_assets",
-            "List all assets owned by a script. Requires the user to own the script, have ReadAssets capability, or be an administrator.",
+            "list_files",
+            "List the files of a script: its entrypoint (main.ts, main.js, main.tsx or main.jsx) and every module, template and other file beside it. Requires the user to own the script, have ReadAssets capability, or be an administrator.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "script": { "type": "string", "description": "URI of the script whose assets to list (e.g., 'https://example.com/myscript')" }
+                        "script": { "type": "string", "description": "URI of the script whose files to list (e.g., 'https://example.com/myscript')" }
                     },
                     "required": ["script"]
                 })
             },
-            tool_list_assets,
+            tool_list_files,
         ),
         (
-            "read_asset",
-            "Fetch an asset owned by a script: the whole file base64-encoded, or, with 'lines' or 'grep', part of a text asset. Every reply carries the sha256 of the whole asset, which edit_asset takes as base_sha256. Requires the user to own the script, have ReadAssets capability, or be an administrator.",
+            "read_file",
+            "Fetch one file of a script: the whole file, or, with 'lines' or 'grep', part of it. Text comes back as 'content' and anything that is not text as 'content_base64'. Every reply carries the sha256 of the whole file, which edit_file takes as base_sha256. Reads what is stored (head), which for a pinned script is not the revision it serves; the reply then carries a 'deployment' block saying so.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "script": { "type": "string", "description": "URI of the script that owns the asset" },
-                        "asset": { "type": "string", "description": "URI/path of the asset to fetch (e.g., '/images/logo.png')" },
-                        "lines": { "type": "string", "description": "Inclusive 1-based line range of a text asset, e.g. '120-180', '120-' to the end, or '120' alone. Answers with text rather than base64." },
+                        "script": { "type": "string", "description": "URI of the script that owns the file" },
+                        "path": { "type": "string", "description": "Path of the file within the script, e.g. 'main.ts', 'lib/util.ts' or 'images/logo.png'" },
+                        "lines": { "type": "string", "description": "Inclusive 1-based line range of a text file, e.g. '120-180', '120-' to the end, or '120' alone" },
                         "grep": { "type": "string", "description": "Regular expression; answers with the matching line numbers and their text instead of the file. Searches within 'lines' when both are given." }
                     },
-                    "required": ["script", "asset"]
+                    "required": ["script", "path"]
                 })
             },
-            tool_read_asset,
+            tool_read_file,
         ),
         (
-            "write_asset",
-            "Create or update an asset for a script. Requires the user to own the script, have WriteAssets capability, or be an administrator.",
+            "write_file",
+            "Create or update one file of a script. Writing its entrypoint (main.ts, main.js, main.tsx or main.jsx) is writing the script itself: it creates the script if it does not exist, and takes WriteScripts and ownership rather than WriteAssets. Use write_files to change several files as one deploy.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "script": { "type": "string", "description": "URI of the script that will own the asset" },
-                        "asset": { "type": "string", "description": "URI/path of the asset (e.g., '/images/logo.png')" },
-                        "mimetype": { "type": "string", "description": "MIME type of the asset (e.g., 'image/png', 'text/css')" },
+                        "script": { "type": "string", "description": "URI of the script that owns the file" },
+                        "path": { "type": "string", "description": "Path of the file within the script, e.g. 'main.ts' or 'lib/util.ts'" },
+                        "mimetype": { "type": "string", "description": "MIME type; inferred from the extension when omitted" },
                         "text": { "type": "string", "description": "The file as text — what a module is. Exactly one of 'text' and 'content' is required." },
                         "content": { "type": "string", "description": "The file as base64, for content that is not text (max 10MB)" }
                     },
-                    "required": ["script", "asset", "mimetype"]
+                    "required": ["script", "path"]
                 })
             },
-            tool_write_asset,
+            tool_write_file,
         ),
         (
-            "write_assets",
-            "Write a script's files as one change, then run its init() once: several assets, the root source ('content'), and whatever the change removes ('remove'). A module goes in 'text' as plain source, the way /engine/check takes it; 'content_base64' is for a file that is not text. One transaction, one revision, one init(), and nothing is written if any file is rejected. Writing the root takes WriteScripts; the assets take WriteAssets; both take ownership of the script or administrator.",
+            "write_files",
+            "Write several of a script's files as one change, then run its init() once, and remove whatever 'remove' names. A module goes in 'text' as plain source, the way /engine/check takes it; 'content_base64' is for a file that is not text. One transaction, one revision, one init(), and nothing is written if any file is rejected. The entrypoint is one of the files: name it in 'files' as 'main.ts' (or .js/.tsx/.jsx), or pass it as 'content'. Writing it takes WriteScripts; the rest take WriteAssets; both take ownership of the script or administrator.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "script": { "type": "string", "description": "URI of the script that will own these assets" },
+                        "script": { "type": "string", "description": "URI of the script whose files these are" },
                         "files": {
                             "type": "array",
                             "description": "Files to write (max 256, 10MB of content in total)",
@@ -9655,17 +9564,17 @@ fn native_tools() -> &'static [NativeToolEntry] {
                     "required": ["script"]
                 })
             },
-            tool_write_assets,
+            tool_write_files,
         ),
         (
-            "edit_asset",
-            "Edit one of a script's assets in place by replacing strings in it, without resending the file, then run the script's init() once. Each old_string must be present and unique unless replace_all is set; nothing is written unless every edit applies. Requires the user to own the script, have WriteAssets capability, or be an administrator.",
+            "edit_file",
+            "Edit one of a script's files in place by replacing strings in it, without resending the file, then run the script's init() once. Each old_string must be present and unique unless replace_all is set; nothing is written unless every edit applies. Editing the entrypoint takes WriteScripts and ownership; editing any other file takes WriteAssets and ownership. Edits what is stored (head); a pinned script goes on serving its pinned revision until it is deployed or unpinned, and the answer says so.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "script": { "type": "string", "description": "URI of the script that owns the asset" },
-                        "asset": { "type": "string", "description": "URI/path of the asset to edit (e.g., '/lib/util.ts')" },
+                        "script": { "type": "string", "description": "URI of the script that owns the file" },
+                        "path": { "type": "string", "description": "Path of the file within the script, e.g. 'main.ts' or 'lib/util.ts'" },
                         "edits": {
                             "type": "array",
                             "description": "Edits to apply in order (max 128). Each is checked and applied in memory before anything is stored.",
@@ -9679,46 +9588,46 @@ fn native_tools() -> &'static [NativeToolEntry] {
                                 "required": ["old_string", "new_string"]
                             }
                         },
-                        "base_sha256": { "type": "string", "description": "SHA-256 the asset is expected to have right now, as read_asset reported it. The patch is refused if the stored content has moved on." },
+                        "base_sha256": { "type": "string", "description": "SHA-256 the file is expected to have right now, as read_file reported it. The patch is refused if the stored content has moved on." },
                         "reinit": { "type": "string", "enum": ["after", "never"], "description": "Run the script's init() once the edits land (default 'after'), or leave it alone" }
                     },
-                    "required": ["script", "asset", "edits"]
+                    "required": ["script", "path", "edits"]
                 })
             },
-            tool_edit_asset,
+            tool_edit_file,
         ),
         (
-            "create_asset",
-            "Create a new asset for a script. Fails if the asset already exists — the counterpart of create_file for a script's modules, where write_asset overwrites. Requires the user to own the script, have WriteAssets capability, or be an administrator.",
+            "create_file",
+            "Create a new file in a script. Fails if that path is already taken, which is what distinguishes it from write_file: creating a module and overwriting somebody's are not the same request. Creating the entrypoint (main.ts, main.js, main.tsx or main.jsx) creates the script.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "script": { "type": "string", "description": "URI of the script that will own the asset" },
-                        "asset": { "type": "string", "description": "URI/path of the asset (e.g., '/lib/util.ts')" },
+                        "script": { "type": "string", "description": "URI of the script that will own the file" },
+                        "path": { "type": "string", "description": "Path of the file within the script, e.g. 'main.ts' or 'lib/util.ts'" },
                         "mimetype": { "type": "string", "description": "MIME type; inferred from the file extension when omitted" },
                         "text": { "type": "string", "description": "The file as text — what a module is. Exactly one of 'text' and 'content' is required." },
                         "content": { "type": "string", "description": "The file as base64, for content that is not text (max 10MB)" }
                     },
-                    "required": ["script", "asset"]
+                    "required": ["script", "path"]
                 })
             },
-            tool_create_asset,
+            tool_create_file,
         ),
         (
-            "delete_asset",
-            "Delete an asset from a script. Requires the user to own the script, have DeleteAssets capability, or be an administrator.",
+            "delete_file",
+            "Delete one file from a script. Takes DeleteAssets and ownership, or — for the entrypoint, whose removal leaves the script with no program — DeleteScripts. To remove the whole script, use delete_script.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "script": { "type": "string", "description": "URI of the script that owns the asset" },
-                        "asset": { "type": "string", "description": "URI/path of the asset to delete (e.g., '/images/logo.png')" }
+                        "script": { "type": "string", "description": "URI of the script that owns the file" },
+                        "path": { "type": "string", "description": "Path of the file within the script, e.g. 'lib/util.ts' or 'images/logo.png'" }
                     },
-                    "required": ["script", "asset"]
+                    "required": ["script", "path"]
                 })
             },
-            tool_delete_asset,
+            tool_delete_file,
         ),
         (
             "list_script_owners",
@@ -11038,164 +10947,19 @@ fn tool_run_tests(args: &Value, user: &UserContext) -> Value {
     report
 }
 
-fn tool_read_file(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
-    };
-    let options = match read_options(
-        arg_str(args, "lines"),
-        arg_str(args, "grep").map(str::to_string),
-    ) {
-        Ok(options) => options,
-        Err(message) => return json!({ "error": message }),
-    };
-
-    match read_script_authorized(user, uri, &options) {
-        Ok(read) => {
-            let mut body = read.to_json();
-            if let Some(object) = body.as_object_mut() {
-                object.insert("uri".to_string(), json!(uri));
-                // `size` is what this tool has always called the script's
-                // length; `bytes` is what every other read calls it. Both,
-                // rather than a rename that breaks a caller to save a field.
-                object.insert("size".to_string(), json!(read.bytes));
-                if let Some(note) = deployment_note(uri) {
-                    object.insert("deployment".to_string(), note);
-                }
-                object.insert("timestamp".to_string(), json!(iso_timestamp()));
-            }
-            body
-        }
-        Err(FileReadError::NotFound) | Err(FileReadError::AccessDenied) => {
-            json!({ "error": format!("File not found: {}", uri) })
-        }
-        Err(FileReadError::Validation(message)) => json!({ "error": message }),
-    }
-}
-
-fn tool_edit_file(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
-    };
-    let Some(edits) = args.get("edits").and_then(Value::as_array) else {
-        return missing_arg("edits");
-    };
-    let reinit = match ReinitMode::parse(arg_str(args, "reinit")) {
-        Ok(reinit) => reinit,
-        Err(message) => return json!({ "error": message }),
-    };
-    let prepared = match parse_tool_edits(edits) {
-        Ok(prepared) => prepared,
-        Err(message) => return json!({ "error": message }),
-    };
-
-    match patch_script_authorized(
-        user,
-        uri,
-        &prepared,
-        arg_str(args, "base_sha256").or_else(|| arg_str(args, "sha256")),
-        Some("mcp"),
-    ) {
-        Ok(outcome) => {
-            // Bridging back to async, as edit_asset does, so the caller is
-            // told what init() did rather than that it was started.
-            let init = match (reinit, outcome.status) {
-                (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
-                (_, "unchanged") => json!({ "ran": false, "reason": "no change" }),
-                (ReinitMode::After, _) => {
-                    crate::database::run_blocking(reinitialize_after_write(uri))
-                }
-            };
-            let mut body = outcome.to_json();
-            if let Some(object) = body.as_object_mut() {
-                object.insert("success".to_string(), json!(true));
-                object.insert("uri".to_string(), json!(uri));
-                object.insert("init".to_string(), init);
-                if let Some(note) = deployment_note(uri) {
-                    object.insert("deployment".to_string(), note);
-                }
-                object.insert("timestamp".to_string(), json!(iso_timestamp()));
-            }
-            body
-        }
-        Err(PatchError::AccessDenied(message)) => {
-            json!({ "error": format!("Failed to edit file: {}", message) })
-        }
-        Err(PatchError::NotFound) => {
-            json!({ "error": format!("File not found: {}", uri) })
-        }
-        Err(PatchError::Conflict { expected, actual }) => json!({
-            "error": format!(
-                "Script '{}' has changed since it was read (expected {}, stored {})",
-                uri, expected, actual
-            ),
-            "uri": uri,
-            "expected_sha256": expected,
-            "sha256": actual,
-        }),
-        Err(PatchError::Validation(message)) | Err(PatchError::Storage(message)) => {
-            json!({ "error": format!("Failed to edit file: {}", message) })
-        }
-    }
-}
-
-fn tool_write_file(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
-    };
-    let Some(content) = arg_str(args, "content") else {
-        return missing_arg("content");
-    };
-    match upsert_script_authorized(user, uri, content, Some("mcp")) {
-        Ok((action, revision)) => {
-            let action = match action {
-                UpsertAction::Inserted => "created",
-                UpsertAction::Updated => "updated",
-            };
-            json!({
-                "success": true,
-                "action": action,
-                "uri": uri,
-                "size": content.len(),
-                "revision": revision,
-                "timestamp": iso_timestamp(),
-            })
-        }
-        Err(e) => json!({ "error": format!("Failed to write file: {}", e) }),
-    }
-}
-
-fn tool_create_file(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
-    };
-    let content = arg_str(args, "content").unwrap_or("");
-
-    if get_script_authorized(user, uri).is_some() {
-        return json!({ "error": format!("File already exists: {}", uri) });
-    }
-    match upsert_script_authorized(user, uri, content, Some("mcp")) {
-        Ok(_) => json!({
-            "success": true,
-            "uri": uri,
-            "size": content.len(),
-            "timestamp": iso_timestamp(),
-        }),
-        Err(e) => json!({ "error": format!("Failed to create file: {}", e) }),
-    }
-}
-
-fn tool_list_files(args: &Value, user: &UserContext) -> Value {
+/// The scripts in the engine. A script is a tree; `tool_list_files` lists one
+/// tree's files.
+fn tool_list_scripts(args: &Value, user: &UserContext) -> Value {
     let pattern = arg_str(args, "pattern");
     let regex = match pattern {
         Some(p) => match regex::RegexBuilder::new(p).case_insensitive(true).build() {
             Ok(r) => Some(r),
-            Err(e) => return json!({ "error": format!("Failed to list files: {}", e) }),
+            Err(e) => return json!({ "error": format!("Failed to list scripts: {}", e) }),
         },
         None => None,
     };
 
-    let files: Vec<Value> = list_scripts_authorized(user)
+    let scripts: Vec<Value> = list_scripts_authorized(user)
         .iter()
         .filter(|meta| regex.as_ref().is_none_or(|r| r.is_match(&meta.uri)))
         .map(|meta| {
@@ -11208,14 +10972,14 @@ fn tool_list_files(args: &Value, user: &UserContext) -> Value {
         .collect();
 
     json!({
-        "files": files,
-        "count": files.len(),
+        "scripts": scripts,
+        "count": scripts.len(),
         "pattern": pattern,
         "timestamp": iso_timestamp(),
     })
 }
 
-fn tool_delete_file(args: &Value, user: &UserContext) -> Value {
+fn tool_delete_script(args: &Value, user: &UserContext) -> Value {
     let Some(uri) = arg_str(args, "uri") else {
         return missing_arg("uri");
     };
@@ -11226,7 +10990,7 @@ fn tool_delete_file(args: &Value, user: &UserContext) -> Value {
             "timestamp": iso_timestamp(),
         })
     } else {
-        json!({ "error": format!("File not found: {}", uri) })
+        json!({ "error": format!("Script not found: {}", uri) })
     }
 }
 
@@ -11342,25 +11106,25 @@ fn tool_read_init_status(args: &Value, user: &UserContext) -> Value {
     }
 }
 
-fn tool_list_assets(args: &Value, user: &UserContext) -> Value {
+fn tool_list_files(args: &Value, user: &UserContext) -> Value {
     let Some(script) = arg_str(args, "script") else {
         return missing_arg("script");
     };
-    let assets = list_assets_authorized(user, script);
+    let files = list_assets_authorized(user, script);
     json!({
         "script": script,
-        "assets": assets,
-        "count": assets.len(),
+        "files": files,
+        "count": files.len(),
         "timestamp": iso_timestamp(),
     })
 }
 
-fn tool_read_asset(args: &Value, user: &UserContext) -> Value {
+fn tool_read_file(args: &Value, user: &UserContext) -> Value {
     let Some(script) = arg_str(args, "script") else {
         return missing_arg("script");
     };
-    let Some(asset) = arg_str(args, "asset") else {
-        return missing_arg("asset");
+    let Some(path) = arg_str(args, "path") else {
+        return missing_arg("path");
     };
     let options = match read_options(
         arg_str(args, "lines"),
@@ -11369,36 +11133,52 @@ fn tool_read_asset(args: &Value, user: &UserContext) -> Value {
         Ok(options) => options,
         Err(message) => return json!({ "error": message }),
     };
-    match read_asset_authorized(user, script, asset, &options) {
+    match read_file_authorized(user, script, path, &options) {
         Ok(read) => {
             let mut body = read.to_json();
             if let Some(object) = body.as_object_mut() {
                 object.insert("script".to_string(), json!(script));
-                object.insert("asset".to_string(), json!(asset));
+                object.insert("path".to_string(), json!(path));
+                // What a pinned script serves is not what this read answered
+                // with, and that is worth saying wherever it is true rather
+                // than only for the entrypoint, since a module is pinned
+                // with it.
+                if let Some(note) = deployment_note(script) {
+                    object.insert("deployment".to_string(), note);
+                }
                 object.insert("timestamp".to_string(), json!(iso_timestamp()));
             }
             body
         }
         Err(FileReadError::AccessDenied) => json!({ "error": "Error: Access denied" }),
         Err(FileReadError::NotFound) => {
-            json!({ "error": format!("Asset not found: {}", asset) })
+            json!({ "error": format!("File not found: {}", path) })
         }
         Err(FileReadError::Validation(message)) => json!({ "error": message }),
     }
 }
 
-fn tool_write_asset(args: &Value, user: &UserContext) -> Value {
+fn tool_write_file(args: &Value, user: &UserContext) -> Value {
+    write_one_file(args, user, false)
+}
+
+/// `write_file` and `create_file`, which differ only in whether an existing
+/// path is an error. That was the whole of `create_asset`'s body, repeated.
+fn write_one_file(args: &Value, user: &UserContext, if_absent: bool) -> Value {
+    let verb = if if_absent { "create" } else { "write" };
     let Some(script) = arg_str(args, "script") else {
         return missing_arg("script");
     };
-    let Some(asset) = arg_str(args, "asset") else {
-        return missing_arg("asset");
+    let Some(path) = arg_str(args, "path") else {
+        return missing_arg("path");
     };
-    let Some(mimetype) = arg_str(args, "mimetype") else {
-        return missing_arg("mimetype");
-    };
+    // Inferred rather than required: a caller writing `lib/util.ts` should
+    // not have to know what the engine calls a TypeScript file.
+    let mimetype = arg_str(args, "mimetype")
+        .map(str::to_string)
+        .unwrap_or_else(|| mimetype_for(path).to_string());
     let content = match asset_content_from_request(
-        &format!("asset '{}'", asset),
+        &format!("file '{}'", path),
         "content",
         arg_str(args, "text").map(str::to_string),
         arg_str(args, "content").map(str::to_string),
@@ -11407,30 +11187,30 @@ fn tool_write_asset(args: &Value, user: &UserContext) -> Value {
         Err(message) => return json!({ "error": message }),
     };
 
-    match write_asset_bytes_authorized(user, script, asset, mimetype, content, false) {
+    match write_file_bytes_authorized(user, script, path, &mimetype, content, if_absent) {
         Ok(revision) => json!({
             "success": true,
-            "message": format!("Asset '{}' upserted successfully", asset),
+            "message": format!("File '{}' {}d successfully", path, verb),
             "script": script,
-            "asset": asset,
+            "path": path,
             "revision": revision,
             "timestamp": iso_timestamp(),
         }),
-        Err(AssetWriteError::Exists(asset)) => {
-            json!({ "error": format!("Asset already exists: {}", asset) })
+        Err(AssetWriteError::Exists(path)) => {
+            json!({ "error": format!("File already exists: {}", path) })
         }
         Err(AssetWriteError::AccessDenied(message)) => {
-            json!({ "error": format!("Failed to write asset: {}", message) })
+            json!({ "error": format!("Failed to {} file: {}", verb, message) })
         }
         Err(AssetWriteError::Validation(msg)) | Err(AssetWriteError::Storage(msg)) => {
-            json!({ "error": format!("Failed to write asset: {}", msg) })
+            json!({ "error": format!("Failed to {} file: {}", verb, msg) })
         }
     }
 }
 
 /// Write several of a script's assets as one unit — the MCP face of
 /// [`assets_batch_route`], down to the shape of its answer.
-fn tool_write_assets(args: &Value, user: &UserContext) -> Value {
+fn tool_write_files(args: &Value, user: &UserContext) -> Value {
     let Some(script) = arg_str(args, "script") else {
         return missing_arg("script");
     };
@@ -11529,56 +11309,16 @@ fn tool_write_assets(args: &Value, user: &UserContext) -> Value {
     }
 }
 
-fn tool_create_asset(args: &Value, user: &UserContext) -> Value {
-    let Some(script) = arg_str(args, "script") else {
-        return missing_arg("script");
-    };
-    let Some(asset) = arg_str(args, "asset") else {
-        return missing_arg("asset");
-    };
-    let content = match asset_content_from_request(
-        &format!("asset '{}'", asset),
-        "content",
-        arg_str(args, "text").map(str::to_string),
-        arg_str(args, "content").map(str::to_string),
-    ) {
-        Ok(content) => content,
-        Err(message) => return json!({ "error": message }),
-    };
-    // Inferred rather than required, as a batch write infers it: a caller
-    // creating `lib/util.ts` should not have to know what the engine calls a
-    // TypeScript file.
-    let mimetype = arg_str(args, "mimetype")
-        .map(str::to_string)
-        .unwrap_or_else(|| mimetype_for(asset).to_string());
-
-    match write_asset_bytes_authorized(user, script, asset, &mimetype, content, true) {
-        Ok(revision) => json!({
-            "success": true,
-            "message": format!("Asset '{}' created successfully", asset),
-            "script": script,
-            "asset": asset,
-            "revision": revision,
-            "timestamp": iso_timestamp(),
-        }),
-        Err(AssetWriteError::Exists(asset)) => {
-            json!({ "error": format!("Asset already exists: {}", asset) })
-        }
-        Err(AssetWriteError::AccessDenied(message)) => {
-            json!({ "error": format!("Failed to create asset: {}", message) })
-        }
-        Err(AssetWriteError::Validation(message)) | Err(AssetWriteError::Storage(message)) => {
-            json!({ "error": format!("Failed to create asset: {}", message) })
-        }
-    }
+fn tool_create_file(args: &Value, user: &UserContext) -> Value {
+    write_one_file(args, user, true)
 }
 
-fn tool_edit_asset(args: &Value, user: &UserContext) -> Value {
+fn tool_edit_file(args: &Value, user: &UserContext) -> Value {
     let Some(script) = arg_str(args, "script") else {
         return missing_arg("script");
     };
-    let Some(asset) = arg_str(args, "asset") else {
-        return missing_arg("asset");
+    let Some(path) = arg_str(args, "path") else {
+        return missing_arg("path");
     };
     let Some(edits) = args.get("edits").and_then(Value::as_array) else {
         return missing_arg("edits");
@@ -11593,15 +11333,16 @@ fn tool_edit_asset(args: &Value, user: &UserContext) -> Value {
         Err(message) => return json!({ "error": message }),
     };
 
-    match patch_asset_authorized(
+    match patch_file_authorized(
         user,
         script,
-        asset,
+        path,
         &prepared,
         arg_str(args, "base_sha256").or_else(|| arg_str(args, "sha256")),
+        Some("mcp"),
     ) {
         Ok(outcome) => {
-            // Bridging back to async, as write_assets does, so the caller is
+            // Bridging back to async, as write_files does, so the caller is
             // told what init() did rather than that it was started.
             let init = match (reinit, outcome.status) {
                 (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
@@ -11614,52 +11355,55 @@ fn tool_edit_asset(args: &Value, user: &UserContext) -> Value {
             if let Some(object) = body.as_object_mut() {
                 object.insert("success".to_string(), json!(true));
                 object.insert("script".to_string(), json!(script));
-                object.insert("asset".to_string(), json!(asset));
+                object.insert("path".to_string(), json!(path));
                 object.insert("init".to_string(), init);
+                if let Some(note) = deployment_note(script) {
+                    object.insert("deployment".to_string(), note);
+                }
                 object.insert("timestamp".to_string(), json!(iso_timestamp()));
             }
             body
         }
         Err(PatchError::AccessDenied(message)) => {
-            json!({ "error": format!("Failed to edit asset: {}", message) })
+            json!({ "error": format!("Failed to edit file: {}", message) })
         }
         Err(PatchError::NotFound) => {
-            json!({ "error": format!("Asset not found: {}", asset) })
+            json!({ "error": format!("File not found: {}", path) })
         }
         Err(PatchError::Conflict { expected, actual }) => json!({
             "error": format!(
-                "Asset '{}' has changed since it was read (expected {}, stored {})",
-                asset, expected, actual
+                "'{}' has changed since it was read (expected {}, stored {})",
+                path, expected, actual
             ),
             "script": script,
-            "asset": asset,
+            "path": path,
             "expected_sha256": expected,
             "sha256": actual,
         }),
         Err(PatchError::Validation(message)) | Err(PatchError::Storage(message)) => {
-            json!({ "error": format!("Failed to edit asset: {}", message) })
+            json!({ "error": format!("Failed to edit file: {}", message) })
         }
     }
 }
 
-fn tool_delete_asset(args: &Value, user: &UserContext) -> Value {
+fn tool_delete_file(args: &Value, user: &UserContext) -> Value {
     let Some(script) = arg_str(args, "script") else {
         return missing_arg("script");
     };
-    let Some(asset) = arg_str(args, "asset") else {
-        return missing_arg("asset");
+    let Some(path) = arg_str(args, "path") else {
+        return missing_arg("path");
     };
-    match delete_asset_authorized(user, script, asset) {
+    match delete_asset_authorized(user, script, path) {
         Ok((true, revision)) => json!({
             "success": true,
-            "message": format!("Asset '{}' deleted successfully", asset),
+            "message": format!("File '{}' deleted successfully", path),
             "script": script,
-            "asset": asset,
+            "path": path,
             "revision": revision,
             "timestamp": iso_timestamp(),
         }),
-        Ok((false, _)) => json!({ "error": format!("Asset '{}' not found", asset) }),
-        Err(_) => json!({ "error": "Failed to delete asset: Access denied" }),
+        Ok((false, _)) => json!({ "error": format!("File '{}' not found", path) }),
+        Err(_) => json!({ "error": "Failed to delete file: Access denied" }),
     }
 }
 

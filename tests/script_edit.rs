@@ -436,7 +436,7 @@ async fn a_read_reports_the_digest_an_edit_takes() {
 
     let read = execute_native_mcp_tool(
         "read_file",
-        &json!({ "uri": uri }),
+        &json!({ "script": uri, "path": "main.js" }),
         &UserContext::admin("editor".to_string()),
     )
     .expect("read_file should dispatch");
@@ -456,7 +456,7 @@ async fn the_mcp_tool_edits_the_same_way() {
 
     let read = execute_native_mcp_tool(
         "read_file",
-        &json!({ "uri": uri }),
+        &json!({ "script": uri, "path": "main.js" }),
         &UserContext::admin("editor".to_string()),
     )
     .expect("read_file should dispatch");
@@ -467,7 +467,8 @@ async fn the_mcp_tool_edits_the_same_way() {
     let result = execute_native_mcp_tool(
         "edit_file",
         &json!({
-            "uri": uri,
+            "script": uri,
+            "path": "main.js",
             "base_sha256": digest,
             "edits": [{
                 "old_string": "/script-edit/mcp-before",
@@ -491,7 +492,8 @@ async fn the_mcp_tool_edits_the_same_way() {
     let next = execute_native_mcp_tool(
         "edit_file",
         &json!({
-            "uri": uri,
+            "script": uri,
+            "path": "main.js",
             "base_sha256": result["sha256"],
             "reinit": "never",
             "edits": [{
@@ -612,7 +614,7 @@ async fn grep_locates_a_line_of_the_root_without_returning_it() {
     // And over MCP, where the same loop is actually run.
     let read = execute_native_mcp_tool(
         "read_file",
-        &json!({ "uri": uri, "grep": "^function" }),
+        &json!({ "script": uri, "path": "main.js", "grep": "^function" }),
         &UserContext::admin("editor".to_string()),
     )
     .expect("read_file should dispatch");
@@ -646,10 +648,10 @@ async fn an_unscoped_read_is_unchanged() {
 
     let read = execute_native_mcp_tool(
         "read_file",
-        &json!({ "uri": uri }),
+        &json!({ "script": uri, "path": "main.js" }),
         &UserContext::admin("editor".to_string()),
     )
     .expect("read_file should dispatch");
     assert_eq!(read["content"], json!(source), "{}", read);
-    assert_eq!(read["size"], json!(source.len()), "{}", read);
+    assert_eq!(read["bytes"], json!(source.len()), "{}", read);
 }

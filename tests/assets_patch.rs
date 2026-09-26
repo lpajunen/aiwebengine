@@ -430,7 +430,7 @@ async fn read_access_alone_cannot_patch_an_asset() {
         network_scope: None,
     };
 
-    let result = aiwebengine::engine_api::patch_asset_authorized(
+    let result = aiwebengine::engine_api::patch_file_authorized(
         &reader,
         uri,
         "assets_patch_authz/util.ts",
@@ -439,6 +439,7 @@ async fn read_access_alone_cannot_patch_an_asset() {
             new_string: "export const hacked".to_string(),
             replace_all: false,
         }],
+        None,
         None,
     );
 
@@ -473,7 +474,7 @@ async fn engine_asset_reads_are_closed_to_anonymous_callers() {
         "the sandbox still needs this capability for public requests"
     );
 
-    let read = aiwebengine::engine_api::read_asset_authorized(
+    let read = aiwebengine::engine_api::read_file_authorized(
         &anonymous,
         uri,
         "assets_patch_anonymous/secrets.ts",
@@ -484,7 +485,7 @@ async fn engine_asset_reads_are_closed_to_anonymous_callers() {
         "an unauthenticated caller must not download a script's assets"
     );
 
-    let search = aiwebengine::engine_api::read_asset_authorized(
+    let search = aiwebengine::engine_api::read_file_authorized(
         &anonymous,
         uri,
         "assets_patch_anonymous/secrets.ts",
@@ -520,7 +521,7 @@ async fn engine_asset_reads_are_closed_to_anonymous_callers() {
     // the script that runs it.
     let authenticated = UserContext::authenticated("someone".to_string());
     assert!(
-        aiwebengine::engine_api::read_asset_authorized(
+        aiwebengine::engine_api::read_file_authorized(
             &authenticated,
             uri,
             "assets_patch_anonymous/secrets.ts",
@@ -533,7 +534,7 @@ async fn engine_asset_reads_are_closed_to_anonymous_callers() {
     // An administrator is unaffected.
     let admin = UserContext::admin("root".to_string());
     assert!(
-        aiwebengine::engine_api::read_asset_authorized(
+        aiwebengine::engine_api::read_file_authorized(
             &admin,
             uri,
             "assets_patch_anonymous/secrets.ts",
@@ -672,8 +673,13 @@ async fn grep_locates_lines_without_returning_the_file() {
 }
 
 /// The unscoped read is the older contract, and callers already parse it.
+/// A whole read answers with text when the file is text, and with base64
+/// when it is not. It used to answer with base64 for every file that was not
+/// a script's root, which made a module come back encoded whole and plain by
+/// the line — the same file, two spellings, depending on how much of it you
+/// asked for.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_read_without_lines_or_grep_still_answers_with_base64() {
+async fn a_whole_read_answers_with_text_when_the_file_is_text() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -685,13 +691,8 @@ async fn a_read_without_lines_or_grep_still_answers_with_base64() {
     let (status, body) = get(&format!("script={}&asset=assets_patch_whole/util.ts", uri)).await;
 
     assert_eq!(status, 200, "{}", body);
-    use base64::Engine as _;
-    assert_eq!(
-        body["content"],
-        json!(base64::engine::general_purpose::STANDARD.encode(source)),
-        "{}",
-        body
-    );
+    assert_eq!(body["encoding"], json!("utf8"), "{}", body);
+    assert_eq!(body["content"], json!(source), "{}", body);
     assert_eq!(body["sha256"], json!(sha256_hex(source.as_bytes())));
 }
 
@@ -714,11 +715,11 @@ async fn the_mcp_tool_edits_the_same_way() {
     store_asset(uri, "assets_patch_mcp/routes.ts", source);
 
     let read = execute_native_mcp_tool(
-        "read_asset",
-        &json!({ "script": uri, "asset": "assets_patch_mcp/routes.ts", "grep": "PATH" }),
+        "read_file",
+        &json!({ "script": uri, "path": "assets_patch_mcp/routes.ts", "grep": "PATH" }),
         &UserContext::admin("patcher".to_string()),
     )
-    .expect("read_asset should dispatch");
+    .expect("read_file should dispatch");
 
     assert_eq!(read["match_count"], json!(1), "{}", read);
     let digest = read["sha256"]
@@ -727,10 +728,10 @@ async fn the_mcp_tool_edits_the_same_way() {
     assert_eq!(digest, sha256_hex(source.as_bytes()));
 
     let result = execute_native_mcp_tool(
-        "edit_asset",
+        "edit_file",
         &json!({
             "script": uri,
-            "asset": "assets_patch_mcp/routes.ts",
+            "path": "assets_patch_mcp/routes.ts",
             "base_sha256": digest,
             "edits": [{
                 "old_string": "/assets-patch/mcp-before",
@@ -739,7 +740,7 @@ async fn the_mcp_tool_edits_the_same_way() {
         }),
         &UserContext::admin("patcher".to_string()),
     )
-    .expect("edit_asset should dispatch");
+    .expect("edit_file should dispatch");
 
     assert_eq!(result["success"], json!(true), "{}", result);
     assert_eq!(result["replacements"], json!(1), "{}", result);

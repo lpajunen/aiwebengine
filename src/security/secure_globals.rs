@@ -46,6 +46,24 @@ use crate::security::{
     Capability, SecureOperations, SecurityAuditor, SecurityEventType, SecuritySeverity, UserContext,
 };
 
+/// Why `assetStorage` refuses to touch a script's entrypoint.
+///
+/// Merging the root source into the tree made `main.*` reachable by every
+/// path that reaches a file, and this one is gated by `WriteAssets` and
+/// `DeleteAssets` alone — no ownership check is needed here, because a script
+/// only ever reaches its *own* files. That combination would have let a script
+/// rewrite or delete its own program while serving a request from anybody
+/// holding the editor tier, which is a thing `assetStorage` could not do
+/// before the merge and a thing nobody asked for it to start doing.
+///
+/// Refused rather than re-gated on `WriteScripts`, because the engine never
+/// offered a script a way to edit its own program and a merge of two storage
+/// shapes is not the moment to start. `engine.call("write_file", ...)` is the
+/// deliberate way, and it applies the same rules the endpoint does.
+const ENTRYPOINT_IS_NOT_AN_ASSET: &str = "Error: a script's entrypoint is not writable through assetStorage. \
+     Use engine.call(\"write_file\", { script, path, text }), which applies \
+     the checks writing a script's program takes.";
+
 /// A `{"error": "..."}` answer, built by the serializer rather than by string
 /// formatting.
 ///
@@ -1102,6 +1120,10 @@ impl SecureGlobalContext {
                     Err(e) => return Ok(format!("Error decoding base64 content: {}", e)),
                 };
 
+                if crate::module_loader::is_root_module_name(&uri) {
+                    return Ok(ENTRYPOINT_IS_NOT_AN_ASSET.to_string());
+                }
+
                 // Check capability
                 if let Err(e) = user_ctx_upsert_asset
                     .require_capability(&crate::security::Capability::WriteAssets)
@@ -1205,6 +1227,10 @@ impl SecureGlobalContext {
         let delete_asset = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, uri: String| -> JsResult<String> {
+                if crate::module_loader::is_root_module_name(&uri) {
+                    return Ok(ENTRYPOINT_IS_NOT_AN_ASSET.to_string());
+                }
+
                 // Check capability
                 if let Err(e) = user_ctx_delete_asset
                     .require_capability(&crate::security::Capability::DeleteAssets)

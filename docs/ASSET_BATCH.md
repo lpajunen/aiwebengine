@@ -112,11 +112,11 @@ already has, without sending the file back, see
 `If-None-Match: *` makes it a create instead: the write is refused with `409`
 if the asset already exists. It is a precondition on the write rather than a
 check before it, because a caller that reads first and writes second has a
-window in which the answer changes. The `create_asset` tool is the same thing
-over MCP — `create_file` for a script's modules, where `write_asset`
+window in which the answer changes. The `create_file` tool is the same thing
+over MCP, where `write_file`
 overwrites — and infers the MIME type from the extension the way a batch does.
 
-The `write_asset` and `create_asset` tools take `text` or `content`, the same
+The `write_file` and `create_file` tools take `text` or `content`, the same
 choice a batch's files get and for the same reason: the file is the unit that
 differs, not the encoding. `POST /engine/assets` itself is unchanged — it takes
 the whole file base64 in `content`, as it always has.
@@ -197,7 +197,7 @@ change that is not coherent yet, not a way to keep a cluster quiet.
 
 ## Over MCP
 
-The `write_assets` tool takes the same arguments — including `content` and
+The `write_files` tool takes the same arguments — including `content` and
 `remove` — and answers with the same
 body, including the `init` block:
 

@@ -85,7 +85,7 @@ transaction, one notification to the rest of the cluster, one `init()`.
 ```json
 {
   "script": "myapp",
-  "asset": "server/move-player.ts",
+  "path": "server/move-player.ts",
   "sha256": "c07…",
   "bytes": 1841,
   "replacements": 1,
@@ -287,12 +287,15 @@ it so the script follows head again. See
 
 ## Over MCP
 
-`edit_asset` takes the same arguments as the endpoint and answers with the same
-body, including the `init` block. `read_asset` takes the same `lines` and
-`grep` filters. `edit_file` is `edit_asset` for the root source — `uri` in
-place of `script` and `asset`, everything else identical — and `read_file` is
-`read_asset` for it, with the same `lines` and `grep` filters and the `sha256`
-to aim an edit with.
+`edit_file` takes the same arguments as the endpoint and answers with the same
+body, including the `init` block. `read_file` takes the same `lines` and
+`grep` filters and reports the `sha256` to aim an edit with.
+
+Both name a file as `(script, path)`, and a script's entrypoint is a path like
+any other: `main.ts`, or `.js`/`.tsx`/`.jsx` as the tree spells it. There is
+no second pair of tools for it. What is still its own is the permission —
+editing a `main.*` takes `WriteScripts` rather than `WriteAssets`, because
+changing a script's program is changing the script.
 
 ```json
 {
@@ -306,7 +309,7 @@ to aim an edit with.
 ```
 
 Together they are the loop an agent editing a solution actually runs: `grep` to
-find the place, `lines` to read around it, `edit_asset` or `edit_file` to change
+find the place, `lines` to read around it, `edit_file` to change
 it, with the digest carried through so the change lands on the version it was
 written for.
 
@@ -314,7 +317,7 @@ written for.
 
 `grep` searches a file the caller can already name. `GET /engine/search` and
 the `search_files` tool are for the step before that — which file mentions
-this — and read root sources and assets alike:
+this — and read every file of every script, entrypoints included:
 
 ```bash
 curl "…/engine/search?query=movePlayer"

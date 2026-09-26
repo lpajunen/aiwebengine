@@ -523,6 +523,16 @@ fn invalidate_script_asset_caches(script_uri: &str, asset_path: &str, content: O
         return;
     }
 
+    // Counted like the write it is. [`get_script_metadata`] fills the cache
+    // across an await: it reads the database, then takes the lock and
+    // installs what it read. A write landing in that gap is overwritten by
+    // the older content the reader already had in hand, and the cache — which
+    // is what `fetch_script` answers from — stays permanently behind the
+    // database. Only `Repository::upsert_script` used to be able to change a
+    // script's source, so counting there was enough; a root written as an
+    // ordinary file of the tree reaches the cache through here instead.
+    note_script_write();
+
     match content.map(|bytes| std::str::from_utf8(bytes)) {
         // Refresh in place rather than evicting: eviction would also drop the
         // script's route registrations, 404ing every one of its routes until

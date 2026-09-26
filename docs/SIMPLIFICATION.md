@@ -79,8 +79,43 @@ script's program, and the delete side needed the same line drawn explicitly —
 otherwise what you could not overwrite you could remove. The root also keeps
 the 1MB source ceiling rather than inheriting the 10MB file one.
 
-Still to do in §1: the surface. Thirteen tool names are still thirteen, and
-`assetStorage` still has four methods of its own.
+### Done: the MCP surface
+
+Thirteen tool names became ten, and — the part that mattered — seven
+implementations became four. `read_file_authorized`,
+`write_file_bytes_authorized` and `patch_file_authorized` each take a path and
+decide policy from it, where before there were two functions per operation
+with ninety near-identical lines between them, answering `size` in one and
+`bytes` in the other.
+
+| now                                                                                                               | was                                                                      |
+| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `read_file` `write_file` `write_files` `edit_file` `create_file` `delete_file` `list_files`, all `(script, path)` | the `*_asset` seven, plus a `*_file` six that took `uri`                 |
+| `list_scripts` `delete_script`                                                                                    | `list_files` (which listed _scripts_), `delete_file` (which deleted one) |
+
+Two behaviours changed with them, both fixing a disagreement the split had
+left. A whole read answers with text when the bytes are text and base64
+otherwise, and says which in `encoding` — before, a module came back encoded
+whole and plain by the line, because the unscoped read was the one place the
+two halves differed. And writing a `main.*` through the single-file write
+_is_ writing the script: it delegates to `upsert_script_authorized`, so it
+creates the script when there is none, records the revision, broadcasts the
+update and runs `init()`, rather than repeating four of those and forgetting
+the fifth.
+
+What did not change is the permission. `WriteScripts` / `DeleteScripts` and
+ownership still gate a `main.*` wherever it is reached, and one place the
+merge had quietly opened needed closing: `assetStorage.upsertAsset` and
+`deleteAsset` are gated by `WriteAssets` / `DeleteAssets` alone — there is no
+ownership question, since a script only reaches its own files — so merging
+the tree would have let a script rewrite or delete its own program while
+serving any editor's request. It refuses a root name and names
+`engine.call("write_file", …)` as the deliberate way.
+
+Still to do in §1: `assetStorage`'s four methods, which want §5's prelude at
+the same time rather than being renamed twice. The HTTP endpoints keep
+`asset=` and `/engine/read_script`, since §3 regenerates them from the tool
+table.
 
 ## 2. Exposure belongs to the tree, not to `init()`
 
@@ -491,7 +526,8 @@ the operation.
 ## Order of work
 
 1. **Merge script and asset into one tree** (§1). Everything else gets cheaper.
-   _(storage done; the duplicated tool and endpoint names are what remains.)_
+   _(storage done; MCP surface done; `assetStorage` waits for §5's prelude and
+   the HTTP names for §3's generation.)_
 2. ~~**Drop the two unused RPC surfaces**~~ _(done, §7)._
 3. **Exposure by directory** (§2), plus `.md`/`.txt` string modules.
 4. **Name and mount** (§4), including the move to `scripts.id` for physical

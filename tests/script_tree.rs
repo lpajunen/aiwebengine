@@ -8,6 +8,7 @@
 
 mod common;
 
+use aiwebengine::js_engine::execute_script_secure;
 use aiwebengine::repository;
 use aiwebengine::security::{Capability, UserContext};
 use common::{setup_env, test_mutex};
@@ -172,5 +173,76 @@ async fn deleting_the_entrypoint_takes_more_than_deleting_a_module() {
         text(uri, "main.ts").as_deref(),
         Some("export function init() {}\n"),
         "and nothing should have been removed"
+    );
+}
+
+/// `assetStorage` is how a script reaches its own files, and merging the tree
+/// put the entrypoint among them. Its writes are gated by `WriteAssets` and
+/// `DeleteAssets` and by nothing else — a script only ever reaches its own
+/// files, so there is no ownership question — which would have let a script
+/// rewrite or delete its own program while serving a request from anyone
+/// holding the editor tier. It could not do that before the merge, so it does
+/// not do it now.
+///
+/// Asserted from inside the script, because `execute_script_secure` stores
+/// the source it is given: the entrypoint this script would be overwriting is
+/// the very snippet running, so the check has to happen while it runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_cannot_rewrite_its_own_entrypoint_through_asset_storage() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://tree/self-write/app.ts";
+
+    // An editor: everything an author holds, which is the most anyone
+    // visiting a script's route brings with them.
+    let editor = UserContext {
+        user_id: Some("tree-editor-2".to_string()),
+        is_authenticated: true,
+        capabilities: [
+            Capability::ReadScripts,
+            Capability::ReadAssets,
+            Capability::WriteScripts,
+            Capability::WriteAssets,
+            Capability::DeleteAssets,
+            Capability::DeleteScripts,
+        ]
+        .into_iter()
+        .collect(),
+        attenuated: false,
+        network_scope: None,
+    };
+
+    let attempt = r#"
+        const before = assetStorage.fetchAsset("main.ts");
+        if (before.startsWith("Error:") || before === "Asset 'main.ts' not found") {
+            throw new Error("the entrypoint should be readable: " + before);
+        }
+
+        const wrote = assetStorage.upsertAsset(
+            "main.ts",
+            "text/typescript",
+            "ZXhwb3J0IGZ1bmN0aW9uIGluaXQoKSB7fQ==",
+        );
+        if (!wrote.startsWith("Error:")) {
+            throw new Error("upsertAsset should be refused, got: " + wrote);
+        }
+
+        const removed = assetStorage.deleteAsset("main.ts");
+        if (!removed.startsWith("Error:")) {
+            throw new Error("deleteAsset should be refused, got: " + removed);
+        }
+
+        const after = assetStorage.fetchAsset("main.ts");
+        if (after !== before) {
+            throw new Error("the entrypoint moved under a refused write");
+        }
+    "#;
+
+    let result = execute_script_secure(uri, attempt, editor);
+    assert!(
+        result.success,
+        "the entrypoint must survive both: {:?}",
+        result.error
     );
 }

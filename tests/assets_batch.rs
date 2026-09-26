@@ -615,7 +615,7 @@ async fn the_mcp_tool_writes_the_same_batch() {
 
     let source = "export const PATH = \"/assets-batch/mcp\";";
     let result = execute_native_mcp_tool(
-        "write_assets",
+        "write_files",
         &json!({
             "script": uri,
             "files": [
@@ -628,7 +628,7 @@ async fn the_mcp_tool_writes_the_same_batch() {
         }),
         &UserContext::admin("batcher".to_string()),
     )
-    .expect("write_assets should dispatch");
+    .expect("write_files should dispatch");
 
     assert_eq!(result["success"], json!(true), "{}", result);
     assert_eq!(result["written"], json!(1), "{}", result);
@@ -662,7 +662,7 @@ async fn the_tool_takes_a_module_as_text() {
 
     let source = "export const PATH = \"/assets-batch/mcp-text\";";
     let result = execute_native_mcp_tool(
-        "write_assets",
+        "write_files",
         &json!({
             "script": uri,
             "files": [
@@ -675,7 +675,7 @@ async fn the_tool_takes_a_module_as_text() {
         }),
         &UserContext::admin("batcher".to_string()),
     )
-    .expect("write_assets should dispatch");
+    .expect("write_files should dispatch");
 
     assert_eq!(result["success"], json!(true), "{}", result);
     assert_eq!(stored_text(uri, "assets_batch_mcp_text/routes.ts"), source);
@@ -698,15 +698,15 @@ async fn the_single_file_tools_take_text_too() {
     let admin = UserContext::admin("batcher".to_string());
 
     let created = execute_native_mcp_tool(
-        "create_asset",
+        "create_file",
         &json!({
             "script": uri,
-            "asset": "assets_batch_single/new.ts",
+            "path": "assets_batch_single/new.ts",
             "text": "export const created = true;",
         }),
         &admin,
     )
-    .expect("create_asset should dispatch");
+    .expect("create_file should dispatch");
     assert_eq!(created["success"], json!(true), "{}", created);
     assert_eq!(
         stored_text(uri, "assets_batch_single/new.ts"),
@@ -714,35 +714,35 @@ async fn the_single_file_tools_take_text_too() {
     );
 
     let written = execute_native_mcp_tool(
-        "write_asset",
+        "write_file",
         &json!({
             "script": uri,
-            "asset": "assets_batch_single/new.ts",
+            "path": "assets_batch_single/new.ts",
             "mimetype": "text/typescript",
             "text": "export const created = false;",
         }),
         &admin,
     )
-    .expect("write_asset should dispatch");
+    .expect("write_file should dispatch");
     assert_eq!(written["success"], json!(true), "{}", written);
     assert_eq!(
         stored_text(uri, "assets_batch_single/new.ts"),
         "export const created = false;",
-        "write_asset overwrites, which is what distinguishes it from create_asset"
+        "write_file overwrites, which is what distinguishes it from create_file"
     );
 
     // And base64 still means base64 under the name it has always had.
     let encoded = execute_native_mcp_tool(
-        "write_asset",
+        "write_file",
         &json!({
             "script": uri,
-            "asset": "assets_batch_single/new.ts",
+            "path": "assets_batch_single/new.ts",
             "mimetype": "text/typescript",
             "content": b64("export const created = null;"),
         }),
         &admin,
     )
-    .expect("write_asset should dispatch");
+    .expect("write_file should dispatch");
     assert_eq!(encoded["success"], json!(true), "{}", encoded);
     assert_eq!(
         stored_text(uri, "assets_batch_single/new.ts"),
@@ -1192,7 +1192,7 @@ async fn the_mcp_tool_writes_the_whole_change_too() {
     deploy(uri, "function init() {}");
 
     let seed = execute_native_mcp_tool(
-        "write_assets",
+        "write_files",
         &json!({
             "script": uri,
             "files": [{
@@ -1203,12 +1203,12 @@ async fn the_mcp_tool_writes_the_whole_change_too() {
         }),
         &UserContext::admin("batcher".to_string()),
     )
-    .expect("write_assets should dispatch");
+    .expect("write_files should dispatch");
     assert_eq!(seed["success"], json!(true), "{}", seed);
 
     let root = "function init() { /* rewritten */ }";
     let result = execute_native_mcp_tool(
-        "write_assets",
+        "write_files",
         &json!({
             "script": uri,
             "content": root,
@@ -1221,7 +1221,7 @@ async fn the_mcp_tool_writes_the_whole_change_too() {
         }),
         &UserContext::admin("batcher".to_string()),
     )
-    .expect("write_assets should dispatch");
+    .expect("write_files should dispatch");
 
     assert_eq!(result["success"], json!(true), "{}", result);
     assert_eq!(result["root"], json!("updated"), "{}", result);
@@ -1244,15 +1244,15 @@ async fn creating_an_asset_refuses_to_overwrite_one() {
     deploy(uri, "function init() {}");
 
     let created = execute_native_mcp_tool(
-        "create_asset",
+        "create_file",
         &json!({
             "script": uri,
-            "asset": "assets_batch_create/util.ts",
+            "path": "assets_batch_create/util.ts",
             "content": b64("export const n = 1;\n"),
         }),
         &UserContext::admin("batcher".to_string()),
     )
-    .expect("create_asset should dispatch");
+    .expect("create_file should dispatch");
 
     assert_eq!(created["success"], json!(true), "{}", created);
     assert_eq!(
@@ -1268,15 +1268,15 @@ async fn creating_an_asset_refuses_to_overwrite_one() {
     );
 
     let again = execute_native_mcp_tool(
-        "create_asset",
+        "create_file",
         &json!({
             "script": uri,
-            "asset": "assets_batch_create/util.ts",
+            "path": "assets_batch_create/util.ts",
             "content": b64("export const n = 2;\n"),
         }),
         &UserContext::admin("batcher".to_string()),
     )
-    .expect("create_asset should dispatch");
+    .expect("create_file should dispatch");
 
     assert!(
         again["error"]
@@ -1294,16 +1294,16 @@ async fn creating_an_asset_refuses_to_overwrite_one() {
 
     // write_asset is still the way to say "overwrite".
     let overwritten = execute_native_mcp_tool(
-        "write_asset",
+        "write_file",
         &json!({
             "script": uri,
-            "asset": "assets_batch_create/util.ts",
+            "path": "assets_batch_create/util.ts",
             "mimetype": "text/typescript",
             "content": b64("export const n = 2;\n"),
         }),
         &UserContext::admin("batcher".to_string()),
     )
-    .expect("write_asset should dispatch");
+    .expect("write_file should dispatch");
     assert_eq!(overwritten["success"], json!(true), "{}", overwritten);
     assert_eq!(
         stored_text(uri, "assets_batch_create/util.ts"),
