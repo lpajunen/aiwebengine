@@ -1006,3 +1006,86 @@ async fn rewriting_an_asset_keeps_it_with_its_script() {
 
     repository::delete_asset(script_uri, asset_path);
 }
+
+/// A Markdown file is a module whose default export is its text.
+///
+/// The case this is really about is the one the previous arrangement would
+/// have got wrong: every module used to be run through the linker's import
+/// rewriting first, and only a `.json` file's transformed form was thrown
+/// away afterwards. A skill document's whole job is to contain code examples,
+/// so a fenced `import` inside one would have been resolved as a dependency
+/// on a module that does not exist.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_markdown_module_exports_its_text_without_reading_it_as_source() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://asset-module-markdown.ts";
+    ensure_script(script_uri);
+
+    let policy = "# Refunds\n\
+                  \n\
+                  Refund within 30 days. Quote the \"order id\".\n\
+                  \n\
+                  ```ts\n\
+                  import { refund } from \"./nowhere/missing.ts\";\n\
+                  ```\n";
+
+    repository::upsert_asset(test_asset(
+        script_uri,
+        "skills/refund.md",
+        "text/markdown",
+        policy.as_bytes(),
+    ))
+    .expect("the skill document should be stored");
+
+    let script_content = r#"
+        import refundPolicy from "./skills/refund.md";
+
+        function handleImportedRequest(context) {
+            return ResponseBuilder.json({
+                length: refundPolicy.length,
+                heading: refundPolicy.split("\n")[0],
+                quotesSurvive: refundPolicy.includes("\"order id\""),
+            });
+        }
+    "#;
+
+    let setup_result = execute_script_secure(
+        script_uri,
+        script_content,
+        UserContext::authenticated("markdown-module-user".to_string()),
+    );
+    assert!(
+        setup_result.success,
+        "a fenced import inside the document must not be resolved: {:?}",
+        setup_result.error
+    );
+
+    let response = execute_script_for_request_secure(RequestExecutionParams {
+        script_uri: script_uri.to_string(),
+        handler_name: "handleImportedRequest".to_string(),
+        path: "/markdown-module".to_string(),
+        method: "GET".to_string(),
+        url: None,
+        query_params: None,
+        form_data: None,
+        raw_body: None,
+        headers: HashMap::new(),
+        user_context: UserContext::authenticated("markdown-module-user".to_string()),
+        route_params: None,
+        auth_context: None,
+        uploaded_files: None,
+        request_id: None,
+        route_pattern: None,
+    })
+    .expect("request execution should succeed");
+
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.body).expect("response should be JSON");
+    assert_eq!(body["length"], serde_json::json!(policy.len()));
+    assert_eq!(body["heading"], serde_json::json!("# Refunds"));
+    assert_eq!(body["quotesSurvive"], serde_json::json!(true));
+
+    assert!(repository::delete_asset(script_uri, "skills/refund.md"));
+}

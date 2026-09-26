@@ -3387,6 +3387,31 @@ declare function Fragment(
   ...children: any[]
 ): string;
 
+/**
+ * Markdown and plain-text files are modules whose default export is their
+ * content.
+ *
+ * ```ts
+ * import refundPolicy from "./skills/refund.md";
+ * ```
+ *
+ * The import resolves when the script is bundled, is cached in the prepared
+ * program, is dropped when the file is written, and is part of what a
+ * revision pins — so a system prompt or a skill definition costs nothing per
+ * request and travels with the version of the code that was written against
+ * it. `assetStorage.fetchAsset` is for the other case: content that changes
+ * without a redeploy.
+ */
+declare module "*.md" {
+  const content: string;
+  export default content;
+}
+
+declare module "*.txt" {
+  const content: string;
+  export default content;
+}
+
 declare module "react/jsx-runtime" {
   export { Fragment };
 

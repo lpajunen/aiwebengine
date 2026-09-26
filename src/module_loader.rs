@@ -537,36 +537,41 @@ impl<'a> ModuleLinker<'a> {
         }
 
         self.visiting.push(module_path.to_string());
-        let transformed = match transform_module_source(&module_source.content, module_path, false)
-        {
-            Ok(transformed) => transformed,
-            Err(error) => {
-                self.visiting.pop();
-                return Err(error);
-            }
-        };
-        if let Err(error) = self.resolve_dependencies(module_path, &transformed) {
-            self.visiting.pop();
-            return Err(error);
-        }
+        // A data module is content, not source: nothing in it is transformed
+        // and nothing in it is resolved as an import. Only code reaches the
+        // linker's rewriting at all.
+        let compiled = match module_kind(module_path) {
+            ModuleKind::Json => transform_json_module(&module_source.content, module_path),
+            ModuleKind::Text => Ok(transform_text_module(&module_source.content)),
+            ModuleKind::Code => {
+                let transformed =
+                    match transform_module_source(&module_source.content, module_path, false) {
+                        Ok(transformed) => transformed,
+                        Err(error) => {
+                            self.visiting.pop();
+                            return Err(error);
+                        }
+                    };
+                if let Err(error) = self.resolve_dependencies(module_path, &transformed) {
+                    self.visiting.pop();
+                    return Err(error);
+                }
 
-        let compiled = if module_path.ends_with(".json") {
-            transform_json_module(&module_source.content, module_path)
-        } else {
-            transpiler::transpile_if_needed(module_path, &transformed.code)
-                .map_err(|error| {
-                    ModuleLoaderError::Transpilation(format!(
-                        "Failed transpiling asset module '{}': {}\nTransformed module source:\n{}",
-                        module_path, error, transformed.code
-                    ))
-                })
-                .map(|transpiled| {
-                    if transformed.export_footer.is_empty() {
-                        transpiled
-                    } else {
-                        format!("{}\n{}", transpiled, transformed.export_footer.join("\n"))
-                    }
-                })
+                transpiler::transpile_if_needed(module_path, &transformed.code)
+                    .map_err(|error| {
+                        ModuleLoaderError::Transpilation(format!(
+                            "Failed transpiling asset module '{}': {}\nTransformed module source:\n{}",
+                            module_path, error, transformed.code
+                        ))
+                    })
+                    .map(|transpiled| {
+                        if transformed.export_footer.is_empty() {
+                            transpiled
+                        } else {
+                            format!("{}\n{}", transpiled, transformed.export_footer.join("\n"))
+                        }
+                    })
+            }
         };
         let compiled = match compiled {
             Ok(compiled) => compiled,
@@ -927,6 +932,35 @@ fn rewrite_exports(
     Ok(rewritten)
 }
 
+/// What a module's source is, which decides how it becomes JavaScript.
+///
+/// The distinction is not cosmetic. A data module's bytes are *content*, so
+/// nothing in them may be read as source — and that is what the previous
+/// arrangement got wrong for JSON: every module went through
+/// `transform_module_source` and `resolve_dependencies` first, and only then
+/// was a `.json` file's transformed form thrown away. A string inside the
+/// JSON that happened to read like an import was therefore resolved as one,
+/// against a module that need not exist. Harmless in practice for JSON and
+/// not harmless at all for Markdown, whose whole job is to contain code
+/// examples.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModuleKind {
+    /// Transformed, its imports resolved, transpiled.
+    Code,
+    /// Parsed, and its value becomes the default export.
+    Json,
+    /// The file's text becomes the default export, verbatim.
+    Text,
+}
+
+fn module_kind(logical_path: &str) -> ModuleKind {
+    match logical_path.rsplit_once('.').map(|(_, ext)| ext) {
+        Some("json") => ModuleKind::Json,
+        Some("md" | "txt") => ModuleKind::Text,
+        _ => ModuleKind::Code,
+    }
+}
+
 fn transform_json_module(content: &str, module_path: &str) -> Result<String, ModuleLoaderError> {
     let parsed: serde_json::Value = serde_json::from_str(content).map_err(|error| {
         ModuleLoaderError::InvalidSpecifier(format!(
@@ -936,6 +970,29 @@ fn transform_json_module(content: &str, module_path: &str) -> Result<String, Mod
     })?;
 
     Ok(format!("exports.default = {};", parsed))
+}
+
+/// A text file as a module exporting its own content.
+///
+/// `import policy from "./skills/refund.md"` in place of
+/// `assetStorage.fetchAsset("skills/refund.md")`. The import resolves at link
+/// time, is cached in the prepared program, is dropped when the file is
+/// written, is part of the revision's pinned content and is visible to `tsc`;
+/// the fetch is a database read on every call that returns a string through
+/// the JSON-in-a-string idiom. For content that does not change without a
+/// redeploy — a system prompt, a skill definition, a few-shot example — the
+/// import is strictly better, and people reached for `fetchAsset` only
+/// because it was the one that was obviously *for* files.
+///
+/// Escaped by the JSON serializer rather than by hand: a prompt is exactly
+/// the kind of text that contains quotes, backslashes, newlines and the odd
+/// `</script>`, and a string literal assembled by hand gets one of those
+/// wrong eventually.
+fn transform_text_module(content: &str) -> String {
+    format!(
+        "exports.default = {};",
+        serde_json::Value::String(content.to_string())
+    )
 }
 
 /// The names a script's root module may have, in the order a tree holding
@@ -1171,9 +1228,15 @@ fn is_supported_module_asset(logical_path: &str, mimetype: &str) -> bool {
         || logical_path.ends_with(".jsx")
         || logical_path.ends_with(".tsx")
         || logical_path.ends_with(".json")
+        || logical_path.ends_with(".md")
+        || logical_path.ends_with(".txt")
         || matches!(
             mimetype,
-            "text/javascript" | "application/javascript" | "text/plain" | "application/json"
+            "text/javascript"
+                | "application/javascript"
+                | "text/plain"
+                | "application/json"
+                | "text/markdown"
         )
 }
 

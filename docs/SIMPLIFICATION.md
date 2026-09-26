@@ -266,17 +266,24 @@ For static content the import is strictly better, and people reach for
 `fetchAsset` should mean "content that changes without a redeploy", and nothing
 else.
 
-`module_loader.rs:549` already handles `.json` this way.
-**Add `.md` and `.txt` as string modules** — about ten lines beside
-`transform_json_module`, plus two entries in `is_supported_module_asset`
-(`module_loader.rs:1119`) — and the whole skills case becomes build-time, with
-no per-request cost and correct revision pinning:
+`module_loader.rs` already handles `.json` this way.
+**Done: `.md` and `.txt` are string modules**, so the whole skills case is
+build-time, with no per-request cost and correct revision pinning:
 
 ```ts
 import refundPolicy from "./skills/refund.md";
 ```
 
-That is the highest-value small change in this area.
+It was not ten lines beside `transform_json_module`, and the reason is worth
+recording. Every module was run through `transform_module_source` and
+`resolve_dependencies` _first_, and only then was a `.json` file's transformed
+form thrown away — so anything inside a data module that read like an import
+was resolved as one. Latent for JSON and fatal for Markdown, whose whole job
+is to contain code examples: a fenced `import` in a skill document would have
+been a dependency on a module that does not exist. So the dispatch moved to
+the front (`ModuleKind::{Code, Json, Text}`), and a data module's bytes are
+never read as source. `tests/asset_modules.rs` pins it with a document that
+contains exactly such a fence.
 
 ### Consequences
 
