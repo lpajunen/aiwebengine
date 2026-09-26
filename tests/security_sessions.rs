@@ -243,7 +243,14 @@ async fn test_refresh_session_extends_expiry() {
     let key: [u8; 32] = rand::random();
     let pool = common::test_pool().await;
     let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
-    let manager = SecureSessionManager::new(pool, &key, 5, 86400 * 30, 3, auditor).unwrap();
+    // A long idle timeout, like every other test here. What this asserts is
+    // that refreshing *moves* the expiry, which needs the session to still be
+    // alive when it is refreshed — and nothing else. Five seconds made those
+    // two things one: `refresh_session` rejects a session whose stored
+    // `expires_at` has passed, so the sleep below plus two database round
+    // trips had to fit inside the timeout, and on a loaded machine they did
+    // not. The failure was `SessionExpired`, roughly one run in three.
+    let manager = SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 3, auditor).unwrap();
 
     let params = CreateSessionParams {
         user_id: format!("user_refresh_ok_{}", rand::random::<u32>()),
@@ -261,7 +268,11 @@ async fn test_refresh_session_extends_expiry() {
     };
 
     let token = manager.create_session(params).await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // Only to put a measurable gap between the two expiries. `expires_at` is
+    // recomputed as `now + timeout` at microsecond precision, so this is five
+    // orders of magnitude more than the assertion needs; it is here to say out
+    // loud that the clock has to advance, not to approach any deadline.
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
     let refreshed = manager
         .refresh_session(&token.token, "192.168.1.10", "Mozilla/5.0", TEST_HOST, None)
