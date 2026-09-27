@@ -2451,6 +2451,7 @@ impl SecureGlobalContext {
         let auditor_stream = auditor.clone();
         let config_stream = config.clone();
         let script_uri_stream = script_uri_owned.clone();
+        let stream_register_fn = register_fn.clone();
         let register_stream_route = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>,
@@ -2587,16 +2588,23 @@ impl SecureGlobalContext {
                 }
 
                 // Register the stream
-                match crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream_with_metadata(
-                    &path,
-                    &script_uri_stream,
-                    customization_function,
-                    crate::stream_registry::StreamRouteMetadata {
-                        tags,
-                        summary,
-                        description,
-                    },
-                ) {
+                // The same sink a handler route and a file route record
+                // into. A stream is a route whose target is a connection the
+                // engine holds open, so where it is published belongs with
+                // the rest of the script's registrations; `stream_registry`
+                // keeps what it is actually for, which is the connections.
+                let Some(record) = stream_register_fn.as_ref() else {
+                    return Ok(registration_inactive(
+                        "routeRegistry.registerStreamRoute",
+                        &path,
+                    ));
+                };
+                let mut route_meta = repository::RouteMetadata::stream(customization_function);
+                route_meta.tags = tags;
+                route_meta.summary = summary;
+                route_meta.description = description;
+
+                match record(&path, &route_meta, Some(repository::STREAM_METHOD)) {
                     Ok(()) => Ok(format!("Web stream '{}' registered successfully", path)),
                     Err(e) => Ok(format!("Failed to register stream '{}': {}", path, e)),
                 }

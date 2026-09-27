@@ -2875,6 +2875,21 @@ pub fn exposure_report_authorized(
     Ok(crate::exposure::report(&metadata))
 }
 
+/// The engine's own streams, which are not registrations of any script.
+///
+/// A script's streams are indexed with its routes; these have no script
+/// behind them and no metadata to be indexed from, so they stay in
+/// `stream_registry` — which is where they are registered — and are listed
+/// from there.
+fn engine_owned_streams() -> Vec<(String, String)> {
+    crate::stream_registry::GLOBAL_STREAM_REGISTRY
+        .get_all_registrations()
+        .into_iter()
+        .filter(|(_, script_uri, _)| script_uri.starts_with("engine://"))
+        .map(|(path, script_uri, _)| (path, script_uri))
+        .collect()
+}
+
 pub fn routes_introspection_authorized(user: &UserContext) -> AppResult<Vec<Value>> {
     if !may_administer(user) {
         return Err(crate::error::AppError::AuthorizationFailed {
@@ -2893,9 +2908,9 @@ pub fn routes_introspection_authorized(user: &UserContext) -> AppResult<Vec<Valu
                 // is what this view always showed them as: the asset half
                 // used to be assembled from a registry of its own here.
                 let tags = if route_meta.tags.is_empty()
-                    && route_meta.kind == repository::RouteKind::File
+                    && route_meta.kind != repository::RouteKind::Handler
                 {
-                    vec!["Assets".to_string()]
+                    vec![route_meta.default_tag().to_string()]
                 } else {
                     route_meta.tags.clone()
                 };
@@ -2912,25 +2927,15 @@ pub fn routes_introspection_authorized(user: &UserContext) -> AppResult<Vec<Valu
         }
     }
 
-    for (path, script_uri, metadata) in
-        crate::stream_registry::GLOBAL_STREAM_REGISTRY.get_all_registrations()
-    {
-        let handler = crate::stream_registry::GLOBAL_STREAM_REGISTRY
-            .get_stream_info(&path)
-            .and_then(|(_, customization_function)| customization_function);
-        let tags = if metadata.tags.is_empty() {
-            vec!["Streams".to_string()]
-        } else {
-            metadata.tags
-        };
+    for (path, script_uri) in engine_owned_streams() {
         all_routes.push(json!({
             "path": path,
-            "method": "STREAM",
-            "handler": handler,
+            "method": repository::STREAM_METHOD,
+            "handler": Value::Null,
             "script_uri": script_uri,
-            "summary": metadata.summary,
-            "description": metadata.description,
-            "tags": tags,
+            "summary": Value::Null,
+            "description": Value::Null,
+            "tags": ["Streams"],
         }));
     }
 
@@ -3015,11 +3020,26 @@ pub fn generate_merged_openapi_spec() -> String {
         })
         .collect();
 
+    let stream_routes: Vec<(String, String, repository::RouteMetadata)> = metadata_list
+        .iter()
+        .filter(|metadata| metadata.initialized)
+        .flat_map(|metadata| {
+            metadata
+                .registrations
+                .iter()
+                .filter(|(_, route_meta)| route_meta.kind == repository::RouteKind::Stream)
+                .map(|((path, _), route_meta)| {
+                    (path.clone(), metadata.uri.clone(), route_meta.clone())
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
     // Script-registered HTTP routes
     for metadata in metadata_list {
         if metadata.initialized && !metadata.registrations.is_empty() {
             for ((path, method), route_meta) in metadata.registrations {
-                if route_meta.kind == repository::RouteKind::File {
+                if route_meta.kind != repository::RouteKind::Handler {
                     continue;
                 }
                 let path_item = js_paths.entry(path.clone()).or_insert_with(|| json!({}));
@@ -3126,10 +3146,18 @@ pub fn generate_merged_openapi_spec() -> String {
         }
     }
 
-    // SSE stream routes from the stream registry
-    for (path, script_uri, metadata) in
-        crate::stream_registry::GLOBAL_STREAM_REGISTRY.get_all_registrations()
-    {
+    // SSE stream routes, the scripts' and the engine's own
+    let stream_routes: Vec<(String, String, repository::RouteMetadata)> = stream_routes
+        .into_iter()
+        .chain(
+            engine_owned_streams()
+                .into_iter()
+                .map(|(path, script_uri)| {
+                    (path, script_uri, repository::RouteMetadata::stream(None))
+                }),
+        )
+        .collect();
+    for (path, script_uri, metadata) in stream_routes {
         let stream_tags = if metadata.tags.is_empty() {
             vec!["Streams".to_string()]
         } else {

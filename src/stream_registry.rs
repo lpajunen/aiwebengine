@@ -730,9 +730,14 @@ impl StreamRegistry {
             OpenError::Internal("Failed to open connection: registry lock error".to_string())
         })?;
 
-        if !streams.contains_key(path) {
-            return Err(OpenError::NotRegistered(path.to_string()));
-        }
+        // Created on first connection rather than at registration. Where a
+        // stream is *published* is a registration of the script, indexed
+        // with its routes; what this registry holds is the connections, and
+        // a stream nobody has connected to has none. The caller has already
+        // matched the route, so reaching here means the stream exists.
+        streams
+            .entry(path.to_string())
+            .or_insert_with(|| StreamRegistration::new(path.to_string(), String::new(), None));
 
         // Counted while the lock is held, so this is the count the insert
         // below lands on rather than one that was true a moment ago.

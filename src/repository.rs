@@ -86,7 +86,15 @@ pub enum RouteKind {
     /// Send one of the script's files. The engine moves the bytes, so
     /// [`RouteMetadata::authorize`] is where "who may read this" lives.
     File,
+    /// Open a Server-Sent Events connection. The engine holds the socket, so
+    /// [`RouteMetadata::authorize`] is again where the decision lives — and
+    /// it returns the connection's filter criteria along with it.
+    Stream,
 }
+
+/// The pseudo-method a stream route is keyed under, for the reason
+/// [`ASSET_METHOD`] gives.
+pub const STREAM_METHOD: &str = "STREAM";
 
 /// The pseudo-method a file route is keyed under.
 ///
@@ -141,6 +149,21 @@ impl RouteMetadata {
         }
     }
 
+    /// A route that opens a Server-Sent Events connection.
+    pub fn stream(authorize: Option<String>) -> Self {
+        Self {
+            handler_name: String::new(),
+            kind: RouteKind::Stream,
+            file: None,
+            authorize,
+            summary: None,
+            description: None,
+            tags: Vec::new(),
+            parameters: None,
+            request_body: None,
+        }
+    }
+
     /// A route that sends one of the script's files.
     pub fn file(path: String, authorize: Option<String>) -> Self {
         Self {
@@ -161,6 +184,18 @@ impl RouteMetadata {
         match self.kind {
             RouteKind::Handler => &self.handler_name,
             RouteKind::File => self.file.as_deref().unwrap_or_default(),
+            // A stream has no target beyond the path; what a listing wants to
+            // show for it is the function that decides who may subscribe.
+            RouteKind::Stream => self.authorize.as_deref().unwrap_or_default(),
+        }
+    }
+
+    /// The default Swagger group for a route of this kind.
+    pub fn default_tag(&self) -> &'static str {
+        match self.kind {
+            RouteKind::Handler => "Scripts",
+            RouteKind::File => "Assets",
+            RouteKind::Stream => "Streams",
         }
     }
 }

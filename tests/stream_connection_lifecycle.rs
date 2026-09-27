@@ -168,14 +168,29 @@ fn closing_frees_a_slot() {
         .expect("the closed connection should have freed its slot");
 }
 
+/// Connection state is created on first connection rather than at
+/// registration.
+///
+/// Where a stream is *published* is a registration of the script, indexed
+/// with its routes; this registry holds the connections, and a stream nobody
+/// has connected to has none. So there is no "unregistered path" for it to
+/// refuse — the router is what vouches for the path, and by the time a
+/// connection is opened it has already matched.
 #[test]
-fn an_unregistered_path_is_refused_and_is_not_a_capacity_problem() {
-    let refused = GLOBAL_STREAM_REGISTRY
-        .open_connection("/lifecycle/never_registered", None, StreamLimits::default())
-        .expect_err("nothing is registered there");
+fn connection_state_appears_on_the_first_connection() {
+    let path = "/lifecycle/first_connection";
+    assert_eq!(
+        connections_on(path),
+        0,
+        "a stream nobody has connected to holds nothing"
+    );
 
-    assert!(matches!(refused, OpenError::NotRegistered(_)));
-    assert!(!refused.is_capacity());
+    let opened = GLOBAL_STREAM_REGISTRY
+        .open_connection(path, None, StreamLimits::default())
+        .expect("the router matched the path, so the connection opens");
+
+    assert_eq!(connections_on(path), 1);
+    GLOBAL_STREAM_REGISTRY.close_connection(path, &opened.connection_id);
 }
 
 #[test]

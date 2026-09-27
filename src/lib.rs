@@ -734,20 +734,24 @@ fn error_to_response(error_response: error::ErrorResponse) -> Response {
 /// Helper: Get client metadata for stream connection from customization function or query params
 fn get_stream_client_metadata(
     path: &str,
+    stream: Option<&StreamRoute>,
     query_params: &HashMap<String, String>,
     auth_user: Option<&auth::AuthUser>,
 ) -> Result<AccessDecision, String> {
-    let stream_info = stream_registry::GLOBAL_STREAM_REGISTRY.get_stream_info(path);
-
-    if let Some((script_uri, Some(func_name))) = stream_info {
+    if let Some(StreamRoute {
+        script_uri,
+        authorize: Some(func_name),
+        ..
+    }) = stream
+    {
         // The callback is the only place per-resource authorization can live:
         // whose order `/orders/1234/events` is, is a fact about the script's
         // data model. See `resource_access`.
         let auth_context = auth_user.map(|user| create_js_auth_context(Some(user)));
 
         let decision = js_engine::execute_stream_customization_function(
-            &script_uri,
-            &func_name,
+            script_uri,
+            func_name,
             path,
             query_params,
             auth_context,
@@ -801,11 +805,26 @@ fn build_access_error_response(message: &str) -> Response {
         })
 }
 
+/// A script's stream route, as the index matched it.
+///
+/// `None` at the call site means the engine's own stream, which has no
+/// script behind it and therefore nothing to authorize with.
+pub struct StreamRoute {
+    pub script_uri: String,
+    /// The function that decides who may subscribe, and returns the
+    /// connection's filter criteria. `None` means anyone who can reach the
+    /// host — which is what a handler that checks nothing also means.
+    pub authorize: Option<String>,
+    /// The `:param` values the pattern captured, folded into the criteria
+    /// the function is given.
+    pub params: HashMap<String, String>,
+}
+
 /// Handle Server-Sent Events stream requests
-async fn handle_stream_request(req: Request<Body>) -> Response {
+async fn handle_stream_request(req: Request<Body>, stream: Option<StreamRoute>) -> Response {
     let path = req.uri().path().to_string();
     let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
-    let query_params = parse_query_string(&query_string);
+    let mut query_params = parse_query_string(&query_string);
 
     // Extract auth context before consuming the request
     let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
@@ -816,38 +835,47 @@ async fn handle_stream_request(req: Request<Body>) -> Response {
     );
 
     // Get client metadata from customization function or query params
-    let client_metadata = match get_stream_client_metadata(&path, &query_params, auth_user.as_ref())
-    {
-        Ok(AccessDecision::Allow(criteria)) => {
-            if criteria.is_empty() {
-                None
-            } else {
-                Some(criteria)
+    // The captured segments reach the function alongside the query, so a
+    // stream on `/orders/:id/events` can decide about the order.
+    if let Some(route) = &stream {
+        for (key, value) in &route.params {
+            query_params.insert(key.clone(), value.clone());
+        }
+    }
+
+    let client_metadata =
+        match get_stream_client_metadata(&path, stream.as_ref(), &query_params, auth_user.as_ref())
+        {
+            Ok(AccessDecision::Allow(criteria)) => {
+                if criteria.is_empty() {
+                    None
+                } else {
+                    Some(criteria)
+                }
             }
-        }
-        Ok(AccessDecision::Deny { status, reason }) => {
-            info!(
-                "Stream '{}' refused the connection with {}{}",
-                path,
-                status,
-                reason
-                    .as_deref()
-                    .map(|r| format!(": {}", r))
-                    .unwrap_or_default()
-            );
-            return build_denied_response(status, reason.as_deref());
-        }
-        Err(e) => {
-            // A throw is still a 500, because it still means the callback
-            // itself failed rather than that it decided. That is the whole
-            // reason a decision has a spelling of its own.
-            error!("Customization function failed for stream '{}': {}", path, e);
-            return build_access_error_response(&format!(
-                "Stream customization function failed: {}",
-                e
-            ));
-        }
-    };
+            Ok(AccessDecision::Deny { status, reason }) => {
+                info!(
+                    "Stream '{}' refused the connection with {}{}",
+                    path,
+                    status,
+                    reason
+                        .as_deref()
+                        .map(|r| format!(": {}", r))
+                        .unwrap_or_default()
+                );
+                return build_denied_response(status, reason.as_deref());
+            }
+            Err(e) => {
+                // A throw is still a 500, because it still means the callback
+                // itself failed rather than that it decided. That is the whole
+                // reason a decision has a spelling of its own.
+                error!("Customization function failed for stream '{}': {}", path, e);
+                return build_access_error_response(&format!(
+                    "Stream customization function failed: {}",
+                    e
+                ));
+            }
+        };
 
     // The registry accepts the connection or refuses it, under one lock, and
     // hands back the id it stored. Closing with that id is what the guard
@@ -3452,8 +3480,8 @@ async fn handle_dynamic_request(
     }
 
     // Check if this is a request to a registered stream path
-    if should_route_to_stream(&path, &request_method, &canonical_host).await {
-        return handle_stream_request(req).await;
+    if is_engine_stream(&path, &request_method) {
+        return handle_stream_request(req, None).await;
     }
 
     // Match against the cached route index (rebuilt lazily on script changes),
@@ -3490,6 +3518,27 @@ async fn handle_dynamic_request(
                 strip_body,
                 req.uri().query().unwrap_or_default(),
                 req.extensions().get::<auth::AuthUser>(),
+            )
+            .await;
+        }
+        // A stream route: the engine holds the connection open. Found by the
+        // same lookup as everything else, which is what gives a stream
+        // `:param` — `/orders/:id/events` was not expressible while streams
+        // were matched by an exact-match registry of their own.
+        route_index::RouteLookup::Handler {
+            kind: repository::RouteKind::Stream,
+            script_uri,
+            authorize,
+            params,
+            ..
+        } => {
+            return handle_stream_request(
+                req,
+                Some(StreamRoute {
+                    script_uri,
+                    authorize,
+                    params,
+                }),
             )
             .await;
         }
@@ -4067,35 +4116,15 @@ async fn serve_route_file(
 }
 
 /// Check if request should be routed to a stream handler
-async fn should_route_to_stream(path: &str, method: &str, host: &str) -> bool {
-    let is_get = method == "GET";
-    let is_stream_registered = stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered(path);
-
-    info!(
-        "Stream check - method: {}, is_get: {}, path: '{}', is_registered: {}",
-        method, is_get, path, is_stream_registered
-    );
-
-    if is_get && is_stream_registered {
-        // A stream is published on the hosts of the script that registered it.
-        // The engine's own streams have no script behind them, so they are left
-        // to the management host guard rather than checked here.
-        if let Some(script_uri) =
-            stream_registry::GLOBAL_STREAM_REGISTRY.get_stream_script_uri(path)
-            && !script_uri.starts_with("engine://")
-            && !route_index::script_serves_host(&script_uri, host).await
-        {
-            info!(
-                "Stream {} is not published on host {}; not routing to it",
-                path, host
-            );
-            return false;
-        }
-        info!("Routing to stream handler for path: {}", path);
-        return true;
-    }
-
-    false
+/// Whether this is the engine's *own* stream.
+///
+/// A script's streams are registrations like its routes and are found by the
+/// route index, which is also what applies the host filter. The engine's own
+/// stream has no script behind it and therefore no metadata to be indexed
+/// from, so it is named here — there is exactly one, and its path is a
+/// constant under the reserved `/engine` prefix that no script may claim.
+fn is_engine_stream(path: &str, method: &str) -> bool {
+    method == "GET" && path == engine_api::ENGINE_SCRIPT_UPDATES_STREAM
 }
 
 /// Build an HTTP response from a JavaScript response object

@@ -401,3 +401,50 @@ async fn a_file_route_matches_a_pattern_and_the_guard_sees_it() {
 
     engine.shutdown().await;
 }
+
+/// A stream is a route, so it matches patterns like one, and the captured
+/// segments reach the function that decides who may subscribe.
+/// `/orders/:id/events` was not expressible while streams were matched by an
+/// exact-match registry of their own — the decision a stream most often has
+/// to make is about the thing in the path.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stream_matches_a_pattern_and_the_guard_sees_it() {
+    let engine = common::AdminServer::start()
+        .await
+        .expect("server failed to start");
+
+    let script_uri = "https://example.com/param_stream_test";
+    engine.deploy_script(script_uri, "function init() {}").await;
+
+    let script = r#"
+        function mayWatch(context) {
+          if (context.request.query.id === "42") return { orderId: "42" };
+          return { deny: 403, reason: "not your order" };
+        }
+
+        function init(context) {
+          routeRegistry.registerStreamRoute("/orders/:id/events", "mayWatch");
+          return { success: true };
+        }
+    "#;
+    engine.deploy_script(script_uri, script).await;
+
+    let port = engine.port();
+    let client = engine.client();
+
+    // A refused subscription answers the status the function chose, rather
+    // than the 500 a throw used to produce.
+    let refused = client
+        .get(format!("http://127.0.0.1:{}/orders/7/events", port))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(refused.status().as_u16(), 403);
+    assert_eq!(
+        refused.text().await.unwrap_or_default(),
+        "not your order",
+        "the guard saw the :id the pattern captured"
+    );
+
+    engine.shutdown().await;
+}

@@ -342,6 +342,15 @@ fn resolve(index: &IndexInner, host: &str, path: &str, method: &str) -> RouteLoo
         }
     }
 
+    // A stream answers GET only — a HEAD of one would have to open a
+    // connection to say nothing about it.
+    if method == "GET" {
+        let as_stream = match_index(index, host, path, repository::STREAM_METHOD);
+        if matches!(as_stream, RouteLookup::Handler { .. }) {
+            return as_stream;
+        }
+    }
+
     let result = match_index(index, host, path, method);
     if method == "HEAD"
         && !matches!(result, RouteLookup::Handler { .. })

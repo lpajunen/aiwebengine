@@ -4742,19 +4742,21 @@ mod tests {
         );
         assert!(result.error.is_none(), "Should not have any errors");
 
-        // Small delay to ensure registration is complete
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-        // Verify the stream was registered
+        // A stream is a registration of the script, reported the way its
+        // routes are, rather than a write to a registry of its own.
+        let registered = result.registrations.get(&(
+            "/test-stream-func".to_string(),
+            repository::STREAM_METHOD.to_string(),
+        ));
         assert!(
-            stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered("/test-stream-func"),
-            "Stream should be registered"
+            registered.is_some(),
+            "Stream should be registered: {:?}",
+            result.registrations
         );
-
-        // Verify the correct script URI is associated
-        let script_uri =
-            stream_registry::GLOBAL_STREAM_REGISTRY.get_stream_script_uri("/test-stream-func");
-        assert_eq!(script_uri, Some("stream-test-func".to_string()));
+        assert_eq!(
+            registered.map(|meta| meta.kind),
+            Some(repository::RouteKind::Stream)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -4787,7 +4789,10 @@ mod tests {
 
         // Verify the invalid stream was NOT registered
         assert!(
-            !stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered("invalid-path-test"),
+            !result.registrations.contains_key(&(
+                "invalid-path-test".to_string(),
+                repository::STREAM_METHOD.to_string()
+            )),
             "Invalid stream should not be registered"
         );
     }
@@ -4829,7 +4834,10 @@ mod tests {
 
         // Verify the stream was registered
         assert!(
-            stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered("/test-message-stream"),
+            result.registrations.contains_key(&(
+                "/test-message-stream".to_string(),
+                repository::STREAM_METHOD.to_string()
+            )),
             "Stream should be registered"
         );
 
@@ -4891,7 +4899,10 @@ mod tests {
 
         // Verify the stream was registered
         assert!(
-            stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered("/test-json-stream"),
+            result.registrations.contains_key(&(
+                "/test-json-stream".to_string(),
+                repository::STREAM_METHOD.to_string()
+            )),
             "Stream should be registered"
         );
 

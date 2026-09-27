@@ -278,10 +278,13 @@ Three fixable defects, none of them a reason to remove it. The first two are
 - ~~**Its authorization role is undocumented.**~~ `aiwebengine.d.ts` now leads
   with it: the callback is what **decides who may subscribe**, and without one
   anyone who can reach the host gets the stream.
-- **Deny-by-omission is still the default.** `registerStreamRoute("/events/x")`
-  with no callback means anyone who can reach the host gets the stream — the
-  same open-by-default shape as assets. Closing that is the same decision as
-  closing it for `public/`, so the two go together.
+- ~~**Deny-by-omission is the default.**~~ Not a defect, and listed here as
+  one by mistake. A stream provides dynamic content the way a
+  `registerRoute` route does, and a route's handler that checks nothing is
+  public too — the callback _is_ the hook, exactly as the handler is. Public
+  by default is the consistent answer across all three surfaces, and for a
+  file route the directory now says it out loud: a `public/` file with no
+  `authorize` is public because that is what `public/` means.
 
 `resource_access.rs` is the shape, settled once, so the asset-route hook below
 answers the same way rather than inventing a second convention.
@@ -337,9 +340,33 @@ contains exactly such a fence.
 ### Consequences
 
 `assetStorage`'s four methods fold into the unified file API from §1.
-`asset_registry.rs` folds into `route_index`: a `public/` file is a route, and
-there is no reason for it to have a second global registry with a second
-invalidation path.
+
+**Done: one registry.** `asset_registry.rs` is deleted and `stream_registry`
+keeps only the connections. A script's registrations are one kind of thing —
+`RouteMetadata` carries a `RouteKind` of `Handler`, `File` or `Stream` — so
+all three record into the same sink, are indexed by `route_index`, are
+filtered by host once and are invalidated once.
+`routes_introspection_authorized` had always rendered them as one list; it
+was only the storage that was split.
+
+What that bought beyond the deletion:
+
+- **`:param` and `/*` work for all three.** `/reports/:id` and
+  `/orders/:id/events` were not expressible while files and streams were
+  matched by exact-match maps of their own, and the captured segments reach
+  the authorization function — which is the decision a stream most often has
+  to make.
+- **A registration the script stops making goes away.** Registrations are
+  rebuilt on every `init()`; neither old registry ever unregistered anything,
+  so a removed `registerAssetRoute` or `registerStreamRoute` kept routing
+  until the process restarted.
+- Precedence is stated rather than emergent. A file route is keyed under an
+  `ASSET` pseudo-method and a stream under `STREAM`, so neither shares a slot
+  with a handler on the same path, and `route_index::resolve` says which wins
+  — which is what three registries consulted in sequence used to add up to.
+
+The engine's own stream has no script behind it and no metadata to be indexed
+from, so it stays registered in `stream_registry` and is listed from there.
 
 ## 3. Three hand-written descriptions of one operation set
 
@@ -592,8 +619,9 @@ the operation.
    and OpenAPI from it.
 6. **Prelude every global** (§5); trim `database` to about ten methods (§6).
 7. ~~**Fold `stream_manager` into `stream_registry`**~~ _(done)_ — the
-   connection leak and the never-firing limits — **and `asset_registry` into
-   `route_index`** (§7, §2).
+   connection leak and the never-firing limits — ~~**and `asset_registry`
+   into `route_index`**~~ _(done, along with the stream registry's routing
+   half)_ (§7, §2).
 
 ## Open questions
 

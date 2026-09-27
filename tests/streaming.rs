@@ -201,8 +201,9 @@ async fn test_basic_streaming_functionality() {
 
     // Verify the stream was registered
     assert!(
-        GLOBAL_STREAM_REGISTRY.is_stream_registered("/test_stream"),
-        "Test stream should be registered"
+        registered_stream(&result, "/test_stream"),
+        "Test stream should be registered: {:?}",
+        result.registrations
     );
 
     info!("Test stream registered successfully");
@@ -620,7 +621,7 @@ async fn test_stream_endpoints() {
     println!("Script logs: {:?}", logs);
 
     // Check if stream is registered
-    let is_registered = GLOBAL_STREAM_REGISTRY.is_stream_registered("/test-stream");
+    let is_registered = registered_stream(&result, "/test-stream");
     println!("Is /test-stream registered: {}", is_registered);
 
     let client = engine.client();
@@ -1068,8 +1069,9 @@ async fn test_simple_stream_registration() {
 
     // Verify the stream was registered
     assert!(
-        GLOBAL_STREAM_REGISTRY.is_stream_registered("/simple_test"),
-        "Simple test stream should be registered"
+        registered_stream(&result, "/simple_test"),
+        "Simple test stream should be registered: {:?}",
+        result.registrations
     );
 
     println!("Simple stream registration test passed!");
@@ -1136,9 +1138,21 @@ async fn test_combined_functionality() {
 
     // Verify the stream was registered
     assert!(
-        GLOBAL_STREAM_REGISTRY.is_stream_registered("/combined_test"),
+        registered_stream(&result, "/combined_test"),
         "Combined test stream should be registered"
     );
 
     println!("Combined test passed!");
+}
+
+/// Whether a run registered `path` as a stream.
+///
+/// A stream is a registration of the script, reported the way its routes
+/// are, rather than a write to a registry of its own — which is what let a
+/// removed `registerStreamRoute` go on routing until the process restarted.
+fn registered_stream(result: &js_engine::ScriptExecutionResult, path: &str) -> bool {
+    result.registrations.contains_key(&(
+        path.to_string(),
+        aiwebengine::repository::STREAM_METHOD.to_string(),
+    ))
 }
