@@ -2681,6 +2681,17 @@ impl SecureGlobalContext {
 
                 // Extract optional OpenAPI metadata (tags/summary/description)
                 let (tags, summary, description) = extract_route_metadata(metadata.0.as_ref());
+                // And the one part of the registration that is not cosmetic:
+                // who may read the file. It rides in the same object because
+                // the second argument is the file's name and the shape
+                // `registerStreamRoute` uses is therefore not available, not
+                // because deciding access is metadata.
+                let authorize = metadata
+                    .0
+                    .as_ref()
+                    .and_then(|object| object.get::<_, Option<String>>("authorize").ok())
+                    .flatten()
+                    .filter(|name| !name.trim().is_empty());
 
                 if let Some(reply) = config_asset_route.collect(CollectedRegistration::new(
                     RegistrationKind::AssetRoute,
@@ -2698,6 +2709,7 @@ impl SecureGlobalContext {
                         tags,
                         summary,
                         description,
+                        authorize,
                     },
                 ) {
                     Ok(()) => Ok(format!(

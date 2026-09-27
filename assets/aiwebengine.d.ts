@@ -472,7 +472,7 @@ interface RouteRegistry {
    * ```ts
    * function authorizeOrder(context) {
    *   if (!context.auth?.userId) return { deny: 401 };
-   *   const orderId = context.request.queryParams.orderId;
+   *   const orderId = context.request.query.orderId;
    *   if (!ownsOrder(context.auth.userId, orderId)) {
    *     return { deny: 403, reason: "not your order" };
    *   }
@@ -516,15 +516,47 @@ interface RouteRegistry {
 
   /**
    * Register a static asset route
+   *
+   * With no `authorize`, the file is served to **anyone who can reach the
+   * host** — no session, no check. That is right for a stylesheet or a logo,
+   * and it is why a served file belongs under `public/`.
+   *
+   * `authorize` names the function that decides who may read it, for the
+   * files where that is a question. The engine still moves the bytes — an
+   * authorized asset is streamed rather than marshalled through JavaScript as
+   * a string — so what the function costs is one call, not the file.
+   *
+   * ```ts
+   * function mayReadInvoice(context) {
+   *   if (!context.auth?.userId) return { deny: 401 };
+   *   const id = context.request.query.id;
+   *   if (!ownsInvoice(context.auth.userId, id)) {
+   *     return { deny: 404 };   // do not confirm it exists
+   *   }
+   *   return {};
+   * }
+   *
+   * routeRegistry.registerAssetRoute("/invoice.pdf", "public/invoice.pdf", {
+   *   authorize: "mayReadInvoice",
+   * });
+   * ```
+   *
+   * It answers exactly as a stream's customization function does: any object
+   * without `deny` allows, `{ deny: true }` or `{ deny: <4xx>, reason? }`
+   * refuses. Throwing is not how you deny — it means the function itself is
+   * broken, and the file is **not** served, since falling through to the
+   * bytes when the thing guarding them has failed is the wrong way round.
+   *
    * @param httpPath - HTTP path where asset will be served (e.g., "/styles/main.css")
    * @param assetName - Name of the asset in the asset storage (e.g., "main.css")
-   * @param metadata - Optional OpenAPI metadata. `tags` sets the Swagger group
-   *   (defaults to "Assets"); `summary`/`description` override the
+   * @param metadata - `authorize` names the function that decides who may
+   *   read the file. The rest is OpenAPI metadata: `tags` sets the Swagger
+   *   group (defaults to "Assets"); `summary`/`description` override the
    *   auto-generated documentation text.
    * @returns Registration result message
    * @example
-   * routeRegistry.registerAssetRoute("/styles/main.css", "main.css");
-   * routeRegistry.registerAssetRoute("/logo.svg", "logo.svg", {
+   * routeRegistry.registerAssetRoute("/styles/main.css", "public/main.css");
+   * routeRegistry.registerAssetRoute("/logo.svg", "public/logo.svg", {
    *   tags: ["Branding"],
    *   summary: "Company logo",
    * });
@@ -536,6 +568,8 @@ interface RouteRegistry {
     httpPath: string,
     assetName: string,
     metadata?: {
+      /** Name of the function that decides who may read this file. */
+      authorize?: string;
       summary?: string;
       description?: string;
       tags?: string[];

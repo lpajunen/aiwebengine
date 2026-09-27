@@ -208,14 +208,26 @@ not answer it at all:
 | ----------- | -------------------------------------------------------------------------------- | ---------------------------------------- |
 | route       | the handler **is** the hook — it runs under the requesting user's context        | yes, reads `context.auth`                |
 | stream      | the customization callback — the engine opens the connection, so no handler runs | yes, filter criteria from `context.auth` |
-| asset route | **none**                                                                         | **impossible**                           |
+| asset route | `authorize` — the engine moves the bytes, so no handler runs                     | yes, reads `context.auth`                |
 
-`try_serve_asset` (`lib.rs:4344`) checks the host and serves the bytes. There
-is no way to say "signed-in users only", let alone "the person this file
-belongs to". And `asset_registry::get_asset_registration` is an exact-match
-`HashMap` lookup — no `:param`, no wildcard — so `/files/:id` is not
-expressible either. Folding it into `route_index` (§2) fixes the second half
-of that; the first half needs the hook.
+`try_serve_asset` checked the host and served the bytes. There was no way to
+say "signed-in users only", let alone "the person this file belongs to". And
+`asset_registry::get_asset_registration` is an exact-match `HashMap` lookup —
+no `:param`, no wildcard — so `/files/:id` is not expressible either. Folding
+it into `route_index` (§2) fixes the second half of that; the first half
+needed the hook.
+
+**Done: the hook.** `registerAssetRoute(path, file, { authorize: "mayRead" })`
+names the function that decides, and it answers in exactly the shape a
+stream's callback does — `resource_access::AccessDecision`, one
+implementation (`js_engine::execute_authorization_function`) for both, so the
+two surfaces cannot drift into two ways of parsing `{ deny: … }`. Omitting
+`authorize` keeps what an asset route has always meant, which is right for a
+stylesheet and is why the directory is called `public/`. A callback that
+_throws_ does not serve the file: falling through to the bytes when the thing
+guarding them is broken is the wrong way round.
+
+Still open: the fold itself, which is what makes `/files/:id` expressible.
 
 So the stream callback is not the odd one out. It is the only surface that gets
 this right, and the asset route is the one with the hole.

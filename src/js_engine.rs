@@ -428,6 +428,11 @@ pub struct RequestExecutionParams {
 pub enum HandlerInvocationKind {
     HttpRoute,
     StreamCustomization,
+    /// The function that decides whether a caller may read a file the engine
+    /// serves directly. Its sibling is `StreamCustomization`: both answer the
+    /// question a handler would have answered, on a surface where no handler
+    /// runs.
+    AssetAuthorization,
     Init,
     Scheduled,
     McpTool,
@@ -444,6 +449,7 @@ impl HandlerInvocationKind {
         match self {
             HandlerInvocationKind::HttpRoute => "httpRoute",
             HandlerInvocationKind::StreamCustomization => "streamCustomization",
+            HandlerInvocationKind::AssetAuthorization => "assetAuthorization",
             HandlerInvocationKind::Init => "init",
             HandlerInvocationKind::Scheduled => "scheduled",
             HandlerInvocationKind::McpTool => "mcpTool",
@@ -2847,12 +2853,37 @@ pub fn execute_stream_customization_function(
     query_params: &std::collections::HashMap<String, String>,
     auth_context: Option<crate::auth::JsAuthContext>,
 ) -> Result<crate::resource_access::AccessDecision, String> {
+    execute_authorization_function(
+        script_uri,
+        function_name,
+        HandlerInvocationKind::StreamCustomization,
+        path,
+        query_params,
+        auth_context,
+    )
+}
+
+/// Run the function a script named to decide who may read something the
+/// engine serves without running a handler.
+///
+/// One implementation for both surfaces — a stream's connection and an asset
+/// route — because they are the same question asked twice, and two copies
+/// would eventually parse `{ deny: … }` two different ways. `kind` is what
+/// the script's log lines are attributed to.
+pub fn execute_authorization_function(
+    script_uri: &str,
+    function_name: &str,
+    kind: HandlerInvocationKind,
+    path: &str,
+    query_params: &std::collections::HashMap<String, String>,
+    auth_context: Option<crate::auth::JsAuthContext>,
+) -> Result<crate::resource_access::AccessDecision, String> {
     let script_uri_owned = script_uri.to_string();
     let function_name_owned = function_name.to_string();
     let path_owned = path.to_string();
     let query_params_owned = query_params.clone();
     let invocation_id = crate::middleware::generate_request_id();
-    let log_context = HandlerInvocationKind::StreamCustomization.log_context(
+    let log_context = kind.log_context(
         &script_uri_owned,
         invocation_id.clone(),
         Some(path_owned.clone()),
@@ -2899,7 +2930,7 @@ pub fn execute_stream_customization_function(
         &rt,
         &ctx,
         &script_uri_owned,
-        &format!("Stream customization '{}'", function_name_owned),
+        &format!("{} '{}'", kind.as_str(), function_name_owned),
         TransactionHandling::Auto,
         |ctx| -> Result<rquickjs::Promise<'_>, String> {
             let request_context = JsRequestContext {
@@ -2914,12 +2945,17 @@ pub fn execute_stream_customization_function(
                 uploaded_files: Vec::new(),
             };
 
-            let mut context_builder =
-                JsHandlerContextBuilder::new(HandlerInvocationKind::StreamCustomization)
-                    .with_script_metadata(&script_uri_owned, &function_name_owned)
-                    .with_request(request_context)
-                    .with_invocation_id(invocation_id.clone())
-                    .with_metadata_value("stream", serde_json::json!({ "path": path_owned }));
+            let mut context_builder = JsHandlerContextBuilder::new(kind)
+                .with_script_metadata(&script_uri_owned, &function_name_owned)
+                .with_request(request_context)
+                .with_invocation_id(invocation_id.clone())
+                .with_metadata_value(
+                    match kind {
+                        HandlerInvocationKind::AssetAuthorization => "asset",
+                        _ => "stream",
+                    },
+                    serde_json::json!({ "path": path_owned }),
+                );
 
             if !query_params_owned.is_empty() {
                 let args_json = JsonValue::Object(

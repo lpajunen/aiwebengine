@@ -25,6 +25,19 @@ pub struct AssetRouteMetadata {
     pub summary: Option<String>,
     /// Overrides the auto-generated OpenAPI description when present.
     pub description: Option<String>,
+    /// The script function that decides who may read this file.
+    ///
+    /// An asset route was the one surface where the engine served data with
+    /// no way to ask. A route's handler *is* the hook, since it runs under
+    /// the requesting user's context; a stream has its customization
+    /// callback; an asset route had nothing, so "signed-in users only" was
+    /// inexpressible and "the person this file belongs to" doubly so.
+    ///
+    /// `None` keeps what an asset route has always meant: anyone who can
+    /// reach the host may read it. That is right for a stylesheet and wrong
+    /// for a report, and it is why the name of the directory a served file
+    /// has to live in is `public/`.
+    pub authorize: Option<String>,
 }
 
 /// Stores registration information for a public asset path

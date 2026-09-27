@@ -767,11 +767,15 @@ fn get_stream_client_metadata(
 
 /// Answer a refusal the way the callback asked to.
 ///
-/// Not [`build_stream_error_response`], which is a 500: a denied subscription
-/// is not the server failing, and answering one told the client to retry
-/// something that would be refused again and put the script's message in the
-/// body of it.
-fn build_stream_denied_response(status: u16, reason: Option<&str>) -> Response {
+/// Not [`build_access_error_response`], which is a 500: a refusal is not the
+/// server failing, and answering one told the client to retry something that
+/// would be refused again and put the script's message in the body of it.
+///
+/// Shared by the two surfaces the engine serves without running a handler —
+/// a stream's connection and an asset route — because `resource_access`
+/// settles the decision for both and a second way to render it would be a
+/// second way to get it wrong.
+fn build_denied_response(status: u16, reason: Option<&str>) -> Response {
     let code = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
     Response::builder()
         .status(code)
@@ -785,8 +789,9 @@ fn build_stream_denied_response(status: u16, reason: Option<&str>) -> Response {
         })
 }
 
-/// Helper: Build error response for stream errors
-fn build_stream_error_response(message: &str) -> Response {
+/// The callback guarding something failed, which is not the same as deciding
+/// to refuse — and is the one case that really is a 500.
+fn build_access_error_response(message: &str) -> Response {
     Response::builder()
         .status(StatusCode::INTERNAL_SERVER_ERROR)
         .header("content-type", "text/plain")
@@ -831,14 +836,14 @@ async fn handle_stream_request(req: Request<Body>) -> Response {
                     .map(|r| format!(": {}", r))
                     .unwrap_or_default()
             );
-            return build_stream_denied_response(status, reason.as_deref());
+            return build_denied_response(status, reason.as_deref());
         }
         Err(e) => {
             // A throw is still a 500, because it still means the callback
             // itself failed rather than that it decided. That is the whole
             // reason a decision has a spelling of its own.
             error!("Customization function failed for stream '{}': {}", path, e);
-            return build_stream_error_response(&format!(
+            return build_access_error_response(&format!(
                 "Stream customization function failed: {}",
                 e
             ));
@@ -865,7 +870,7 @@ async fn handle_stream_request(req: Request<Body>) -> Response {
         }
         Err(e) => {
             error!("Failed to open stream connection for '{}': {}", path, e);
-            return build_stream_error_response(&format!(
+            return build_access_error_response(&format!(
                 "Failed to create stream connection: {}",
                 e
             ));
@@ -3448,7 +3453,15 @@ async fn handle_dynamic_request(
     }
 
     // Check for registered asset paths first if it's a GET request
-    if let Some(asset_response) = try_serve_asset(&path, &request_method, &canonical_host).await {
+    if let Some(asset_response) = try_serve_asset(
+        &path,
+        &request_method,
+        &canonical_host,
+        req.uri().query().unwrap_or_default(),
+        req.extensions().get::<auth::AuthUser>(),
+    )
+    .await
+    {
         return asset_response;
     }
 
@@ -3932,7 +3945,13 @@ pub async fn start_server_without_shutdown_with_config(config: config::Config) -
 // ============================================================================
 
 /// Try to serve an asset if the path matches a registered asset
-async fn try_serve_asset(path: &str, method: &str, host: &str) -> Option<Response> {
+async fn try_serve_asset(
+    path: &str,
+    method: &str,
+    host: &str,
+    query_string: &str,
+    auth_user: Option<&auth::AuthUser>,
+) -> Option<Response> {
     // Asset routes have no per-method registration (see `AssetPathRegistration`),
     // so HEAD is served the same way as GET with the body dropped afterward.
     if method != "GET" && method != "HEAD" {
@@ -3946,6 +3965,71 @@ async fn try_serve_asset(path: &str, method: &str, host: &str) -> Option<Respons
     // matching and, failing that, a 404.
     if !route_index::script_serves_host(&registration.script_uri, host).await {
         return None;
+    }
+
+    // Who may read this. An asset route was the one surface where the engine
+    // served data with no way to ask: a route's handler *is* the hook, a
+    // stream has its customization callback, and this had nothing — so
+    // "signed-in users only" was inexpressible and "the person this file
+    // belongs to" doubly so. A registration with no `authorize` keeps what an
+    // asset route has always meant, which is right for a stylesheet and is
+    // why the directory a served file lives in is called `public/`.
+    if let Some(authorize) = registration.metadata.authorize.clone() {
+        let script_uri = registration.script_uri.clone();
+        let path_owned = path.to_string();
+        let query_params = parse_query_string(query_string);
+        let auth_context = auth_user.map(|user| create_js_auth_context(Some(user)));
+
+        let decision = tokio::task::spawn_blocking(move || {
+            js_engine::execute_authorization_function(
+                &script_uri,
+                &authorize,
+                js_engine::HandlerInvocationKind::AssetAuthorization,
+                &path_owned,
+                &query_params,
+                auth_context,
+            )
+        })
+        .await;
+
+        match decision {
+            Ok(Ok(AccessDecision::Allow(_))) => {}
+            Ok(Ok(AccessDecision::Deny { status, reason })) => {
+                info!(
+                    "Asset route '{}' refused the read with {}{}",
+                    path,
+                    status,
+                    reason
+                        .as_deref()
+                        .map(|r| format!(": {}", r))
+                        .unwrap_or_default()
+                );
+                return Some(build_denied_response(status, reason.as_deref()));
+            }
+            // A callback that failed is not a callback that allowed. Falling
+            // through to the bytes would serve the file precisely when the
+            // thing guarding it is broken.
+            Ok(Err(e)) => {
+                error!(
+                    "Authorization function '{}' failed for asset route '{}': {}",
+                    registration.metadata.authorize.as_deref().unwrap_or(""),
+                    path,
+                    e
+                );
+                return Some(build_access_error_response(
+                    "The function guarding this file failed",
+                ));
+            }
+            Err(e) => {
+                error!(
+                    "Authorization task failed for asset route '{}': {}",
+                    path, e
+                );
+                return Some(build_access_error_response(
+                    "The function guarding this file failed",
+                ));
+            }
+        }
     }
 
     if let Some(asset) =

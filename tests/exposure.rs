@@ -178,3 +178,95 @@ async fn a_script_with_no_init_is_not_unclassifiable() {
         "a script that registers nothing has nothing to report, so it is not listed at all"
     );
 }
+
+/// An asset route was the one surface where the engine served data with no
+/// way to ask who was asking. A route's handler *is* the hook, a stream has
+/// its customization callback, and this had nothing — so "signed-in users
+/// only" was inexpressible and "the person this file belongs to" doubly so.
+///
+/// Driven over real HTTP, because the point is that the bytes do not leave
+/// the engine: an assertion against the registry would pass whether or not
+/// the check runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_asset_route_can_refuse_to_serve_its_file() {
+    let engine = common::AdminServer::start()
+        .await
+        .expect("server failed to start");
+
+    let script_uri = "https://example.com/authorized_asset_test";
+    engine.deploy_script(script_uri, "function init() {}").await;
+    store(script_uri, "public/secret.css", "body { color: red; }");
+    store(script_uri, "public/open.css", "body { color: blue; }");
+
+    let script = r#"
+        function mayRead(context) {
+          if (context.request.query.pass === "yes") {
+            return {};
+          }
+          return { deny: 403, reason: "not yours" };
+        }
+
+        function broken(context) {
+          throw new Error("the guard itself is wrong");
+        }
+
+        function init(context) {
+          routeRegistry.registerAssetRoute("/authz-secret.css", "public/secret.css", {
+            authorize: "mayRead",
+          });
+          routeRegistry.registerAssetRoute("/authz-broken.css", "public/secret.css", {
+            authorize: "broken",
+          });
+          routeRegistry.registerAssetRoute("/authz-open.css", "public/open.css");
+          return { success: true };
+        }
+    "#;
+    engine.deploy_script(script_uri, script).await;
+
+    let port = engine.port();
+    let client = engine.client();
+    let get = |path: String| {
+        let client = client.clone();
+        async move {
+            let response = client
+                .get(format!("http://127.0.0.1:{}{}", port, path))
+                .send()
+                .await
+                .expect("request failed");
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            (status, body)
+        }
+    };
+
+    let (status, body) = get("/authz-secret.css".to_string()).await;
+    assert_eq!(status, 403, "{}", body);
+    assert_eq!(body, "not yours", "the reason reaches whoever was refused");
+    assert!(
+        !body.contains("color: red"),
+        "the file must not be in the body of its own refusal"
+    );
+
+    let (status, body) = get("/authz-secret.css?pass=yes".to_string()).await;
+    assert_eq!(status, 200, "{}", body);
+    assert_eq!(body, "body { color: red; }");
+
+    // A guard that fails is not a guard that allowed. Falling through to the
+    // bytes would serve the file precisely when the thing protecting it is
+    // broken.
+    let (status, body) = get("/authz-broken.css".to_string()).await;
+    assert_eq!(status, 500, "{}", body);
+    assert!(
+        !body.contains("color: red"),
+        "a broken guard must not serve the file: {}",
+        body
+    );
+
+    // And a registration with no `authorize` is what an asset route has
+    // always been: open to anyone who can reach the host.
+    let (status, body) = get("/authz-open.css".to_string()).await;
+    assert_eq!(status, 200, "{}", body);
+    assert_eq!(body, "body { color: blue; }");
+
+    engine.shutdown().await;
+}
