@@ -159,21 +159,32 @@ resources/schema.json   MCP resource
 Anything not under `public/` or `resources/` is private and reachable only to
 the linker and to the script itself.
 
-**Done, as a report.** `exposure.rs` holds the convention, `registerAssetRoute`
-and `registerResource` warn when they publish a file from outside its
-directory, and `GET /engine/exposure` (the `exposure_report` MCP tool) lists
-every registration that enforcement would stop. Nothing is refused yet: the
-set of files a deployment actually serves is only knowable from the live
-registries, so an operator sees the blast radius on their own engine first.
+**Done, and enforced.** `exposure.rs` holds the convention.
+`registerAssetRoute` refuses a file outside `public/` and `registerResource`
+one outside `resources/`, so publishing a file is now _moving_ it — a
+reviewable act, visible in `ls`, in a pull request and in a revision
+manifest.
 
-The report distinguishes "clean" from "we could not look", and getting that
-right mattered more than it sounds. The first cut flagged any script that was
-not `initialized`, which on a real deployment was 36 of 37 scripts — because
-a script with **no `init()`** never reaches `update_script_init_status` and
-sits at `initialized = false` for ever, while being the clearest case there
-is: a script that registers nothing publishes nothing. Only a _failed_
-`init()` is uncertain, since it may have been part-way through registering.
-With that fixed the same engine reports one script and two registrations.
+It landed as a report first and was enforced once the report read clean,
+because the set of files a deployment actually serves is only knowable from
+the live registries. `GET /engine/exposure` (the `exposure_report` MCP tool)
+is still that view, answering the question enforcement turns it into: what
+was refused, and where each file would have to move. Refusals are recorded
+per script and cleared when the script initialises again, so the report
+describes the deployment as it stands rather than logging every mistake ever
+made.
+
+A refusal is a returned message, not a throw: a script that publishes four
+files and gets one path wrong keeps the other three, and is told exactly
+where the fourth belongs.
+
+Getting the report's "clean" versus "we could not look" right mattered more
+than it sounds. The first cut flagged any script that was not `initialized`,
+which on a real deployment was 36 of 37 scripts — because a script with **no
+`init()`** never reaches `update_script_init_status` and sits at
+`initialized = false` for ever, while being the clearest case there is: a
+script that registers nothing publishes nothing. Only a _failed_ `init()` is
+uncertain, since it may have been part-way through registering.
 
 **Why a convention and not an `exposure` column.** `git_sync.rs` already made
 this argument and refused a manifest: the directory structure already _is_ the

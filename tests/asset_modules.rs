@@ -602,7 +602,7 @@ async fn register_asset_route_records_metadata_tags() {
     setup_env().await;
 
     let script_uri = "test://asset-metadata-tags";
-    let asset_uri = "repro.css";
+    let asset_uri = "public/repro.css";
     ensure_script(script_uri);
     repository::upsert_asset(test_asset(script_uri, asset_uri, "text/css", b"body{}"))
         .expect("asset should be stored");
@@ -612,7 +612,7 @@ async fn register_asset_route_records_metadata_tags() {
 
     let script_content = r#"
         function init(context) {
-          routeRegistry.registerAssetRoute("/repro-asset.css", "repro.css", {
+          routeRegistry.registerAssetRoute("/repro-asset.css", "public/repro.css", {
             tags: ["ReproGroup"],
             summary: "Repro asset",
           });

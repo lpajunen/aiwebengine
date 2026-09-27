@@ -38,16 +38,21 @@
 //! `name`/`description`/`mimeType`. Publishing a file then means **moving**
 //! it, which is a reviewable act.
 //!
-//! ## What is enforced today
+//! ## What is enforced
 //!
-//! Nothing. This reports. A deployment's scripts were written when a
-//! registration was the whole of the decision, so enforcing the convention
-//! would stop serving files that are being served right now — and the set of
-//! them is only knowable from the live registries, which a script whose
-//! `init()` failed never populated. [`report`] is how an operator sees the
-//! blast radius on their own engine before any of it 404s; the registration
-//! paths log a warning each time they publish a file from outside its
-//! directory.
+//! A registration naming a file outside its directory is **refused**.
+//! `registerAssetRoute` may only publish from `public/`, `registerResource`
+//! only from `resources/`; anything else is not registered and the script is
+//! told why.
+//!
+//! It landed as a report first, because a deployment's scripts were written
+//! when the registration was the whole of the decision and the set of files
+//! one actually serves is only knowable from the live registries. [`report`]
+//! is still that view, answering the question enforcement turns it into:
+//! what was refused, and where each file would have to move. Refusals are
+//! recorded per script and cleared when the script initialises again, so the
+//! report describes this instance as it now stands rather than accumulating
+//! history.
 
 /// Where a file has to live to be served to the world.
 pub const PUBLIC_DIR: &str = "public/";
@@ -93,7 +98,8 @@ pub fn is_resource(path: &str) -> bool {
     matches!(of(path), Exposure::Resource)
 }
 
-/// One registration that publishes a file the directory does not.
+/// One registration that was refused because the file is not where its
+/// exposure would have to put it.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Misplaced {
     /// The HTTP path or resource URI it is published under.
@@ -109,9 +115,9 @@ pub struct Misplaced {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ScriptExposure {
     pub script_uri: String,
-    /// Asset routes publishing a file from outside `public/`.
+    /// Asset routes refused for naming a file outside `public/`.
     pub routes: Vec<Misplaced>,
-    /// MCP resources publishing a file from outside `resources/`.
+    /// MCP resources refused for naming a file outside `resources/`.
     pub resources: Vec<Misplaced>,
     /// True when the script's `init()` **failed**, so what it would have
     /// published is not knowable from the registries.
@@ -135,25 +141,78 @@ impl ScriptExposure {
     }
 }
 
-/// What enforcing the convention would change, across every script.
+/// What the convention refused, across every script.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ExposureReport {
     /// Only the scripts with something to say; a clean engine reports none.
     pub scripts: Vec<ScriptExposure>,
-    /// How many registrations would stop working.
-    pub would_break: usize,
+    /// How many registrations were refused.
+    pub refused: usize,
     /// How many scripts could not be classified because their `init()` has
     /// not run cleanly.
     pub unclassified: usize,
 }
 
-/// Build the report from the live registries.
+/// Registrations this instance refused, per script.
 ///
-/// The live registries rather than the stored source, because a registration
-/// is a *call* — what a script publishes is what its `init()` did, not what
-/// its source appears to say. The cost is that a script whose `init()` failed
-/// has registered nothing and cannot be classified, which is why that is
-/// reported rather than counted as clean.
+/// Process-local and rebuilt as scripts initialise, like `deployments::pinned`
+/// and `script_limits`: a refusal is a fact about what *this* process was
+/// asked to publish, and an instance that has not run a script's `init()` has
+/// nothing to say about it.
+/// One refused registration and which surface refused it: `true` for an MCP
+/// resource, `false` for an asset route. The two differ only in the
+/// directory they answer for.
+type Refusal = (bool, Misplaced);
+
+static REFUSED: std::sync::RwLock<Option<std::collections::HashMap<String, Vec<Refusal>>>> =
+    std::sync::RwLock::new(None);
+
+/// Forget what a script was refused, because it is about to be asked again.
+///
+/// Called before each registration pass. Without it the report accumulates:
+/// a file moved into `public/` would go on being listed as refused, which is
+/// the one thing a report about exposure must not do.
+pub fn clear_for_script(script_uri: &str) {
+    if let Ok(mut guard) = REFUSED.write()
+        && let Some(map) = guard.as_mut()
+    {
+        map.remove(script_uri);
+    }
+}
+
+/// Record that a registration was refused for naming a file outside its
+/// directory.
+///
+/// `is_resource` distinguishes the two surfaces, which differ only in which
+/// directory they answer for.
+pub fn note_refusal(script_uri: &str, is_resource: bool, published_as: &str, path: &str) {
+    let directory = if is_resource {
+        RESOURCE_DIR
+    } else {
+        PUBLIC_DIR
+    };
+    let entry = Misplaced {
+        published_as: published_as.to_string(),
+        should_be: format!("{}{}", directory, path),
+        path: path.to_string(),
+    };
+    if let Ok(mut guard) = REFUSED.write() {
+        let map = guard.get_or_insert_with(std::collections::HashMap::new);
+        let refusals = map.entry(script_uri.to_string()).or_default();
+        // Keyed by what it tried to publish, so a script re-registering the
+        // same mistake is one entry rather than one per attempt.
+        refusals.retain(|(_, existing)| existing.published_as != published_as);
+        refusals.push((is_resource, entry));
+    }
+}
+
+/// What the convention refused on this instance.
+///
+/// Reads the recorded refusals rather than the live registries, which is the
+/// difference enforcement makes: a refused registration never reaches a
+/// registry, so there is nothing there to find. `metadata` supplies the
+/// scripts whose `init()` failed — those have registered nothing and the
+/// report says so rather than calling them clean.
 pub fn report(metadata: &[crate::repository::ScriptMetadata]) -> ExposureReport {
     use std::collections::BTreeMap;
 
@@ -176,53 +235,43 @@ pub fn report(metadata: &[crate::repository::ScriptMetadata]) -> ExposureReport 
         })
         .collect();
 
-    fn entry<'a>(
-        map: &'a mut BTreeMap<String, ScriptExposure>,
-        uri: &str,
-    ) -> &'a mut ScriptExposure {
-        map.entry(uri.to_string())
-            .or_insert_with(|| ScriptExposure {
-                script_uri: uri.to_string(),
-                routes: Vec::new(),
-                resources: Vec::new(),
-                unclassified: false,
-            })
-    }
-
-    for (path, registration) in crate::asset_registry::get_global_registry().get_all_registrations()
+    if let Ok(guard) = REFUSED.read()
+        && let Some(map) = guard.as_ref()
     {
-        if is_publishable(&registration.asset_name) {
-            continue;
+        for (script_uri, refusals) in map {
+            let entry = by_script
+                .entry(script_uri.clone())
+                .or_insert_with(|| ScriptExposure {
+                    script_uri: script_uri.clone(),
+                    routes: Vec::new(),
+                    resources: Vec::new(),
+                    unclassified: false,
+                });
+            for (is_resource, misplaced) in refusals {
+                if *is_resource {
+                    entry.resources.push(misplaced.clone());
+                } else {
+                    entry.routes.push(misplaced.clone());
+                }
+            }
         }
-        entry(&mut by_script, &registration.script_uri)
-            .routes
-            .push(Misplaced {
-                published_as: path,
-                should_be: format!("{}{}", PUBLIC_DIR, registration.asset_name),
-                path: registration.asset_name,
-            });
     }
 
-    for resource in crate::mcp::list_resources() {
-        if is_resource(&resource.asset_name) {
-            continue;
-        }
-        entry(&mut by_script, &resource.script_uri)
-            .resources
-            .push(Misplaced {
-                published_as: resource.uri,
-                should_be: format!("{}{}", RESOURCE_DIR, resource.asset_name),
-                path: resource.asset_name,
-            });
-    }
-
-    let scripts: Vec<ScriptExposure> = by_script
+    let mut scripts: Vec<ScriptExposure> = by_script
         .into_values()
         .filter(|script| !script.is_clean())
         .collect();
+    for script in &mut scripts {
+        script
+            .routes
+            .sort_by(|a, b| a.published_as.cmp(&b.published_as));
+        script
+            .resources
+            .sort_by(|a, b| a.published_as.cmp(&b.published_as));
+    }
 
     ExposureReport {
-        would_break: scripts
+        refused: scripts
             .iter()
             .map(|script| script.routes.len() + script.resources.len())
             .sum(),

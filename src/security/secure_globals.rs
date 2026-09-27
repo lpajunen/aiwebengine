@@ -1804,16 +1804,23 @@ impl SecureGlobalContext {
                 }
 
                 if !crate::exposure::is_resource(&asset_name) {
+                    crate::exposure::note_refusal(&script_uri_resource, true, &uri, &asset_name);
                     tracing::warn!(
                         script = %script_uri_resource,
                         uri = %uri,
                         asset = %asset_name,
-                        "Publishing a file from outside '{}' as an MCP resource. Move it to \
-                         '{}{}'. See GET /engine/exposure.",
+                        "Refused to publish a file from outside '{}' as an MCP resource",
+                        crate::exposure::RESOURCE_DIR,
+                    );
+                    return Ok(format!(
+                        "Refused: '{}' is not under '{}', so it is not a file an MCP client \
+                         may read. Move it to '{}{}' and register that. See \
+                         GET /engine/exposure.",
+                        asset_name,
                         crate::exposure::RESOURCE_DIR,
                         crate::exposure::RESOURCE_DIR,
                         asset_name,
-                    );
+                    ));
                 }
 
                 debug!(
@@ -2660,23 +2667,30 @@ impl SecureGlobalContext {
 
                 // Exposure belongs to the tree, not to this call. A file
                 // outside `public/` is one the directory says is private, and
-                // publishing it is the mistake nothing else in the engine can
-                // see — not the write path, not the revision manifest, not a
-                // git diff. Warned rather than refused, because scripts were
-                // written when this call *was* the decision; `/engine/exposure`
-                // is the whole list.
+                // publishing it was the mistake nothing else in the engine
+                // could see — not the write path, not the revision manifest,
+                // not a git diff. Refused rather than warned about, which is
+                // what makes the directory the answer rather than a
+                // suggestion; publishing a file is now moving it, which is a
+                // reviewable act.
                 if !crate::exposure::is_publishable(&asset_name) {
+                    crate::exposure::note_refusal(&script_uri_asset, false, &path, &asset_name);
                     tracing::warn!(
                         script = %script_uri_asset,
                         path = %path,
                         asset = %asset_name,
-                        "Publishing a file from outside '{}'. Move it to '{}{}' — a file's \
-                         directory is what says whether the world may read it, and this one \
-                         says it is private. See GET /engine/exposure.",
+                        "Refused to publish a file from outside '{}'",
+                        crate::exposure::PUBLIC_DIR,
+                    );
+                    return Ok(format!(
+                        "Refused: '{}' is not under '{}', so it is not a file the world may \
+                         read. Move it to '{}{}' and register that. A file's directory is \
+                         what says whether it is public; see GET /engine/exposure.",
+                        asset_name,
                         crate::exposure::PUBLIC_DIR,
                         crate::exposure::PUBLIC_DIR,
                         asset_name,
-                    );
+                    ));
                 }
 
                 // Extract optional OpenAPI metadata (tags/summary/description)

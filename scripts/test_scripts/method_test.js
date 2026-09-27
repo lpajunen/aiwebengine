@@ -32,7 +32,10 @@ function init(context) {
   routeRegistry.registerRoute("/api/test", "put_handler", "PUT");
   routeRegistry.registerRoute("/api/test", "delete_handler", "DELETE");
   // Untagged asset route; used to test the default "Assets" OpenAPI group
-  routeRegistry.registerAssetRoute("/method-test.css", "method-test.css");
+  routeRegistry.registerAssetRoute(
+    "/method-test.css",
+    "public/method-test.css",
+  );
   console.log("HTTP method test endpoints registered");
   return { success: true };
 }

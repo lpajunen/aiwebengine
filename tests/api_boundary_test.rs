@@ -470,10 +470,10 @@ async fn test_route_introspection_includes_stream_and_asset_routes() {
 
     repository::upsert_script("test://route-introspection", "").expect("Failed to create script");
     repository::upsert_asset(repository::Asset {
-        uri: "test-introspection.css".to_string(),
+        uri: "public/test-introspection.css".to_string(),
         mimetype: "text/css".to_string(),
         content: b"body { color: red; }".to_vec(),
-        name: Some("test-introspection.css".to_string()),
+        name: Some("public/test-introspection.css".to_string()),
         script_uri: "test://route-introspection".to_string(),
         created_at: std::time::SystemTime::now(),
         updated_at: std::time::SystemTime::now(),
@@ -482,7 +482,7 @@ async fn test_route_introspection_includes_stream_and_asset_routes() {
 
     let script = r#"
         routeRegistry.registerStreamRoute("/test-introspection-stream", "streamCustomizer");
-        routeRegistry.registerAssetRoute("/test-introspection.css", "test-introspection.css");
+        routeRegistry.registerAssetRoute("/test-introspection.css", "public/test-introspection.css");
     "#;
 
     let result = execute_script_secure("test://route-introspection", script, admin.clone());
@@ -507,7 +507,7 @@ async fn test_route_introspection_includes_stream_and_asset_routes() {
         .iter()
         .find(|route| route["path"] == "/test-introspection.css" && route["method"] == "ASSET")
         .expect("Expected asset route in the introspection output");
-    assert_eq!(asset_route["handler"], "test-introspection.css");
+    assert_eq!(asset_route["handler"], "public/test-introspection.css");
 }
 
 #[tokio::test(flavor = "multi_thread")]

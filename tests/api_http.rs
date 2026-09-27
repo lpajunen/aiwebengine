@@ -624,10 +624,10 @@ async fn test_head_request_on_asset_route_strips_body() {
     let script_uri = "https://example.com/head_asset_test";
     engine.deploy_script(script_uri, "function init() {}").await;
     repository::upsert_asset(repository::Asset {
-        uri: "head-test.css".to_string(),
+        uri: "public/head-test.css".to_string(),
         mimetype: "text/css".to_string(),
         content: b"body { color: red; }".to_vec(),
-        name: Some("head-test.css".to_string()),
+        name: Some("public/head-test.css".to_string()),
         script_uri: script_uri.to_string(),
         created_at: std::time::SystemTime::now(),
         updated_at: std::time::SystemTime::now(),
@@ -636,7 +636,7 @@ async fn test_head_request_on_asset_route_strips_body() {
 
     let script = r#"
         function init(context) {
-          routeRegistry.registerAssetRoute("/head-test.css", "head-test.css");
+          routeRegistry.registerAssetRoute("/head-test.css", "public/head-test.css");
           return { success: true };
         }
     "#;

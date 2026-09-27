@@ -4347,8 +4347,8 @@ pub async fn exposure_route(auth_user: Option<Extension<AuthUser>>) -> Response 
             json!({
                 "publicDir": crate::exposure::PUBLIC_DIR,
                 "resourceDir": crate::exposure::RESOURCE_DIR,
-                "enforced": false,
-                "wouldBreak": report.would_break,
+                "enforced": true,
+                "refused": report.refused,
                 "unclassified": report.unclassified,
                 "scripts": report.scripts,
                 "timestamp": iso_timestamp(),
@@ -11166,8 +11166,8 @@ fn tool_exposure_report(_args: &Value, user: &UserContext) -> Value {
         Ok(report) => json!({
             "publicDir": crate::exposure::PUBLIC_DIR,
             "resourceDir": crate::exposure::RESOURCE_DIR,
-            "enforced": false,
-            "wouldBreak": report.would_break,
+            "enforced": true,
+            "refused": report.refused,
             "unclassified": report.unclassified,
             "scripts": report.scripts,
             "timestamp": iso_timestamp(),

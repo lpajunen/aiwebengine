@@ -257,6 +257,12 @@ impl ScriptInitializer {
         let script_uri_clone = script_uri.to_string();
         let metadata_clone = metadata.clone();
 
+        // What this script was refused last time is about to be decided
+        // again. Left behind, a file since moved into `public/` would go on
+        // being reported as refused, which is the one thing a report about
+        // exposure must not do.
+        crate::exposure::clear_for_script(script_uri);
+
         debug!("Spawning blocking task for {}", script_uri);
         let init_timeout_ms = self.timeout_ms;
         let (ticket, watch) = crate::worker_census::watch(format!("init {}", script_uri));

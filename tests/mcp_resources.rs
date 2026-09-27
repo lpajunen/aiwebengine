@@ -26,12 +26,12 @@ const SCRIPT_URI: &str = "test://mcp/resources";
 /// A script that publishes two of its assets and nothing else.
 const RESOURCE_SCRIPT: &str = r#"
 function init() {
-  mcpRegistry.registerResource("docs://handbook", "handbook.md", {
+  mcpRegistry.registerResource("docs://handbook", "resources/handbook.md", {
     name: "Handbook",
     description: "How the team works",
     mimeType: "text/markdown"
   });
-  mcpRegistry.registerResource("docs://logo", "logo.png");
+  mcpRegistry.registerResource("docs://logo", "resources/logo.png");
 }
 "#;
 
@@ -60,11 +60,15 @@ async fn server() -> anyhow::Result<(TestServer, reqwest::Client, String)> {
     // to be one to own them.
     repository::upsert_script(SCRIPT_URI, RESOURCE_SCRIPT).expect("script should store");
 
-    store_asset("handbook.md", "text/markdown", "# Handbook\n\nBe kind.\n");
+    store_asset(
+        "resources/handbook.md",
+        "text/markdown",
+        "# Handbook\n\nBe kind.\n",
+    );
     // Deliberately not valid UTF-8: a PNG header, which is what forces the
     // `blob` arm below.
     store_asset(
-        "logo.png",
+        "resources/logo.png",
         "image/png",
         vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe],
     );
@@ -140,7 +144,7 @@ async fn a_listing_describes_what_a_script_published() -> anyhow::Result<()> {
     // asset's — the more readable of the two candidates — and `mimeType` is
     // absent rather than guessed.
     assert_eq!(resources[1]["uri"], "docs://logo");
-    assert_eq!(resources[1]["name"], "logo.png");
+    assert_eq!(resources[1]["name"], "resources/logo.png");
     assert!(
         resources[1].get("mimeType").is_none(),
         "an unstated MIME type should be omitted, not invented: {}",
@@ -180,7 +184,7 @@ async fn a_read_answers_with_what_the_asset_says_now() -> anyhow::Result<()> {
     // failure this asserts against — an asset written by the script itself,
     // or by an editor, reaches clients without a redeploy.
     store_asset(
-        "handbook.md",
+        "resources/handbook.md",
         "text/markdown",
         "# Handbook\n\nBe careful.\n",
     );

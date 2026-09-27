@@ -7,9 +7,9 @@
 //! was private only because nobody happened to name it.
 //!
 //! `public/` is served, `resources/` is an MCP resource, everything else is
-//! reachable only to the linker and the script itself. Nothing is enforced
-//! yet: these tests are about the convention and about the report that says
-//! what enforcing it would cost.
+//! reachable only to the linker and the script itself — and a registration
+//! naming a file outside its directory is refused, so publishing a file
+//! means moving it, which is a reviewable act.
 
 mod common;
 
@@ -49,11 +49,10 @@ fn the_directory_is_the_decision() {
     assert_eq!(exposure::of("credentials.json"), Exposure::Private);
 }
 
-/// The report is what an operator reads before anything is enforced, so what
-/// it must get right is the difference between "clean" and "we could not
-/// look".
+/// What the report must get right is the difference between "clean" and "we
+/// could not look".
 #[tokio::test(flavor = "multi_thread")]
-async fn the_report_names_a_file_published_from_outside_public() {
+async fn a_file_outside_public_is_refused_and_reported() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -88,46 +87,101 @@ async fn the_report_names_a_file_published_from_outside_public() {
     assert_eq!(
         paths,
         vec!["branding/logo.css"],
-        "only the file outside public/ is a problem; the one inside it is not"
+        "only the file outside public/ is refused; the one inside it registers"
     );
     assert_eq!(mine.routes[0].published_as, "/exposure-misplaced.css");
     assert_eq!(
         mine.routes[0].should_be, "public/branding/logo.css",
         "the report says where the file would have to move"
     );
+
+    assert!(
+        !aiwebengine::asset_registry::get_global_registry()
+            .is_path_registered("/exposure-misplaced.css"),
+        "a refused registration does not reach the registry"
+    );
+    assert!(
+        aiwebengine::asset_registry::get_global_registry().is_path_registered("/exposure-ok.css"),
+        "and the one under public/ does"
+    );
 }
 
-/// Nothing is enforced yet, and the point of the report is that the operator
-/// finds out before anything 404s rather than after.
+/// A refusal describes what a script asks for *now*. A file moved into
+/// `public/` must stop being reported, or the report becomes a log of every
+/// mistake ever made rather than a description of the deployment.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_misplaced_file_is_still_served() {
+async fn moving_the_file_clears_the_refusal() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let admin = UserContext::admin("exposure-admin-5".to_string());
+    let uri = "test://exposure/moved";
+    ensure_script(uri);
+    store(uri, "branding/moved.css", "body { color: red; }");
+    store(uri, "public/moved.css", "body { color: red; }");
+
+    aiwebengine::exposure::note_refusal(uri, false, "/exposure-moved.css", "branding/moved.css");
+    assert!(
+        listed(&admin, uri).is_some(),
+        "a refusal should be reported while it stands"
+    );
+
+    // What the registration pass does before asking again.
+    aiwebengine::exposure::clear_for_script(uri);
+    assert!(
+        listed(&admin, uri).is_none(),
+        "once the script is asked again, last time's refusal says nothing"
+    );
+}
+
+fn listed(admin: &UserContext, uri: &str) -> Option<aiwebengine::exposure::ScriptExposure> {
+    aiwebengine::engine_api::exposure_report_authorized(admin)
+        .expect("an administrator may read the report")
+        .scripts
+        .into_iter()
+        .find(|script| script.script_uri == uri)
+}
+
+/// A refusal is not a thrown error: `init()` goes on, and the message says
+/// what to do. A script that publishes four files and gets one path wrong
+/// should not lose the other three.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refusal_does_not_stop_the_rest_of_init() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
     let admin = UserContext::admin("exposure-admin-2".to_string());
-    let uri = "test://exposure/still-served";
+    let uri = "test://exposure/partial";
     ensure_script(uri);
     store(uri, "branding/still.css", "body { color: green; }");
+    store(uri, "public/after.css", "body { color: black; }");
 
     let script = r#"
         routeRegistry.registerAssetRoute("/exposure-still.css", "branding/still.css");
+        routeRegistry.registerAssetRoute("/exposure-after.css", "public/after.css");
     "#;
     let result = execute_script_secure(uri, script, admin);
     assert!(
         result.success,
-        "registration should run: {:?}",
+        "a refusal is a returned message, not a throw: {:?}",
         result.error
     );
 
     assert!(
-        aiwebengine::asset_registry::get_global_registry()
+        !aiwebengine::asset_registry::get_global_registry()
             .is_path_registered("/exposure-still.css"),
-        "the registration still stands — this lands as a warning and a report entry, not a refusal"
+        "the misplaced file is not published"
+    );
+    assert!(
+        aiwebengine::asset_registry::get_global_registry()
+            .is_path_registered("/exposure-after.css"),
+        "and the registration after it still happens"
     );
 }
 
-/// The report is a map of exactly the mistakes worth exploiting: every file a
-/// deployment serves from a directory that says it is private.
+/// The report names every file a deployment tried to serve from a directory
+/// that says it is private, which is a map of exactly the mistakes worth
+/// exploiting.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_report_is_an_administrators_to_read() {
     let _guard = test_mutex().lock().await;

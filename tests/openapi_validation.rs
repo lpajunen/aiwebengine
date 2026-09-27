@@ -585,8 +585,8 @@ async fn test_openapi_asset_and_stream_default_groups() {
 
     let now = std::time::SystemTime::now();
     aiwebengine::repository::upsert_asset(aiwebengine::repository::Asset {
-        uri: "method-test.css".to_string(),
-        name: Some("method-test.css".to_string()),
+        uri: "public/method-test.css".to_string(),
+        name: Some("public/method-test.css".to_string()),
         mimetype: "text/css".to_string(),
         content: b"body { color: black; }".to_vec(),
         created_at: now,
