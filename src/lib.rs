@@ -28,6 +28,7 @@ pub mod embedded_db;
 pub mod engine_api;
 pub mod error;
 pub mod execution_slots;
+pub mod exposure;
 pub mod git_credentials;
 pub mod git_github;
 pub mod git_sync;
@@ -111,6 +112,7 @@ What a script may spend is worth knowing before writing one: each invocation get
         engine_api::script_logs_delete_route,
         engine_api::script_logs_stream_route,
         engine_api::routes_route,
+        engine_api::exposure_route,
         engine_api::revisions_route,
         engine_api::revert_route,
         engine_api::revision_label_route,
@@ -3097,6 +3099,10 @@ async fn setup_routes(
         .route(
             "/engine/routes",
             axum::routing::get(engine_api::routes_route),
+        )
+        .route(
+            "/engine/exposure",
+            axum::routing::get(engine_api::exposure_route),
         )
         .route(
             "/engine/revisions",

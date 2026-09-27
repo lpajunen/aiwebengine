@@ -2854,6 +2854,27 @@ pub fn delete_asset_authorized(
 /// Backs `GET /engine/routes`. Host bindings are not applied here — this is the
 /// whole engine's view; callers that care filter by `script_uri` (see
 /// [`crate::route_index::script_serves_host`]).
+/// What enforcing exposure-by-directory would change.
+///
+/// Reads the live registries, so it is a report about what this instance is
+/// actually publishing rather than about what its scripts' source appears to
+/// say. Administrator-only: the list names every file a deployment serves
+/// from a directory that says it is private, which is a map of exactly the
+/// mistakes worth exploiting.
+pub fn exposure_report_authorized(
+    user: &UserContext,
+) -> AppResult<crate::exposure::ExposureReport> {
+    if !may_administer(user) {
+        return Err(crate::error::AppError::AuthorizationFailed {
+            message: "The exposure report is not open to anonymous callers".to_string(),
+        });
+    }
+    user.require_capability(&Capability::AdministerEngine)?;
+
+    let metadata = repository::get_all_script_metadata()?;
+    Ok(crate::exposure::report(&metadata))
+}
+
 pub fn routes_introspection_authorized(user: &UserContext) -> AppResult<Vec<Value>> {
     if !may_administer(user) {
         return Err(crate::error::AppError::AuthorizationFailed {
@@ -4291,6 +4312,61 @@ pub async fn eval_route(
 #[derive(Deserialize, Default)]
 pub struct RoutesParams {
     host: Option<String>,
+}
+
+/// Which files a deployment publishes from a directory that says they are
+/// private.
+///
+/// Exposure is moving from being a side effect of an `init()` call to being a
+/// property of where a file sits: `public/` is served, `resources/` is an MCP
+/// resource, everything else is reachable only to the linker and the script.
+/// Nothing is enforced yet, because scripts written before that convention
+/// are publishing files from wherever they happen to be — and the set of them
+/// is only knowable from the live registries. This is that set.
+///
+/// `unclassified` counts the scripts whose `init()` has not run cleanly:
+/// they have registered nothing, so the report says nothing about them, which
+/// is the one thing an operator must not read as "clean".
+#[utoipa::path(
+    get,
+    path = "/engine/exposure",
+    tags = ["Scripts"],
+    responses(
+        (status = 200, description = "Registrations that publish a file from outside its directory"),
+        (status = 403, description = "Not an administrator"),
+    )
+)]
+pub async fn exposure_route(auth_user: Option<Extension<AuthUser>>) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+
+    let result = tokio::task::spawn_blocking(move || exposure_report_authorized(&user)).await;
+
+    match result {
+        Ok(Ok(report)) => json_response(
+            StatusCode::OK,
+            json!({
+                "publicDir": crate::exposure::PUBLIC_DIR,
+                "resourceDir": crate::exposure::RESOURCE_DIR,
+                "enforced": false,
+                "wouldBreak": report.would_break,
+                "unclassified": report.unclassified,
+                "scripts": report.scripts,
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Ok(Err(e)) => {
+            let status =
+                StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            error_response(
+                status,
+                format!("Failed to build the exposure report: {}", e),
+            )
+        }
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to build the exposure report: {}", e),
+        ),
+    }
 }
 
 /// List every registration in the engine: script routes, SSE streams
@@ -9469,6 +9545,17 @@ fn native_tools() -> &'static [NativeToolEntry] {
             tool_list_routes,
         ),
         (
+            "exposure_report",
+            "List every registration that publishes one of a script's files from outside the directory that would expose it. A file under 'public/' is served to the world, one under 'resources/' is an MCP resource, and everything else is reachable only to the linker and the script itself. The convention is not enforced yet, so this reports what enforcing it would stop serving; 'unclassified' counts scripts whose init() has not run cleanly and which therefore have registered nothing to report on.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {}
+                })
+            },
+            tool_exposure_report,
+        ),
+        (
             "read_init_status",
             "Read init() status for scripts (useful for debugging). Returns status for one script when uri is given, otherwise for all scripts.",
             || {
@@ -11071,6 +11158,21 @@ fn tool_clear_logs(args: &Value, user: &UserContext) -> Value {
     match delete_logs_authorized(user, uri) {
         Ok(body) => body,
         Err(e) => json!({ "error": format!("Failed to delete logs: {}", e) }),
+    }
+}
+
+fn tool_exposure_report(_args: &Value, user: &UserContext) -> Value {
+    match exposure_report_authorized(user) {
+        Ok(report) => json!({
+            "publicDir": crate::exposure::PUBLIC_DIR,
+            "resourceDir": crate::exposure::RESOURCE_DIR,
+            "enforced": false,
+            "wouldBreak": report.would_break,
+            "unclassified": report.unclassified,
+            "scripts": report.scripts,
+            "timestamp": iso_timestamp(),
+        }),
+        Err(e) => json!({ "error": format!("Failed to build the exposure report: {}", e) }),
     }
 }
 

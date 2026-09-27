@@ -1803,6 +1803,19 @@ impl SecureGlobalContext {
                     ));
                 }
 
+                if !crate::exposure::is_resource(&asset_name) {
+                    tracing::warn!(
+                        script = %script_uri_resource,
+                        uri = %uri,
+                        asset = %asset_name,
+                        "Publishing a file from outside '{}' as an MCP resource. Move it to \
+                         '{}{}'. See GET /engine/exposure.",
+                        crate::exposure::RESOURCE_DIR,
+                        crate::exposure::RESOURCE_DIR,
+                        asset_name,
+                    );
+                }
+
                 debug!(
                     user_id = ?user_ctx_resource.user_id,
                     uri = %uri,
@@ -2643,6 +2656,27 @@ impl SecureGlobalContext {
                             asset_name, script_uri_asset
                         ));
                     }
+                }
+
+                // Exposure belongs to the tree, not to this call. A file
+                // outside `public/` is one the directory says is private, and
+                // publishing it is the mistake nothing else in the engine can
+                // see — not the write path, not the revision manifest, not a
+                // git diff. Warned rather than refused, because scripts were
+                // written when this call *was* the decision; `/engine/exposure`
+                // is the whole list.
+                if !crate::exposure::is_publishable(&asset_name) {
+                    tracing::warn!(
+                        script = %script_uri_asset,
+                        path = %path,
+                        asset = %asset_name,
+                        "Publishing a file from outside '{}'. Move it to '{}{}' — a file's \
+                         directory is what says whether the world may read it, and this one \
+                         says it is private. See GET /engine/exposure.",
+                        crate::exposure::PUBLIC_DIR,
+                        crate::exposure::PUBLIC_DIR,
+                        asset_name,
+                    );
                 }
 
                 // Extract optional OpenAPI metadata (tags/summary/description)
