@@ -95,14 +95,16 @@ async fn a_file_outside_public_is_refused_and_reported() {
         "the report says where the file would have to move"
     );
 
+    let published = registered_paths(&result);
     assert!(
-        !aiwebengine::asset_registry::get_global_registry()
-            .is_path_registered("/exposure-misplaced.css"),
-        "a refused registration does not reach the registry"
+        !published.contains(&"/exposure-misplaced.css".to_string()),
+        "a refused registration does not reach the index: {:?}",
+        published
     );
     assert!(
-        aiwebengine::asset_registry::get_global_registry().is_path_registered("/exposure-ok.css"),
-        "and the one under public/ does"
+        published.contains(&"/exposure-ok.css".to_string()),
+        "and the one under public/ does: {:?}",
+        published
     );
 }
 
@@ -167,15 +169,16 @@ async fn a_refusal_does_not_stop_the_rest_of_init() {
         result.error
     );
 
+    let published = registered_paths(&result);
     assert!(
-        !aiwebengine::asset_registry::get_global_registry()
-            .is_path_registered("/exposure-still.css"),
-        "the misplaced file is not published"
+        !published.contains(&"/exposure-still.css".to_string()),
+        "the misplaced file is not published: {:?}",
+        published
     );
     assert!(
-        aiwebengine::asset_registry::get_global_registry()
-            .is_path_registered("/exposure-after.css"),
-        "and the registration after it still happens"
+        published.contains(&"/exposure-after.css".to_string()),
+        "and the registration after it still happens: {:?}",
+        published
     );
 }
 
@@ -321,6 +324,80 @@ async fn an_asset_route_can_refuse_to_serve_its_file() {
     let (status, body) = get("/authz-open.css".to_string()).await;
     assert_eq!(status, 200, "{}", body);
     assert_eq!(body, "body { color: blue; }");
+
+    engine.shutdown().await;
+}
+
+/// The paths a run registered as file routes. A file route is a registration
+/// of the script like any other, so it comes back in the same map a handler
+/// route does rather than landing in a registry of its own.
+fn registered_paths(result: &aiwebengine::js_engine::ScriptExecutionResult) -> Vec<String> {
+    let mut paths: Vec<String> = result
+        .registrations
+        .iter()
+        .filter(|(_, route_meta)| route_meta.kind == aiwebengine::repository::RouteKind::File)
+        .map(|((path, _), _)| path.clone())
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// A file route is a route, so it matches patterns like one. `/reports/:id`
+/// was not expressible while file routes lived in an exact-match map of
+/// their own — which is half of why `try_serve_asset` had no way to answer
+/// "the person this file belongs to", the other half being the missing hook.
+///
+/// The captured segments reach the authorization function, which is what
+/// makes the pattern worth having: the decision is about `:id`. A parameter
+/// is a whole segment, exactly as it is for a handler route — `/:id.csv`
+/// would name the parameter `id.csv`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_route_matches_a_pattern_and_the_guard_sees_it() {
+    let engine = common::AdminServer::start()
+        .await
+        .expect("server failed to start");
+
+    let script_uri = "https://example.com/param_file_route_test";
+    engine.deploy_script(script_uri, "function init() {}").await;
+    store(script_uri, "public/report.csv", "id,total\n1,9\n");
+
+    let script = r#"
+        function mayRead(context) {
+          // The `:id` the pattern captured, not a query parameter.
+          if (context.request.query.id === "42") return {};
+          return { deny: 404 };
+        }
+
+        function init(context) {
+          routeRegistry.registerAssetRoute("/reports/:id", "public/report.csv", {
+            authorize: "mayRead",
+          });
+          return { success: true };
+        }
+    "#;
+    engine.deploy_script(script_uri, script).await;
+
+    let port = engine.port();
+    let client = engine.client();
+    let get = |path: String| {
+        let client = client.clone();
+        async move {
+            let response = client
+                .get(format!("http://127.0.0.1:{}{}", port, path))
+                .send()
+                .await
+                .expect("request failed");
+            let status = response.status().as_u16();
+            (status, response.text().await.unwrap_or_default())
+        }
+    };
+
+    let (status, body) = get("/reports/42".to_string()).await;
+    assert_eq!(status, 200, "{}", body);
+    assert_eq!(body, "id,total\n1,9\n");
+
+    let (status, body) = get("/reports/7".to_string()).await;
+    assert_eq!(status, 404, "the guard saw a different :id: {}", body);
 
     engine.shutdown().await;
 }

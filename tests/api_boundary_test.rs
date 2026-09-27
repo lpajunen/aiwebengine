@@ -492,6 +492,18 @@ async fn test_route_introspection_includes_stream_and_asset_routes() {
         result.error
     );
 
+    // Store what the run registered, which is what the deploy path does. A
+    // file route is a registration of the script now rather than a write to
+    // a registry of its own, so it reaches the introspection view the same
+    // way a handler route does — by being stored.
+    repository::get_script_metadata("test://route-introspection")
+        .expect("the script the run stored should be readable");
+    repository::mark_script_initialized_with_registrations(
+        "test://route-introspection",
+        result.registrations.clone(),
+    )
+    .expect("registrations should store");
+
     // The registrations surface through the introspection view behind
     // `GET /engine/routes`.
     let routes = aiwebengine::engine_api::routes_introspection_authorized(&admin)

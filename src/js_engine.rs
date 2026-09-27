@@ -783,8 +783,14 @@ fn validate_script(content: &str, limits: &ExecutionLimits) -> Result<(), String
 }
 
 /// Function type for registering functions in different execution contexts
-type RegisterFunctionType =
-    Box<dyn Fn(&str, &repository::RouteMetadata, Option<&str>) -> Result<(), rquickjs::Error>>;
+/// Where a registration lands.
+///
+/// `Rc` rather than `Box` because more than one registry function records
+/// through it: a route, a file route and (in time) a stream are one kind of
+/// registration, so they share one sink rather than each owning a registry.
+type RegisterFunctionType = std::rc::Rc<
+    dyn Fn(&str, &repository::RouteMetadata, Option<&str>) -> Result<(), rquickjs::Error>,
+>;
 
 /// Sets up secure global functions with proper capability validation
 ///
@@ -1125,7 +1131,7 @@ pub fn execute_script_secure(
                     // Create the register function that captures registrations
                     let regs_clone = Rc::clone(&registrations);
                     let uri_clone = uri_owned.clone();
-                    let register_impl = Box::new(
+                    let register_impl = std::rc::Rc::new(
                         move |path: &str,
                               route_metadata: &repository::RouteMetadata,
                               method: Option<&str>|
@@ -1255,7 +1261,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                             // Create the register function that captures registrations
                             let regs_clone = Rc::clone(&registrations);
                             let uri_clone = uri_owned.clone();
-                            let register_impl = Box::new(
+                            let register_impl = std::rc::Rc::new(
                         move |path: &str,
                               route_metadata: &repository::RouteMetadata,
                               method: Option<&str>|
@@ -3894,7 +3900,7 @@ fn run_registration_pass(
             // delegate check downstream reads the sink, and a route handler is
             // the delegate most worth checking.
             let route_sink = dry_run_sink.clone();
-            let register_impl = Box::new(
+            let register_impl = std::rc::Rc::new(
                 move |path: &str,
                       route_metadata: &repository::RouteMetadata,
                       method: Option<&str>|

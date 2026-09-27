@@ -15,7 +15,6 @@ use tracing::{debug, error, info, warn};
 // it uses is what lets the two suites share the file rather than a copy.
 extern crate self as aiwebengine;
 
-pub mod asset_registry;
 pub mod bytecode;
 pub mod config;
 pub mod conversion;
@@ -3452,19 +3451,6 @@ async fn handle_dynamic_request(
         return error_to_response(error::errors::not_found(&path, &request_id));
     }
 
-    // Check for registered asset paths first if it's a GET request
-    if let Some(asset_response) = try_serve_asset(
-        &path,
-        &request_method,
-        &canonical_host,
-        req.uri().query().unwrap_or_default(),
-        req.extensions().get::<auth::AuthUser>(),
-    )
-    .await
-    {
-        return asset_response;
-    }
-
     // Check if this is a request to a registered stream path
     if should_route_to_stream(&path, &request_method, &canonical_host).await {
         return handle_stream_request(req).await;
@@ -3483,12 +3469,37 @@ async fn handle_dynamic_request(
     };
 
     let (owner_uri, handler_name, route_pattern, route_params, strip_body) = match route_lookup {
+        // A file route: the engine sends the bytes itself. One lookup decides
+        // between this and a handler, where three registries were consulted
+        // in sequence before it.
+        route_index::RouteLookup::Handler {
+            script_uri,
+            kind: repository::RouteKind::File,
+            file,
+            authorize,
+            params,
+            strip_body,
+            ..
+        } => {
+            return serve_route_file(
+                &script_uri,
+                file.as_deref().unwrap_or_default(),
+                authorize.as_deref(),
+                &path,
+                &params,
+                strip_body,
+                req.uri().query().unwrap_or_default(),
+                req.extensions().get::<auth::AuthUser>(),
+            )
+            .await;
+        }
         route_index::RouteLookup::Handler {
             script_uri,
             handler_name,
             pattern,
             params,
             strip_body,
+            ..
         } => (script_uri, handler_name, pattern, params, strip_body),
         no_handler => {
             // Extract request ID from extensions
@@ -3945,48 +3956,50 @@ pub async fn start_server_without_shutdown_with_config(config: config::Config) -
 // ============================================================================
 
 /// Try to serve an asset if the path matches a registered asset
-async fn try_serve_asset(
+/// Send one of a script's files, for a route whose target is a file.
+///
+/// The engine moves the bytes. That is what makes a file route worth having
+/// over a handler that reads the file and returns it: the decision about who
+/// may read it is JavaScript, the data path is not.
+///
+/// `route_params` are the `:param` values the pattern captured. They reach
+/// the authorization function, which is the point of a file route being a
+/// route at all — `/invoices/:id.pdf` was not expressible while file routes
+/// lived in an exact-match map of their own.
+#[allow(clippy::too_many_arguments)]
+async fn serve_route_file(
+    script_uri: &str,
+    file: &str,
+    authorize: Option<&str>,
     path: &str,
-    method: &str,
-    host: &str,
+    route_params: &HashMap<String, String>,
+    strip_body: bool,
     query_string: &str,
     auth_user: Option<&auth::AuthUser>,
-) -> Option<Response> {
-    // Asset routes have no per-method registration (see `AssetPathRegistration`),
-    // so HEAD is served the same way as GET with the body dropped afterward.
-    if method != "GET" && method != "HEAD" {
-        return None;
-    }
-
-    let registration = asset_registry::get_global_registry().get_asset_registration(path)?;
-
-    // An asset route belongs to its script, so it is published on the same
-    // hosts. Returning None lets the caller fall through to normal route
-    // matching and, failing that, a 404.
-    if !route_index::script_serves_host(&registration.script_uri, host).await {
-        return None;
-    }
-
-    // Who may read this. An asset route was the one surface where the engine
-    // served data with no way to ask: a route's handler *is* the hook, a
-    // stream has its customization callback, and this had nothing — so
-    // "signed-in users only" was inexpressible and "the person this file
-    // belongs to" doubly so. A registration with no `authorize` keeps what an
-    // asset route has always meant, which is right for a stylesheet and is
-    // why the directory a served file lives in is called `public/`.
-    if let Some(authorize) = registration.metadata.authorize.clone() {
-        let script_uri = registration.script_uri.clone();
+) -> Response {
+    // Who may read this. A route's handler *is* the hook, since it runs under
+    // the requesting user's context; where the engine answers without running
+    // one, the script names the function that decides. No `authorize` means
+    // anyone who can reach the host — which is what a handler that checks
+    // nothing also means, and why a served file lives under `public/`.
+    if let Some(authorize) = authorize {
+        let script = script_uri.to_string();
+        let authorize_owned = authorize.to_string();
         let path_owned = path.to_string();
-        let query_params = parse_query_string(query_string);
+        let mut params = parse_query_string(query_string);
+        // The captured segments, alongside the query, so the function can
+        // decide on `/invoices/:id.pdf` without the caller having to repeat
+        // the id in a query parameter.
+        params.extend(route_params.clone());
         let auth_context = auth_user.map(|user| create_js_auth_context(Some(user)));
 
         let decision = tokio::task::spawn_blocking(move || {
             js_engine::execute_authorization_function(
-                &script_uri,
-                &authorize,
+                &script,
+                &authorize_owned,
                 js_engine::HandlerInvocationKind::AssetAuthorization,
                 &path_owned,
-                &query_params,
+                &params,
                 auth_context,
             )
         })
@@ -3996,7 +4009,7 @@ async fn try_serve_asset(
             Ok(Ok(AccessDecision::Allow(_))) => {}
             Ok(Ok(AccessDecision::Deny { status, reason })) => {
                 info!(
-                    "Asset route '{}' refused the read with {}{}",
+                    "File route '{}' refused the read with {}{}",
                     path,
                     status,
                     reason
@@ -4004,63 +4017,53 @@ async fn try_serve_asset(
                         .map(|r| format!(": {}", r))
                         .unwrap_or_default()
                 );
-                return Some(build_denied_response(status, reason.as_deref()));
+                return build_denied_response(status, reason.as_deref());
             }
-            // A callback that failed is not a callback that allowed. Falling
-            // through to the bytes would serve the file precisely when the
-            // thing guarding it is broken.
+            // A guard that failed is not a guard that allowed. Falling
+            // through to the bytes would send the file precisely when the
+            // thing protecting it is broken.
             Ok(Err(e)) => {
                 error!(
-                    "Authorization function '{}' failed for asset route '{}': {}",
-                    registration.metadata.authorize.as_deref().unwrap_or(""),
-                    path,
-                    e
+                    "Authorization function '{}' failed for file route '{}': {}",
+                    authorize, path, e
                 );
-                return Some(build_access_error_response(
-                    "The function guarding this file failed",
-                ));
+                return build_access_error_response("The function guarding this file failed");
             }
             Err(e) => {
-                error!(
-                    "Authorization task failed for asset route '{}': {}",
-                    path, e
-                );
-                return Some(build_access_error_response(
-                    "The function guarding this file failed",
-                ));
+                error!("Authorization task failed for file route '{}': {}", path, e);
+                return build_access_error_response("The function guarding this file failed");
             }
         }
     }
 
-    if let Some(asset) =
-        repository::fetch_asset_async(&registration.script_uri, &registration.asset_name).await
-    {
-        let mut response = asset.content.into_response();
-        // For text/* types, ensure charset=utf-8 is declared so browsers don't
-        // fall back to Windows-1252 and garble multi-byte UTF-8 characters.
-        let content_type =
-            if asset.mimetype.starts_with("text/") && !asset.mimetype.contains("charset") {
-                format!("{}; charset=utf-8", asset.mimetype)
-            } else {
-                asset.mimetype.clone()
-            };
-        response.headers_mut().insert(
-            axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_str(&content_type).unwrap_or(
-                axum::http::HeaderValue::from_static("application/octet-stream"),
-            ),
+    let Some(asset) = repository::fetch_asset_async(script_uri, file).await else {
+        warn!(
+            "File route '{}' names '{}' of script '{}', which is not there",
+            path, file, script_uri
         );
-        if method == "HEAD" {
-            *response.body_mut() = Body::empty();
-        }
-        return Some(response);
-    }
+        let request_id = "unknown".to_string();
+        return error_to_response(error::errors::not_found(path, &request_id));
+    };
 
-    warn!(
-        "Asset '{}' registered for path '{}' from script '{}' but not found in repository",
-        registration.asset_name, path, registration.script_uri
+    let mut response = asset.content.into_response();
+    // For text/* types, ensure charset=utf-8 is declared so browsers don't
+    // fall back to Windows-1252 and garble multi-byte UTF-8 characters.
+    let content_type = if asset.mimetype.starts_with("text/") && !asset.mimetype.contains("charset")
+    {
+        format!("{}; charset=utf-8", asset.mimetype)
+    } else {
+        asset.mimetype.clone()
+    };
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_str(&content_type).unwrap_or(
+            axum::http::HeaderValue::from_static("application/octet-stream"),
+        ),
     );
-    None
+    if strip_body {
+        *response.body_mut() = Body::empty();
+    }
+    response
 }
 
 /// Check if request should be routed to a stream handler

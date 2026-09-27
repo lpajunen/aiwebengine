@@ -2889,14 +2889,24 @@ pub fn routes_introspection_authorized(user: &UserContext) -> AppResult<Vec<Valu
     for metadata in metadata_list {
         if metadata.initialized && !metadata.registrations.is_empty() {
             for ((path, method), route_meta) in metadata.registrations {
+                // Handlers and file routes come from the same list now, which
+                // is what this view always showed them as: the asset half
+                // used to be assembled from a registry of its own here.
+                let tags = if route_meta.tags.is_empty()
+                    && route_meta.kind == repository::RouteKind::File
+                {
+                    vec!["Assets".to_string()]
+                } else {
+                    route_meta.tags.clone()
+                };
                 all_routes.push(json!({
                     "path": path,
                     "method": method,
-                    "handler": route_meta.handler_name,
+                    "handler": route_meta.target(),
                     "script_uri": metadata.uri,
                     "summary": route_meta.summary,
                     "description": route_meta.description,
-                    "tags": route_meta.tags,
+                    "tags": tags,
                 }));
             }
         }
@@ -2920,24 +2930,6 @@ pub fn routes_introspection_authorized(user: &UserContext) -> AppResult<Vec<Valu
             "script_uri": script_uri,
             "summary": metadata.summary,
             "description": metadata.description,
-            "tags": tags,
-        }));
-    }
-
-    for (path, registration) in crate::asset_registry::get_global_registry().get_all_registrations()
-    {
-        let tags = if registration.metadata.tags.is_empty() {
-            vec!["Assets".to_string()]
-        } else {
-            registration.metadata.tags.clone()
-        };
-        all_routes.push(json!({
-            "path": path,
-            "method": "ASSET",
-            "handler": registration.asset_name,
-            "script_uri": registration.script_uri,
-            "summary": registration.metadata.summary,
-            "description": registration.metadata.description,
             "tags": tags,
         }));
     }
@@ -2998,10 +2990,38 @@ pub fn generate_merged_openapi_spec() -> String {
 
     let mut js_paths = serde_json::Map::new();
 
+    // File routes, taken from the same registrations as the handler routes
+    // below and rendered separately because what they document is a file
+    // rather than an operation. They used to come from a registry of their
+    // own; the collect-first is only because the loop below consumes the
+    // metadata list.
+    let file_routes: Vec<(String, String, String, repository::RouteMetadata)> = metadata_list
+        .iter()
+        .filter(|metadata| metadata.initialized)
+        .flat_map(|metadata| {
+            metadata
+                .registrations
+                .iter()
+                .filter(|(_, route_meta)| route_meta.kind == repository::RouteKind::File)
+                .map(|((path, _), route_meta)| {
+                    (
+                        path.clone(),
+                        metadata.uri.clone(),
+                        route_meta.file.clone().unwrap_or_default(),
+                        route_meta.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
     // Script-registered HTTP routes
     for metadata in metadata_list {
         if metadata.initialized && !metadata.registrations.is_empty() {
             for ((path, method), route_meta) in metadata.registrations {
+                if route_meta.kind == repository::RouteKind::File {
+                    continue;
+                }
                 let path_item = js_paths.entry(path.clone()).or_insert_with(|| json!({}));
                 let Some(path_obj) = path_item.as_object_mut() else {
                     continue;
@@ -3043,9 +3063,8 @@ pub fn generate_merged_openapi_spec() -> String {
         }
     }
 
-    // Asset routes from the asset registry
-    let asset_registrations = crate::asset_registry::get_global_registry().get_all_registrations();
-    for (path, registration) in asset_registrations {
+    // Asset routes
+    for (path, script_uri, asset_name, registration_meta) in file_routes {
         let extension = path.rsplit('.').next().unwrap_or("");
         let mime_type = match extension {
             "css" => "text/css",
@@ -3065,27 +3084,22 @@ pub fn generate_merged_openapi_spec() -> String {
         };
 
         let mut asset_operation = serde_json::Map::new();
-        let asset_summary = registration
-            .metadata
+        let asset_summary = registration_meta
             .summary
             .clone()
-            .unwrap_or_else(|| format!("Static asset: {}", registration.asset_name));
+            .unwrap_or_else(|| format!("Static asset: {}", asset_name));
         asset_operation.insert("summary".to_string(), json!(asset_summary));
-        let asset_description = registration
-            .metadata
-            .description
-            .clone()
-            .unwrap_or_else(|| {
-                format!(
-                    "Serves static asset '{}' registered by script '{}'",
-                    registration.asset_name, registration.script_uri
-                )
-            });
+        let asset_description = registration_meta.description.clone().unwrap_or_else(|| {
+            format!(
+                "Serves static asset '{}' registered by script '{}'",
+                asset_name, script_uri
+            )
+        });
         asset_operation.insert("description".to_string(), json!(asset_description));
-        let asset_tags = if registration.metadata.tags.is_empty() {
+        let asset_tags = if registration_meta.tags.is_empty() {
             vec!["Assets".to_string()]
         } else {
-            registration.metadata.tags.clone()
+            registration_meta.tags.clone()
         };
         asset_operation.insert("tags".to_string(), json!(asset_tags));
         asset_operation.insert(
@@ -3102,9 +3116,9 @@ pub fn generate_merged_openapi_spec() -> String {
                 "404": { "description": "Asset not found" }
             }),
         );
-        asset_operation.insert("x-asset-name".to_string(), json!(registration.asset_name));
-        asset_operation.insert("x-script-uri".to_string(), json!(registration.script_uri));
-        asset_operation.insert("x-source".to_string(), json!("asset-registry"));
+        asset_operation.insert("x-asset-name".to_string(), json!(asset_name));
+        asset_operation.insert("x-script-uri".to_string(), json!(script_uri));
+        asset_operation.insert("x-source".to_string(), json!("file-route"));
 
         let path_entry = js_paths.entry(path).or_insert_with(|| json!({}));
         if let Some(path_obj) = path_entry.as_object_mut() {

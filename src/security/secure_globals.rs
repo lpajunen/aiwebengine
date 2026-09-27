@@ -279,9 +279,15 @@ fn success_answer(fields: serde_json::Value) -> String {
     serde_json::Value::Object(answer).to_string()
 }
 
-// Type alias for route registration callback function
-type RouteRegisterFn =
-    Box<dyn Fn(&str, &repository::RouteMetadata, Option<&str>) -> Result<(), rquickjs::Error>>;
+/// Where a registration lands.
+///
+/// `Rc` rather than `Box` because more than one registry function records
+/// through it: a route and a file route are one kind of registration
+/// differing only in what the engine does once the path matches, so they
+/// share one sink rather than each owning a registry.
+type RouteRegisterFn = std::rc::Rc<
+    dyn Fn(&str, &repository::RouteMetadata, Option<&str>) -> Result<(), rquickjs::Error>,
+>;
 
 /// Which registry a [`CollectedRegistration`] would have been written to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -2338,7 +2344,7 @@ impl SecureGlobalContext {
         let route_registry = rquickjs::Object::new(ctx.clone())?;
 
         // 1. registerRoute function
-        if let Some(register_impl) = register_fn {
+        if let Some(register_impl) = register_fn.clone() {
             let register_route = Function::new(
                 ctx.clone(),
                 move |_ctx: rquickjs::Ctx<'_>,
@@ -2599,6 +2605,7 @@ impl SecureGlobalContext {
         route_registry.set("registerStreamRoute", register_stream_route)?;
 
         // 3. registerAssetRoute function
+        let asset_register_fn = register_fn.clone();
         let user_ctx_asset = user_context.clone();
         let script_uri_asset = script_uri_owned.clone();
         let config_asset_route = self.config.clone();
@@ -2714,18 +2721,26 @@ impl SecureGlobalContext {
                     return Ok(reply);
                 }
 
-                // Register the path in the global asset registry
-                match crate::asset_registry::get_global_registry().register_path_with_metadata(
-                    &path,
-                    &asset_name,
-                    &script_uri_asset,
-                    crate::asset_registry::AssetRouteMetadata {
-                        tags,
-                        summary,
-                        description,
-                        authorize,
-                    },
-                ) {
+                // The same sink a handler route records into. A file route is
+                // a route whose target is a file rather than a function, so
+                // it belongs in the script's registrations with the rest:
+                // indexed by `route_index` (which is what gives it `:param`
+                // and `/*`), filtered by host once, invalidated once, and —
+                // because the registrations are rebuilt on every `init()` —
+                // actually gone when the script stops registering it. The
+                // registry it used to live in never unregistered anything.
+                let Some(record) = asset_register_fn.as_ref() else {
+                    return Ok(registration_inactive(
+                        "routeRegistry.registerAssetRoute",
+                        &path,
+                    ));
+                };
+                let mut route_meta = repository::RouteMetadata::file(asset_name.clone(), authorize);
+                route_meta.tags = tags;
+                route_meta.summary = summary;
+                route_meta.description = description;
+
+                match record(&path, &route_meta, Some(repository::ASSET_METHOD)) {
                     Ok(()) => Ok(format!(
                         "Asset path '{}' registered to asset '{}'",
                         path, asset_name

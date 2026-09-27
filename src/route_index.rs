@@ -15,10 +15,16 @@ use crate::repository::{self, Repository as _};
 /// Result of a route lookup.
 #[derive(Debug)]
 pub enum RouteLookup {
-    /// A handler matched.
+    /// A registration matched.
     Handler {
         script_uri: String,
         handler_name: String,
+        /// What the engine does with it: run the handler, or send a file.
+        kind: repository::RouteKind,
+        /// The file to send, for [`repository::RouteKind::File`].
+        file: Option<String>,
+        /// The function that decides who may read it, where no handler runs.
+        authorize: Option<String>,
         /// The registered pattern that matched, e.g. `/things/:id`. The caller
         /// has the concrete path already; what it cannot reconstruct is which
         /// registration served it, which is what attributes a request's logs
@@ -42,6 +48,12 @@ pub enum RouteLookup {
 struct RouteTarget {
     script_uri: String,
     handler_name: String,
+    /// What the engine does once this path matches.
+    kind: repository::RouteKind,
+    /// The file to send, for [`repository::RouteKind::File`].
+    file: Option<String>,
+    /// The function that decides who may read it, where no handler runs.
+    authorize: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,6 +175,9 @@ fn build_index(metadata: &[repository::ScriptMetadata]) -> IndexInner {
                 let target = RouteTarget {
                     script_uri: script.uri.clone(),
                     handler_name: route_meta.handler_name.clone(),
+                    kind: route_meta.kind,
+                    file: route_meta.file.clone(),
+                    authorize: route_meta.authorize.clone(),
                 };
                 if pattern.ends_with("/*") {
                     inner.patterns.push(PatternRoute {
@@ -237,6 +252,45 @@ pub async fn scripts_for_host(host: &str) -> Option<std::collections::HashSet<St
     )
 }
 
+/// Every file route in the engine, as `(path, script_uri, file)`.
+///
+/// Reads the registrations rather than a registry of its own — there is not
+/// one any more. For introspection and for tests that need to ask what a
+/// script published.
+pub async fn file_routes() -> Vec<(String, String, String)> {
+    let Ok(index) = current_index().await else {
+        return Vec::new();
+    };
+    let mut found: Vec<(String, String, String)> = index
+        .exact
+        .iter()
+        .filter(|((_, _, method), _)| method == repository::ASSET_METHOD)
+        .map(|((_, path, _), target)| {
+            (
+                path.clone(),
+                target.script_uri.clone(),
+                target.file.clone().unwrap_or_default(),
+            )
+        })
+        .chain(
+            index
+                .patterns
+                .iter()
+                .filter(|route| route.method == repository::ASSET_METHOD)
+                .map(|route| {
+                    (
+                        route.pattern.clone(),
+                        route.target.script_uri.clone(),
+                        route.target.file.clone().unwrap_or_default(),
+                    )
+                }),
+        )
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
 /// Whether `script_uri` publishes on `host`.
 ///
 /// For the registrations that are not routes — asset paths, streams, MCP
@@ -266,12 +320,37 @@ pub async fn script_serves_host(script_uri: &str, host: &str) -> bool {
 }
 
 fn resolve(index: &IndexInner, host: &str, path: &str, method: &str) -> RouteLookup {
+    // A file route answers GET and HEAD, and is keyed under its own
+    // pseudo-method so it does not share a slot with a handler on the same
+    // path. Which of the two wins is stated here, once: the file does,
+    // because that is what three registries consulted in sequence used to
+    // add up to — `try_serve_asset` ran before route matching. It was an
+    // accident of ordering rather than a decision; now it is a decision, and
+    // §4's mount registration is where a collision gets refused outright
+    // rather than resolved.
+    if method == "GET" || method == "HEAD" {
+        let as_file = match_index(index, host, path, repository::ASSET_METHOD);
+        if let RouteLookup::Handler { strip_body, .. } = &as_file {
+            debug_assert!(!strip_body);
+            let mut found = as_file;
+            if method == "HEAD"
+                && let RouteLookup::Handler { strip_body, .. } = &mut found
+            {
+                *strip_body = true;
+            }
+            return found;
+        }
+    }
+
     let result = match_index(index, host, path, method);
     if method == "HEAD"
         && !matches!(result, RouteLookup::Handler { .. })
         && let RouteLookup::Handler {
             script_uri,
             handler_name,
+            kind,
+            file,
+            authorize,
             pattern,
             params,
             ..
@@ -280,6 +359,9 @@ fn resolve(index: &IndexInner, host: &str, path: &str, method: &str) -> RouteLoo
         return RouteLookup::Handler {
             script_uri,
             handler_name,
+            kind,
+            file,
+            authorize,
             pattern,
             params,
             strip_body: true,
@@ -296,6 +378,9 @@ fn match_index(index: &IndexInner, host: &str, path: &str, method: &str) -> Rout
         return RouteLookup::Handler {
             script_uri: target.script_uri.clone(),
             handler_name: target.handler_name.clone(),
+            kind: target.kind,
+            file: target.file.clone(),
+            authorize: target.authorize.clone(),
             // An exact registration is its own pattern.
             pattern: path.to_string(),
             params: HashMap::new(),
@@ -321,6 +406,9 @@ fn match_index(index: &IndexInner, host: &str, path: &str, method: &str) -> Rout
         return RouteLookup::Handler {
             script_uri: route.target.script_uri.clone(),
             handler_name: route.target.handler_name.clone(),
+            kind: route.target.kind,
+            file: route.target.file.clone(),
+            authorize: route.target.authorize.clone(),
             pattern: route.pattern.clone(),
             params,
             strip_body: false,
@@ -624,6 +712,9 @@ mod tests {
                     let target = RouteTarget {
                         script_uri: script.uri.clone(),
                         handler_name: route_meta.handler_name.clone(),
+                        kind: route_meta.kind,
+                        file: route_meta.file.clone(),
+                        authorize: route_meta.authorize.clone(),
                     };
                     if pattern.split('/').any(|part| part.starts_with(':')) {
                         inner.patterns.push(PatternRoute {

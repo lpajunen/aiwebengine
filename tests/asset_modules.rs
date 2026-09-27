@@ -607,9 +607,6 @@ async fn register_asset_route_records_metadata_tags() {
     repository::upsert_asset(test_asset(script_uri, asset_uri, "text/css", b"body{}"))
         .expect("asset should be stored");
 
-    // Ensure a clean registry so we only observe this test's registration.
-    aiwebengine::asset_registry::get_global_registry().clear();
-
     let script_content = r#"
         function init(context) {
           routeRegistry.registerAssetRoute("/repro-asset.css", "public/repro.css", {
@@ -619,25 +616,33 @@ async fn register_asset_route_records_metadata_tags() {
         }
     "#;
 
-    call_init_if_exists(
+    // A file route is a registration of the script like any other, so it
+    // comes back in the same map a handler route does — rather than being a
+    // side effect on a registry of its own, which is what made a removed
+    // registration linger until the process restarted.
+    let registrations = call_init_if_exists(
         script_uri,
         script_content,
         InitContext::new(script_uri.to_string(), true),
     )
-    .expect("init execution should succeed");
+    .expect("init execution should succeed")
+    .expect("init should report its registrations");
 
-    let registrations = aiwebengine::asset_registry::get_global_registry().get_all_registrations();
-    let (_, reg) = registrations
-        .iter()
-        .find(|(path, _)| path == "/repro-asset.css")
-        .expect("asset route should be registered");
+    let route_meta = registrations
+        .get(&(
+            "/repro-asset.css".to_string(),
+            aiwebengine::repository::ASSET_METHOD.to_string(),
+        ))
+        .expect("file route should be registered");
 
+    assert_eq!(route_meta.kind, aiwebengine::repository::RouteKind::File);
+    assert_eq!(route_meta.file.as_deref(), Some("public/repro.css"));
     assert_eq!(
-        reg.metadata.tags,
+        route_meta.tags,
         vec!["ReproGroup".to_string()],
-        "asset route metadata should carry the tags passed from JS"
+        "a file route carries the tags passed from JS, like any other route"
     );
-    assert_eq!(reg.metadata.summary.as_deref(), Some("Repro asset"));
+    assert_eq!(route_meta.summary.as_deref(), Some("Repro asset"));
 
     assert!(repository::delete_asset(script_uri, asset_uri));
 }
