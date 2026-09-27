@@ -606,6 +606,12 @@ vocabularies a solution developer must hold at once, across four documents. Not
 a deletion — one "what narrows what" document, and ideally one shared name for
 the operation.
 
+## Where this stands
+
+`docs/SIMPLIFICATION-STATUS.md` tracks how far this has got, what is true of
+the tree right now, and what the next step needs in mind. This document stays
+the argument; that one is the state.
+
 ## Order of work
 
 1. **Merge script and asset into one tree** (§1). Everything else gets cheaper.
