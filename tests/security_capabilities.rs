@@ -543,7 +543,9 @@ async fn test_secure_request_execution() {
         }
     "#;
 
-    // Execute script to register the handler
+    // Store the script, then execute it to register the handler
+    aiwebengine::repository::upsert_script("/test_request_script", script_content)
+        .expect("script should be stored");
     let result =
         execute_script_secure("/test_request_script", script_content, user_context.clone());
     assert!(result.success, "Script setup should succeed");
@@ -635,6 +637,8 @@ async fn test_asset_upsert_sets_script_uri() {
         asset_name, asset_content_b64
     );
 
+    aiwebengine::repository::upsert_script(script_uri, &script_content)
+        .expect("script should be stored");
     let result = execute_script_secure(script_uri, &script_content, user_context);
 
     assert!(

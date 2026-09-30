@@ -423,40 +423,26 @@ pub fn can_write_script(user: &UserContext, uri: &str) -> bool {
     authorize_script_write(user, uri).is_ok()
 }
 
-/// Write a script's root source as one part of a larger change.
-///
-/// [`upsert_script_authorized`] records a revision and re-initializes the
-/// script, which is right when writing the root *is* the change and wrong when
-/// it is the first step of one. A sync writes the root, then the assets, then
-/// removes what the source no longer has — and wants one revision describing
-/// the result and one `init()` afterwards, not one of each per file.
-///
-/// The authorization is shared with [`upsert_script_authorized`]; only the
-/// bookkeeping the caller takes over is left out.
-pub fn upsert_script_for_sync(
-    user: &UserContext,
-    uri: &str,
-    content: &str,
-) -> Result<UpsertAction, String> {
-    if content.is_empty() {
-        return Err(format!("Error: Script '{}' has no content", uri));
-    }
-    let exists = authorize_script_write(user, uri)?;
-
-    if let Err(e) = repository::upsert_script_with_owner(uri, content, user.user_id.as_deref()) {
-        return Err(format!("Error storing script: {}", e));
-    }
-
-    Ok(if exists {
-        UpsertAction::Updated
-    } else {
-        UpsertAction::Inserted
-    })
-}
-
 pub fn upsert_script_authorized(
     user: &UserContext,
     uri: &str,
+    content: &str,
+    via: Option<&str>,
+) -> Result<(UpsertAction, Option<i32>), String> {
+    upsert_root_authorized(user, uri, None, content, via)
+}
+
+/// [`upsert_script_authorized`] into the entrypoint file `root` names.
+///
+/// `None` writes whichever entrypoint the tree already has, which is what a
+/// caller sending only source means. `Some("main.ts")` writes that file and
+/// removes any other entrypoint, which is what a caller writing a file by
+/// name means — and the only way the language of an entrypoint can change,
+/// since the name is what says it.
+pub fn upsert_root_authorized(
+    user: &UserContext,
+    uri: &str,
+    root: Option<&str>,
     content: &str,
     via: Option<&str>,
 ) -> Result<(UpsertAction, Option<i32>), String> {
@@ -465,7 +451,8 @@ pub fn upsert_script_authorized(
     }
     let exists = authorize_script_write(user, uri)?;
 
-    if let Err(e) = repository::upsert_script_with_owner(uri, content, user.user_id.as_deref()) {
+    if let Err(e) = repository::upsert_root_with_owner(uri, root, content, user.user_id.as_deref())
+    {
         return Err(format!("Error storing script: {}", e));
     }
 
@@ -2034,7 +2021,7 @@ pub fn write_file_bytes_authorized(
                 path
             ))
         })?;
-        return upsert_script_authorized(user, script_uri, &text, Some("file"))
+        return upsert_root_authorized(user, script_uri, Some(path), &text, Some("file"))
             .map(|(_, revision)| revision)
             .map_err(|message| {
                 let message = message

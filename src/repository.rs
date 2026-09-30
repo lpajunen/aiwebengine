@@ -946,32 +946,131 @@ async fn db_ensure_script_row(
 /// followed by an INSERT when it matched nothing are not a unit, and between
 /// them another instance creating the same script leaves a row where the
 /// UPDATE found none.
+async fn db_upsert_script(
+    executor: crate::database::TransactionExecutor<'_>,
+    uri: &str,
+    content: &str,
+    root: Option<&str>,
+) -> AppResult<()> {
+    debug!(
+        "db_upsert_script called: uri={}, root={:?}, content_len={}",
+        uri,
+        root,
+        content.len()
+    );
+    if let Some(name) = root
+        && !crate::module_loader::is_root_module_name(name)
+    {
+        return Err(RepositoryError::InvalidData(format!(
+            "'{}' is not an entrypoint name (one of {})",
+            name,
+            crate::module_loader::ROOT_MODULE_NAMES.join(", ")
+        ))
+        .into());
+    }
+
+    // Two statements, three when the caller names the entrypoint: one unit
+    // either way, so a pool caller gets a transaction of its own rather than
+    // a window in which the script has two entrypoints or none.
+    match executor {
+        crate::database::TransactionExecutor::Transaction(tx) => {
+            upsert_script_rows(tx, uri, content, root).await?;
+        }
+        crate::database::TransactionExecutor::Pool(pool) => {
+            let mut tx = pool.begin().await.map_err(store_error)?;
+            upsert_script_rows(&mut tx, uri, content, root).await?;
+            tx.commit().await.map_err(store_error)?;
+        }
+    }
+
+    debug!("✓ Successfully stored script in database: {}", uri);
+    Ok(())
+}
+
+/// The statements behind [`db_upsert_script`], on one connection.
 ///
 /// `name` is only filled in when the row has none, which is what the UPDATE
 /// did with `COALESCE(name, $4)`: it is a display label a caller may have
 /// customised, and a redeploy is not a reason to overwrite it.
-async fn db_upsert_script(
-    mut executor: crate::database::TransactionExecutor<'_>,
+///
+/// Which file the source lands in:
+///
+/// - **Named** (`root` is `Some`): exactly that file, and every other
+///   entrypoint name is removed. Naming the file is how an author says what
+///   language the entrypoint is in — writing `main.ts` into a script that has
+///   `main.js` is a rename, not a second program, and resolution would
+///   otherwise keep whichever sorts first.
+/// - **Unnamed**: whichever entrypoint the tree already holds, and the name
+///   derived from the URI when it holds none. This is what a caller that
+///   sends only source (`/engine/upsert_script`, a batch's `content`) means.
+async fn upsert_script_rows(
+    conn: &mut sqlx::PgConnection,
     uri: &str,
     content: &str,
+    root: Option<&str>,
 ) -> AppResult<()> {
-    debug!(
-        "db_upsert_script called: uri={}, content_len={}",
-        uri,
-        content.len()
-    );
     let now = chrono::Utc::now();
 
     // Extract name from URI (last segment after /)
     let name = uri.rsplit('/').next().unwrap_or(uri);
 
-    const UPSERT_SCRIPT: &str = r#"
+    sqlx::query(
+        r#"
         INSERT INTO scripts (uri, name, created_at, updated_at)
         VALUES ($1, $2, $3, $3)
         ON CONFLICT (uri) DO UPDATE
         SET updated_at = EXCLUDED.updated_at,
             name = COALESCE(scripts.name, EXCLUDED.name)
-        "#;
+        "#,
+    )
+    .bind(uri)
+    .bind(name)
+    .bind(now)
+    .execute(&mut *conn)
+    .await
+    .map_err(store_error)?;
+
+    let target = root.unwrap_or_else(|| crate::module_loader::default_root_module_name(uri));
+    let mimetype = if target.ends_with(".ts") || target.ends_with(".tsx") {
+        "text/typescript"
+    } else {
+        "text/javascript"
+    };
+
+    if let Some(root) = root {
+        sqlx::query(
+            r#"
+            DELETE FROM assets
+            WHERE script_uri = $1 AND uri = ANY($2::text[]) AND uri <> $3
+            "#,
+        )
+        .bind(uri)
+        .bind(root_names())
+        .bind(root)
+        .execute(&mut *conn)
+        .await
+        .map_err(store_error)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO assets (script_uri, uri, mimetype, content, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $5)
+            ON CONFLICT (script_uri, uri) DO UPDATE
+            SET content = EXCLUDED.content,
+                mimetype = EXCLUDED.mimetype,
+                updated_at = EXCLUDED.updated_at
+            "#,
+        )
+        .bind(uri)
+        .bind(root)
+        .bind(mimetype)
+        .bind(content.as_bytes())
+        .bind(now)
+        .execute(&mut *conn)
+        .await
+        .map_err(store_error)?;
+        return Ok(());
+    }
 
     // The root goes to whichever root name the tree already holds, and to the
     // one derived from the URI when it holds none. Resolving the target inside
@@ -983,7 +1082,8 @@ async fn db_upsert_script(
     // `mimetype` is set on insert and left alone on conflict. The conflict
     // arm may be updating a `main.ts` while `$4` describes the `main.js` the
     // default would have created, and the stored row already says what it is.
-    const UPSERT_ROOT: &str = r#"
+    sqlx::query(
+        r#"
         INSERT INTO assets (script_uri, uri, mimetype, content, created_at, updated_at)
         SELECT $1,
                COALESCE(
@@ -996,57 +1096,17 @@ async fn db_upsert_script(
         ON CONFLICT (script_uri, uri) DO UPDATE
         SET content = EXCLUDED.content,
             updated_at = EXCLUDED.updated_at
-        "#;
-
-    let default_root = crate::module_loader::default_root_module_name(uri);
-    let mimetype = if default_root.ends_with(".ts") || default_root.ends_with(".tsx") {
-        "text/typescript"
-    } else {
-        "text/javascript"
-    };
-
-    match executor {
-        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
-            sqlx::query(UPSERT_SCRIPT)
-                .bind(uri)
-                .bind(name)
-                .bind(now)
-                .execute(&mut ***tx)
-                .await
-                .map_err(store_error)?;
-            sqlx::query(UPSERT_ROOT)
-                .bind(uri)
-                .bind(root_names())
-                .bind(default_root)
-                .bind(mimetype)
-                .bind(content.as_bytes())
-                .bind(now)
-                .execute(&mut ***tx)
-                .await
-                .map_err(store_error)?;
-        }
-        crate::database::TransactionExecutor::Pool(pool) => {
-            sqlx::query(UPSERT_SCRIPT)
-                .bind(uri)
-                .bind(name)
-                .bind(now)
-                .execute(pool)
-                .await
-                .map_err(store_error)?;
-            sqlx::query(UPSERT_ROOT)
-                .bind(uri)
-                .bind(root_names())
-                .bind(default_root)
-                .bind(mimetype)
-                .bind(content.as_bytes())
-                .bind(now)
-                .execute(pool)
-                .await
-                .map_err(store_error)?;
-        }
-    }
-
-    debug!("✓ Successfully stored script in database: {}", uri);
+        "#,
+    )
+    .bind(uri)
+    .bind(root_names())
+    .bind(target)
+    .bind(mimetype)
+    .bind(content.as_bytes())
+    .bind(now)
+    .execute(&mut *conn)
+    .await
+    .map_err(store_error)?;
     Ok(())
 }
 
@@ -5812,7 +5872,7 @@ pub async fn upsert_script_async(uri: &str, content: &str) -> AppResult<()> {
     }
 
     let repo = get_repository();
-    repo.upsert_script(uri, content).await
+    repo.upsert_script(uri, content, None).await
 }
 
 /// Make sure the script row exists, and give a new one its first owner.
@@ -5853,6 +5913,18 @@ pub fn upsert_script_with_owner(
     content: &str,
     owner_user_id: Option<&str>,
 ) -> AppResult<()> {
+    upsert_root_with_owner(uri, None, content, owner_user_id)
+}
+
+/// [`upsert_script_with_owner`], writing the source into the entrypoint file
+/// `root` names rather than into whichever one the tree already has. See
+/// `upsert_script_rows` for what naming it changes.
+pub fn upsert_root_with_owner(
+    uri: &str,
+    root: Option<&str>,
+    content: &str,
+    owner_user_id: Option<&str>,
+) -> AppResult<()> {
     debug!(
         "upsert_script_with_owner called: uri={}, owner_user_id={:?}, content_len={}",
         uri,
@@ -5879,7 +5951,7 @@ pub fn upsert_script_with_owner(
 
     // Upsert the script
     let repo = get_repository();
-    run_bounded(async { repo.upsert_script(uri, content).await })?;
+    run_bounded(async { repo.upsert_script(uri, content, root).await })?;
 
     // Assign ownership if needed:
     // - For NEW scripts: set the creator as owner
@@ -6836,7 +6908,7 @@ pub trait Repository: Send + Sync {
     /// Create the script row if it is not there, with no content.
     async fn ensure_script_row(&self, uri: &str) -> AppResult<()>;
     async fn list_scripts(&self) -> AppResult<HashMap<String, String>>;
-    async fn upsert_script(&self, uri: &str, content: &str) -> AppResult<()>;
+    async fn upsert_script(&self, uri: &str, content: &str, root: Option<&str>) -> AppResult<()>;
     async fn delete_script(&self, uri: &str) -> AppResult<bool>;
     async fn get_script_metadata(&self, uri: &str) -> AppResult<ScriptMetadata>;
     async fn get_all_script_metadata(&self) -> AppResult<Vec<ScriptMetadata>>;
@@ -7125,9 +7197,16 @@ impl Repository for PostgresRepository {
         }
     }
 
-    async fn upsert_script(&self, uri: &str, content: &str) -> AppResult<()> {
+    async fn upsert_script(&self, uri: &str, content: &str, root: Option<&str>) -> AppResult<()> {
         let executor = crate::database::get_current_executor(&self.pool);
-        db_upsert_script(executor, uri, content).await?;
+        db_upsert_script(executor, uri, content, root).await?;
+        // Naming the entrypoint may have removed another one, and a module
+        // cache holding the removed name would go on answering for it.
+        if root.is_some() {
+            for name in crate::module_loader::ROOT_MODULE_NAMES {
+                crate::module_loader::invalidate_asset(uri, name);
+            }
+        }
         note_script_write();
 
         // Send notification after successful upsert

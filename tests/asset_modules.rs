@@ -213,6 +213,7 @@ async fn imported_asset_module_executes_in_request_path() {
         }
     "#;
 
+    repository::upsert_script(script_uri, script_content).expect("script should be stored");
     let setup_result = execute_script_secure(
         script_uri,
         script_content,
@@ -355,6 +356,7 @@ async fn imported_asset_root_module_executes_in_request_path() {
         }
     "#;
 
+    repository::upsert_script(script_uri, script_content).expect("script should be stored");
     let setup_result = execute_script_secure(
         script_uri,
         script_content,
@@ -422,6 +424,7 @@ async fn imported_multiline_asset_root_module_executes_in_request_path() {
         }
     "#;
 
+    repository::upsert_script(script_uri, script_content).expect("script should be stored");
     let setup_result = execute_script_secure(
         script_uri,
         script_content,
@@ -508,6 +511,7 @@ async fn imported_typescript_asset_module_with_type_exports_executes() {
         }
     "#;
 
+    repository::upsert_script(script_uri, script_content).expect("script should be stored");
     let setup_result = execute_script_secure(
         script_uri,
         script_content,
@@ -758,6 +762,7 @@ async fn nested_asset_relative_import_chain_executes_in_request_path() {
         }
     "#;
 
+    repository::upsert_script(script_uri, script_content).expect("script should be stored");
     let setup_result = execute_script_secure(
         script_uri,
         script_content,
@@ -1056,6 +1061,7 @@ async fn a_markdown_module_exports_its_text_without_reading_it_as_source() {
         }
     "#;
 
+    repository::upsert_script(script_uri, script_content).expect("script should be stored");
     let setup_result = execute_script_secure(
         script_uri,
         script_content,

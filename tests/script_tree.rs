@@ -184,9 +184,8 @@ async fn deleting_the_entrypoint_takes_more_than_deleting_a_module() {
 /// holding the editor tier. It could not do that before the merge, so it does
 /// not do it now.
 ///
-/// Asserted from inside the script, because `execute_script_secure` stores
-/// the source it is given: the entrypoint this script would be overwriting is
-/// the very snippet running, so the check has to happen while it runs.
+/// Asserted from inside the script, which is deployed as the very
+/// entrypoint it then tries to overwrite and delete.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_script_cannot_rewrite_its_own_entrypoint_through_asset_storage() {
     let _guard = test_mutex().lock().await;
@@ -239,10 +238,91 @@ async fn a_script_cannot_rewrite_its_own_entrypoint_through_asset_storage() {
         }
     "#;
 
+    deploy(uri, attempt);
     let result = execute_script_secure(uri, attempt, editor);
     assert!(
         result.success,
         "the entrypoint must survive both: {:?}",
+        result.error
+    );
+}
+
+/// Running a script is not writing it. Execution used to store the source it
+/// was handed as the entrypoint, which after the merge meant writing a *file*
+/// named from the URI — so every boot rewrote every script, and a TypeScript
+/// script whose URI had no extension grew a second entrypoint, `main.js`,
+/// holding its TypeScript.
+#[tokio::test(flavor = "multi_thread")]
+async fn executing_a_script_leaves_its_tree_alone() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://tree/execute-is-read-only";
+    let stored = "function init() { /* stored */ }\n";
+    let owner = UserContext::admin("tree-exec-owner".to_string());
+    aiwebengine::engine_api::upsert_root_authorized(&owner, uri, Some("main.ts"), stored, None)
+        .expect("the entrypoint should be written");
+
+    let result = execute_script_secure(uri, "function init() { /* ran */ }", owner);
+    assert!(result.success, "the script should run: {:?}", result.error);
+
+    let names: Vec<String> = repository::fetch_assets(uri).into_keys().collect();
+    assert_eq!(names, vec!["main.ts".to_string()], "no second entrypoint");
+    assert_eq!(
+        text(uri, "main.ts").as_deref(),
+        Some(stored),
+        "and no rewrite"
+    );
+}
+
+/// A file written by name is that file. Writing `main.ts` used to go wherever
+/// the tree's existing entrypoint was, or to the name the URI implies — so on
+/// a script whose URI carries no extension the TypeScript landed in
+/// `main.js` and was run untranspiled.
+#[tokio::test(flavor = "multi_thread")]
+async fn writing_an_entrypoint_by_name_is_how_its_language_changes() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://tree/rename-entrypoint";
+    let owner = UserContext::admin("tree-rename-owner".to_string());
+    let js = "function init() {}\n";
+    aiwebengine::engine_api::write_file_bytes_authorized(
+        &owner,
+        uri,
+        "main.js",
+        "text/javascript",
+        js.as_bytes().to_vec(),
+        false,
+    )
+    .expect("main.js should be written");
+    assert_eq!(text(uri, "main.js").as_deref(), Some(js));
+
+    let ts = "interface Greeting { text: string }\nfunction init(): void {}\n";
+    aiwebengine::engine_api::write_file_bytes_authorized(
+        &owner,
+        uri,
+        "main.ts",
+        "text/typescript",
+        ts.as_bytes().to_vec(),
+        false,
+    )
+    .expect("main.ts should be written");
+
+    let names: Vec<String> = repository::fetch_assets(uri).into_keys().collect();
+    assert_eq!(
+        names,
+        vec!["main.ts".to_string()],
+        "the entrypoint was renamed, not duplicated"
+    );
+    assert_eq!(text(uri, "main.ts").as_deref(), Some(ts));
+
+    // And it is built as what it now says it is: TypeScript that ran
+    // untranspiled would fail on the interface.
+    let result = execute_script_secure(uri, ts, owner);
+    assert!(
+        result.success,
+        "main.ts should transpile: {:?}",
         result.error
     );
 }
