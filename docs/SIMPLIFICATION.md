@@ -402,6 +402,14 @@ code paths for all of them.
 
 ## 4. The script URI is two things and is neither
 
+> **Decided since this was written:** no path-prefix mounts. A script keeps
+> publishing at `/` of the hosts it is bound to, binding stays an API call
+> (`set_script_hosts`), and what survives of this section is the slug, the
+> stable identity underneath it, and a collision on one host being refused
+> rather than silent. `docs/SIMPLIFICATION-STATUS.md` has the reasoning and
+> the phases; the argument below is kept because the identity half of it
+> still holds.
+
 ### What the prefix does today: nothing
 
 The host in a script URI is parsed by nothing. `hosts.rs` never reads it;
@@ -615,43 +623,42 @@ the argument; that one is the state.
 ## Order of work
 
 1. **Merge script and asset into one tree** (§1). Everything else gets cheaper.
-   _(storage done; MCP surface done; `assetStorage` waits for §5's prelude and
-   the HTTP names for §3's generation.)_
+   _(storage done; MCP surface done; `assetStorage` goes with §5's prelude.)_
 2. ~~**Drop the two unused RPC surfaces**~~ _(done, §7)._
-3. **Exposure by directory** (§2), plus `.md`/`.txt` string modules.
-4. **Name and mount** (§4), including the move to `scripts.id` for physical
-   table names and foreign keys.
-5. **Collapse routes and tools into one operation table** (§3); generate HTTP
-   and OpenAPI from it.
-6. **Prelude every global** (§5); trim `database` to about ten methods (§6).
-7. ~~**Fold `stream_manager` into `stream_registry`**~~ _(done)_ — the
-   connection leak and the never-firing limits — ~~**and `asset_registry`
-   into `route_index`**~~ _(done, along with the stream registry's routing
+3. ~~**Exposure by directory** (§2), plus `.md`/`.txt` string modules~~
+   _(done and enforced)._
+4. ~~**Fold `stream_manager` into `stream_registry`** and `asset_registry`
+   into `route_index`~~ _(done, along with the stream registry's routing
    half)_ (§7, §2).
+5. **Prelude every global** (§5), with one `registerRoute(path, spec)`; trim
+   `database` to about ten methods (§6).
+6. **Collapse routes and tools into one operation table** (§3); generate HTTP
+   and OpenAPI from it.
+7. **Refuse a route collision on one host** (§4, without mounts).
+8. **Name and stable identity** (§4): slugs, and `scripts.id` for physical
+   table names.
+
+The status document numbers these as Phases 1–4 and says what each costs the
+script repositories.
 
 ## Open questions
 
-- **Relative route paths are a behaviour change for every existing script.** The
-  migration can derive a mount from the current URI path segment
-  (`https://example.com/shop.ts` → `/shop`), but then absolute
-  `registerRoute("/api/x")` calls need rewriting to relative — or every mount is
-  `/` and today's collisions are preserved. There is no free version; deriving
-  the mount and rewriting the registrations in one pass is the honest option.
+- ~~**Relative route paths are a behaviour change for every existing
+  script.**~~ Settled by not building mounts: every script stays at `/` of its
+  hosts, and a collision on one host is refused instead of preserved.
 - **Renaming a file changes its exposure.** That is the cost of convention over
   declaration, and also what makes it visible. Mitigate by having a write that
   moves a file _into_ `public/` say so in the audit line.
-- **Classifying existing assets** needs the live registries at migration time, so
-  a script whose `init()` fails will have registered nothing. That needs a
-  second pass over stored source, or an operator-visible report of what could
-  not be classified.
+- ~~**Classifying existing assets**~~ Settled: exposure shipped as a report
+  first (`GET /engine/exposure`, counting only scripts whose `init()` failed
+  as unclassifiable) and was enforced once that report read clean.
 - **A file that is both a module and an MCP resource** — a `.json` schema that is
   imported _and_ published — must pick a directory. Importing from `resources/`
   is fine, since the directory governs exposure rather than importability, but
   say so explicitly or someone will assume `resources/` is closed to the linker.
-- **What shape should a deny take** (§2.1)? `{ deny: 403 }`, a `false` return, or a
-  thrown typed error all work; what matters is that it is not a bare throw
-  landing as a 500. Settle it once for streams and asset routes together, since
-  they should share the mechanism.
+- ~~**What shape should a deny take** (§2.1)?~~ Settled:
+  `{ deny: true | <4xx>, reason? }`, one parser in `resource_access.rs` for
+  streams and asset routes alike; a throw still means the callback failed.
 - **A slug namespace is global per engine**, so two tenants both wanting `shop`
   collide. `acme/shop` handles it, but decide whether the slug has structure
   before the foreign keys move, because it is much cheaper now than after.

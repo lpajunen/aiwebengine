@@ -133,12 +133,18 @@ engine beyond the JS API:
 
 ### Phase 0 — housekeeping
 
-- Refresh the stale local database (move `agent.ts`'s `app.js` / `ui.html`
-  under `public/` in `../aiwebengine-agent`, then pull).
-- Fix or explicitly quarantine `desktop::tests::generated_config_loads_and_validates`,
-  so a clean run reads `0 failed` and a new failure is visible.
-- In `docs/SIMPLIFICATION.md`: close the settled deny-shape open question and
-  point §4 at the decisions above.
+- Refresh the stale local database. The repository side is done
+  (`aiwebengine-agent` `e6395e9` moved the two files under `public/`); what is
+  left is the database, whose `agent.ts` is far older than the repository — a
+  single `main.ts` beside root-level `app.js` / `ui.html` — and which also
+  holds ~40 fixture scripts from before tests had databases of their own.
+  Worth doing before Phase 1, because "a clone of real data" in the cutover
+  procedure means this database.
+- ~~Fix or quarantine `desktop::tests::generated_config_loads_and_validates`~~
+  — it passes now; a full `cargo nextest run --all-features` on `47fb7b0` is
+  1705 passed, 0 failed.
+- ~~In `docs/SIMPLIFICATION.md`: close the settled deny-shape open question and
+  point §4 at the decisions above.~~
 
 ### Phase 1 — one JavaScript convention (§5, §6, rest of §1)
 
@@ -262,12 +268,9 @@ scope. Scripts themselves call `engine.call`, which does not change.
 
 - **`make test-simple` (`cargo test`) does not pass and is not a gate.** Use
   `cargo nextest`. See CLAUDE.md for why.
-- **`desktop::tests::generated_config_loads_and_validates` fails on `main`
-  too.** It is pre-existing and unrelated; every run here is "1 failed" for
-  that reason alone.
 - **The local `aiwebengine` database is stale** relative to the live engine —
-  its `agent.ts` still has `app.js` and `ui.html` at the tree root, so those
-  two registrations will be refused on next boot. The live deployment is
+  see Phase 0. Its `agent.ts` still has `app.js` and `ui.html` at the tree
+  root, so those two registrations will be refused on next boot. The live deployment is
   clean (all 32 asset registrations name a `public/...` file, no script
   registers MCP resources).
 - **Verify migrations against a clone of real data**, not just the test
