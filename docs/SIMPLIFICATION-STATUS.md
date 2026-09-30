@@ -105,8 +105,9 @@ engine beyond the JS API:
   `aiwebengine-examples/scripts/` are identical copies (`upload-script.js`,
   `deploy-assets.js`, `check-script.js`, `run-tests.js`, `revisions.js`,
   `git-sync.js`, `set-script-hosts.js`, …) calling about thirty `/engine/*`
-  paths. Phase 2 breaks all of them. Fix once and copy, or better, make one
-  the source and have the other vendor it.
+  paths. Phase 2 breaks all of them. `aiwebengine-examples` is already the
+  source: fix it there and `make sync-tooling` in `aiwebengine-dev`
+  (`make check-tooling` fails on drift).
 - **Browser UIs calling the engine.** `aiwebengine-dev`'s `admin` and `editor`
   call `/engine/*` from the page (`script_logs`, `assets`, `users`,
   `script_hosts`, …). Also Phase 2.
@@ -143,23 +144,29 @@ engine beyond the JS API:
   **Rebuilt 2026-09-30** from `aiwebengine_test_template` (an empty database
   cannot even compile the engine, since `sqlx::query!` checks against it) and
   loaded from the four repositories with a scratchpad copy of the tooling, so
-  no repository's production token was touched. 30 of 32 scripts initialise.
-  What it turned up, all to fix before Phase 1 — a cutover tested on this
-  database would trip over each of them:
-  - **Executing a script writes it.** `js_engine::execute_script_secure`
+  no repository's production token was touched. 30 of 32 scripts initialise;
+  the two that do not are `github_mcp_issues`, which has no `init()`, and
+  `auth_roles_demo` (below). What it turned up:
+  - ~~**Executing a script writes it.**~~ **Fixed:**
+    `execute_script_secure` no longer stores what it runs; tests that used it
+    as their deploy step store the script first. `js_engine::execute_script_secure`
     calls `repository::upsert_script(uri, content)` on every execution, which
     before the tree merge rewrote a column and now writes an entry _file_,
     named from the URI's extension. So every boot rewrites every script's
     entrypoint; a script with no entrypoint gets an empty `main.js`; and a
     TypeScript script whose URI has no `.ts` gets its source written into a
     second entry, `main.js`.
-  - **Writing `main.ts` stores `main.js`.** The single-file write of an entry
+  - ~~**Writing `main.ts` stores `main.js`.**~~ **Fixed:** a write that
+    names the entrypoint (`upsert_root_authorized`, reached by every
+    single-file write of a `main.*`) writes that file and removes any other
+    entrypoint in the same transaction, so naming the file is how its
+    language changes. A write that names none (`upsert_script`, a batch's
+    `content`) keeps writing whichever entrypoint the tree has. The single-file write of an entry
     delegates to `upsert_script_authorized`, which names the file from the
     URI and drops the name the caller gave. Same root cause: the URI extension
     is still load-bearing on the write path, which §1 says it no longer is.
     The four TypeScript/JSX examples (`typescript`, `tsx`, `jsx`,
-    `import-example`) cannot be loaded under their `https://example.com/<dir>`
-    URIs until this is fixed.
+    `import-example`) are loaded with it.
   - **The tooling uploads every entry through `/engine/upsert_script`**, which
     carries no file name — the same bug from the client side. Goes away in
     Phase 2 with `upsert_script`, but the tooling should write the entry as
@@ -172,6 +179,15 @@ engine beyond the JS API:
     by bytes but not by the engine's 256-file ceiling.
   - `aiwebengine-examples/auth_roles_demo` registers `/auth/demo`, which is a
     reserved prefix. A script bug, not an engine one.
+  - **The connection pool ran dry after about an hour** with every script
+    loaded: `Rate limit DB error: pool timed out while waiting for an open
+connection`, and `/auth/local/login` hung, while Postgres showed every one
+    of the ten connections (`APP_REPOSITORY__MAX_CONNECTIONS=10`) idle — so
+    they were checked out and held in-process, not busy. Not reproduced in the
+    first 25 minutes after a restart, which reads as a leak rather than load.
+    Suspects are what runs unattended: `virtual-world`'s NPC tick and the
+    private script's scheduled feeds. Open; worth finding before Phase 1,
+    since a cutover rehearsal is exactly an hour-long run of these scripts.
 - ~~Fix or quarantine `desktop::tests::generated_config_loads_and_validates`~~
   — it passes now; a full `cargo nextest run --all-features` on `47fb7b0` is
   1705 passed, 0 failed.
