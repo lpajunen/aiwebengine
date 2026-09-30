@@ -140,6 +140,38 @@ engine beyond the JS API:
   holds ~40 fixture scripts from before tests had databases of their own.
   Worth doing before Phase 1, because "a clone of real data" in the cutover
   procedure means this database.
+  **Rebuilt 2026-09-30** from `aiwebengine_test_template` (an empty database
+  cannot even compile the engine, since `sqlx::query!` checks against it) and
+  loaded from the four repositories with a scratchpad copy of the tooling, so
+  no repository's production token was touched. 30 of 32 scripts initialise.
+  What it turned up, all to fix before Phase 1 — a cutover tested on this
+  database would trip over each of them:
+  - **Executing a script writes it.** `js_engine::execute_script_secure`
+    calls `repository::upsert_script(uri, content)` on every execution, which
+    before the tree merge rewrote a column and now writes an entry _file_,
+    named from the URI's extension. So every boot rewrites every script's
+    entrypoint; a script with no entrypoint gets an empty `main.js`; and a
+    TypeScript script whose URI has no `.ts` gets its source written into a
+    second entry, `main.js`.
+  - **Writing `main.ts` stores `main.js`.** The single-file write of an entry
+    delegates to `upsert_script_authorized`, which names the file from the
+    URI and drops the name the caller gave. Same root cause: the URI extension
+    is still load-bearing on the write path, which §1 says it no longer is.
+    The four TypeScript/JSX examples (`typescript`, `tsx`, `jsx`,
+    `import-example`) cannot be loaded under their `https://example.com/<dir>`
+    URIs until this is fixed.
+  - **The tooling uploads every entry through `/engine/upsert_script`**, which
+    carries no file name — the same bug from the client side. Goes away in
+    Phase 2 with `upsert_script`, but the tooling should write the entry as
+    the file it is.
+  - **A capability refusal on `/engine/upsert_script` answers 500**, not 403.
+    Phase 2's single error mapping fixes this class.
+  - **`upload-script.js` collects `.git/` and ignores the repository's
+    `.aiwebengineignore` when `--assets-dir` is the repository root** (it
+    reads the ignore file from the tooling's own root), and it chunks batches
+    by bytes but not by the engine's 256-file ceiling.
+  - `aiwebengine-examples/auth_roles_demo` registers `/auth/demo`, which is a
+    reserved prefix. A script bug, not an engine one.
 - ~~Fix or quarantine `desktop::tests::generated_config_loads_and_validates`~~
   — it passes now; a full `cargo nextest run --all-features` on `47fb7b0` is
   1705 passed, 0 failed.
