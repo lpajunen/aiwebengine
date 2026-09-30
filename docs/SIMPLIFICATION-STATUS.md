@@ -5,8 +5,8 @@ The plan document says what to do and why; this says how far it got, what is
 true of the tree right now, and what the next person needs in their head
 before touching the next thing.
 
-Branch: `simplify-one-tree`, nine commits off `main`, +4.5k/−1.8k across 45
-files. Not merged.
+The first stretch was done on `simplify-one-tree` (nine commits, +4.5k/−1.8k
+across 45 files) and is **merged into `main`**.
 
 ## What is done
 
@@ -20,10 +20,11 @@ files. Not merged.
 | §2.1  | Asset-route authorization hook              | **Done**                                      |
 | §2/§7 | `asset_registry` → `route_index`            | **Done**; the module is deleted               |
 | §2/§7 | Stream routing → `route_index`              | **Done**; `stream_registry` keeps connections |
-| §3    | One operation table, HTTP generated from it | Not started                                   |
-| §4    | Name and mount                              | Not started                                   |
-| §5    | Prelude every global                        | Not started                                   |
-| §6    | Trim `database` to ~10 methods              | Not started                                   |
+| §3    | One operation table, HTTP generated from it | Not started (Phase 2)                         |
+| §4    | Collision refusal (no mounts)               | Not started (Phase 3)                         |
+| §4    | Slug + stable identity                      | Not started (Phase 4)                         |
+| §5    | Prelude every global                        | Not started (Phase 1)                         |
+| §6    | Trim `database` to ~10 methods              | Not started (Phase 1)                         |
 
 ## What is true of the tree now
 
@@ -61,48 +62,201 @@ route's `authorize` are the hook a route's handler is; a handler that checks
 nothing is public too. `docs/SIMPLIFICATION.md` §2.1 used to list this as a
 defect and no longer does.
 
-## Next, in the order I would do it
+## Decisions taken since the plan was written
 
-### 1. One `registerRoute(path, spec)` — decided, not started
+These override `docs/SIMPLIFICATION.md` where the two disagree.
 
-The three JS calls collapse into one whose target says what it is. This was
-chosen deliberately over keeping three names, accepting that every `init()`
-has to be rewritten.
+- **No path-prefix mounts.** §4's `script_mounts` table (host plus path
+  prefix) is not being built. Every script keeps publishing at `/` of
+  the host(s) it is bound to, and **binding a script to a host stays an API
+  call** — today's `/engine/script_hosts` / `set_script_hosts`. That is what
+  lets two scripts register the same path: they are set to different hosts.
+  What changes is that a collision _on one host_ stops being silent (Phase 3).
+  Because there is no prefix, `public/**` is **not** served automatically —
+  every script would claim `/app.js` at the same root. A served file keeps an
+  explicit file route.
+- **Flat HTTP URLs.** The generated HTTP surface is `POST /engine/{tool_name}`
+  with the tool's arguments as the JSON body (`GET` with query arguments for
+  read-only operations). No REST-shaped paths are kept through hints.
+- **`registerRoute(path, spec)` lands with §5**, not before it. `routeRegistry`
+  is one of the raw globals §5 wraps, and both changes rewrite the same
+  `init()` call sites — doing them apart breaks every script twice.
+- **§3 before §4.** §4 renames the `uri` argument of nearly every operation;
+  after §3 that is one table rather than HTTP, MCP and OpenAPI separately.
 
-```js
-routeRegistry.registerRoute("/things/:id", {
-  handler: "getThing",
-  method: "GET",
-});
-routeRegistry.registerRoute("/things/:id/events", {
-  stream: true,
-  authorize: "mayWatch",
-});
-routeRegistry.registerRoute("/thing.css", { file: "public/thing.css" });
-```
+## The scripts that have to move with the engine
 
-Exactly one of `handler`, `stream`, `file`; anything else refused with a
-clear message. Shared: `summary`, `description`, `tags`, `authorize`, and for
-handlers `method`, `parameters`, `requestBody`.
+Every breaking change below is paid for in four repositories, and nothing
+else is in scope — not the live database's copies, which are refreshed by
+pulling these after each cutover.
 
-The internals are already one record, so this is surface work — but broad:
-~164 call sites across `tests/`, `scripts/test_scripts/` and `assets/`, plus
-the live deployment's own scripts. Worth doing in one pass with the old three
-names deleted, not aliased.
+| repository                | what is in it                                        | register\* sites | `JSON.parse(` |
+| ------------------------- | ---------------------------------------------------- | ---------------- | ------------- |
+| `../aiwebengine-agent`    | the agent script (heavy `database`, `secretStorage`) | ~30              | ~23           |
+| `../aiwebengine-dev`      | `admin`, `docs`, `editor` + deploy tooling           | ~43              | ~38           |
+| `../aiwebengine-examples` | ~27 example scripts + the same deploy tooling        | ~82              | ~132          |
+| `../aiwebengine-private`  | one private solution (heavy `schedulerService`)      | ~16              | ~32           |
 
-### 2. §3, the operation table
+Counts are greps and include each repo's vendored `types/aiwebengine.d.ts`;
+they are for sizing, not a checklist. Three things in them are coupled to the
+engine beyond the JS API:
 
-`engine_api.rs` is still ~12k lines holding a `_route` function and a `tool_`
-function per operation over shared cores, plus utoipa annotations and a
-tool-schema table. §1 removed the _duplication between scripts and assets_;
-§3 removes the duplication between HTTP, MCP and OpenAPI. Doing it before §4
-means the mount work only has one surface to update.
+- **Deploy tooling.** `aiwebengine-dev/scripts/` and
+  `aiwebengine-examples/scripts/` are identical copies (`upload-script.js`,
+  `deploy-assets.js`, `check-script.js`, `run-tests.js`, `revisions.js`,
+  `git-sync.js`, `set-script-hosts.js`, …) calling about thirty `/engine/*`
+  paths. Phase 2 breaks all of them. Fix once and copy, or better, make one
+  the source and have the other vendor it.
+- **Browser UIs calling the engine.** `aiwebengine-dev`'s `admin` and `editor`
+  call `/engine/*` from the page (`script_logs`, `assets`, `users`,
+  `script_hosts`, …). Also Phase 2.
+- **`aiwebengine.config.json`** composes script URIs from `uriOrigin` +
+  directory (`https://example.com/editor`). Phase 4 replaces that with slugs.
 
-### 3. §4, name and mount
+**The cutover procedure, per breaking phase:**
 
-Note the ordering constraint the plan states: move physical table names to
-`scripts.id` **in the same pass** as the rename, or one unrenameable
-identifier is traded for another.
+1. On an engine branch, make the change and rewrite the fixtures in `tests/`
+   and `scripts/test_scripts/`.
+2. In each of the four repos, on a branch of the same name: `make fetch-types`
+   (or copy `assets/aiwebengine.d.ts`) from the local engine, rewrite, and
+   `make typecheck` until clean — the typecheck is what finds the call sites
+   the greps missed.
+3. Against a local engine running a **clone of real data**
+   (`CREATE DATABASE x TEMPLATE aiwebengine`): pull each repo in, run
+   `check_script` and `run_tests` over every script, and read
+   `/engine/exposure` and the collision report for anything refused.
+4. Merge the engine, deploy, then pull the four repos straight away. Scripts
+   fail `init()` in the gap; with one operator that is acceptable, and it is
+   shorter than any compatibility shim would be to write and remove.
+
+## Next, in order
+
+### Phase 0 — housekeeping
+
+- Refresh the stale local database (move `agent.ts`'s `app.js` / `ui.html`
+  under `public/` in `../aiwebengine-agent`, then pull).
+- Fix or explicitly quarantine `desktop::tests::generated_config_loads_and_validates`,
+  so a clean run reads `0 failed` and a new failure is visible.
+- In `docs/SIMPLIFICATION.md`: close the settled deny-shape open question and
+  point §4 at the decisions above.
+
+### Phase 1 — one JavaScript convention (§5, §6, rest of §1)
+
+Breaking for every script; do it as one release with one cutover. One commit
+per global, each with its `aiwebengine.d.ts` change:
+
+- **1a `routeRegistry`.** Prelude, and the one call:
+
+  ```js
+  routeRegistry.registerRoute("/things/:id", {
+    handler: "getThing",
+    method: "GET",
+  });
+  routeRegistry.registerRoute("/things/:id/events", {
+    stream: true,
+    authorize: "mayWatch",
+  });
+  routeRegistry.registerRoute("/thing.css", { file: "public/thing.css" });
+  ```
+
+  Exactly one of `handler`, `stream`, `file`. Shared: `summary`,
+  `description`, `tags`, `authorize`; handlers add `method`, `parameters`,
+  `requestBody`. `registerStreamRoute` and `registerAssetRoute` are deleted,
+  not aliased. Misuse (no target, two targets, unknown key) **throws**; a
+  _refusal_ — a file outside `public/`, and from Phase 3 a path another
+  script holds on this host — **returns** `{ ok: false, reason }`, so one bad
+  registration does not cost the script its others. That keeps what exposure
+  enforcement already does and states it as the rule.
+
+- **1b `assetStorage` → a file API on the script's own tree.** Same four
+  operations, preluded, returning values and throwing errors; keeps refusing
+  `main.*`. Name to decide at the time (`files` is the obvious one). Document
+  it as "content that changes without a redeploy"; anything static becomes an
+  import.
+- **1c `database`.** Prelude first (real objects, thrown errors), then trim:
+  the seven `add*Column` go (`ensureTable` covers them), the six transaction
+  and savepoint calls become one `transaction(fn)` over the nesting
+  `Database::begin_transaction` already does, `acquireLease` /
+  `createLeaseTable` go (`scriptTasks` lanes). ~28 → ~10. The agent and the
+  examples' `dbtest` are the heaviest users; the lease users move to a laned
+  `scriptTasks` queue.
+- **1d** `secretStorage`, `schedulerService`, `mcpRegistry` preludes.
+- **1e** Delete the `"Error: ..."` value formats from `secure_globals.rs` and
+  the bare `: string` returns from `aiwebengine.d.ts`; a grep for either
+  should come back empty.
+- **Scripts:** every `JSON.parse(<global>.…)` and `startsWith("Error")` check
+  goes, every registration is rewritten. Mechanical but wide — examples is
+  most of it.
+
+### Phase 2 — one operation table (§3)
+
+1. **Inventory** the 58 `_route` functions against the 49 tools. Each route
+   either has a tool, gets one, or is one of the few that stay hand-written:
+   `/engine/script_updates` and `/engine/script_logs/stream` (SSE),
+   `/engine/installed`, `/engine/openapi.json`, `/engine/types/...`,
+   `/engine/engine.css`, `/favicon.ico`.
+2. **Grow the entry** to name, description, schema, capability,
+   `http: Option<HttpHint>` and fn. `HttpHint` is for the handful whose answer is
+   not JSON — the raw file read's content type and `ETag` — not for paths.
+3. **Generate HTTP** as `POST /engine/{name}`. `AppError` maps to 400/403/404
+   in one place, which recovers most of what the hand-written routes did.
+   `management_hosts` enforcement moves to the one generated router.
+4. **Generate `/engine/openapi.json`** from the schemas; delete the 58
+   `#[utoipa::path]` annotations and the dependency if nothing else needs it.
+5. **Delete the `_route` functions.** Tests call operations through one helper
+   by name. Expected: −4–5k lines of `engine_api.rs`.
+6. Optionally generate the `engine.call` argument types in `aiwebengine.d.ts`
+   from the table — the fifth description of the same operations.
+
+**Scripts:** the deploy tooling in `aiwebengine-dev` / `aiwebengine-examples`
+and the `admin` / `editor` UIs, which are the only callers of `/engine/*` in
+scope. Scripts themselves call `engine.call`, which does not change.
+
+### Phase 3 — a collision on one host is refused (§4, the part that survives)
+
+- A script's hosts are still set by API: `/engine/script_hosts` /
+  `set_script_hosts` (from Phase 2, `POST /engine/set_script_hosts`). Two
+  scripts on different hosts may register the same path, as today.
+- Two scripts claiming the same `(host, path, method)` — `*` counting as
+  every host — is no longer settled by whichever `init()` ran last
+  (`route_index.rs:190`). The holder keeps it; the second registration gets
+  `{ ok: false, reason: "… held by <script>" }`, is recorded per script and
+  cleared on `init()` exactly like exposure refusals, and shows in the same
+  report (widen `GET /engine/exposure` into a general "refused registrations"
+  report rather than adding a second one).
+- Startup order must be deterministic for "the holder" to mean anything:
+  execute startup scripts sorted by name, so a restart does not hand a path to
+  the other script.
+- `set_script_hosts` that would create a collision on the target host is
+  refused at the call with the conflicting paths listed — the "move this
+  script to that host" operation is where the operator learns it.
+- **Scripts:** none, unless the report shows a collision that exists today.
+
+### Phase 4 — name and stable identity (§4)
+
+- **4a Stable identity first.** Physical table names hash `scripts.id`
+  rather than the URI (the migration renames every table in `script_tables`),
+  and every `script_uri` column gets a foreign key with `ON UPDATE CASCADE` —
+  adding one where there is none today (secrets, storage, tasks, limits,
+  logs, …). A rename is then one `UPDATE` and the 4,089 references to
+  `script_uri` stay as they are. In-memory caches keyed by URI are dropped on
+  rename via `notifications.rs`.
+- **4b Slugs.** `https://example.com/editor` → `editor`. `engine://native` and
+  `https://example.com/core` become reserved slugs. Decide whether a slug may
+  be `acme/shop` before this migration, not after. `git_sync`'s URI
+  composition mostly disappears (third `MAPPING_VERSION` bump).
+- **Scripts:** `aiwebengine.config.json` in `aiwebengine-dev` /
+  `aiwebengine-examples` drops `uriOrigin` for slugs, the tooling's URI
+  composition in `scripts/lib/repo-config.js` goes with it, and anything that
+  hard-codes a `https://example.com/...` URI (grep) is rewritten.
+
+### Phase 5 — wrap-up
+
+- The "what narrows what" document (§8).
+- Decide `mcp_elicitation.rs` (§7).
+- CLAUDE.md, README and `docs/` brought in line; this file collapses to a
+  short record of what was done.
+- Each of the four repos' README / CLAUDE.md updated for the API it now uses.
 
 ## Things to be careful of
 
