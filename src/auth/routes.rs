@@ -8,12 +8,13 @@ use crate::auth::metadata::{
     MetadataConfig, metadata_handler, protected_resource_metadata_handler,
 };
 use crate::auth::oauth_state;
+use crate::engine_page::Width;
 use crate::security::client_ip;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header},
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
 };
 use chrono::{DateTime, Utc};
@@ -239,274 +240,6 @@ fn safe_redirect_target(candidate: Option<&str>) -> String {
 /// target built from it.
 const ACCOUNT_PATH: &str = "/auth/account";
 
-/// The look of the engine's own sign-in and account pages.
-///
-/// One block for both, because they are one surface: a person moves between
-/// them and should not be able to tell they changed pages. Inline rather than a
-/// stylesheet, and carried under a per-response nonce, so the pages keep
-/// working under a `style-src 'self'` policy with no inline allowance.
-const AUTH_PAGE_STYLES: &str = r#"        body {
-            margin: 0;
-            padding: 1rem;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            font-size: 14px;
-            line-height: 1.5;
-            color: #212529;
-            background: #f8f9fa;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .card {
-            width: 100%;
-            max-width: 400px;
-            background: #ffffff;
-            border: 1px solid #dee2e6;
-            border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
-            padding: 2rem;
-            text-align: center;
-        }
-
-        .card h1 {
-            margin: 0 0 1rem 0;
-            font-size: 1.75rem;
-        }
-
-        .card p {
-            color: #6c757d;
-            margin: 0 0 1.5rem 0;
-        }
-
-        .notice {
-            padding: 0.6rem 0.75rem;
-            margin-bottom: 1rem;
-            border: 1px solid #f1aeb5;
-            border-radius: 6px;
-            background: #fdf2f3;
-            color: #842029;
-        }
-
-        .credentials, .guest {
-            display: block;
-            margin: 0 0 1rem;
-        }
-
-        .credentials h2 {
-            margin: 0 0 0.75rem;
-            font-size: 1rem;
-            font-weight: 600;
-        }
-
-        .credentials label {
-            display: block;
-            margin-bottom: 0.25rem;
-            font-weight: 500;
-        }
-
-        .credentials .hint {
-            font-weight: 400;
-            color: #6c757d;
-        }
-
-        .credentials input {
-            display: block;
-            width: 100%;
-            box-sizing: border-box;
-            padding: 0.6rem 0.75rem;
-            margin-bottom: 0.75rem;
-            border: 1px solid #ced4da;
-            border-radius: 6px;
-            font-size: 1rem;
-            font-family: inherit;
-        }
-
-        .credentials input:focus {
-            outline: 2px solid #4285f4;
-            outline-offset: 1px;
-            border-color: #4285f4;
-        }
-
-        .credentials button, .guest button {
-            display: block;
-            width: 100%;
-            box-sizing: border-box;
-            padding: 0.75rem 1rem;
-            border: none;
-            border-radius: 6px;
-            font-weight: 500;
-            font-size: 1rem;
-            font-family: inherit;
-            cursor: pointer;
-            background-color: #212529;
-            color: #ffffff;
-        }
-
-        .credentials button:hover, .guest button:hover {
-            background-color: #343a40;
-        }
-
-        .guest button.secondary {
-            background-color: #ffffff;
-            color: #212529;
-            border: 1px solid #ced4da;
-        }
-
-        .guest button.secondary:hover {
-            background-color: #f1f3f5;
-        }
-
-        .switch {
-            margin: 0.75rem 0 0;
-            font-size: 0.9rem;
-            color: #6c757d;
-        }
-
-        .divider {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            margin: 1rem 0;
-            color: #6c757d;
-            font-size: 0.9rem;
-        }
-
-        .divider::before, .divider::after {
-            content: "";
-            flex: 1;
-            border-top: 1px solid #dee2e6;
-        }
-
-        .provider-btn {
-            display: block;
-            width: 100%;
-            box-sizing: border-box;
-            padding: 0.75rem 1rem;
-            margin-bottom: 0.5rem;
-            border: none;
-            border-radius: 6px;
-            font-weight: 500;
-            font-size: 1rem;
-            text-decoration: none;
-            transition: all 0.2s ease;
-        }
-
-        .provider-google {
-            background-color: #4285f4;
-            color: white;
-        }
-
-        .provider-google:hover {
-            background-color: #3367d6;
-        }
-
-        .provider-microsoft {
-            background-color: #00a4ef;
-            color: white;
-        }
-
-        .provider-microsoft:hover {
-            background-color: #0078d4;
-        }
-
-        .provider-apple {
-            background-color: #000000;
-            color: white;
-        }
-
-        .provider-apple:hover {
-            background-color: #333333;
-        }
-
-        .identity {
-            margin: 0 0 1.5rem;
-            color: #212529;
-        }
-
-        .identity .provider {
-            display: block;
-            font-size: 0.9rem;
-            color: #6c757d;
-        }
-
-        .notice.ok {
-            border-color: #a3cfbb;
-            background: #f0f9f4;
-            color: #0f5132;
-        }
-
-        .explain {
-            margin: 0 0 0.75rem;
-            font-size: 0.9rem;
-            color: #6c757d;
-            text-align: left;
-        }
-
-        .codes {
-            list-style: none;
-            margin: 0 0 1.5rem;
-            padding: 0.75rem;
-            border: 1px solid #dee2e6;
-            border-radius: 6px;
-            background: #f8f9fa;
-            font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-            font-size: 1rem;
-            letter-spacing: 0.05em;
-        }
-
-        .codes li {
-            padding: 0.15rem 0;
-        }
-
-        .sessions {
-            list-style: none;
-            margin: 0 0 1rem;
-            padding: 0;
-            text-align: left;
-        }
-
-        .sessions li {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 0.75rem;
-            padding: 0.6rem 0;
-            border-top: 1px solid #dee2e6;
-        }
-
-        .sessions .where {
-            font-weight: 500;
-        }
-
-        .sessions .when {
-            display: block;
-            font-size: 0.85rem;
-            color: #6c757d;
-        }
-
-        .sessions form {
-            margin: 0;
-        }
-
-        .sessions button {
-            width: auto;
-            padding: 0.35rem 0.75rem;
-            font-size: 0.85rem;
-            background: #ffffff;
-            color: #842029;
-            border: 1px solid #f1aeb5;
-            border-radius: 6px;
-            font-family: inherit;
-            cursor: pointer;
-        }
-
-        .sessions button:hover {
-            background: #fdf2f3;
-        }
-"#;
-
 /// Login page parameters
 #[derive(Debug, Deserialize)]
 pub struct LoginPageParams {
@@ -586,9 +319,9 @@ fn render_recovery_form(
     };
 
     format!(
-        r#"<form class="credentials" method="post" action="/auth/local/recover">
+        r#"<form class="aw-form" method="post" action="/auth/local/recover">
                 <h2>Use a recovery code</h2>
-                <p class="explain">One of the codes you were given when you set them up. Each works
+                <p class="aw-explain">One of the codes you were given when you set them up. Each works
                 once, and using one sets a new password and signs out everywhere else.</p>
                 <input type="hidden" name="csrf_token" value="{csrf}">
                 <input type="hidden" name="redirect" value="{redirect}">
@@ -602,7 +335,7 @@ fn render_recovery_form(
                 <input id="new_password" name="new_password" type="password" required
                        autocomplete="new-password" minlength="{min_password}">
                 <button type="submit">Set a new password</button>
-                <p class="switch">Remembered it? <a href="/auth/login?redirect={encoded_redirect}">Sign in</a></p>
+                <p class="aw-small">Remembered it? <a href="/auth/login?redirect={encoded_redirect}">Sign in</a></p>
             </form>"#,
         csrf = html_attribute(csrf_token),
         redirect = html_attribute(&target),
@@ -659,10 +392,10 @@ pub fn render_internal_auth_forms(
                 "/auth/local/register",
                 "Create an account",
                 "Create account",
-                r#"<label for="name">Display name <span class="hint">(optional)</span></label>
+                r#"<label for="name">Display name <span class="aw-hint">(optional)</span></label>
                 <input id="name" name="name" type="text" autocomplete="nickname">"#,
                 format!(
-                    r#"<p class="switch">Already have an account? <a href="/auth/login?redirect={}">Sign in</a></p>"#,
+                    r#"<p class="aw-small">Already have an account? <a href="/auth/login?redirect={}">Sign in</a></p>"#,
                     encoded_redirect
                 ),
             )
@@ -676,7 +409,7 @@ pub fn render_internal_auth_forms(
                     let mut links = String::new();
                     if internal.allow_registration {
                         links.push_str(&format!(
-                            r#"<p class="switch">No account yet? <a href="/auth/login?signup=1&amp;redirect={}">Create one</a></p>"#,
+                            r#"<p class="aw-small">No account yet? <a href="/auth/login?signup=1&amp;redirect={}">Create one</a></p>"#,
                             encoded_redirect
                         ));
                     }
@@ -685,7 +418,7 @@ pub fn render_internal_auth_forms(
                     // form because that is where they are when they find out.
                     if internal.allow_recovery_codes {
                         links.push_str(&format!(
-                            r#"<p class="switch">Forgotten it? <a href="/auth/login?recover=1&amp;redirect={}">Use a recovery code</a></p>"#,
+                            r#"<p class="aw-small">Forgotten it? <a href="/auth/login?recover=1&amp;redirect={}">Use a recovery code</a></p>"#,
                             encoded_redirect
                         ));
                     }
@@ -695,7 +428,7 @@ pub fn render_internal_auth_forms(
         };
 
         blocks.push(format!(
-            r#"<form class="credentials" method="post" action="{action}">
+            r#"<form class="aw-form" method="post" action="{action}">
                 <h2>{heading}</h2>
                 <input type="hidden" name="csrf_token" value="{csrf}">
                 <input type="hidden" name="redirect" value="{redirect}">
@@ -736,17 +469,17 @@ pub fn render_internal_auth_forms(
     // when they are thinking about their password.
     if internal.enabled && form == LoginForm::SignIn {
         blocks.push(format!(
-            r#"<p class="switch"><a href="{}">Change your password</a></p>"#,
+            r#"<p class="aw-small"><a href="{}">Change your password</a></p>"#,
             ACCOUNT_PATH
         ));
     }
 
     if internal.allow_guests {
         blocks.push(format!(
-            r#"<form class="guest" method="post" action="/auth/guest">
+            r#"<form class="aw-form" method="post" action="/auth/guest">
                 <input type="hidden" name="csrf_token" value="{csrf}">
                 <input type="hidden" name="redirect" value="{redirect}">
-                <button type="submit" class="secondary">Continue as guest</button>
+                <button type="submit" class="aw-button--secondary">Continue as guest</button>
             </form>"#,
             csrf = html_attribute(csrf_token),
             redirect = html_attribute(redirect),
@@ -816,7 +549,7 @@ pub async fn login_page(
             } else {
                 login_error_message(code)
             };
-            format!(r#"<div class="notice">{}</div>"#, message)
+            format!(r#"<div class="aw-notice">{}</div>"#, message)
         })
         .unwrap_or_default();
 
@@ -839,33 +572,17 @@ pub async fn login_page(
     let providers_intro = if providers.is_empty() {
         String::new()
     } else if internal_block.is_empty() {
-        "<p>Choose a provider to continue:</p>".to_string()
+        r#"<p class="aw-explain">Choose a provider to continue:</p>"#.to_string()
     } else {
-        r#"<div class="divider"><span>or</span></div>"#.to_string()
+        r#"<div class="aw-divider"><span>or</span></div>"#.to_string()
     };
 
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login</title>
-    <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <style nonce="{style_nonce}">{styles}    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>Sign In</h1>
+    let body = format!(
+        r#"<h1>Sign in</h1>
         {error_block}
         {internal_block}
         {providers_intro}
-        {provider_buttons}
-    </div>
-</body>
-</html>"#,
-        style_nonce = html_attribute(&nonce),
-        styles = AUTH_PAGE_STYLES,
+        {provider_buttons}"#,
         error_block = error_block,
         internal_block = internal_block,
         providers_intro = providers_intro,
@@ -875,7 +592,7 @@ pub async fn login_page(
             sorted_providers
                 .iter()
                 .map(|p| format!(
-                    r#"<a href="/auth/login/{}?redirect={}" class="provider-btn provider-{}">{}</a>"#,
+                    r#"<a href="/auth/login/{}?redirect={}" class="aw-button aw-provider aw-provider--{}">{}</a>"#,
                     p.to_lowercase(),
                     encoded_redirect,
                     p.to_lowercase(),
@@ -891,31 +608,17 @@ pub async fn login_page(
         }
     );
 
-    html_page_response(html, &nonce)
+    page_response("Sign in", Width::Narrow, &body, &nonce)
 }
 
-/// Serve an engine-authored HTML page under a policy naming its own inline
-/// blocks.
-///
-/// Set here rather than by the security-headers layer because only this side
-/// knows the nonce it wrote into the markup. The layer fills in a header a
-/// response did not set, so this wins.
-fn html_page_response(html: String, nonce: &str) -> Response {
-    let mut response = Html(html).into_response();
-    match header::HeaderValue::from_str(&crate::security::engine_page_policy(nonce)) {
-        Ok(value) => {
-            response
-                .headers_mut()
-                .insert(header::CONTENT_SECURITY_POLICY, value);
-        }
-        Err(e) => {
-            // Serving the page without its policy would let an injected inline
-            // block run, which is the thing the nonce exists to prevent.
-            tracing::error!("Could not build a content security policy: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response();
-        }
-    }
-    response
+/// Serve one of the engine's pages: `body` inside the shared shell, under a
+/// policy naming the nonce its inline blocks carry.
+fn page_response(title: &str, width: Width, body: &str, nonce: &str) -> Response {
+    crate::engine_page::response(
+        StatusCode::OK,
+        crate::engine_page::document(title, nonce, width, body),
+        nonce,
+    )
 }
 
 /// Account page parameters. Both are engine-written codes, rendered through a
@@ -1021,7 +724,7 @@ pub fn render_account_forms(
 
     match username {
         Some(username) => format!(
-            r#"<form class="credentials" method="post" action="/auth/local/password">
+            r#"<form class="aw-form" method="post" action="/auth/local/password">
                 <h2>Change your password</h2>
                 <input type="hidden" name="csrf_token" value="{csrf}">
                 <input type="hidden" name="redirect" value="/auth/account?notice=password">
@@ -1034,7 +737,7 @@ pub fn render_account_forms(
                 <input id="new_password" name="new_password" type="password" required
                        autocomplete="new-password" minlength="{min_password}">
                 <button type="submit">Change password</button>
-                <p class="switch">Changing it signs out every other session this account has.</p>
+                <p class="aw-small">Changing it signs out every other session this account has.</p>
             </form>{recovery}"#,
             csrf = html_attribute(csrf_token),
             username = html_attribute(username),
@@ -1051,9 +754,9 @@ pub fn render_account_forms(
             };
 
             format!(
-                r#"<form class="credentials" method="post" action="/auth/local/claim">
+                r#"<form class="aw-form" method="post" action="/auth/local/claim">
                 <h2>Add a username and password</h2>
-                <p class="explain">{explain}</p>
+                <p class="aw-explain">{explain}</p>
                 <input type="hidden" name="csrf_token" value="{csrf}">
                 <input type="hidden" name="redirect" value="/auth/account?notice=claimed">
                 <label for="username">Username</label>
@@ -1109,9 +812,9 @@ fn render_recovery_codes_form(
     };
 
     format!(
-        r#"<form class="credentials" method="post" action="/auth/local/recovery_codes">
+        r#"<form class="aw-form" method="post" action="/auth/local/recovery_codes">
                 <h2>Recovery codes</h2>
-                <p class="explain">{standing} Each one can set a new password once, if you forget
+                <p class="aw-explain">{standing} Each one can set a new password once, if you forget
                 it. Generating a set replaces whatever you have now.</p>
                 <input type="hidden" name="csrf_token" value="{csrf}">
                 <input type="hidden" name="redirect" value="/auth/account">
@@ -1175,7 +878,7 @@ fn render_sessions(csrf_token: &str, sessions: &[crate::security::SessionSummary
                     r#"<form method="post" action="/auth/sessions/revoke">
                     <input type="hidden" name="csrf_token" value="{csrf}">
                     <input type="hidden" name="session" value="{id}">
-                    <button type="submit">End</button>
+                    <button type="submit" class="aw-button--danger aw-button--small">End</button>
                 </form>"#,
                     csrf = html_attribute(csrf_token),
                     id = session.id,
@@ -1185,8 +888,8 @@ fn render_sessions(csrf_token: &str, sessions: &[crate::security::SessionSummary
             format!(
                 r#"<li>
                 <div>
-                    <span class="where">{label}</span>
-                    <span class="when">from {ip} · started {started} · last used {used}</span>
+                    <span class="aw-row-title">{label}</span>
+                    <span class="aw-row-meta">from {ip} · started {started} · last used {used}</span>
                 </div>
                 {control}
             </li>"#,
@@ -1204,9 +907,9 @@ fn render_sessions(csrf_token: &str, sessions: &[crate::security::SessionSummary
     // one that does nothing.
     let end_others = if sessions.len() > 1 {
         format!(
-            r#"<form class="guest" method="post" action="/auth/sessions/revoke">
+            r#"<form class="aw-form" method="post" action="/auth/sessions/revoke">
                 <input type="hidden" name="csrf_token" value="{csrf}">
-                <button type="submit" class="secondary">Sign out everywhere else</button>
+                <button type="submit" class="aw-button--secondary">Sign out everywhere else</button>
             </form>"#,
             csrf = html_attribute(csrf_token),
         )
@@ -1216,9 +919,9 @@ fn render_sessions(csrf_token: &str, sessions: &[crate::security::SessionSummary
 
     format!(
         r#"<h2>Where you are signed in</h2>
-        <p class="explain">The engine keeps only a hash of the browser that started a session, so
+        <p class="aw-explain">The engine keeps only a hash of the browser that started a session, so
         these are named by the address they came from rather than by device.</p>
-        <ul class="sessions">
+        <ul class="aw-rows">
             {rows}
         </ul>
         {end_others}"#,
@@ -1258,13 +961,13 @@ fn render_elevation(
         Some(elevation) => format!(
             r#"<li>
                 <div>
-                    <span class="where">Switched on</span>
-                    <span class="when">until {until}</span>
+                    <span class="aw-row-title">Switched on</span>
+                    <span class="aw-row-meta">until {until}</span>
                 </div>
                 <form method="post" action="/auth/elevate/drop">
                     <input type="hidden" name="csrf_token" value="{csrf}">
                     <input type="hidden" name="redirect" value="{account}">
-                    <button type="submit">Switch off</button>
+                    <button type="submit" class="aw-button--danger aw-button--small">Switch off</button>
                 </form>
             </li>"#,
             until = page_timestamp_utc(elevation.expires_at),
@@ -1274,10 +977,10 @@ fn render_elevation(
         None => format!(
             r#"<li>
                 <div>
-                    <span class="where">Nothing switched on</span>
-                    <span class="when">this session holds only what using a solution needs</span>
+                    <span class="aw-row-title">Nothing switched on</span>
+                    <span class="aw-row-meta">this session holds only what using a solution needs</span>
                 </div>
-                <a class="switch" href="{elevate}">Switch some on</a>
+                <a class="aw-small" href="{elevate}">Switch some on</a>
             </li>"#,
             elevate = html_attribute(&elevate_url(None, Some(ACCOUNT_PATH))),
         ),
@@ -1285,7 +988,7 @@ fn render_elevation(
 
     format!(
         r#"<h2>Extra rights</h2>
-        <ul class="sessions">
+        <ul class="aw-rows">
             {body}
         </ul>"#
     )
@@ -1340,15 +1043,15 @@ fn render_delegations(
                     format!(
                         r#"<li>
                     <div>
-                        <span class="where">{identity}</span>
-                        <span class="when">can start this on {channel}</span>
+                        <span class="aw-row-title">{identity}</span>
+                        <span class="aw-row-meta">can start this on {channel}</span>
                     </div>
                     <form method="post" action="/auth/delegations/unlink">
                         <input type="hidden" name="csrf_token" value="{csrf}">
                         <input type="hidden" name="script" value="{script_value}">
                         <input type="hidden" name="channel" value="{channel_value}">
                         <input type="hidden" name="identity" value="{identity_value}">
-                        <button type="submit">Unlink</button>
+                        <button type="submit" class="aw-button--danger aw-button--small">Unlink</button>
                     </form>
                 </li>"#,
                         identity = html_escape::encode_text(&link.identity),
@@ -1366,7 +1069,7 @@ fn render_delegations(
                 String::new()
             } else {
                 format!(
-                    "\n            <ul class=\"sessions\">\n                {}\n            </ul>",
+                    "\n            <ul class=\"aw-rows\">\n                {}\n            </ul>",
                     senders
                 )
             };
@@ -1374,13 +1077,13 @@ fn render_delegations(
             format!(
                 r#"<li>
                 <div>
-                    <span class="where">{script}</span>
-                    <span class="when">{scopes} · {when}</span>
+                    <span class="aw-row-title">{script}</span>
+                    <span class="aw-row-meta">{scopes} · {when}</span>
                 </div>
                 <form method="post" action="/auth/delegations/revoke">
                     <input type="hidden" name="csrf_token" value="{csrf}">
                     <input type="hidden" name="script" value="{script_value}">
-                    <button type="submit">Withdraw</button>
+                    <button type="submit" class="aw-button--danger aw-button--small">Withdraw</button>
                 </form>
             </li>{senders}"#,
                 script = html_escape::encode_text(&grant.script_uri),
@@ -1396,9 +1099,9 @@ fn render_delegations(
 
     format!(
         r#"<h2>Apps acting for you</h2>
-        <p class="explain">These can work on your behalf while you are away. Withdrawing one stops
+        <p class="aw-explain">These can work on your behalf while you are away. Withdrawing one stops
         it, cancels whatever it had queued, and unlinks every sender that could start it.</p>
-        <ul class="sessions">
+        <ul class="aw-rows">
             {rows}
         </ul>"#,
         rows = rows,
@@ -1554,16 +1257,16 @@ pub async fn delegate_page(
             let note = match (reachable, scope.required_role()) {
                 (true, _) => String::new(),
                 (false, Some(crate::user_repository::UserRole::Administrator)) => {
-                    r#" <span class="provider">— your account is not an administrator</span>"#
+                    r#" <span class="aw-muted">— your account is not an administrator</span>"#
                         .to_string()
                 }
                 (false, _) => {
-                    r#" <span class="provider">— your account cannot author scripts</span>"#
+                    r#" <span class="aw-muted">— your account cannot author scripts</span>"#
                         .to_string()
                 }
             };
             format!(
-                r#"<label class="scope">
+                r#"<label class="aw-choice">
                     <input type="checkbox" name="scope" value="{value}"{checked}{disabled}>
                     {description}{note}
                 </label>"#,
@@ -1602,7 +1305,7 @@ pub async fn delegate_page(
                 .is_some_and(|owner| owner != session.user_id) =>
         {
             (
-                r#"<p class="explain">Another account has already linked this sender to this app,
+                r#"<p class="aw-explain">Another account has already linked this sender to this app,
         so it cannot be linked to yours. Authorising below still works; messages from that
         sender will not reach you.</p>"#
                     .to_string(),
@@ -1611,7 +1314,7 @@ pub async fn delegate_page(
         }
         Some((channel, identity)) => (
             format!(
-                r#"<p class="explain">It will also be able to start work for you when
+                r#"<p class="aw-explain">It will also be able to start work for you when
         <strong>{identity}</strong> messages it on <strong>{channel}</strong>. Only that sender,
         and only this app.</p>"#,
                 identity = html_escape::encode_text(identity),
@@ -1624,22 +1327,11 @@ pub async fn delegate_page(
         ),
     };
 
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Authorise an app</title>
-    <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <style nonce="{style_nonce}">{styles}    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>Authorise an app</h1>
-        <p class="identity"><strong>{script}</strong> is asking to work on your behalf
+    let body = format!(
+        r#"<h1>Authorise an app</h1>
+        <p class="aw-identity"><strong>{script}</strong> is asking to work on your behalf
             while you are away.</p>
-        <p class="explain">It can already do these things while you are using it. This lets it
+        <p class="aw-explain">It can already do these things while you are using it. This lets it
         carry on after you close the page — for example to finish something long, or to check
         for you on a schedule. You can withdraw it at any time from your account page.</p>
         {sender_note}
@@ -1649,7 +1341,7 @@ pub async fn delegate_page(
             <input type="hidden" name="redirect" value="{redirect}">
             {sender_fields}
             {checkboxes}
-            <label class="scope">Stop after
+            <label class="aw-field">Stop after
                 <select name="days">
                     <option value="1">1 day</option>
                     <option value="7">7 days</option>
@@ -1659,12 +1351,7 @@ pub async fn delegate_page(
             </label>
             <button type="submit">Authorise</button>
         </form>
-        <p class="switch"><a href="/auth/account">Not now — back to your account</a></p>
-    </div>
-</body>
-</html>"#,
-        style_nonce = html_attribute(&nonce),
-        styles = AUTH_PAGE_STYLES,
+        <p class="aw-small"><a href="/auth/account">Not now — back to your account</a></p>"#,
         script = html_escape::encode_text(&script),
         script_value = html_attribute(&script),
         redirect = html_attribute(params.redirect.as_deref().unwrap_or(ACCOUNT_PATH)),
@@ -1674,7 +1361,7 @@ pub async fn delegate_page(
         sender_fields = sender_fields,
     );
 
-    html_page_response(html, &nonce)
+    page_response("Authorise an app", Width::Narrow, &body, &nonce)
 }
 
 /// The account page: what the signed-in person can do about their own way in.
@@ -1756,11 +1443,11 @@ pub async fn account_page(
 
     let notice_block = match (params.error.as_deref(), params.notice.as_deref()) {
         (Some(code), _) => format!(
-            r#"<div class="notice">{}</div>"#,
+            r#"<div class="aw-notice">{}</div>"#,
             account_error_message(code)
         ),
         (None, Some(code)) => format!(
-            r#"<div class="notice ok">{}</div>"#,
+            r#"<div class="aw-notice aw-notice--ok">{}</div>"#,
             account_notice_message(code)
         ),
         (None, None) => String::new(),
@@ -1789,7 +1476,7 @@ pub async fn account_page(
         recovery_codes_left,
     );
     let forms = if forms.is_empty() {
-        r#"<p class="explain">This engine holds no credentials of its own, so there is nothing to change here.</p>"#
+        r#"<p class="aw-explain">This engine holds no credentials of its own, so there is nothing to change here.</p>"#
             .to_string()
     } else {
         forms
@@ -1834,32 +1521,16 @@ pub async fn account_page(
         &crate::security::elevation::configured(),
     );
 
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Your account</title>
-    <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <style nonce="{style_nonce}">{styles}    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>Your account</h1>
+    let body = format!(
+        r#"<h1>Your account</h1>
         {notice_block}
-        <p class="identity">Signed in as <strong>{label}</strong>
-            <span class="provider">via {provider}</span></p>
+        <p class="aw-identity">Signed in as <strong>{label}</strong>
+            <span class="aw-muted">via {provider}</span></p>
         {forms}
         {elevation}
         {delegations}
         {sessions}
-        <p class="switch"><a href="/auth/logout">Sign out</a></p>
-    </div>
-</body>
-</html>"#,
-        style_nonce = html_attribute(&nonce),
-        styles = AUTH_PAGE_STYLES,
+        <p class="aw-small"><a href="/auth/logout">Sign out</a></p>"#,
         notice_block = notice_block,
         label = html_escape::encode_text(&label),
         provider = html_escape::encode_text(&session.provider),
@@ -1869,7 +1540,7 @@ pub async fn account_page(
         sessions = sessions,
     );
 
-    let mut response = html_page_response(html, &nonce);
+    let mut response = page_response("Your account", Width::Wide, &body, &nonce);
     // The page names the account it belongs to. A shared cache holding it would
     // hand one person's to the next.
     response.headers_mut().insert(
@@ -2944,36 +2615,20 @@ fn render_recovery_codes_page(codes: &[String]) -> Response {
         .collect::<Vec<_>>()
         .join("\n            ");
 
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Recovery codes</title>
-    <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <style nonce="{style_nonce}">{styles}    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>Recovery codes</h1>
-        <div class="notice ok">These replace any codes you had before.</div>
-        <p class="explain">Write them down somewhere that is not this computer. Each one can set a
+    let body = format!(
+        r#"<h1>Recovery codes</h1>
+        <div class="aw-notice aw-notice--ok">These replace any codes you had before.</div>
+        <p class="aw-explain">Write them down somewhere that is not this computer. Each one can set a
         new password once, and they are shown here and nowhere else — the engine keeps only a hash,
         so it cannot show them to you again.</p>
-        <ul class="codes">
+        <ul class="aw-codes">
             {items}
         </ul>
-        <p class="switch"><a href="/auth/account">Back to your account</a></p>
-    </div>
-</body>
-</html>"#,
-        style_nonce = html_attribute(&nonce),
-        styles = AUTH_PAGE_STYLES,
+        <p class="aw-small"><a href="/auth/account">Back to your account</a></p>"#,
         items = items,
     );
 
-    let mut response = html_page_response(html, &nonce);
+    let mut response = page_response("Recovery codes", Width::Narrow, &body, &nonce);
     // The one response in the engine that carries credentials in its body.
     response.headers_mut().insert(
         header::CACHE_CONTROL,
@@ -4125,26 +3780,25 @@ fn append_query_param(url: &str, name: &str, value: &str) -> String {
 fn redirect_to_client(target: &str) -> Response {
     let js_target = serde_json::to_string(target).unwrap_or_else(|_| "\"/\"".to_string());
     let nonce = crate::security::generate_nonce();
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta http-equiv="refresh" content="0;url={}" />
-    <title>Redirecting…</title>
-</head>
-<body>
-    <p>Returning to the application. If nothing happens, <a href="{}">continue</a>.</p>
-    <script nonce="{}">window.location.href = {};</script>
-</body>
-</html>"#,
-        html_escape::encode_text(target),
-        html_escape::encode_text(target),
+    let head = format!(
+        r#"
+    <meta http-equiv="refresh" content="0;url={}">"#,
+        html_attribute(target),
+    );
+    let body = format!(
+        r#"<h1>Returning to the application</h1>
+        <p class="aw-small">If nothing happens, <a href="{}">continue</a>.</p>
+        <script nonce="{}">window.location.href = {};</script>"#,
+        html_attribute(target),
         html_attribute(&nonce),
         js_target
     );
 
-    html_page_response(html, &nonce)
+    crate::engine_page::response(
+        StatusCode::OK,
+        crate::engine_page::document_with_head("Redirecting…", &nonce, Width::Narrow, &head, &body),
+        &nonce,
+    )
 }
 
 /// Check an authorization request against the client registry and the rules.
@@ -4542,7 +4196,7 @@ fn render_consent_page(
                 )
                 .collect::<String>();
             format!(
-                r#"<div class="detail"><span class="detail-label">Access requested</span><ul class="scopes">{}</ul></div>"#,
+                r#"<div class="aw-detail"><span class="aw-detail-label">Access requested</span><ul class="aw-list">{}</ul></div>"#,
                 items
             )
         }
@@ -4551,7 +4205,7 @@ fn render_consent_page(
 
     let resource_block = match validated.resource.as_deref() {
         Some(resource) => format!(
-            r#"<div class="detail"><span class="detail-label">For</span><code>{}</code></div>"#,
+            r#"<div class="aw-detail"><span class="aw-detail-label">For</span><code>{}</code></div>"#,
             html_escape::encode_text(resource)
         ),
         None => String::new(),
@@ -4582,166 +4236,45 @@ fn render_consent_page(
         hidden_fields.push_str(&hidden("resource", resource));
     }
 
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Authorize {client_title}</title>
-    <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <style nonce="{style_nonce}">
-        body {{
-            margin: 0;
-            padding: 1rem;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            font-size: 14px;
-            line-height: 1.5;
-            color: #212529;
-            background: #f8f9fa;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }}
+    let body = format!(
+        r#"<h1>Authorize {client_title}</h1>
+        <p class="aw-identity">Signed in as {user_label}</p>
 
-        .card {{
-            width: 100%;
-            max-width: 440px;
-            background: #ffffff;
-            border: 1px solid #dee2e6;
-            border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
-            padding: 2rem;
-        }}
-
-        h1 {{
-            margin: 0 0 0.5rem 0;
-            font-size: 1.4rem;
-            text-align: center;
-        }}
-
-        .who {{
-            margin: 0 0 1.5rem 0;
-            color: #6c757d;
-            text-align: center;
-        }}
-
-        .detail {{
-            padding: 0.75rem 0;
-            border-top: 1px solid #e9ecef;
-        }}
-
-        .detail-label {{
-            display: block;
-            font-size: 0.8rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: #6c757d;
-            margin-bottom: 0.25rem;
-        }}
-
-        code {{
-            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-            font-size: 0.85rem;
-            word-break: break-all;
-        }}
-
-        .scopes {{
-            margin: 0;
-            padding-left: 1.25rem;
-        }}
-
-        .warning {{
-            margin: 1rem 0 0;
-            padding: 0.6rem 0.75rem;
-            border: 1px solid #ffe08a;
-            border-radius: 6px;
-            background: #fff9e6;
-            color: #664d03;
-            font-size: 0.9rem;
-        }}
-
-        .actions {{
-            display: flex;
-            gap: 0.5rem;
-            margin-top: 1.5rem;
-        }}
-
-        button {{
-            flex: 1;
-            padding: 0.75rem 1rem;
-            border-radius: 6px;
-            font-weight: 500;
-            font-size: 1rem;
-            cursor: pointer;
-            border: 1px solid transparent;
-        }}
-
-        .allow {{
-            background-color: #0d6efd;
-            color: #ffffff;
-        }}
-
-        .allow:hover {{
-            background-color: #0b5ed7;
-        }}
-
-        .deny {{
-            background-color: #ffffff;
-            color: #212529;
-            border-color: #ced4da;
-        }}
-
-        .deny:hover {{
-            background-color: #f1f3f5;
-        }}
-
-        button:focus-visible {{
-            outline: 2px solid #0d6efd;
-            outline-offset: 2px;
-        }}
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>Authorize {client_title}</h1>
-        <p class="who">Signed in as {user_label}</p>
-
-        <div class="detail">
-            <span class="detail-label">Application</span>
+        <div class="aw-detail">
+            <span class="aw-detail-label">Application</span>
             <strong>{client_title}</strong>
         </div>
-        <div class="detail">
-            <span class="detail-label">Will be sent to</span>
+        <div class="aw-detail">
+            <span class="aw-detail-label">Will be sent to</span>
             <code>{redirect_uri}</code>
         </div>
         {scope_block}
         {resource_block}
 
-        <p class="warning">Anyone can register an application with this engine. Approve this only if you started it yourself and recognise where it sends you.</p>
+        <p class="aw-notice aw-notice--warn">Anyone can register an application with this engine. Approve this only if you started it yourself and recognise where it sends you.</p>
 
         <form method="post" action="{consent_path}">
             {hidden_fields}
-            <div class="actions">
-                <button type="submit" class="deny" name="decision" value="deny">Cancel</button>
-                <button type="submit" class="allow" name="decision" value="allow">Allow</button>
+            <div class="aw-actions">
+                <button type="submit" class="aw-button--secondary" name="decision" value="deny">Cancel</button>
+                <button type="submit" name="decision" value="allow">Allow</button>
             </div>
-        </form>
-    </div>
-</body>
-</html>"#,
+        </form>"#,
         client_title = html_escape::encode_text(validated.client.display_name()),
         user_label = html_escape::encode_text(user_label),
         redirect_uri = html_escape::encode_text(&validated.redirect_uri),
-        style_nonce = html_attribute(&nonce),
         scope_block = scope_block,
         resource_block = resource_block,
         consent_path = CONSENT_PATH,
         hidden_fields = hidden_fields,
     );
 
-    html_page_response(html, &nonce)
+    page_response(
+        &format!("Authorize {}", validated.client.display_name()),
+        Width::Narrow,
+        &body,
+        &nonce,
+    )
 }
 
 /// OAuth 2.0 authorization endpoint
@@ -6724,7 +6257,7 @@ pub async fn elevate_page(
             let reachable = !grade.requires_administrator() || session.is_admin;
             let ticked = reachable && wanted.contains(grade);
             format!(
-                r#"<label class="scope">
+                r#"<label class="aw-choice">
                     <input type="checkbox" name="grade" value="{value}"{checked}{disabled}>
                     {description}{note}
                 </label>"#,
@@ -6735,7 +6268,7 @@ pub async fn elevate_page(
                 note = if reachable {
                     String::new()
                 } else {
-                    r#" <span class="provider">— your account is not an administrator</span>"#
+                    r#" <span class="aw-muted">— your account is not an administrator</span>"#
                         .to_string()
                 },
             )
@@ -6753,11 +6286,11 @@ pub async fn elevate_page(
         .reauthenticated_at
         .is_some_and(|at| chrono::Utc::now() - at < window);
     let proof = match (&username, recently) {
-        (Some(_), _) => r#"<label class="scope">Your password
+        (Some(_), _) => r#"<label class="aw-field">Your password
                 <input type="password" name="password" autocomplete="current-password" required>
             </label>"#
             .to_string(),
-        (None, true) => r#"<p class="explain">You signed in a moment ago, so that is proof
+        (None, true) => r#"<p class="aw-explain">You signed in a moment ago, so that is proof
         enough this time.</p>"#
             .to_string(),
         // The provider can be asked to check them again, so offer that rather
@@ -6767,9 +6300,9 @@ pub async fn elevate_page(
             if auth_manager.can_force_reauthentication(host.as_deref(), &session.provider) =>
         {
             format!(
-                r#"<p class="explain">Switching these on needs you to sign in again — that is
+                r#"<p class="aw-explain">Switching these on needs you to sign in again — that is
         what asking is for.</p>
-        <p class="switch"><a href="/auth/login/{provider_path}?prompt=login&amp;redirect={back}">Check
+        <p class="aw-small"><a href="/auth/login/{provider_path}?prompt=login&amp;redirect={back}">Check
         me again with {provider}</a></p>"#,
                 provider_path = html_attribute(&session.provider),
                 provider = html_escape::encode_text(&session.provider),
@@ -6780,7 +6313,7 @@ pub async fn elevate_page(
         // provider answers from its own session proves nothing, so the only
         // honest instruction is the one that actually re-authenticates.
         (None, false) => format!(
-            r#"<p class="explain">This account signs in through {provider}, which the engine
+            r#"<p class="aw-explain">This account signs in through {provider}, which the engine
         cannot ask to check you again. <a href="/auth/logout">Sign out and back in</a>, then
         come straight here.</p>"#,
             provider = html_escape::encode_text(&session.provider),
@@ -6795,7 +6328,7 @@ pub async fn elevate_page(
         .filter(|elevation| elevation.is_live(chrono::Utc::now()));
     let current = match live {
         Some(elevation) => format!(
-            r#"<p class="explain">This session is already elevated until <strong>{until}</strong>.
+            r#"<p class="aw-explain">This session is already elevated until <strong>{until}</strong>.
         Elevating again replaces it.</p>"#,
             until = page_timestamp_utc(elevation.expires_at),
         ),
@@ -6804,11 +6337,11 @@ pub async fn elevate_page(
 
     let notice_block = match (params.error.as_deref(), params.notice.as_deref()) {
         (Some(code), _) => format!(
-            r#"<div class="notice">{}</div>"#,
+            r#"<div class="aw-notice">{}</div>"#,
             account_error_message(code)
         ),
         (None, Some(code)) => format!(
-            r#"<div class="notice ok">{}</div>"#,
+            r#"<div class="aw-notice aw-notice--ok">{}</div>"#,
             account_notice_message(code)
         ),
         (None, None) => String::new(),
@@ -6837,22 +6370,11 @@ pub async fn elevate_page(
         durations
     };
 
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Switch on more rights</title>
-    <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <style nonce="{style_nonce}">{styles}    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>Switch on more rights</h1>
+    let body = format!(
+        r#"<h1>Switch on more rights</h1>
         {notice_block}
-        <p class="identity">Signed in as <strong>{label}</strong></p>
-        <p class="explain">Your account may do these things. This session is not doing them
+        <p class="aw-identity">Signed in as <strong>{label}</strong></p>
+        <p class="aw-explain">Your account may do these things. This session is not doing them
         yet — switch on what you need, for as long as you need it, and it goes back off by
         itself.</p>
         {current}
@@ -6860,7 +6382,7 @@ pub async fn elevate_page(
             <input type="hidden" name="csrf_token" value="{csrf}">
             <input type="hidden" name="redirect" value="{redirect}">
             {checkboxes}
-            <label class="scope">For
+            <label class="aw-field">For
                 <select name="minutes">
                     {durations}
                 </select>
@@ -6868,12 +6390,7 @@ pub async fn elevate_page(
             {proof}
             <button type="submit"{submit_disabled}>Switch on</button>
         </form>
-        <p class="switch"><a href="{back}">Not now</a></p>
-    </div>
-</body>
-</html>"#,
-        style_nonce = html_attribute(&nonce),
-        styles = AUTH_PAGE_STYLES,
+        <p class="aw-small"><a href="{back}">Not now</a></p>"#,
         notice_block = notice_block,
         label = html_escape::encode_text(
             &username
@@ -6891,7 +6408,7 @@ pub async fn elevate_page(
         back = html_attribute(&safe_redirect_target(params.redirect.as_deref())),
     );
 
-    let mut response = html_page_response(html, &nonce);
+    let mut response = page_response("Switch on more rights", Width::Narrow, &body, &nonce);
     // The page names the account it belongs to and carries a CSRF token bound
     // to it. A shared cache holding it would hand one person's to the next.
     response.headers_mut().insert(

@@ -8749,88 +8749,15 @@ pub async fn user_roles_delete_route(
     }
 }
 
-/// Serve an engine-authored HTML page under a policy naming its own inline
-/// blocks.
-///
-/// Set here rather than by the security-headers layer because only this side
-/// knows the nonce it wrote into the markup. The layer fills in a header a
-/// response did not set, so this wins.
-fn engine_html_response(status: StatusCode, html: String, nonce: &str) -> Response {
-    match axum::http::HeaderValue::from_str(&crate::security::engine_page_policy(nonce)) {
-        Ok(policy) => {
-            let mut response = (
-                status,
-                [(axum::http::header::CONTENT_TYPE, "text/html; charset=UTF-8")],
-                html,
-            )
-                .into_response();
-            response
-                .headers_mut()
-                .insert(axum::http::header::CONTENT_SECURITY_POLICY, policy);
-            response
-        }
-        Err(e) => {
-            // Serving the page without its policy would let an injected inline
-            // block run, which is the thing the nonce exists to prevent.
-            tracing::error!("Could not build a content security policy: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
-        }
-    }
-}
-
 /// Installation confirmation page, shown after a fresh install (the root
 /// path redirects here until further routes are registered).
 fn installed_page_html(nonce: &str) -> String {
-    format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>aiwebengine Installed</title>
-  <style nonce="{nonce}">
-    body {{
-      margin: 0;
-      padding: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 100vh;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    }}
-    .container {{
-      text-align: center;
-      background: white;
-      padding: 3rem 4rem;
-      border-radius: 1rem;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-    }}
-    h1 {{
-      color: #333;
-      margin: 0 0 1rem 0;
-      font-size: 2.5rem;
-    }}
-    p {{
-      color: #666;
-      font-size: 1.2rem;
-      margin: 0;
-    }}
-    .emoji {{
-      font-size: 4rem;
-      margin-bottom: 1rem;
-    }}
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="emoji">🎉</div>
-    <h1>Thanks for installing aiwebengine!</h1>
-    <p>Your server is up and running.</p>
-  </div>
-</body>
-</html>"#,
-        nonce = nonce
+    crate::engine_page::document(
+        "aiwebengine installed",
+        nonce,
+        crate::engine_page::Width::Narrow,
+        r#"<h1>Thanks for installing aiwebengine!</h1>
+        <p class="aw-identity aw-muted">Your server is up and running.</p>"#,
     )
 }
 
@@ -8846,7 +8773,7 @@ fn installed_page_html(nonce: &str) -> String {
 )]
 pub async fn installed_page_route() -> Response {
     let nonce = crate::security::generate_nonce();
-    engine_html_response(StatusCode::OK, installed_page_html(&nonce), &nonce)
+    crate::engine_page::response(StatusCode::OK, installed_page_html(&nonce), &nonce)
 }
 
 /// How many rows of lock detail one health check reports.
@@ -9120,14 +9047,15 @@ pub async fn unauthorized_page_route(
             let email_suffix = user
                 .email
                 .as_deref()
-                .map(|email| format!(" ({})", html_escape(email)))
+                .filter(|email| *email != user_name)
+                .map(|email| format!(r#" <span class="aw-muted">({})</span>"#, html_escape(email)))
                 .unwrap_or_default();
             format!(
                 r#"
-            <div class="user-info">
-                <strong>Signed in as:</strong> {}{}
-            </div>
-            "#,
+        <div class="aw-detail">
+            <span class="aw-detail-label">Signed in as</span>
+            {}{}
+        </div>"#,
                 html_escape(user_name),
                 email_suffix
             )
@@ -9138,270 +9066,67 @@ pub async fn unauthorized_page_route(
     let attempted_path_block = match attempted {
         Some(path) => format!(
             r#"
-            <div class="attempted-path">
-                <strong>Attempted to access:</strong> {}
-            </div>
-            "#,
+        <div class="aw-detail">
+            <span class="aw-detail-label">Attempted to access</span>
+            <code>{}</code>
+        </div>"#,
             html_escape(path)
         ),
         None => String::new(),
     };
 
     let action_link = match auth_user {
-        Some(_) => r#"<a href="/auth/logout">Sign Out</a>"#.to_string(),
+        Some(_) => r#"<a class="aw-button" href="/auth/logout">Sign out</a>"#.to_string(),
         None => {
             let redirect_suffix = attempted
                 .map(|path| format!("?redirect={}", urlencoding::encode(path)))
                 .unwrap_or_default();
-            format!(r#"<a href="/auth/login{}">Sign In</a>"#, redirect_suffix)
+            format!(
+                r#"<a class="aw-button" href="/auth/login{}">Sign in</a>"#,
+                redirect_suffix
+            )
         }
     };
 
-    // Names the one <style> block below and nothing else, so anything injected
-    // into this page stays inert. Fresh per response — a nonce a caller can
-    // predict is not a nonce.
+    // Names the one <style> block the shell writes and nothing else, so
+    // anything injected into this page stays inert. Fresh per response — a
+    // nonce a caller can predict is not a nonce. The sheet is inlined rather
+    // than linked because this page is shown when something has already gone
+    // wrong, and must not depend on another resource being served.
     let nonce = crate::security::generate_nonce();
-    let style_nonce = html_escape(&nonce);
 
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Insufficient Permissions - aiwebengine</title>
-    <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <style nonce="{style_nonce}">
-        /* Self-contained: this page is shown in error situations and must
-           not depend on any other resource being served correctly. */
-        :root {{
-            --primary-color: #007acc;
-            --bg-primary: #ffffff;
-            --bg-secondary: #f8f9fa;
-            --text-color: #212529;
-            --text-muted: #6c757d;
-            --border-color: #dee2e6;
-            --border-radius: 6px;
-            --border-radius-lg: 8px;
-            --shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
-            --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1), 0 4px 6px rgba(0, 0, 0, 0.05);
-            --transition: all 0.2s ease;
-            --info-bg: #e8f4fd;
-            --info-border: #b6def7;
-            --info-color: #0c5464;
-            --error-bg: #f8d7da;
-            --error-color: #dc3545;
-        }}
-
-        body {{
-            margin: 0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            font-size: 14px;
-            line-height: 1.5;
-        }}
-
-        body {{
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 2rem 0;
-        }}
-
-        .permissions-container {{
-            max-width: 600px;
-            margin: 0 auto;
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: var(--border-radius-lg);
-            box-shadow: var(--shadow-lg);
-            overflow: hidden;
-        }}
-
-        .permissions-content {{
-            padding: 3rem 2rem;
-            text-align: center;
-        }}
-
-        .permissions-icon {{
-            width: 80px;
-            height: 80px;
-            margin: 0 auto 1.5rem;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 40px;
-            color: white;
-        }}
-
-        .permissions-content h1 {{
-            color: var(--text-color);
-            margin-bottom: 1rem;
-            font-size: 2rem;
-        }}
-
-        .permissions-subtitle {{
-            color: var(--text-muted);
-            margin-bottom: 2rem;
-            font-size: 1.1rem;
-            line-height: 1.6;
-        }}
-
-        .info-box {{
-            background: var(--bg-secondary);
-            border-left: 4px solid var(--primary-color);
-            border-radius: var(--border-radius);
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-            text-align: left;
-        }}
-
-        .info-box p {{
-            color: var(--text-muted);
-            line-height: 1.6;
-            margin-bottom: 0.75rem;
-        }}
-
-        .info-box p:last-child {{
-            margin-bottom: 0;
-        }}
-
-        .info-box strong {{
-            color: var(--text-color);
-        }}
-
-        .user-info {{
-            background: var(--info-bg);
-            border: 1px solid var(--info-border);
-            border-radius: var(--border-radius);
-            padding: 1rem;
-            margin-bottom: 1.5rem;
-            font-size: 0.9rem;
-            color: var(--info-color);
-        }}
-
-        .user-info strong {{
-            color: var(--text-color);
-        }}
-
-        .attempted-path {{
-            background: var(--error-bg);
-            border-left: 4px solid var(--error-color);
-            border-radius: var(--border-radius);
-            padding: 1rem;
-            margin-bottom: 1.5rem;
-            text-align: left;
-            font-size: 0.9rem;
-            color: var(--error-color);
-            word-break: break-all;
-        }}
-
-        .permissions-actions {{
-            display: flex;
-            gap: 1rem;
-            justify-content: center;
-            flex-wrap: wrap;
-            margin-bottom: 2rem;
-        }}
-
-        .permissions-actions a {{
-            padding: 0.75rem 1.5rem;
-            border-radius: var(--border-radius);
-            text-decoration: none;
-            font-weight: 600;
-            font-size: 1rem;
-            transition: var(--transition);
-            display: inline-block;
-            text-align: center;
-        }}
-
-        .permissions-actions a:first-child {{
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }}
-
-        .permissions-actions a:first-child:hover {{
-            transform: translateY(-2px);
-            box-shadow: var(--shadow);
-        }}
-
-        .permissions-actions a:last-child {{
-            background: var(--bg-secondary);
-            color: var(--text-muted);
-            border: 1px solid var(--border-color);
-        }}
-
-        .permissions-actions a:last-child:hover {{
-            background: var(--bg-primary);
-        }}
-
-        .contact-info {{
-            margin-top: 2rem;
-            padding-top: 1.5rem;
-            border-top: 1px solid var(--border-color);
-            font-size: 0.9rem;
-            color: var(--text-muted);
-        }}
-
-        @media (max-width: 768px) {{
-            .permissions-content {{
-                padding: 2rem 1rem;
-            }}
-
-            .permissions-content h1 {{
-                font-size: 1.75rem;
-            }}
-
-            .permissions-actions {{
-                flex-direction: column;
-            }}
-
-            .permissions-actions a {{
-                width: 100%;
-            }}
-        }}
-    </style>
-</head>
-<body>
-    <div class="permissions-container">
-        <div class="permissions-content">
-            <div class="permissions-icon">
-                🔒
-            </div>
-
-            <h1>Insufficient Permissions</h1>
-
-            <p class="permissions-subtitle">
-                You don't have the required permissions to access this resource.
-            </p>
-            {user_info_block}{attempted_path_block}
-            <div class="info-box">
-                <p><strong>Why am I seeing this?</strong></p>
-                <p>This page or feature requires <strong>Editor</strong> or <strong>Administrator</strong> privileges. Your current account does not have these permissions.</p>
-                <p><strong>What can I do?</strong></p>
-                <p>• Contact your system administrator to request the appropriate role</p>
-                <p>• Verify you're signed in with the correct account</p>
-                <p>• Return to the home page to access features available to you</p>
-            </div>
-
-            <div class="permissions-actions">
-                <a href="/">Go to Home</a>
-                {action_link}
-            </div>
-
-            <div class="contact-info">
-                If you believe this is an error, please contact your system administrator.
-            </div>
+    let body = format!(
+        r#"<h1>Insufficient permissions</h1>
+        <p class="aw-identity aw-muted">You don't have the required permissions to access this
+            resource.</p>{user_info_block}{attempted_path_block}
+        <div class="aw-detail">
+            <span class="aw-detail-label">Why am I seeing this?</span>
+            <p class="aw-explain">This page or feature requires <strong>Editor</strong> or
+                <strong>Administrator</strong> privileges. Your current account does not have
+                these permissions.</p>
+            <span class="aw-detail-label">What can I do?</span>
+            <ul class="aw-list aw-explain">
+                <li>Contact your system administrator to request the appropriate role</li>
+                <li>Verify you're signed in with the correct account</li>
+                <li>Return to the home page to access features available to you</li>
+            </ul>
         </div>
-    </div>
-</body>
-</html>"#
+        <div class="aw-actions">
+            <a class="aw-button aw-button--secondary" href="/">Go to home</a>
+            {action_link}
+        </div>"#
     );
 
-    engine_html_response(StatusCode::FORBIDDEN, html, &nonce)
+    crate::engine_page::response(
+        StatusCode::FORBIDDEN,
+        crate::engine_page::document(
+            "Insufficient permissions",
+            &nonce,
+            crate::engine_page::Width::Narrow,
+            &body,
+        ),
+        &nonce,
+    )
 }
 
 /// Site favicon, served from the engine's bootstrapped assets.

@@ -6262,18 +6262,6 @@ fn get_static_assets() -> HashMap<String, Asset> {
     };
     m.insert("logo.svg".to_string(), logo);
 
-    let engine_css_content = include_bytes!("../assets/engine.css").to_vec();
-    let engine_css = Asset {
-        uri: "engine.css".to_string(),
-        name: Some("Engine Styles".to_string()),
-        mimetype: "text/css".to_string(),
-        content: engine_css_content,
-        created_at: now,
-        updated_at: now,
-        script_uri: "https://example.com/core".to_string(),
-    };
-    m.insert("engine.css".to_string(), engine_css);
-
     let favicon_content = include_bytes!("../assets/favicon.ico").to_vec();
     let favicon = Asset {
         uri: "favicon.ico".to_string(),

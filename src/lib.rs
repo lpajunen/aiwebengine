@@ -25,6 +25,7 @@ pub mod deployments;
 pub mod desktop;
 pub mod embedded_db;
 pub mod engine_api;
+pub mod engine_page;
 pub mod error;
 pub mod execution_slots;
 pub mod exposure;
@@ -159,6 +160,7 @@ What a script may spend is worth knowing before writing one: each invocation get
         engine_api::openapi_route,
         engine_api::unauthorized_page_route,
         engine_api::favicon_route,
+        engine_page::stylesheet_route,
         auth::routes::login_page,
         auth::routes::account_page,
         auth::routes::start_guest,
@@ -3280,13 +3282,17 @@ async fn setup_routes(
 
     // Served on every host, so they stay outside the guard above rather than
     // being carved back out of it by path: `/engine/installed` is a static
-    // page with no data and the landing target for `/`, and
+    // page with no data and the landing target for `/`,
     // `/auth/unauthorized` is where a failed authorization lands wherever it
-    // happened.
+    // happened, and the stylesheet is for every host's pages.
     app = app
         .route(
             "/engine/installed",
             axum::routing::get(engine_api::installed_page_route),
+        )
+        .route(
+            engine_page::STYLESHEET_PATH,
+            axum::routing::get(engine_page::stylesheet_route),
         )
         .route(
             "/auth/unauthorized",
