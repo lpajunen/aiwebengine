@@ -10,21 +10,21 @@ across 45 files) and is **merged into `main`**.
 
 ## What is done
 
-| §     | Thing                                       | State                                                  |
-| ----- | ------------------------------------------- | ------------------------------------------------------ |
-| §1    | Script and assets are one tree              | **Done** — storage and MCP surface                     |
-| §1    | `assetStorage`'s four methods               | Not started; waits for §5's prelude                    |
-| §2    | `.md` / `.txt` as string modules            | **Done**                                               |
-| §2    | Exposure by directory                       | **Done and enforced**                                  |
-| §2.1  | Deny shape for per-resource authorization   | **Done** (`resource_access.rs`)                        |
-| §2.1  | Asset-route authorization hook              | **Done**                                               |
-| §2/§7 | `asset_registry` → `route_index`            | **Done**; the module is deleted                        |
-| §2/§7 | Stream routing → `route_index`              | **Done**; `stream_registry` keeps connections          |
-| §3    | One operation table, HTTP generated from it | Not started (Phase 2)                                  |
-| §4    | Collision refusal (no mounts)               | Not started (Phase 3)                                  |
-| §4    | Slug + stable identity                      | Not started (Phase 4)                                  |
-| §5    | Prelude every global                        | In progress: `routeRegistry`, `files`, `database` done |
-| §6    | Trim `database` to ~10 methods              | **Done** — ten                                         |
+| §     | Thing                                       | State                                               |
+| ----- | ------------------------------------------- | --------------------------------------------------- |
+| §1    | Script and assets are one tree              | **Done** — storage and MCP surface                  |
+| §1    | `assetStorage`'s four methods               | Not started; waits for §5's prelude                 |
+| §2    | `.md` / `.txt` as string modules            | **Done**                                            |
+| §2    | Exposure by directory                       | **Done and enforced**                               |
+| §2.1  | Deny shape for per-resource authorization   | **Done** (`resource_access.rs`)                     |
+| §2.1  | Asset-route authorization hook              | **Done**                                            |
+| §2/§7 | `asset_registry` → `route_index`            | **Done**; the module is deleted                     |
+| §2/§7 | Stream routing → `route_index`              | **Done**; `stream_registry` keeps connections       |
+| §3    | One operation table, HTTP generated from it | Not started (Phase 2)                               |
+| §4    | Collision refusal (no mounts)               | Not started (Phase 3)                               |
+| §4    | Slug + stable identity                      | Not started (Phase 4)                               |
+| §5    | Prelude every global                        | In progress: all but `convert` and `McpClient` (1e) |
+| §6    | Trim `database` to ~10 methods              | **Done** — ten                                      |
 
 ## What is true of the tree now
 
@@ -236,6 +236,21 @@ of the four repositories, unpushed and undeployed until the phase is whole.
   setup run on it failed silently — the cause of virtual-world's migration
   "not running" locally. All four repositories pass their in-engine tests
   (agent 86, private 313, virtual-world 339) with the Mac kept awake.
+- **1d done** (engine `991d2a9`). `secretStorage`, `schedulerService` and
+  `mcpRegistry` are preluded: writes return nothing and throw, registrations
+  answer `{ ok, ... }` or `{ ok: false, reason }` outside `init()` and throw
+  on misuse (arguments now validated before the phase is checked, as
+  `registerRoute`'s are), and `mcpRegistry` takes `(name, spec)` with schemas
+  and prompt arguments as objects. `removeSecret` throws on a refusal where it
+  used to answer `false`. Locally the same 30 of 32 scripts initialise, the
+  in-engine tests pass, and the 14 MCP tools the repositories register are
+  all registered.
+- **1e is wider than the plan said.** Still answering in strings: `convert`
+  (`markdown_to_html` and `render_handlebars_template` return `"Error: ..."`,
+  `atob` an `"Invalid base64..."` sentence — `markdown_blog` checks
+  `startsWith("Error:")` a dozen times), `McpClient` (`constructor`,
+  `_listTools`, `_callTool` exchange JSON strings; used only by
+  `github_mcp_issues`), and one `"Error: "` in the logging host.
 
 Breaking for every script; do it as one release with one cutover. One commit
 per global, each with its `aiwebengine.d.ts` change:
