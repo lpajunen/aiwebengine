@@ -4465,8 +4465,14 @@ mod tests {
         let target_asset = unique_test_id("asset");
         let content = r#"
             function toolHandler(context) {
+                let deleteResult;
+                try {
+                    deleteResult = String(files.delete(context.args.targetAsset));
+                } catch (e) {
+                    deleteResult = "refused: " + e.message;
+                }
                 return {
-                    deleteResult: assetStorage.deleteAsset(context.args.targetAsset),
+                    deleteResult: deleteResult,
                     isAdmin: context.request.auth.isAdmin,
                     userId: context.request.auth.userId
                 };
@@ -4504,7 +4510,7 @@ mod tests {
             .as_str()
             .expect("deleteResult should be a string");
         assert!(
-            delete_result.starts_with("Error:"),
+            delete_result.starts_with("refused: ") && delete_result.contains("delete_assets"),
             "expected a capability error, got: {}",
             delete_result
         );

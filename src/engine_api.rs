@@ -1902,7 +1902,7 @@ fn sha256_hex(content: &[u8]) -> String {
 /// Deliberately narrow: it covers what scripts are actually made of, and
 /// anything else falls back to a type that will be served as a download rather
 /// than guessed at.
-fn mimetype_for(asset_uri: &str) -> &'static str {
+pub(crate) fn mimetype_for(asset_uri: &str) -> &'static str {
     let extension = asset_uri
         .rsplit_once('.')
         .map(|(_, ext)| ext.to_ascii_lowercase())

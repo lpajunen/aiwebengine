@@ -53,15 +53,10 @@ function uploadTestAsset(context) {
       });
     `;
 
-    // Convert to base64
-    const cssB64 = btoa(cssContent);
-    const svgB64 = btoa(svgContent);
-    const jsB64 = btoa(jsContent);
-
-    // Upload assets using new system (asset names only, no paths)
-    assetStorage.upsertAsset("test-styles.css", "text/css", cssB64);
-    assetStorage.upsertAsset("test-image.svg", "image/svg+xml", svgB64);
-    assetStorage.upsertAsset("test-script.js", "application/javascript", jsB64);
+    // Write them into the script's tree
+    files.write("test-styles.css", cssContent);
+    files.write("test-image.svg", svgContent);
+    files.write("test-script.js", jsContent);
 
     console.log("Test assets uploaded successfully");
 

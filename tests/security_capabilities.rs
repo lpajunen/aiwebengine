@@ -21,7 +21,6 @@ use aiwebengine::security::{
     Capability, InputValidator, RateLimitKey, RateLimiter, SecureOperations, UpsertScriptRequest,
     UserContext,
 };
-use base64::{Engine, engine::general_purpose};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -509,13 +508,21 @@ async fn test_secure_script_execution_anonymous() {
         // Anonymous users can write logs
         console.log("hello from an anonymous script");
         
-        // But cannot delete assets (should fail with capability error)
-        assetStorage.deleteAsset("some_asset");
+        // But cannot delete files: the refusal throws
+        let refused = null;
+        try {
+            files.delete("some_asset");
+        } catch (e) {
+            refused = e;
+        }
+        if (!refused || !refused.message.includes("delete_assets")) {
+            throw new Error("expected a capability refusal, got: " + refused);
+        }
     "#;
 
     let result = execute_script_secure("/test_anonymous", script_content, user_context);
 
-    // Script should still execute, but deleteAsset should return error message
+    // The script catches the refusal, so it runs to completion
     assert!(
         result.success,
         "Script execution should succeed even with capability failures"
@@ -607,13 +614,21 @@ async fn test_capability_enforcement() {
     let user_context = UserContext::anonymous(); // No DeleteAssets capability
 
     let script_content = r#"
-        // This should fail due to insufficient capabilities
-        assetStorage.deleteAsset("some_asset");
+        // This fails for want of DeleteAssets, and says so by throwing
+        let refused = null;
+        try {
+            files.delete("some_asset");
+        } catch (e) {
+            refused = e;
+        }
+        if (!refused || !refused.message.includes("delete_assets")) {
+            throw new Error("expected a capability refusal, got: " + refused);
+        }
     "#;
 
     let result = execute_script_secure("/test_capabilities", script_content, user_context);
 
-    // Script should execute, but deleteAsset should return capability error
+    // The script catches the refusal, so it runs to completion
     assert!(
         result.success,
         "Script should execute despite capability failures"
@@ -627,14 +642,12 @@ async fn test_asset_upsert_sets_script_uri() {
 
     let script_uri = "/test_asset_script_uri";
     let asset_name = "test_asset.txt";
-    let asset_content_b64 = general_purpose::STANDARD.encode("test content");
-
     let script_content = format!(
         r#"
-        // Upsert an asset
-        assetStorage.upsertAsset("{}", "text/plain", "{}");
+        // Write a file
+        files.write("{}", "test content");
     "#,
-        asset_name, asset_content_b64
+        asset_name
     );
 
     aiwebengine::repository::upsert_script(script_uri, &script_content)

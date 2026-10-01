@@ -975,7 +975,7 @@ fn transform_json_module(content: &str, module_path: &str) -> Result<String, Mod
 /// A text file as a module exporting its own content.
 ///
 /// `import policy from "./skills/refund.md"` in place of
-/// `assetStorage.fetchAsset("skills/refund.md")`. The import resolves at link
+/// `files.read("skills/refund.md")`. The import resolves at link
 /// time, is cached in the prepared program, is dropped when the file is
 /// written, is part of the revision's pinned content and is visible to `tsc`;
 /// the fetch is a database read on every call that returns a string through

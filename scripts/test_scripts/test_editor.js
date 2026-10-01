@@ -9,13 +9,7 @@ function testEditorAPI(context) {
   try {
     // Test 1: List assets
     testResults.push("Testing asset listing...");
-    const assetsJson =
-      typeof assetStorage !== "undefined" &&
-      typeof assetStorage.listAssets === "function"
-        ? assetStorage.listAssets()
-        : "[]";
-    const assetMetadata = JSON.parse(assetsJson);
-    const assetNames = assetMetadata.map((a) => a.name);
+    const assetNames = files.list().map((file) => file.path);
     testResults.push(
       `Found ${assetNames.length} assets: ${assetNames.join(", ")}`,
     );
@@ -23,16 +17,8 @@ function testEditorAPI(context) {
     // Test 2: Check if editor files exist
     testResults.push("Checking editor files...");
     // Note: editor.html is not a public asset, so it is not fetched here
-    const editorCss =
-      typeof assetStorage !== "undefined" &&
-      typeof assetStorage.fetchAsset === "function"
-        ? assetStorage.fetchAsset("editor.css")
-        : null;
-    const editorJs =
-      typeof assetStorage !== "undefined" &&
-      typeof assetStorage.fetchAsset === "function"
-        ? assetStorage.fetchAsset("editor.js")
-        : null;
+    const editorCss = files.read("editor.css");
+    const editorJs = files.read("editor.js");
 
     testResults.push(`Editor CSS: ${editorCss !== null ? "Found" : "Missing"}`);
     testResults.push(`Editor JS: ${editorJs !== null ? "Found" : "Missing"}`);

@@ -6,13 +6,7 @@ function testEditorAPI(context) {
 
   try {
     // Test 1: List this script's assets
-    const assetsJson =
-      typeof assetStorage !== "undefined" &&
-      typeof assetStorage.listAssets === "function"
-        ? assetStorage.listAssets()
-        : "[]";
-    const assetMetadata = JSON.parse(assetsJson);
-    const assets = assetMetadata.map((meta) => meta.name);
+    const assets = files.list().map((file) => file.path);
     result += "Available assets: " + JSON.stringify(assets) + "\n\n";
   } catch (error) {
     result += "Error listing assets: " + error.message + "\n\n";

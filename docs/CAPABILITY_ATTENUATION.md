@@ -53,9 +53,9 @@ so **read-only was inexpressible**.
 | `read_scripts`           | Reading script source                                                           |
 | `write_scripts`          | Writing it                                                                      |
 | `delete_scripts`         | Deleting a script you own                                                       |
-| `read_assets`            | `assetStorage.listAssets`, `fetchAsset`                                         |
-| `write_assets`           | `assetStorage.upsertAsset`                                                      |
-| `delete_assets`          | `assetStorage.deleteAsset`                                                      |
+| `read_assets`            | `files.list`, `files.read`                                                      |
+| `write_assets`           | `files.write`                                                                   |
+| `delete_assets`          | `files.delete`                                                                  |
 | `view_logs`              | Writing to the script's log — what `console` does                               |
 | `delete_logs`            | Clearing it                                                                     |
 | `manage_streams`         | Registering streams and sending stream messages                                 |

@@ -2,7 +2,7 @@ use base64::Engine;
 use chrono::Duration as ChronoDuration;
 use rquickjs::{Function, Result as JsResult, function::Opt};
 use std::collections::HashMap;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 /// The JavaScript half of `fetch()`: wraps the Rust call's JSON envelope in a
 /// response that can be awaited, read as an object, or parsed as a string.
@@ -29,6 +29,8 @@ const ENGINE_PRELUDE: &str = include_str!("../../assets/engine_prelude.js");
 const MCP_PRELUDE: &str = include_str!("../../assets/mcp_prelude.js");
 /// Builds `routeRegistry` over `__hostRouteRegistry`.
 const ROUTE_PRELUDE: &str = include_str!("../../assets/route_prelude.js");
+/// Builds `files` over `__hostFiles`.
+const FILES_PRELUDE: &str = include_str!("../../assets/files_prelude.js");
 
 /// What `secretStorage`'s mutating methods answer in a delegated execution.
 ///
@@ -45,26 +47,83 @@ const REQUEST_PRELUDE: &str = include_str!("../../assets/request_prelude.js");
 use crate::repository;
 use crate::scheduler;
 use crate::security::{
-    Capability, SecureOperations, SecurityAuditor, SecurityEventType, SecuritySeverity, UserContext,
+    Capability, SecurityAuditor, SecurityEventType, SecuritySeverity, UserContext,
 };
 
-/// Why `assetStorage` refuses to touch a script's entrypoint.
+/// Why `files` refuses to touch a script's entrypoint.
 ///
 /// Merging the root source into the tree made `main.*` reachable by every
 /// path that reaches a file, and this one is gated by `WriteAssets` and
 /// `DeleteAssets` alone — no ownership check is needed here, because a script
 /// only ever reaches its *own* files. That combination would have let a script
 /// rewrite or delete its own program while serving a request from anybody
-/// holding the editor tier, which is a thing `assetStorage` could not do
-/// before the merge and a thing nobody asked for it to start doing.
+/// holding the editor tier, which is a thing the file API could not do before
+/// the merge and a thing nobody asked for it to start doing.
 ///
 /// Refused rather than re-gated on `WriteScripts`, because the engine never
 /// offered a script a way to edit its own program and a merge of two storage
 /// shapes is not the moment to start. `engine.call("write_file", ...)` is the
 /// deliberate way, and it applies the same rules the endpoint does.
-const ENTRYPOINT_IS_NOT_AN_ASSET: &str = "Error: a script's entrypoint is not writable through assetStorage. \
+const ENTRYPOINT_IS_NOT_A_FILE: &str = "a script's entrypoint is not writable through files. \
      Use engine.call(\"write_file\", { script, path, text }), which applies \
      the checks writing a script's program takes.";
+
+/// A file path a script may write: the same rules the repository applies.
+fn validate_file_path(path: &str) -> Result<(), String> {
+    if path.is_empty() || path.len() > repository::MAX_ASSET_URI_CHARS {
+        return Err(format!(
+            "a path is 1-{} characters",
+            repository::MAX_ASSET_URI_CHARS
+        ));
+    }
+    if path.contains("..") || path.contains('\\') || path.starts_with('/') {
+        return Err(format!(
+            "'{}' is not a path inside this script's tree",
+            path
+        ));
+    }
+    Ok(())
+}
+
+fn millis_since_epoch(time: std::time::SystemTime) -> f64 {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as f64
+}
+
+/// File a write or a removal through `files`, off the JavaScript thread.
+fn audit_file_change(
+    auditor: &SecurityAuditor,
+    user: &UserContext,
+    action: &str,
+    severity: SecuritySeverity,
+    script_uri: &str,
+    path: &str,
+) {
+    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    let auditor = auditor.clone();
+    let user_id = user.user_id.clone();
+    let action = action.to_string();
+    let script_uri = script_uri.to_string();
+    let path = path.to_string();
+    rt.spawn(async move {
+        let _ = auditor
+            .log_event(
+                crate::security::SecurityEvent::new(
+                    SecurityEventType::SystemSecurityEvent,
+                    severity,
+                    user_id,
+                )
+                .with_resource("asset".to_string())
+                .with_action(action)
+                .with_detail("uri", &path)
+                .with_detail("script_uri", &script_uri),
+            )
+            .await;
+    });
+}
 
 /// A `{"error": "..."}` answer, built by the serializer rather than by string
 /// formatting.
@@ -430,7 +489,6 @@ fn extract_resource_metadata(
 /// Secure wrapper for JavaScript global functions that enforces Rust-level validation
 pub struct SecureGlobalContext {
     user_context: UserContext,
-    secure_ops: SecureOperations,
     auditor: SecurityAuditor,
     config: GlobalSecurityConfig,
 }
@@ -1267,7 +1325,6 @@ impl SecureGlobalContext {
 
         Self {
             user_context,
-            secure_ops: SecureOperations::new(),
             auditor: SecurityAuditor::new(pool),
             config: GlobalSecurityConfig::default(),
         }
@@ -1278,7 +1335,6 @@ impl SecureGlobalContext {
 
         Self {
             user_context,
-            secure_ops: SecureOperations::new(),
             auditor: SecurityAuditor::new(pool),
             config,
         }
@@ -1462,243 +1518,187 @@ impl SecureGlobalContext {
     }
 
     /// Setup secure asset management functions
+    /// Install `__hostFiles` and the prelude that builds `files` over it.
+    ///
+    /// A script's own tree, read and written by path. This was `assetStorage`
+    /// — `listAssets`, `fetchAsset`, `upsertAsset`, `deleteAsset` — which
+    /// handed back base64 for every read, a sentence for a missing file that
+    /// was not base64, and `"Error: ..."` as a value, so each caller decoded,
+    /// then guessed which of the three it had. Every caller in practice wanted
+    /// text. A read now answers text, or `null` when there is no such file;
+    /// binary is asked for by name; failures throw.
+    ///
+    /// The entrypoint stays out of reach, for the reason
+    /// [`ENTRYPOINT_IS_NOT_A_FILE`] gives.
     fn setup_asset_management_functions(
         &self,
         ctx: &rquickjs::Ctx<'_>,
         script_uri: &str,
     ) -> JsResult<()> {
-        let global = ctx.globals();
-        let user_context = self.user_context.clone();
-        let secure_ops = self.secure_ops.clone();
-        let auditor = self.auditor.clone();
-        let script_uri_owned = script_uri.to_string();
-        let script_uri_remaining = script_uri_owned.clone(); // Clone for remaining functions
+        let host = rquickjs::Object::new(ctx.clone())?;
 
-        // Create assetStorage object
-        let asset_storage = rquickjs::Object::new(ctx.clone())?;
-
-        // Secure listAssets function
-        let user_ctx_list = user_context.clone();
-        let script_uri_list = script_uri_owned.clone();
-        let list_assets = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
-                // Check capability
-                if let Err(_e) =
-                    user_ctx_list.require_capability(&crate::security::Capability::ReadAssets)
-                {
-                    // Return empty array JSON if no permission
-                    return Ok("[]".to_string());
-                }
-
-                debug!(
-                    user_id = ?user_ctx_list.user_id,
-                    "Secure listAssets called"
-                );
-
-                let assets = repository::fetch_assets(&script_uri_list);
-
-                // Build JSON array of asset metadata (matching listScripts pattern)
-                let assets_json: Vec<serde_json::Value> = assets
-                    .values()
-                    .map(|asset| {
-                        serde_json::json!({
-                            "uri": asset.uri,
-                            "name": asset.name,
-                            "size": asset.content.len(),
-                            "mimetype": asset.mimetype,
-                            "createdAt": asset.created_at
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as f64,
-                            "updatedAt": asset.updated_at
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as f64,
-                        })
+        let user_list = self.user_context.clone();
+        let script_list = script_uri.to_string();
+        let list = Function::new(ctx.clone(), move || -> String {
+            if let Err(e) = user_list.require_capability(&Capability::ReadAssets) {
+                return host_failure("Error", &format!("files.list: {}", e));
+            }
+            let mut entries: Vec<serde_json::Value> = repository::fetch_assets(&script_list)
+                .values()
+                .map(|asset| {
+                    serde_json::json!({
+                        "path": asset.uri,
+                        "size": asset.content.len(),
+                        "mimetype": asset.mimetype,
+                        "createdAt": millis_since_epoch(asset.created_at),
+                        "updatedAt": millis_since_epoch(asset.updated_at),
                     })
-                    .collect();
+                })
+                .collect();
+            // Sorted, so a listing is the same bytes every time it is the
+            // same tree — which matters to a script that puts one into a
+            // prompt it wants cached.
+            entries.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
+            host_ok(serde_json::Value::Array(entries))
+        })?;
+        host.set("list", list)?;
 
-                match serde_json::to_string(&assets_json) {
-                    Ok(json) => Ok(json),
-                    Err(e) => {
-                        error!("Failed to serialize assets to JSON: {}", e);
-                        Ok("[]".to_string())
-                    }
+        let user_read = self.user_context.clone();
+        let script_read = script_uri.to_string();
+        let read = Function::new(
+            ctx.clone(),
+            move |path: String, base64: Option<bool>| -> String {
+                if let Err(e) = user_read.require_capability(&Capability::ReadAssets) {
+                    return host_failure("Error", &format!("files.read: {}", e));
+                }
+                let Some(asset) = repository::fetch_asset(&script_read, &path) else {
+                    return host_ok(serde_json::Value::Null);
+                };
+                if base64.unwrap_or(false) {
+                    return host_ok(serde_json::Value::String(
+                        base64::engine::general_purpose::STANDARD.encode(asset.content),
+                    ));
+                }
+                match String::from_utf8(asset.content) {
+                    Ok(text) => host_ok(serde_json::Value::String(text)),
+                    Err(_) => host_failure(
+                        "TypeError",
+                        &format!(
+                            "files.read: '{}' is not text; read it with {{ encoding: \"base64\" }}",
+                            path
+                        ),
+                    ),
                 }
             },
         )?;
-        asset_storage.set("listAssets", list_assets)?;
+        host.set("read", read)?;
 
-        // Secure fetchAsset function
-        let user_ctx_fetch = user_context.clone();
-        let script_uri_fetch = script_uri_remaining.clone();
-        let fetch_asset = Function::new(
+        let user_write = self.user_context.clone();
+        let auditor_write = self.auditor.clone();
+        let script_write = script_uri.to_string();
+        let write = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, uri: String| -> JsResult<String> {
-                // Check capability
-                if let Err(e) =
-                    user_ctx_fetch.require_capability(&crate::security::Capability::ReadAssets)
-                {
-                    return Ok(format!("Error: {}", e));
+            move |path: String,
+                  content: String,
+                  base64: Option<bool>,
+                  mimetype: Option<String>|
+                  -> String {
+                if crate::module_loader::is_root_module_name(&path) {
+                    return host_failure("Error", ENTRYPOINT_IS_NOT_A_FILE);
                 }
+                if let Err(e) = user_write.require_capability(&Capability::WriteAssets) {
+                    return host_failure("Error", &format!("files.write: {}", e));
+                }
+                if let Err(message) = validate_file_path(&path) {
+                    return host_failure("TypeError", &format!("files.write: {}", message));
+                }
+                let bytes = if base64.unwrap_or(false) {
+                    match base64::engine::general_purpose::STANDARD.decode(&content) {
+                        Ok(bytes) => bytes,
+                        Err(e) => {
+                            return host_failure(
+                                "TypeError",
+                                &format!("files.write: the content is not base64: {}", e),
+                            );
+                        }
+                    }
+                } else {
+                    content.into_bytes()
+                };
+                // The storage-side limit, so this refuses exactly what the
+                // repository would refuse rather than a little more.
+                if bytes.len() > repository::MAX_ASSET_CONTENT_BYTES {
+                    return host_failure(
+                        "RangeError",
+                        &format!(
+                            "files.write: '{}' is {} bytes (max {})",
+                            path,
+                            bytes.len(),
+                            repository::MAX_ASSET_CONTENT_BYTES
+                        ),
+                    );
+                }
+                let mimetype = mimetype
+                    .filter(|m| !m.trim().is_empty())
+                    .unwrap_or_else(|| crate::engine_api::mimetype_for(&path).to_string());
 
-                debug!(
-                    user_id = ?user_ctx_fetch.user_id,
-                    uri = %uri,
-                    "Secure fetchAsset called"
+                audit_file_change(
+                    &auditor_write,
+                    &user_write,
+                    "upsert",
+                    SecuritySeverity::Medium,
+                    &script_write,
+                    &path,
                 );
 
-                match repository::fetch_asset(&script_uri_fetch, &uri) {
-                    Some(asset) => {
-                        // Convert bytes to base64 for safe JavaScript transfer
-                        Ok(base64::engine::general_purpose::STANDARD.encode(asset.content))
-                    }
-                    None => Ok(format!("Asset '{}' not found", uri)),
-                }
-            },
-        )?;
-        asset_storage.set("fetchAsset", fetch_asset)?;
-
-        // Secure upsertAsset function
-        let user_ctx_upsert_asset = user_context.clone();
-        let _secure_ops_asset = secure_ops.clone();
-        let auditor_asset = auditor.clone();
-        let script_uri_asset = script_uri_owned.clone();
-        let upsert_asset = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  uri: String,
-                  mimetype: String,
-                  content_b64: String,
-                  name: Opt<String>|
-                  -> JsResult<String> {
-                // Decode base64 content
-                let content = match base64::engine::general_purpose::STANDARD.decode(&content_b64) {
-                    Ok(c) => c,
-                    Err(e) => return Ok(format!("Error decoding base64 content: {}", e)),
-                };
-
-                if crate::module_loader::is_root_module_name(&uri) {
-                    return Ok(ENTRYPOINT_IS_NOT_AN_ASSET.to_string());
-                }
-
-                // Check capability
-                if let Err(e) = user_ctx_upsert_asset
-                    .require_capability(&crate::security::Capability::WriteAssets)
-                {
-                    return Ok(format!("Access denied: {}", e));
-                }
-
-                // Validate asset URI (inline validation since we can't call async)
-                if uri.is_empty() || uri.len() > repository::MAX_ASSET_URI_CHARS {
-                    return Ok(format!(
-                        "Invalid asset URI: must be 1-{} characters",
-                        repository::MAX_ASSET_URI_CHARS
-                    ));
-                }
-                if uri.contains("..") || uri.contains('\\') {
-                    return Ok("Invalid asset URI: path traversal not allowed".to_string());
-                }
-
-                // The storage-side limit, so this path refuses exactly what
-                // the repository would refuse rather than a little more.
-                if content.len() > repository::MAX_ASSET_CONTENT_BYTES {
-                    return Ok(format!(
-                        "Asset too large (max {} bytes)",
-                        repository::MAX_ASSET_CONTENT_BYTES
-                    ));
-                }
-
-                // Log the operation attempt using spawn to avoid runtime conflicts
-                let auditor_clone = auditor_asset.clone();
-                let user_id = user_ctx_upsert_asset.user_id.clone();
-                let uri_clone = uri.clone();
-                let script_uri_clone = script_uri_asset.clone();
-                let content_len = content.len();
-                let mimetype_clone = mimetype.clone();
-                tokio::task::spawn(async move {
-                    let _ = auditor_clone
-                        .log_event(
-                            crate::security::SecurityEvent::new(
-                                SecurityEventType::SystemSecurityEvent,
-                                SecuritySeverity::Medium,
-                                user_id,
-                            )
-                            .with_resource("asset".to_string())
-                            .with_action("upsert".to_string())
-                            .with_detail("uri", &uri_clone)
-                            .with_detail("script_uri", &script_uri_clone)
-                            .with_detail("content_size", content_len.to_string())
-                            .with_detail("mimetype", &mimetype_clone),
-                        )
-                        .await;
-                });
-
-                // Call repository directly (sync operation)
                 let now = std::time::SystemTime::now();
                 let asset = repository::Asset {
-                    uri: uri.clone(),
-                    name: name.0.or_else(|| Some(uri.clone())),
+                    uri: path.clone(),
+                    name: Some(path.clone()),
                     mimetype,
-                    content,
+                    content: bytes,
                     created_at: now,
                     updated_at: now,
-                    script_uri: script_uri_owned.clone(),
+                    script_uri: script_write.clone(),
                 };
                 match repository::upsert_asset(asset) {
                     Ok(_) => {
                         // A write here is a write to the script, and every
                         // other path that changes a script's files records
-                        // what it consisted of afterwards. This one did not,
-                        // which meant an asset written from JavaScript had no
-                        // history, could not be reverted, and did not move the
-                        // git binding off `in_sync` — so a pull deleted it
-                        // with nothing having said it was there.
-                        //
-                        // Harmless while the only writer was a solution
-                        // managing its own files. Not harmless once an agent
-                        // can write its own skills, which is model-authored
-                        // content somebody may well want to read back or undo.
-                        //
-                        // Recorded after the write and not instead of it: a
-                        // history that cannot be written is worth less than
-                        // the content, so `record_blocking` reports failure
-                        // rather than propagating it and the write still
-                        // stands.
+                        // what it consisted of afterwards — so a file a script
+                        // writes (an agent's skill, say: model-authored content
+                        // somebody may want to read back or undo) has history,
+                        // can be reverted, and moves a git binding off
+                        // `in_sync`. Recorded after the write and not instead
+                        // of it: a history that cannot be written is worth
+                        // less than the content, so `record_blocking` reports
+                        // failure rather than propagating it.
                         crate::revisions::record_blocking(
-                            &script_uri_asset,
+                            &script_write,
                             crate::revisions::Origin::Sandbox,
-                            user_ctx_upsert_asset.user_id.as_deref(),
+                            user_write.user_id.as_deref(),
                         );
-                        Ok(format!("Asset '{}' upserted successfully", uri))
+                        host_ok(serde_json::Value::Null)
                     }
-                    Err(e) => Ok(format!("Error upserting asset: {}", e)),
+                    Err(e) => host_failure("Error", &format!("files.write: {}", e)),
                 }
             },
         )?;
-        asset_storage.set("upsertAsset", upsert_asset)?;
+        host.set("write", write)?;
 
-        // Secure deleteAsset function
-        let user_ctx_delete_asset = user_context.clone();
-        let auditor_delete_asset = auditor.clone();
-        let script_uri_delete_asset = script_uri_remaining.clone();
-        let delete_asset = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, uri: String| -> JsResult<String> {
-                if crate::module_loader::is_root_module_name(&uri) {
-                    return Ok(ENTRYPOINT_IS_NOT_AN_ASSET.to_string());
-                }
-
-                // Check capability
-                if let Err(e) = user_ctx_delete_asset
-                    .require_capability(&crate::security::Capability::DeleteAssets)
-                {
-                    // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
-                    let auditor_clone = auditor_delete_asset.clone();
-                    let user_id = user_ctx_delete_asset.user_id.clone();
-                    tokio::task::spawn(async move {
-                        let _ = auditor_clone
+        let user_delete = self.user_context.clone();
+        let auditor_delete = self.auditor.clone();
+        let script_delete = script_uri.to_string();
+        let delete = Function::new(ctx.clone(), move |path: String| -> String {
+            if crate::module_loader::is_root_module_name(&path) {
+                return host_failure("Error", ENTRYPOINT_IS_NOT_A_FILE);
+            }
+            if let Err(e) = user_delete.require_capability(&Capability::DeleteAssets) {
+                if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                    let auditor = auditor_delete.clone();
+                    let user_id = user_delete.user_id.clone();
+                    rt.spawn(async move {
+                        let _ = auditor
                             .log_authz_failure(
                                 user_id,
                                 "asset".to_string(),
@@ -1707,54 +1707,41 @@ impl SecureGlobalContext {
                             )
                             .await;
                     });
-                    return Ok(format!("Error: {}", e));
                 }
+                return host_failure("Error", &format!("files.delete: {}", e));
+            }
+            audit_file_change(
+                &auditor_delete,
+                &user_delete,
+                "delete",
+                SecuritySeverity::High,
+                &script_delete,
+                &path,
+            );
+            if !repository::delete_asset(&script_delete, &path) {
+                return host_ok(serde_json::Value::Bool(false));
+            }
+            // After a removal nothing else in the engine still holds the
+            // content, which makes this the revision most worth having.
+            crate::revisions::record_blocking(
+                &script_delete,
+                crate::revisions::Origin::Delete,
+                user_delete.user_id.as_deref(),
+            );
+            host_ok(serde_json::Value::Bool(true))
+        })?;
+        host.set("delete", delete)?;
 
-                // Log the operation attempt using spawn to avoid runtime conflicts
-                let auditor_clone = auditor_delete_asset.clone();
-                let user_id = user_ctx_delete_asset.user_id.clone();
-                let uri_clone = uri.clone();
-                tokio::task::spawn(async move {
-                    let _ = auditor_clone
-                        .log_event(
-                            crate::security::SecurityEvent::new(
-                                SecurityEventType::SystemSecurityEvent,
-                                SecuritySeverity::High,
-                                user_id,
-                            )
-                            .with_resource("asset".to_string())
-                            .with_action("delete".to_string())
-                            .with_detail("uri", &uri_clone),
-                        )
-                        .await;
-                });
-
-                debug!(
-                    user_id = ?user_ctx_delete_asset.user_id,
-                    uri = %uri,
-                    "Secure deleteAsset called"
-                );
-
-                match repository::delete_asset(&script_uri_delete_asset, &uri) {
-                    true => {
-                        // The same gap as `upsertAsset` above, and the one
-                        // most worth closing: after a removal nothing else in
-                        // the engine still holds the content.
-                        crate::revisions::record_blocking(
-                            &script_uri_delete_asset,
-                            crate::revisions::Origin::Delete,
-                            user_ctx_delete_asset.user_id.as_deref(),
-                        );
-                        Ok(format!("Asset '{}' deleted successfully", uri))
-                    }
-                    false => Ok(format!("Asset '{}' not found", uri)),
-                }
+        ctx.globals().set("__hostFiles", host)?;
+        crate::bytecode::eval_program(ctx, "engine://files-prelude", FILES_PRELUDE).map_err(
+            |e| {
+                rquickjs::Error::new_from_js_message(
+                    "files",
+                    "prelude",
+                    &format!("files prelude failed to load: {}", e),
+                )
             },
         )?;
-        asset_storage.set("deleteAsset", delete_asset)?;
-
-        // Set the assetStorage object on the global scope
-        global.set("assetStorage", asset_storage)?;
         Ok(())
     }
 
@@ -6902,7 +6889,7 @@ mod api_surface_tests {
     fn every_global_is_installed_outside_the_registration_phase() {
         for global in [
             "routeRegistry",
-            "assetStorage",
+            "files",
             "scriptStorage",
             "personalStorage",
             "secretStorage",

@@ -34,7 +34,7 @@ reported name, so the first case above is reported as
 `basket > an empty basket totals zero`. Full signatures are in the type
 declarations served at `/engine/types/v1/aiwebengine.d.ts`.
 
-Every engine global the script normally has — `database`, `assetStorage`,
+Every engine global the script normally has — `database`, `files`,
 `fetch`, and the rest — is available inside a test.
 
 ## Running them

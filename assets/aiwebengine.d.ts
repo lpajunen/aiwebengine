@@ -71,7 +71,7 @@ declare function init(context?: HandlerContext): void;
  * otherwise fail on every request. Argument validation is unaffected: a bad
  * path or an empty name is reported the same way in every context.
  *
- * Everything else — `database`, `assetStorage`, `secretStorage`,
+ * Everything else — `database`, `files`, `secretStorage`,
  * `scriptStorage`, `personalStorage`, `fetch`, `convert`, `console`,
  * `McpClient`, `routeRegistry.sendStreamMessage` — works in every context.
  *
@@ -562,75 +562,74 @@ interface RouteRegistry {
 // Asset Storage API
 // ============================================================================
 
-/**
- * Asset metadata
- */
-interface AssetMetadata {
-  /** Asset URI/name */
-  uri: string;
-
-  /** Display name */
-  name: string;
-
-  /** MIME type */
-  mimetype: string;
-
-  /** Size in bytes */
+/** One file of a script's tree, as `files.list()` describes it. */
+interface FileInfo {
+  /** Path in the tree, e.g. `"skills/refund.md"` or `"public/logo.svg"`. */
+  path: string;
+  /** Size in bytes. */
   size: number;
+  mimetype: string;
+  /** Milliseconds since the epoch. */
+  createdAt: number;
+  /** Milliseconds since the epoch. */
+  updatedAt: number;
+}
 
-  /** Creation timestamp */
-  created_at: string;
-
-  /** Last update timestamp */
-  updated_at: string;
+/** How a file's content is given or wanted. */
+interface FileEncodingOptions {
+  /** `"utf8"` (default) for text, `"base64"` for binary. */
+  encoding?: "utf8" | "base64";
 }
 
 /**
- * Asset storage for managing static files (script-scoped)
- * Each script can only access and manage its own assets.
+ * The script's own tree, by path.
+ *
+ * Every script reaches only its own files. The entrypoint (`main.*`) is not
+ * writable here: `engine.call("write_file", ...)` is the deliberate way to
+ * change a script's program, and it takes what writing one takes.
+ *
+ * For content that only changes with a redeploy, prefer an import —
+ * `import policy from "./skills/refund.md"` — which is resolved once, cached
+ * with the program and pinned by the revision. A read is for content the
+ * script writes, or that changes under it.
  */
-interface AssetStorage {
+interface Files {
   /**
-   * List all assets owned by this script with metadata
-   * @returns JSON string array of asset metadata
+   * Every file of the script, sorted by path.
    * @example
-   * const assetsJson = assetStorage.listAssets();
-   * const assets = JSON.parse(assetsJson);
+   * const skills = files.list().filter((f) => f.path.startsWith("skills/"));
    */
-  listAssets(): string;
+  list(): FileInfo[];
 
   /**
-   * Fetch an asset's content owned by this script
-   * @param name - Asset name/URI
-   * @returns Base64-encoded asset content or error message
+   * A file's content: text by default, base64 with `{ encoding: "base64" }`.
+   * Answers `null` when there is no such file. Throws a `TypeError` for a
+   * file that is not text unless base64 was asked for.
    * @example
-   * const content = assetStorage.fetchAsset("logo.svg");
+   * const policy = files.read("skills/refund.md") ?? "";
    */
-  fetchAsset(name: string): string;
+  read(path: string, options?: FileEncodingOptions): string | null;
 
   /**
-   * Create or update an asset owned by this script
-   *
-   * The name is at most {{limits.size.maxAssetUriChars}} characters and may not traverse (`..`); the
-   * content is at most 10,000,000 bytes. Either exceeded, this answers with
-   * the reason rather than throwing.
-   * @param name - Asset name/URI (1-{{limits.size.maxAssetUriChars}} characters)
-   * @param mimetype - MIME type (e.g., "image/png", "text/css")
-   * @param contentBase64 - Base64-encoded content (max 10,000,000 bytes)
-   * @returns Operation result message
+   * Create or replace a file. `content` is text, or base64 with
+   * `{ encoding: "base64" }`. The MIME type is inferred from the extension
+   * unless given. At most {{limits.size.maxAssetUriChars}} characters of path and 10,000,000 bytes of
+   * content; a path may not contain `..`. A write is recorded as a revision
+   * of the script.
    * @example
-   * assetStorage.upsertAsset("logo.svg", "image/svg+xml", base64Content);
+   * files.write("notes/today.md", "# Today");
+   * files.write("public/logo.png", pngBase64, { encoding: "base64" });
    */
-  upsertAsset(name: string, mimetype: string, contentBase64: string): string;
+  write(
+    path: string,
+    content: string,
+    options?: FileEncodingOptions & { mimetype?: string },
+  ): void;
 
   /**
-   * Delete an asset owned by this script
-   * @param name - Asset name/URI
-   * @returns Operation result message
-   * @example
-   * assetStorage.deleteAsset("old-logo.svg");
+   * Remove a file. Answers `false` when there was nothing to remove.
    */
-  deleteAsset(name: string): string;
+  delete(path: string): boolean;
 }
 
 // ============================================================================
@@ -2840,7 +2839,7 @@ interface Sandbox {
 // ============================================================================
 
 declare var routeRegistry: RouteRegistry;
-declare var assetStorage: AssetStorage;
+declare var files: Files;
 // ============================================================================
 // MCP elicitation — asking the caller a question mid-tool
 // ============================================================================
@@ -3408,8 +3407,8 @@ declare function Fragment(
  * program, is dropped when the file is written, and is part of what a
  * revision pins — so a system prompt or a skill definition costs nothing per
  * request and travels with the version of the code that was written against
- * it. `assetStorage.fetchAsset` is for the other case: content that changes
- * without a redeploy.
+ * it. `files.read` is for the other case: content that changes without a
+ * redeploy.
  */
 declare module "*.md" {
   const content: string;

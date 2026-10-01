@@ -187,11 +187,7 @@ async fn a_script_writing_its_own_asset_records_a_revision() {
 
     let before = revisions::head(uri).await.expect("head should read");
 
-    let encoded = base64::engine::general_purpose::STANDARD.encode("a skill body");
-    let source = format!(
-        r#"assetStorage.upsertAsset("skills/written/SKILL.md", "text/markdown", "{}");"#,
-        encoded
-    );
+    let source = r#"files.write("skills/written/SKILL.md", "a skill body");"#.to_string();
     let wrote = tokio::task::spawn_blocking({
         let (uri, source) = (uri.to_string(), source.clone());
         move || aiwebengine::js_engine::execute_script_secure(&uri, &source, admin())
@@ -229,11 +225,7 @@ async fn a_script_deleting_its_own_asset_records_a_revision() {
     let uri = "test://revisions/sandbox-delete";
     deploy(uri, "function init() {}").await;
 
-    let encoded = base64::engine::general_purpose::STANDARD.encode("temporary");
-    let write = format!(
-        r#"assetStorage.upsertAsset("scratch.txt", "text/plain", "{}");"#,
-        encoded
-    );
+    let write = r#"files.write("scratch.txt", "temporary");"#.to_string();
     let written = tokio::task::spawn_blocking({
         let (uri, source) = (uri.to_string(), write);
         move || aiwebengine::js_engine::execute_script_secure(&uri, &source, admin())
@@ -249,7 +241,7 @@ async fn a_script_deleting_its_own_asset_records_a_revision() {
         move || {
             aiwebengine::js_engine::execute_script_secure(
                 &uri,
-                r#"assetStorage.deleteAsset("scratch.txt");"#,
+                r#"files.delete("scratch.txt");"#,
                 admin(),
             )
         }

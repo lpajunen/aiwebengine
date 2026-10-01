@@ -38,8 +38,7 @@ pub enum Origin {
     Revert,
     /// Written by the engine at startup rather than by a caller.
     Bootstrap,
-    /// Written by a script itself, through `assetStorage` from inside the
-    /// sandbox.
+    /// Written by a script itself, through `files` from inside the sandbox.
     ///
     /// Distinguished for the reason `GitPull` is: the question a history
     /// answers is "why is my edit not there any more", and "a script wrote
