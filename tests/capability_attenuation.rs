@@ -183,10 +183,11 @@ async fn a_narrowed_turn_cannot_reach_the_network() {
 /// consulting the capability set at all — so a narrowing that took away
 /// `use_network` and `read_secrets` took away neither on this path.
 ///
-/// The call under test is `_callTool` **directly**, with a hand-written client
-/// blob, because that is the shape a check sitting only on the constructor
-/// would miss: `constructor` returns JSON and the methods rebuild the client
-/// from whatever JSON they are given, so the bypass is one string literal.
+/// The call under test is `callTool` on a **forged** client — an object with
+/// `McpClient`'s prototype and a hand-written client blob, never constructed —
+/// because that is the shape a check sitting only on the constructor would
+/// miss: the host methods rebuild the client from whatever JSON they are
+/// given, so the bypass is one object literal.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_narrowed_turn_cannot_reach_an_mcp_server() {
     let _guard = test_mutex().lock().await;
@@ -197,14 +198,14 @@ async fn a_narrowed_turn_cannot_reach_an_mcp_server() {
         r#"
         const run = sandbox.run(`
             try {
-                McpClient._callTool(
-                    JSON.stringify({
+                const forged = Object.create(McpClient.prototype);
+                Object.defineProperty(forged, "_data", {
+                    value: JSON.stringify({
                         serverUrl: "https://example.com/mcp",
                         secretIdentifier: "anthropic_key"
-                    }),
-                    "anything",
-                    "{}"
-                );
+                    })
+                });
+                forged.callTool("anything", {});
                 "not refused";
             } catch (e) {
                 String(e.message || e);
@@ -239,7 +240,7 @@ async fn reaching_an_mcp_server_takes_the_credential_too() {
         r#"
         const run = sandbox.run(`
             try {
-                McpClient.constructor("https://example.com/mcp", "anthropic_key");
+                new McpClient("https://example.com/mcp", "anthropic_key");
                 "not refused";
             } catch (e) {
                 String(e.message || e);

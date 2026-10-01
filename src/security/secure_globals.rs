@@ -35,6 +35,10 @@ const FILES_PRELUDE: &str = include_str!("../../assets/files_prelude.js");
 const SCHEDULER_PRELUDE: &str = include_str!("../../assets/scheduler_prelude.js");
 /// Builds `secretStorage` over `__hostSecrets`.
 const SECRETS_PRELUDE: &str = include_str!("../../assets/secrets_prelude.js");
+/// Builds `convert` over `__hostConvert`.
+const CONVERT_PRELUDE: &str = include_str!("../../assets/convert_prelude.js");
+/// Builds the `McpClient` class over `__hostMcpClient`.
+const MCP_CLIENT_PRELUDE: &str = include_str!("../../assets/mcp_client_prelude.js");
 /// Builds `mcpRegistry` over `__hostMcpRegistry`.
 const MCP_REGISTRY_PRELUDE: &str = include_str!("../../assets/mcp_registry_prelude.js");
 
@@ -1429,7 +1433,7 @@ impl SecureGlobalContext {
         let config_write = config.clone();
         let write_log = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, message: String, level: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>, message: String, level: String| -> JsResult<()> {
                 // Capture before the capability check, not after it. The two
                 // are different channels: `ViewLogs` gates writing to the
                 // script's stored log, while capture hands the output back to
@@ -1463,7 +1467,11 @@ impl SecureGlobalContext {
                             });
                         }
                     }
-                    return Ok(format!("Error: {}", e));
+                    // Dropped, not thrown: `console.log` answers `undefined` and
+                    // never fails, as the browser's does. The refusal is in the
+                    // audit log above.
+                    let _ = e;
+                    return Ok(());
                 }
 
                 // Log the write operation
@@ -1506,7 +1514,7 @@ impl SecureGlobalContext {
                     &level,
                     &config_write.log_context,
                 );
-                Ok("Log written successfully".to_string())
+                Ok(())
             },
         )?;
 
@@ -2830,7 +2838,15 @@ impl SecureGlobalContext {
         mcp_client_class.set("_callTool", call_tool)?;
 
         // Set the class on global scope
-        global.set("McpClient", mcp_client_class)?;
+        global.set("__hostMcpClient", mcp_client_class)?;
+        crate::bytecode::eval_program(ctx, "engine://mcp-client-prelude", MCP_CLIENT_PRELUDE)
+            .map_err(|e| {
+                rquickjs::Error::new_from_js_message(
+                    "McpClient",
+                    "prelude",
+                    &format!("McpClient prelude failed to load: {}", e),
+                )
+            })?;
 
         debug!("McpClient class initialized for external MCP server connections");
 
@@ -3880,110 +3896,60 @@ impl SecureGlobalContext {
         ctx: &rquickjs::Ctx<'_>,
         _script_uri: &str,
     ) -> JsResult<()> {
-        let global = ctx.globals();
+        // `__hostConvert` answers in the envelope `convert_prelude.js` unwraps.
+        // A conversion that fails used to answer `"Error: ..."` as its result,
+        // which for `markdown_to_html` is indistinguishable from a document
+        // that begins with those words.
+        let host = rquickjs::Object::new(ctx.clone())?;
 
-        // Create the convert namespace object
-        let convert_obj = rquickjs::Object::new(ctx.clone())?;
+        let markdown_to_html = Function::new(ctx.clone(), move |markdown: String| -> String {
+            match crate::conversion::convert_markdown_to_html(&markdown) {
+                Ok(html) => host_ok(serde_json::Value::String(html)),
+                Err(e) => host_failure("Error", &format!("convert.markdown_to_html: {}", e)),
+            }
+        })?;
 
-        // convert.markdown_to_html(markdown) - Convert markdown string to HTML
-        let markdown_to_html = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, markdown: String| -> JsResult<String> {
-                // Call the conversion function
-                match crate::conversion::convert_markdown_to_html(&markdown) {
-                    Ok(html) => Ok(html),
-                    Err(e) => {
-                        // Return error as string (following pattern of other APIs)
-                        Ok(format!("Error: {}", e))
-                    }
-                }
-            },
-        )?;
-
-        // convert.render_handlebars_template(template, data) - Render Handlebars template
         let render_handlebars_template = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, template: String, data: String| -> JsResult<String> {
-                // Call the conversion function
+            move |template: String, data: String| -> String {
                 match crate::conversion::render_handlebars_template(&template, &data) {
-                    Ok(rendered) => Ok(rendered),
-                    Err(e) => {
-                        // Return error as string (following pattern of other APIs)
-                        Ok(format!("Error: {}", e))
-                    }
+                    Ok(rendered) => host_ok(serde_json::Value::String(rendered)),
+                    Err(e) => host_failure(
+                        "Error",
+                        &format!("convert.render_handlebars_template: {}", e),
+                    ),
                 }
             },
         )?;
 
-        // convert.btoa(data) - Base64 encode a string (string-only)
-        let btoa = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, input: rquickjs::Value| -> JsResult<String> {
-                let Some(input_str) = input.as_string() else {
-                    return Err(rquickjs::Error::new_from_js_message(
-                        "btoa",
-                        "type_error",
-                        "btoa() expects a string parameter",
-                    ));
-                };
+        let btoa = Function::new(ctx.clone(), move |input: String| -> String {
+            match crate::conversion::convert_btoa(&input) {
+                Ok(encoded) => host_ok(serde_json::Value::String(encoded)),
+                Err(e) => host_failure("TypeError", &format!("convert.btoa: {}", e)),
+            }
+        })?;
 
-                let input_str = input_str.to_string().map_err(|e| {
-                    rquickjs::Error::new_from_js_message(
-                        "btoa",
-                        "type_error",
-                        &format!("btoa() expects a string parameter: {}", e),
-                    )
-                })?;
+        let atob = Function::new(ctx.clone(), move |input: String| -> String {
+            match crate::conversion::convert_atob(&input) {
+                Ok(decoded) => host_ok(serde_json::Value::String(decoded)),
+                Err(e) => host_failure("TypeError", &format!("convert.atob: {}", e)),
+            }
+        })?;
 
-                crate::conversion::convert_btoa(&input_str).map_err(|e| {
-                    rquickjs::Error::new_from_js_message(
-                        "btoa",
-                        "invalid_input",
-                        &format!("Invalid input: {}", e),
-                    )
-                })
+        host.set("markdown_to_html", markdown_to_html)?;
+        host.set("render_handlebars_template", render_handlebars_template)?;
+        host.set("btoa", btoa)?;
+        host.set("atob", atob)?;
+        ctx.globals().set("__hostConvert", host)?;
+        crate::bytecode::eval_program(ctx, "engine://convert-prelude", CONVERT_PRELUDE).map_err(
+            |e| {
+                rquickjs::Error::new_from_js_message(
+                    "convert",
+                    "prelude",
+                    &format!("convert prelude failed to load: {}", e),
+                )
             },
         )?;
-
-        // convert.atob(data) - Base64 decode a string (string-only)
-        let atob = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, input: rquickjs::Value| -> JsResult<String> {
-                let Some(input_str) = input.as_string() else {
-                    return Err(rquickjs::Error::new_from_js_message(
-                        "atob",
-                        "type_error",
-                        "atob() expects a string parameter",
-                    ));
-                };
-
-                let input_str = input_str.to_string().map_err(|e| {
-                    rquickjs::Error::new_from_js_message(
-                        "atob",
-                        "type_error",
-                        &format!("atob() expects a string parameter: {}", e),
-                    )
-                })?;
-
-                crate::conversion::convert_atob(&input_str).map_err(|e| {
-                    rquickjs::Error::new_from_js_message(
-                        "atob",
-                        "invalid_input",
-                        &format!("Invalid input: {}", e),
-                    )
-                })
-            },
-        )?;
-
-        convert_obj.set("markdown_to_html", markdown_to_html)?;
-        convert_obj.set("render_handlebars_template", render_handlebars_template)?;
-        convert_obj.set("btoa", btoa)?;
-        convert_obj.set("atob", atob)?;
-        global.set("convert", convert_obj)?;
-
-        debug!(
-            "convert.markdown_to_html() and convert.render_handlebars_template() functions initialized"
-        );
 
         Ok(())
     }
@@ -6435,7 +6401,7 @@ mod api_surface_tests {
         ] {
             assert_eq!(
                 eval_outside_registration_phase(&format!("typeof {}", global)),
-                if global == "fetch" {
+                if global == "fetch" || global == "McpClient" {
                     "function"
                 } else {
                     "object"

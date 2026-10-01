@@ -5331,12 +5331,12 @@ This is **bold** text.`;
         let script_content = r#"
             function testConvertEmpty(context) {
                 const markdown = '';
-                const html = convert.markdown_to_html(markdown);
-                return {
-                    status: 200,
-                    body: html,
-                    contentType: "text/html"
-                };
+                try {
+                    convert.markdown_to_html(markdown);
+                    return { status: 200, body: "converted", contentType: "text/plain" };
+                } catch (e) {
+                    return { status: 200, body: e.name + ": " + e.message, contentType: "text/plain" };
+                }
             }
         "#;
 
@@ -5365,8 +5365,9 @@ This is **bold** text.`;
         let body = String::from_utf8(response.body).unwrap();
 
         assert!(
-            body.contains("Error:"),
-            "Should return error message for empty input"
+            body.starts_with("Error: convert.markdown_to_html: "),
+            "empty input should throw a named error, got: {}",
+            body
         );
     }
 

@@ -1366,142 +1366,42 @@ interface McpTool {
 }
 
 /**
- * MCP Client for connecting to external MCP servers and using their tools.
+ * A client for another MCP server, using its tools.
  *
- * The MCP Client implements the Model Context Protocol to connect to external
- * MCP servers (like GitHub Copilot MCP) and use their tools. Authentication
- * is handled via secrets stored in the environment.
+ * Authentication is a secret named at construction, resolved host-side and
+ * sent as a `Bearer` token — the script never holds the value.
  *
- * Every call here — the constructor included — requires **both**
- * `use_network` and `read_secrets`. A call to an MCP server is unconditionally
- * both: an outbound request to the URL you name, carrying the secret you name
- * as a `Bearer` token. There is no unauthenticated arm, which is why
- * `read_secrets` is required up front rather than only when a secret is
- * mentioned, as it is for `fetch`.
+ * Every call — the constructor included — requires **both** `use_network`
+ * and `read_secrets`. A call to an MCP server is unconditionally both: an
+ * outbound request to the URL you name, carrying the secret you name. So a
+ * `sandbox.run` narrowed out of either cannot mount an MCP server, which is
+ * deliberate: a credential resolved by name would otherwise be a way to hold,
+ * through a secret, authority the narrowing had just refused.
  *
- * So a `sandbox.run` narrowed out of either cannot mount an MCP server, and
- * that is deliberate: a credential resolved host-side by name would otherwise
- * be a way to hold, through a secret, authority the narrowing had just
- * refused.
- *
- * IMPORTANT: The McpClient uses a low-level API with static methods. For easier
- * usage, wrap it in a class as shown in scripts/examples/github_mcp_issues.js
+ * Failures throw. A JSON-RPC error from the server throws too, with its
+ * `code` on the error; a tool result marked `isError` is a result, and is
+ * returned.
  *
  * @example
- * // Low-level usage (not recommended for typical scripts)
- * const clientDataJson = McpClient.constructor(
- *   "https://api.githubcopilot.com/mcp/",
- *   "GITHUB_TOKEN"
- * );
- * const clientData = JSON.parse(clientDataJson);
- *
- * const toolsJson = McpClient._listTools(JSON.stringify(clientData));
- * const tools = JSON.parse(toolsJson);
- *
- * const resultJson = McpClient._callTool(
- *   JSON.stringify(clientData),
- *   "list_issues",
- *   JSON.stringify({owner: "example", repo: "project"})
- * );
- * const result = JSON.parse(resultJson);
- *
- * @example
- * // Recommended: Use a wrapper class (see scripts/examples/github_mcp_issues.js)
- * class GitHubMcpClient {
- *   constructor(serverUrl, secretIdentifier) {
- *     const clientDataJson = McpClient.constructor(serverUrl, secretIdentifier);
- *     this._clientData = JSON.parse(clientDataJson);
- *   }
- *
- *   listTools() {
- *     const toolsJson = McpClient._listTools(JSON.stringify(this._clientData));
- *     return JSON.parse(toolsJson);
- *   }
- *
- *   callTool(toolName, args) {
- *     const resultJson = McpClient._callTool(
- *       JSON.stringify(this._clientData),
- *       toolName,
- *       JSON.stringify(args)
- *     );
- *     return JSON.parse(resultJson);
- *   }
- * }
- *
- * const client = new GitHubMcpClient(
- *   "https://api.githubcopilot.com/mcp/",
- *   "GITHUB_TOKEN"
- * );
- * const tools = client.listTools();
+ * const github = new McpClient("https://api.githubcopilot.com/mcp/", "GITHUB_TOKEN");
+ * const tools = github.listTools();
+ * const result = github.callTool("search_issues", { query: "repo:me/x is:open" });
  */
-interface McpClientConstructor {
+declare class McpClient {
   /**
-   * Create MCP client connection data (constructor function).
-   * Returns a JSON string with server URL and secret identifier.
-   *
-   * @param serverUrl - MCP server URL (must be https://)
-   * @param secretIdentifier - Name of the secret containing the authentication token
-   * @returns JSON string with client data: {serverUrl: string, secretIdentifier: string}
-   * @throws Error if serverUrl is invalid or secret doesn't exist
-   * @example
-   * const clientDataJson = McpClient.constructor(
-   *   "https://api.githubcopilot.com/mcp/",
-   *   "GITHUB_TOKEN"
-   * );
-   * const clientData = JSON.parse(clientDataJson);
+   * @param serverUrl - The MCP server's URL (https)
+   * @param secretIdentifier - Name of the secret holding the token
    */
-  constructor(serverUrl: string, secretIdentifier: string): string;
+  constructor(serverUrl: string, secretIdentifier: string);
 
-  /**
-   * List all tools available from the MCP server (static method).
-   * Results are cached for 1 hour to reduce network calls.
-   *
-   * @param clientDataJson - JSON string with client data from constructor
-   * @returns JSON string with tool list: {tools: McpTool[]} or error: {error: string, details?: string}
-   * @throws Error if authentication fails or network error occurs
-   * @example
-   * const toolsJson = McpClient._listTools(clientDataJson);
-   * const response = JSON.parse(toolsJson);
-   *
-   * if (response.error) {
-   *   console.error(`Failed to list tools: ${response.error}`);
-   *   return;
-   * }
-   *
-   * response.tools.forEach(tool => {
-   *   console.log(`Tool: ${tool.name} - ${tool.description}`);
-   * });
-   */
-  _listTools(clientDataJson: string): string;
+  readonly serverUrl: string;
 
-  /**
-   * Call a tool on the MCP server (static method).
-   *
-   * @param clientDataJson - JSON string with client data from constructor
-   * @param toolName - Name of the tool to call
-   * @param argsJson - JSON string with tool arguments
-   * @returns JSON string with tool result or error object
-   * @throws Error if authentication fails or network error occurs
-   * @example
-   * const resultJson = McpClient._callTool(
-   *   clientDataJson,
-   *   "search_repositories",
-   *   JSON.stringify({query: "aiwebengine", limit: 10})
-   * );
-   *
-   * const response = JSON.parse(resultJson);
-   *
-   * if (response.error) {
-   *   console.error(`Tool error: ${response.error}`);
-   *   return;
-   * }
-   *
-   * console.log(`Tool result: ${JSON.stringify(response)}`);
-   */
-  _callTool(clientDataJson: string, toolName: string, argsJson: string): string;
+  /** The server's tools. Cached for an hour. */
+  listTools(): McpTool[];
+
+  /** Call one of the server's tools with `args`; answers its result. */
+  callTool(name: string, args?: Record<string, unknown>): any;
 }
-
-declare var McpClient: McpClientConstructor;
 
 // ============================================================================
 // HTTP Fetch API
@@ -1557,14 +1457,8 @@ interface FetchOptions {
 }
 
 /**
- * Fetch response.
- *
- * Usable three ways, so browser habits work without breaking the scripts
- * written against the JSON string `fetch` used to return:
- *
- * - `await fetch(url)` — it is thenable
- * - `fetch(url).status` — the fields are really there
- * - `JSON.parse(fetch(url))` — `toString` yields the original envelope
+ * Fetch response. Usable with or without `await` — it is thenable, and the
+ * request has already finished by the time `fetch` returns.
  */
 interface FetchResponse {
   /** HTTP status code */
@@ -1598,13 +1492,6 @@ interface FetchResponse {
 
   /** The body, parsed as JSON. Throws if the body is not JSON. */
   json(): unknown;
-
-  /**
-   * The raw JSON envelope — status, ok, headers and body — which is what
-   * `fetch()` itself used to return. `JSON.parse(fetch(url))` still works
-   * because `JSON.parse` converts its argument with ToString first.
-   */
-  toString(): string;
 }
 
 /**
@@ -2118,43 +2005,29 @@ interface Console {
  */
 interface Convert {
   /**
-   * Convert markdown string to HTML
-   * @param markdown - Markdown content to convert (1 byte to {{limits.size.maxMarkdown}})
-   * @returns HTML string
+   * Markdown to HTML. Throws when the input cannot be converted — empty, or
+   * over {{limits.size.maxMarkdown}}.
    * @example
    * const html = convert.markdown_to_html("# Hello\n\nThis is **bold**");
    */
   markdown_to_html(markdown: string): string;
 
   /**
-   * Render a Handlebars template with data
-   * @param template - Handlebars template string (1 byte to {{limits.size.maxTemplate}})
-   * @param dataJson - JSON string with template data
-   * @returns Rendered template string
+   * Render a Handlebars template. `data` is an object, or the JSON text of
+   * one. Throws when the template does not render — over
+   * {{limits.size.maxTemplate}}, or not valid Handlebars.
    * @example
-   * const output = convert.render_handlebars_template(
-   *   "Hello {{name}}!",
-   *   JSON.stringify({ name: "World" })
-   * );
+   * const output = convert.render_handlebars_template("Hello {{name}}!", { name: "World" });
    */
-  render_handlebars_template(template: string, dataJson: string): string;
+  render_handlebars_template(
+    template: string,
+    data?: Record<string, unknown> | string,
+  ): string;
 
-  /**
-   * Base64 encode a string
-   * @param data - String to encode
-   * @returns Base64-encoded string
-   * @example
-   * const encoded = convert.btoa("Hello World");
-   */
+  /** Base64-encode a string (as UTF-8). Throws on a value that is not a string. */
   btoa(data: string): string;
 
-  /**
-   * Base64 decode a string
-   * @param data - Base64-encoded string to decode
-   * @returns Decoded string
-   * @example
-   * const decoded = convert.atob(encoded);
-   */
+  /** Decode base64 to a string. Throws when the input is not base64 or not UTF-8. */
   atob(data: string): string;
 }
 

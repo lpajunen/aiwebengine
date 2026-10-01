@@ -1,10 +1,9 @@
 //! The shape `fetch()` hands back.
 //!
-//! One object serves three habits at once: `await fetch(url)` for anyone
-//! arriving from the browser, `fetch(url).status` for direct access, and
-//! `JSON.parse(fetch(url))` for the scripts written against the JSON string
-//! `fetch` used to return. What it does not buy is concurrency — the request
-//! has already finished by the time `fetch` returns.
+//! One object serves two habits: `await fetch(url)` for anyone arriving from
+//! the browser, and `fetch(url).status` for direct access. What it does not
+//! buy is concurrency — the request has already finished by the time `fetch`
+//! returns.
 //!
 //! The transport is stubbed. `fetch` resolves `__hostFetch` — the Rust half —
 //! from the global scope on every call, so replacing it exercises the whole
@@ -101,29 +100,6 @@ async fn a_response_can_be_awaited_like_the_browsers() {
     assert_eq!(value["status"], json!(200));
     assert_eq!(value["ok"], json!(true));
     assert_eq!(value["url"], json!("https://example.test/data"));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn the_json_string_form_still_parses() {
-    let _guard = test_mutex().lock().await;
-    setup_env().await;
-
-    // What scripts written before `fetch` grew a shape do. `JSON.parse`
-    // converts its argument with ToString first, so the envelope comes back.
-    let report = eval_stubbed(
-        "test://fetch-shape/legacy",
-        r#"
-        const parsed = JSON.parse(fetch("https://example.test/data"));
-        ({ status: parsed.status, ok: parsed.ok, hasBody: parsed.body.length > 0 })
-        "#,
-    )
-    .await;
-
-    assert!(report.ok, "{:?}", report.outcome.error);
-    let value = report.outcome.value.expect("a value");
-    assert_eq!(value["status"], json!(200));
-    assert_eq!(value["ok"], json!(true));
-    assert_eq!(value["hasBody"], json!(true));
 }
 
 #[tokio::test(flavor = "multi_thread")]

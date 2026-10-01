@@ -33,41 +33,9 @@ Required scopes: `repo` (for private repos) or `public_repo` (for public repos o
 ### 2. Create MCP Client in JavaScript
 
 ```javascript
-// Simple wrapper for easier usage
-class GitHubMcpClient {
-  constructor(serverUrl, secretIdentifier) {
-    const clientDataJson = McpClient.constructor(serverUrl, secretIdentifier);
-    this._clientData = JSON.parse(clientDataJson);
-  }
-
-  listTools() {
-    const clientDataJson = JSON.stringify(this._clientData);
-    const toolsJson = McpClient._listTools(clientDataJson);
-    return JSON.parse(toolsJson);
-  }
-
-  callTool(toolName, args) {
-    const clientDataJson = JSON.stringify(this._clientData);
-    const argsJson = JSON.stringify(args);
-    const resultJson = McpClient._callTool(clientDataJson, toolName, argsJson);
-    const result = JSON.parse(resultJson);
-
-    // Check for JSON-RPC errors
-    if (result.error) {
-      console.error(
-        `MCP Tool Error [${result.error.code}]: ${result.error.message}`,
-      );
-      return result;
-    }
-
-    return result;
-  }
-}
-
-// Initialize client
-const client = new GitHubMcpClient(
+const client = new McpClient(
   "https://api.githubcopilot.com/mcp/",
-  "github_token",
+  "github_token", // the name of a stored secret, never its value
 );
 ```
 
@@ -114,14 +82,9 @@ const result = client.callTool("issue_read:get", {
   issue_number: 1,
 });
 
-// Check for errors
-if (result.error) {
-  console.error(`Error: ${result.error.message}`);
-} else {
-  console.log(`Issue: ${result.title}`);
-  console.log(`State: ${result.state}`);
-  console.log(`Author: ${result.user.login}`);
-}
+console.log(`Issue: ${result.title}`);
+console.log(`State: ${result.state}`);
+console.log(`Author: ${result.user.login}`);
 ```
 
 ## Error Handling
@@ -163,16 +126,18 @@ This includes the engine's own `/mcp`: a script reaching the engine it runs in
 does so through the engine's public host, with a token whose audience names it,
 exactly as any other client would.
 
-### JSON-RPC Protocol Errors (Error Objects)
+### JSON-RPC Protocol Errors
 
-Protocol-level errors are returned as objects with an `error` field:
+A protocol-level error from the server throws too, with the JSON-RPC code on
+the error. A tool result the server marks `isError` is not a protocol error:
+it is the tool's answer, and is returned.
 
 ```javascript
-const result = client.callTool("nonexistent_tool", {});
-
-if (result.error) {
-  console.error(`Code ${result.error.code}: ${result.error.message}`);
-  // Example: Code -32601: Method not found
+try {
+  client.callTool("nonexistent_tool", {});
+} catch (error) {
+  console.error(`Code ${error.code}: ${error.message}`);
+  // Example: Code -32601: McpClient.callTool: Method not found (-32601)
 }
 ```
 
@@ -228,23 +193,22 @@ See [github_mcp_issues.js](https://github.com/lpajunen/aiwebengine-examples/blob
 ```javascript
 // List all open issues in a repository
 function listOpenIssues(owner, repo) {
-  const client = new GitHubMcpClient(
+  const client = new McpClient(
     "https://api.githubcopilot.com/mcp/",
     "github_token",
   );
 
-  const result = client.callTool("issue_read:list", {
-    owner: owner,
-    repo: repo,
-    state: "open",
-  });
-
-  if (result.error) {
-    console.error("Error:", result.error.message);
+  try {
+    const result = client.callTool("issue_read:list", {
+      owner: owner,
+      repo: repo,
+      state: "open",
+    });
+    return result.issues || [];
+  } catch (error) {
+    console.error("Error:", error.message);
     return [];
   }
-
-  return result.issues || [];
 }
 
 const issues = listOpenIssues("github", "github-mcp-server");
@@ -336,7 +300,7 @@ Current implementation:
 
 ```javascript
 // Connect to a custom MCP server
-const client = new GitHubMcpClient(
+const client = new McpClient(
   "https://my-mcp-server.example.com/mcp",
   "my_custom_token", // Secret identifier stored in the database
 );
@@ -351,17 +315,10 @@ const result = client.callTool("my_custom_tool", { arg1: "value" });
 function callToolWithRetry(client, toolName, args, maxRetries = 3) {
   for (let i = 0; i < maxRetries; i++) {
     try {
-      const result = client.callTool(toolName, args);
-
-      if (result.error) {
-        // Protocol error - no point retrying
-        return result;
-      }
-
-      return result;
+      return client.callTool(toolName, args);
     } catch (error) {
-      // Network error - retry
-      if (i === maxRetries - 1) throw error;
+      // A protocol error carries a JSON-RPC code; retrying will not help.
+      if (error.code !== undefined || i === maxRetries - 1) throw error;
       console.log(`Retry ${i + 1}/${maxRetries}...`);
     }
   }
@@ -424,7 +381,6 @@ new McpClient(serverUrl, secretIdentifier);
   address outside the deployment's own network — see [Which servers can be
   reached](#which-servers-can-be-reached).
 - `secretIdentifier`: String - Secret identifier in the database (set via `secretStorage` API)
-- Returns: Client data JSON string (internal use only)
 
 #### Methods
 
@@ -444,7 +400,8 @@ callTool(name, arguments) -> Object
 
 - `name`: String - Tool name (e.g., "issue_read:get")
 - `arguments`: Object - Tool arguments matching inputSchema
-- Returns: Tool result or error object
+- Returns: the tool's result. Throws on a network, authentication or
+  JSON-RPC error.
 
 ### Tool Object Structure
 
@@ -453,17 +410,6 @@ interface Tool {
   name: string;
   description?: string;
   inputSchema: JSONSchema;
-}
-```
-
-### Error Object Structure
-
-```typescript
-interface ErrorResult {
-  error: {
-    code: number;
-    message: string;
-  };
 }
 ```
 

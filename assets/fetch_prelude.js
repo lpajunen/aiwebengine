@@ -1,13 +1,11 @@
 // The JavaScript half of `fetch()`.
 //
 // `__hostFetch` is the Rust call: it performs the request, blocks until it has
-// an answer, and hands back the response as a JSON envelope. This wraps that
-// envelope in an object that can be used three ways, so browser habits work
-// without breaking the scripts written against the string it used to return:
+// an answer, and hands back the response as a JSON envelope. This turns that
+// envelope into a response object, usable as browser habits expect:
 //
 //   await fetch(url)          — `then` makes it awaitable
 //   fetch(url).status         — the fields are really there
-//   JSON.parse(fetch(url))    — `toString` yields the original envelope
 //
 // The `await` is sequencing sugar, not concurrency. The request has already
 // finished by the time `fetch` returns, so `Promise.all` over several fetches
@@ -34,12 +32,6 @@
 
       json: function () {
         return JSON.parse(data.body);
-      },
-
-      // What `fetch()` used to return. `JSON.parse` converts its argument with
-      // ToString first, so `JSON.parse(fetch(url))` still means what it did.
-      toString: function () {
-        return envelope;
       },
     };
 
