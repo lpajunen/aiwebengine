@@ -16,27 +16,22 @@ use serde_json::{Value, json};
 
 const TOOL_SCRIPT: &str = r#"
 function init() {
-  mcpRegistry.registerTool("ask_a_thing", "Asks for a branch", JSON.stringify({
+  mcpRegistry.registerTool("ask_a_thing", { description: "Asks for a branch", inputSchema: {
     type: "object",
     properties: { repo: { type: "string" } }
-  }), "askAThing");
+  }, handler: "askAThing" });
 
-  mcpRegistry.registerTool("count_passes", "Counts how often it ran", JSON.stringify({
+  mcpRegistry.registerTool("count_passes", { description: "Counts how often it ran", inputSchema: {
     type: "object",
     properties: {}
-  }), "countPasses");
+  }, handler: "countPasses" });
 
-  mcpRegistry.registerTool("never_asks", "Answers straight away", JSON.stringify({
+  mcpRegistry.registerTool("never_asks", { description: "Answers straight away", inputSchema: {
     type: "object",
     properties: {}
-  }), "neverAsks");
+  }, handler: "neverAsks" });
 
-  mcpRegistry.registerPrompt(
-    "pick_a_project",
-    "A prompt that needs to know which project",
-    JSON.stringify([]),
-    "pickAProject"
-  );
+  mcpRegistry.registerPrompt("pick_a_project", { description: "A prompt that needs to know which project", arguments: [], handler: "pickAProject" });
 }
 
 // The specification permits input_required on prompts/get as well, and a

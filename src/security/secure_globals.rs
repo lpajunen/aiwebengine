@@ -31,13 +31,15 @@ const MCP_PRELUDE: &str = include_str!("../../assets/mcp_prelude.js");
 const ROUTE_PRELUDE: &str = include_str!("../../assets/route_prelude.js");
 /// Builds `files` over `__hostFiles`.
 const FILES_PRELUDE: &str = include_str!("../../assets/files_prelude.js");
+/// Builds `schedulerService` over `__hostScheduler`.
+const SCHEDULER_PRELUDE: &str = include_str!("../../assets/scheduler_prelude.js");
+/// Builds `secretStorage` over `__hostSecrets`.
+const SECRETS_PRELUDE: &str = include_str!("../../assets/secrets_prelude.js");
+/// Builds `mcpRegistry` over `__hostMcpRegistry`.
+const MCP_REGISTRY_PRELUDE: &str = include_str!("../../assets/mcp_registry_prelude.js");
 
-/// What `secretStorage`'s mutating methods answer in a delegated execution.
-///
-/// Phrased as the other "Error: ..." strings on that object are, since the
-/// interface returns refusals as values rather than throwing, and a script
-/// that already handles "not authenticated" handles this the same way.
-const DELEGATED_SECRET_MANAGEMENT_REFUSAL: &str = "Error: Secrets cannot be changed by background work acting on somebody's behalf. \
+/// What `secretStorage`'s mutating methods throw in a delegated execution.
+const DELEGATED_SECRET_MANAGEMENT_REFUSAL: &str = "Secrets cannot be changed by background work acting on somebody's behalf. \
      Storing, replacing or deleting a key is something the person does in their own session.";
 
 /// `Headers`, `URLSearchParams`, and the methods `context.request` gains so a
@@ -1025,6 +1027,12 @@ fn validate_function_name(key: &str, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// `{ ok: false, reason }` in the host envelope: a registration refused for
+/// a reason the script is told about rather than thrown at.
+fn refusal_answer(reason: String) -> String {
+    host_ok(serde_json::json!({ "ok": false, "reason": reason }))
+}
+
 /// What a well-formed registration came to.
 #[derive(Debug, PartialEq)]
 enum Registered {
@@ -1769,13 +1777,15 @@ impl SecureGlobalContext {
     /// Setup secret storage functions
     ///
     /// Exposes a JavaScript API for per-user secret management scoped to the current script.
-    /// All methods require an authenticated user; unauthenticated calls return errors or false.
-    /// Secrets are stored in the user_secrets table keyed by (script_uri, user_id, key).
+    /// Installed as `__hostSecrets`, answering in the envelope
+    /// `secrets_prelude.js` unwraps. Writes need a signed-in person and throw
+    /// without one. Secrets are stored in the user_secrets table keyed by
+    /// (script_uri, user_id, key).
     ///
     /// - secretStorage.exists(key): boolean
-    /// - secretStorage.setSecret(key, value): string
+    /// - secretStorage.setSecret(key, value): undefined
     /// - secretStorage.removeSecret(key): boolean
-    /// - secretStorage.clear(): string
+    /// - secretStorage.clear(): undefined
     fn setup_secrets_functions(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
         let global = ctx.globals();
         let script_uri_owned = script_uri.to_string();
@@ -1816,16 +1826,15 @@ impl SecureGlobalContext {
         let manage_refusal = if self.config.is_delegated() {
             DELEGATED_SECRET_MANAGEMENT_REFUSAL.to_string()
         } else {
-            format!(
-                "Error: {}",
-                capability_refusal(
-                    "secretStorage",
-                    &Capability::WriteSecrets,
-                    &self.user_context
-                )
+            capability_refusal(
+                "secretStorage",
+                &Capability::WriteSecrets,
+                &self.user_context,
             )
         };
         let manage_refusal_set = manage_refusal.clone();
+        let manage_refusal_remove = manage_refusal.clone();
+        const SIGN_IN: &str = "secretStorage: a person's secrets need them signed in";
 
         let secret_storage_obj = rquickjs::Object::new(ctx.clone())?;
 
@@ -1833,19 +1842,19 @@ impl SecureGlobalContext {
         let script_uri_exists = script_uri_owned.clone();
         let exists_fn = Function::new(
             ctx.clone(),
-            move |ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<bool> {
+            move |ctx: rquickjs::Ctx<'_>, key: String| -> String {
                 let globals = ctx.globals();
                 // Check user_secrets first (if authenticated, and if this
                 // execution was authorised to reach that person's secrets).
-                if secrets_allowed
-                    && let Some(user_id) = get_auth_user_id(&globals)
-                    && crate::repository::get_user_secret_item(&script_uri_exists, &user_id, &key)
-                        .is_some()
-                {
-                    return Ok(true);
-                }
-                // Fall back to script_secrets
-                Ok(crate::repository::get_script_secret_item(&script_uri_exists, &key).is_some())
+                let found = (secrets_allowed
+                    && get_auth_user_id(&globals).is_some_and(|user_id| {
+                        crate::repository::get_user_secret_item(&script_uri_exists, &user_id, &key)
+                            .is_some()
+                    }))
+                    // Fall back to script_secrets
+                    || crate::repository::get_script_secret_item(&script_uri_exists, &key)
+                        .is_some();
+                host_ok(serde_json::Value::Bool(found))
             },
         )?;
         secret_storage_obj.set("exists", exists_fn)?;
@@ -1854,25 +1863,21 @@ impl SecureGlobalContext {
         let script_uri_set = script_uri_owned.clone();
         let set_secret_fn = Function::new(
             ctx.clone(),
-            move |ctx: rquickjs::Ctx<'_>, key: String, value: String| -> JsResult<String> {
+            move |ctx: rquickjs::Ctx<'_>, key: String, value: String| -> String {
                 if !may_manage_secrets {
-                    return Ok(manage_refusal_set.clone());
+                    return host_failure("Error", &manage_refusal_set);
                 }
-                let globals = ctx.globals();
-                let user_id = match get_auth_user_id(&globals) {
-                    Some(id) => id,
-                    None => {
-                        return Ok(
-                            "Error: Secret storage requires authentication. Please log in."
-                                .to_string(),
-                        );
-                    }
+                let Some(user_id) = get_auth_user_id(&ctx.globals()) else {
+                    return host_failure("Error", SIGN_IN);
                 };
                 if key.trim().is_empty() {
-                    return Ok("Error: Key cannot be empty".to_string());
+                    return host_failure("TypeError", "secretStorage.setSecret: the key is empty");
                 }
                 if value.len() > 1_000_000 {
-                    return Ok("Error: Value too large (>1MB)".to_string());
+                    return host_failure(
+                        "RangeError",
+                        "secretStorage.setSecret: the value is over 1MB",
+                    );
                 }
                 match crate::repository::set_user_secret_item(
                     &script_uri_set,
@@ -1880,8 +1885,8 @@ impl SecureGlobalContext {
                     &key,
                     &value,
                 ) {
-                    Ok(()) => Ok("Secret set successfully".to_string()),
-                    Err(e) => Ok(format!("Error setting secret: {}", e)),
+                    Ok(()) => host_ok(serde_json::Value::Null),
+                    Err(e) => host_failure("Error", &format!("secretStorage.setSecret: {}", e)),
                 }
             },
         )?;
@@ -1891,21 +1896,18 @@ impl SecureGlobalContext {
         let script_uri_remove = script_uri_owned.clone();
         let remove_secret_fn = Function::new(
             ctx.clone(),
-            move |ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<bool> {
-                // `false` is what this already answers with no person signed
-                // in, and it means the same thing here: nothing was removed.
+            move |ctx: rquickjs::Ctx<'_>, key: String| -> String {
+                // Refused rather than answering `false`: "you may not" read as
+                // "there was nothing there" is the kind of answer a caller
+                // cannot tell from the truth.
                 if !may_manage_secrets {
-                    return Ok(false);
+                    return host_failure("Error", &manage_refusal_remove);
                 }
-                let globals = ctx.globals();
-                let user_id = match get_auth_user_id(&globals) {
-                    Some(id) => id,
-                    None => return Ok(false),
+                let Some(user_id) = get_auth_user_id(&ctx.globals()) else {
+                    return host_failure("Error", SIGN_IN);
                 };
-                Ok(crate::repository::remove_user_secret_item(
-                    &script_uri_remove,
-                    &user_id,
-                    &key,
+                host_ok(serde_json::Value::Bool(
+                    crate::repository::remove_user_secret_item(&script_uri_remove, &user_id, &key),
                 ))
             },
         )?;
@@ -1913,31 +1915,30 @@ impl SecureGlobalContext {
 
         // secretStorage.clear() - Clear all secrets for current user in this script
         let script_uri_clear = script_uri_owned.clone();
-        let clear_fn = Function::new(
-            ctx.clone(),
-            move |ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
-                if !may_manage_secrets {
-                    return Ok(manage_refusal.clone());
-                }
-                let globals = ctx.globals();
-                let user_id = match get_auth_user_id(&globals) {
-                    Some(id) => id,
-                    None => {
-                        return Ok(
-                            "Error: Secret storage requires authentication. Please log in."
-                                .to_string(),
-                        );
-                    }
-                };
-                match crate::repository::clear_user_secrets(&script_uri_clear, &user_id) {
-                    Ok(()) => Ok("Secrets cleared successfully".to_string()),
-                    Err(e) => Ok(format!("Error clearing secrets: {}", e)),
-                }
-            },
-        )?;
+        let clear_fn = Function::new(ctx.clone(), move |ctx: rquickjs::Ctx<'_>| -> String {
+            if !may_manage_secrets {
+                return host_failure("Error", &manage_refusal);
+            }
+            let Some(user_id) = get_auth_user_id(&ctx.globals()) else {
+                return host_failure("Error", SIGN_IN);
+            };
+            match crate::repository::clear_user_secrets(&script_uri_clear, &user_id) {
+                Ok(()) => host_ok(serde_json::Value::Null),
+                Err(e) => host_failure("Error", &format!("secretStorage.clear: {}", e)),
+            }
+        })?;
         secret_storage_obj.set("clear", clear_fn)?;
 
-        global.set("secretStorage", secret_storage_obj)?;
+        global.set("__hostSecrets", secret_storage_obj)?;
+        crate::bytecode::eval_program(ctx, "engine://secrets-prelude", SECRETS_PRELUDE).map_err(
+            |e| {
+                rquickjs::Error::new_from_js_message(
+                    "secretStorage",
+                    "prelude",
+                    &format!("secrets prelude failed to load: {}", e),
+                )
+            },
+        )?;
 
         debug!(
             "secretStorage JavaScript API initialized for script: {}",
@@ -1969,7 +1970,10 @@ impl SecureGlobalContext {
                   handler_function: String|
                   -> JsResult<String> {
                 if !config_register.registration_phase {
-                    return Ok(registration_inactive("mcpRegistry.registerTool", &name));
+                    return Ok(refusal_answer(registration_inactive(
+                        "mcpRegistry.registerTool",
+                        &name,
+                    )));
                 }
 
                 // Check capability - reuse ManageMcp for MCP tools
@@ -1988,36 +1992,43 @@ impl SecureGlobalContext {
                             )
                             .await;
                     });
-                    return Ok(format!("Error: {}", e));
+                    return Ok(host_failure("Error", &e.to_string()));
                 }
 
                 // Validate inputs
                 if name.is_empty() || name.len() > 100 {
-                    return Ok(
-                        "Invalid tool name: must be between 1 and 100 characters".to_string()
-                    );
+                    return Ok(host_failure(
+                        "TypeError",
+                        "Invalid tool name: must be between 1 and 100 characters",
+                    ));
                 }
                 if description.is_empty() || description.len() > 1000 {
-                    return Ok(
-                        "Invalid description: must be between 1 and 1000 characters".to_string()
-                    );
+                    return Ok(host_failure(
+                        "TypeError",
+                        "Invalid description: must be between 1 and 1000 characters",
+                    ));
                 }
 
                 // Parse and validate input schema JSON
-                let input_schema: serde_json::Value = serde_json::from_str(&input_schema_json)
-                    .map_err(|e| {
-                        rquickjs::Error::new_from_js_message(
-                            "schema",
-                            "InputSchema",
-                            &format!("Invalid input schema JSON: {}", e),
-                        )
-                    })?;
+                let input_schema: serde_json::Value = match serde_json::from_str(&input_schema_json)
+                {
+                    Ok(schema) => schema,
+                    Err(e) => {
+                        return Ok(host_failure(
+                            "TypeError",
+                            &format!("Invalid input schema: {}", e),
+                        ));
+                    }
+                };
 
                 // Check for dangerous patterns
                 if input_schema_json.contains("__proto__")
                     || input_schema_json.contains("constructor")
                 {
-                    return Ok("Invalid schema: contains dangerous patterns".to_string());
+                    return Ok(host_failure(
+                        "TypeError",
+                        "Invalid schema: contains dangerous patterns",
+                    ));
                 }
 
                 // Log the operation attempt
@@ -2047,11 +2058,14 @@ impl SecureGlobalContext {
                     "Secure registerTool called for MCP"
                 );
 
-                if let Some(reply) = config_register.collect(
-                    CollectedRegistration::new(RegistrationKind::McpTool, name.clone())
-                        .with_handler(handler_function.clone()),
-                ) {
-                    return Ok(reply);
+                if config_register
+                    .collect(
+                        CollectedRegistration::new(RegistrationKind::McpTool, name.clone())
+                            .with_handler(handler_function.clone()),
+                    )
+                    .is_some()
+                {
+                    return Ok(host_ok(serde_json::json!({ "ok": true })));
                 }
 
                 // Actually register the MCP tool
@@ -2063,7 +2077,7 @@ impl SecureGlobalContext {
                     script_uri_register.clone(),
                 );
 
-                Ok(format!("MCP tool '{}' registered successfully", name))
+                Ok(host_ok(serde_json::json!({ "ok": true })))
             },
         )?;
 
@@ -2081,7 +2095,10 @@ impl SecureGlobalContext {
                   handler_function: String|
                   -> JsResult<String> {
                 if !config_prompt.registration_phase {
-                    return Ok(registration_inactive("mcpRegistry.registerPrompt", &name));
+                    return Ok(refusal_answer(registration_inactive(
+                        "mcpRegistry.registerPrompt",
+                        &name,
+                    )));
                 }
 
                 // Check capability - reuse ManageMcp for MCP prompts
@@ -2100,30 +2117,35 @@ impl SecureGlobalContext {
                             )
                             .await;
                     });
-                    return Ok(format!("Error: {}", e));
+                    return Ok(host_failure("Error", &e.to_string()));
                 }
 
                 // Validate inputs
                 if name.is_empty() || name.len() > 100 {
-                    return Ok(
-                        "Invalid prompt name: must be between 1 and 100 characters".to_string()
-                    );
+                    return Ok(host_failure(
+                        "TypeError",
+                        "Invalid prompt name: must be between 1 and 100 characters",
+                    ));
                 }
                 if description.is_empty() || description.len() > 1000 {
-                    return Ok(
-                        "Invalid description: must be between 1 and 1000 characters".to_string()
-                    );
+                    return Ok(host_failure(
+                        "TypeError",
+                        "Invalid description: must be between 1 and 1000 characters",
+                    ));
                 }
                 if handler_function.is_empty() || handler_function.len() > 100 {
-                    return Ok(
-                        "Invalid handler function: must be between 1 and 100 characters"
-                            .to_string(),
-                    );
+                    return Ok(host_failure(
+                        "TypeError",
+                        "Invalid handler function: must be between 1 and 100 characters",
+                    ));
                 }
 
                 // Validate arguments JSON
                 if arguments_json.contains("__proto__") || arguments_json.contains("constructor") {
-                    return Ok("Invalid arguments: contains dangerous patterns".to_string());
+                    return Ok(host_failure(
+                        "TypeError",
+                        "Invalid arguments: contains dangerous patterns",
+                    ));
                 }
 
                 // Log the operation attempt
@@ -2156,11 +2178,14 @@ impl SecureGlobalContext {
                     "Secure registerPrompt called for MCP"
                 );
 
-                if let Some(reply) = config_prompt.collect(
-                    CollectedRegistration::new(RegistrationKind::McpPrompt, name.clone())
-                        .with_handler(handler_function.clone()),
-                ) {
-                    return Ok(reply);
+                if config_prompt
+                    .collect(
+                        CollectedRegistration::new(RegistrationKind::McpPrompt, name.clone())
+                            .with_handler(handler_function.clone()),
+                    )
+                    .is_some()
+                {
+                    return Ok(host_ok(serde_json::json!({ "ok": true })));
                 }
 
                 // Actually register the MCP prompt
@@ -2171,11 +2196,8 @@ impl SecureGlobalContext {
                     handler_function.clone(),
                     script_uri_prompt.clone(),
                 ) {
-                    Ok(_) => Ok(format!(
-                        "MCP prompt '{}' registered successfully with handler '{}'",
-                        name, handler_function
-                    )),
-                    Err(e) => Ok(format!("Error registering prompt: {}", e)),
+                    Ok(_) => Ok(host_ok(serde_json::json!({ "ok": true }))),
+                    Err(e) => Ok(host_failure("TypeError", &e.to_string())),
                 }
             },
         )?;
@@ -2198,7 +2220,10 @@ impl SecureGlobalContext {
                   metadata: Opt<rquickjs::Object>|
                   -> JsResult<String> {
                 if !config_resource.registration_phase {
-                    return Ok(registration_inactive("mcpRegistry.registerResource", &uri));
+                    return Ok(refusal_answer(registration_inactive(
+                        "mcpRegistry.registerResource",
+                        &uri,
+                    )));
                 }
 
                 // The same capability as the rest of `mcpRegistry`, rather
@@ -2220,7 +2245,7 @@ impl SecureGlobalContext {
                             )
                             .await;
                     });
-                    return Ok(format!("Error: {}", e));
+                    return Ok(host_failure("Error", &e.to_string()));
                 }
 
                 // A resource URI is an opaque identifier to a client, but it
@@ -2228,20 +2253,29 @@ impl SecureGlobalContext {
                 // round-trip through `resources/read` and display. Anything
                 // shorter than `a:b` is a name that was meant to be a URI.
                 if uri.len() < 3 || uri.len() > 500 {
-                    return Ok("Invalid resource URI: must be 3-500 characters".to_string());
+                    return Ok(host_failure(
+                        "TypeError",
+                        "Invalid resource URI: must be 3-500 characters",
+                    ));
                 }
                 let scheme_end = uri.find(':').unwrap_or(0);
                 if scheme_end == 0 || scheme_end == uri.len() - 1 {
-                    return Ok(format!(
-                        "Invalid resource URI '{}': must carry a scheme, as in \
+                    return Ok(host_failure(
+                        "TypeError",
+                        &(format!(
+                            "Invalid resource URI '{}': must carry a scheme, as in \
                          'docs://handbook' or 'https://example.com/spec'",
-                        uri
+                            uri
+                        )),
                     ));
                 }
                 if uri.chars().any(|c| c.is_whitespace() || c.is_control()) {
-                    return Ok(format!(
-                        "Invalid resource URI '{}': no whitespace or control characters",
-                        uri
+                    return Ok(host_failure(
+                        "TypeError",
+                        &(format!(
+                            "Invalid resource URI '{}': no whitespace or control characters",
+                            uri
+                        )),
                     ));
                 }
 
@@ -2249,10 +2283,16 @@ impl SecureGlobalContext {
                 // same reason: an asset name is a relative path, so `..` is
                 // how one script would name another's file.
                 if asset_name.is_empty() || asset_name.len() > 255 {
-                    return Ok("Invalid asset name: must be 1-255 characters".to_string());
+                    return Ok(host_failure(
+                        "TypeError",
+                        "Invalid asset name: must be 1-255 characters",
+                    ));
                 }
                 if asset_name.contains("..") || asset_name.contains('\\') {
-                    return Ok("Invalid asset name: path characters not allowed".to_string());
+                    return Ok(host_failure(
+                        "TypeError",
+                        "Invalid asset name: path characters not allowed",
+                    ));
                 }
 
                 let (name, description, mime_type) = extract_resource_metadata(metadata.0.as_ref());
@@ -2265,10 +2305,10 @@ impl SecureGlobalContext {
                 // as a file route does. Registering a URI that answers
                 // nothing would be a resource a client lists and cannot read.
                 if repository::fetch_asset(&script_uri_resource, &asset_name).is_none() {
-                    return Ok(format!(
+                    return Ok(refusal_answer(format!(
                         "Asset '{}' not found or not owned by script '{}'",
                         asset_name, script_uri_resource
-                    ));
+                    )));
                 }
 
                 if !crate::exposure::is_resource(&asset_name) {
@@ -2280,7 +2320,7 @@ impl SecureGlobalContext {
                         "Refused to publish a file from outside '{}' as an MCP resource",
                         crate::exposure::RESOURCE_DIR,
                     );
-                    return Ok(format!(
+                    return Ok(refusal_answer(format!(
                         "Refused: '{}' is not under '{}', so it is not a file an MCP client \
                          may read. Move it to '{}{}' and register that. See \
                          GET /engine/exposure.",
@@ -2288,7 +2328,7 @@ impl SecureGlobalContext {
                         crate::exposure::RESOURCE_DIR,
                         crate::exposure::RESOURCE_DIR,
                         asset_name,
-                    ));
+                    )));
                 }
 
                 debug!(
@@ -2297,11 +2337,14 @@ impl SecureGlobalContext {
                     "Secure registerResource called for MCP"
                 );
 
-                if let Some(reply) = config_resource.collect(CollectedRegistration::new(
-                    RegistrationKind::McpResource,
-                    uri.clone(),
-                )) {
-                    return Ok(reply);
+                if config_resource
+                    .collect(CollectedRegistration::new(
+                        RegistrationKind::McpResource,
+                        uri.clone(),
+                    ))
+                    .is_some()
+                {
+                    return Ok(host_ok(serde_json::json!({ "ok": true })));
                 }
 
                 crate::mcp::register_mcp_resource(
@@ -2313,10 +2356,7 @@ impl SecureGlobalContext {
                     script_uri_resource.clone(),
                 );
 
-                Ok(format!(
-                    "MCP resource '{}' registered from asset '{}'",
-                    uri, asset_name
-                ))
+                Ok(host_ok(serde_json::json!({ "ok": true })))
             },
         )?;
 
@@ -2325,7 +2365,15 @@ impl SecureGlobalContext {
         mcp_registry.set("registerTool", register_tool)?;
         mcp_registry.set("registerPrompt", register_prompt)?;
         mcp_registry.set("registerResource", register_resource)?;
-        global.set("mcpRegistry", mcp_registry)?;
+        global.set("__hostMcpRegistry", mcp_registry)?;
+        crate::bytecode::eval_program(ctx, "engine://mcp-registry-prelude", MCP_REGISTRY_PRELUDE)
+            .map_err(|e| {
+            rquickjs::Error::new_from_js_message(
+                "mcpRegistry",
+                "prelude",
+                &format!("mcpRegistry prelude failed to load: {}", e),
+            )
+        })?;
 
         // The other half of MCP: asking the caller a question mid-tool.
         self.setup_mcp_elicitation(ctx, script_uri)?;
@@ -4388,233 +4436,221 @@ impl SecureGlobalContext {
     }
 
     fn setup_scheduler_functions(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
-        // `schedulerService` used to be omitted entirely outside the
-        // registration phase, which made a shared helper that touches it throw
-        // `ReferenceError` when reached from a test. The object is now always
-        // present; the three registration methods below are the part that
-        // depends on the phase.
-        let global = ctx.globals();
-        let scheduler_obj = rquickjs::Object::new(ctx.clone())?;
+        // `__hostScheduler` answers in the envelope `scheduler_prelude.js`
+        // unwraps, and the prelude builds `schedulerService` from it. The
+        // object is present in every context; registering is what depends on
+        // the phase, and outside it a registration is refused as a value —
+        // `{ ok: false, reason }` — exactly as `routeRegistry.registerRoute`'s
+        // is, since top-level code runs on every execution and must not throw.
+        let host = rquickjs::Object::new(ctx.clone())?;
         let scheduler_handle = scheduler::get_scheduler();
+
+        /// Read `handler` off a registration's options, or say what is wrong.
+        fn handler_of(options: &rquickjs::Object<'_>, api: &str) -> Result<String, String> {
+            let handler: String = options
+                .get("handler")
+                .map_err(|_| format!("{}: options.handler is required", api))?;
+            let handler = handler.trim();
+            if handler.is_empty() {
+                return Err(format!("{}: options.handler must name a function", api));
+            }
+            Ok(handler.to_string())
+        }
+
+        fn refused(reason: String) -> String {
+            host_ok(serde_json::json!({ "ok": false, "reason": reason }))
+        }
 
         let register_once_handle = scheduler_handle.clone();
         let script_uri_once = script_uri.to_string();
         let config_once = self.config.clone();
-        let register_once =
-            Function::new(
-                ctx.clone(),
-                move |_ctx: rquickjs::Ctx<'_>, options: rquickjs::Object| -> JsResult<String> {
-                    let handler: String = match options.get("handler") {
-                        Ok(value) => value,
-                        Err(_) => {
-                            return Ok("schedulerService.registerOnce requires options.handler"
-                                .to_string());
-                        }
-                    };
-                    let handler_name = handler.trim();
-                    if handler_name.is_empty() {
-                        return Ok(
-                            "schedulerService.registerOnce requires a non-empty handler name"
-                                .to_string(),
+        let register_once = Function::new(
+            ctx.clone(),
+            move |options: rquickjs::Object<'_>| -> String {
+                const API: &str = "schedulerService.registerOnce";
+                let handler_name = match handler_of(&options, API) {
+                    Ok(handler) => handler,
+                    Err(message) => return host_failure("TypeError", &message),
+                };
+                let run_at_value: String = match options.get("runAt") {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return host_failure(
+                            "TypeError",
+                            &format!("{}: options.runAt is required (a UTC ISO string)", API),
                         );
                     }
+                };
+                let run_at = match scheduler::parse_utc_timestamp(&run_at_value) {
+                    Ok(ts) => ts,
+                    Err(err) => return host_failure("TypeError", &format!("{}: {}", API, err)),
+                };
+                if !config_once.registration_phase {
+                    return refused(registration_inactive(API, &handler_name));
+                }
 
-                    if !config_once.registration_phase {
-                        return Ok(registration_inactive(
-                            "schedulerService.registerOnce",
-                            handler_name,
-                        ));
-                    }
-
-                    let run_at_value: String = match options.get("runAt") {
-                        Ok(value) => value,
-                        Err(_) => return Ok(
-                            "schedulerService.registerOnce requires options.runAt (UTC ISO string)"
-                                .to_string(),
-                        ),
-                    };
-                    let run_at = match scheduler::parse_utc_timestamp(&run_at_value) {
-                        Ok(ts) => ts,
-                        Err(err) => return Ok(format!("Scheduler error: {}", err)),
-                    };
-
-                    let name = options.get::<_, String>("name").ok();
-
-                    if let Some(reply) = config_once.collect(
+                let name = options.get::<_, String>("name").ok();
+                if config_once
+                    .collect(
                         CollectedRegistration::new(
                             RegistrationKind::ScheduledJob,
-                            name.clone().unwrap_or_else(|| handler_name.to_string()),
+                            name.clone().unwrap_or_else(|| handler_name.clone()),
                         )
-                        .with_handler(handler_name),
-                    ) {
-                        return Ok(reply);
-                    }
+                        .with_handler(handler_name.clone()),
+                    )
+                    .is_some()
+                {
+                    return host_ok(serde_json::json!({ "ok": true }));
+                }
 
-                    match register_once_handle.register_one_off(
-                        &script_uri_once,
-                        handler_name,
-                        name,
-                        run_at,
-                    ) {
-                        Ok(job) => Ok(format!(
-                            "Scheduled one-time job '{}' for {} (id {})",
-                            job.key,
-                            job.schedule.next_run().to_rfc3339(),
-                            job.id
-                        )),
-                        Err(err) => Ok(format!("Scheduler error: {}", err)),
-                    }
-                },
-            )?;
+                match register_once_handle.register_one_off(
+                    &script_uri_once,
+                    &handler_name,
+                    name,
+                    run_at,
+                ) {
+                    Ok(job) => host_ok(serde_json::json!({
+                        "ok": true,
+                        "jobId": job.id.to_string(),
+                        "name": job.key,
+                        "nextRun": job.schedule.next_run().to_rfc3339(),
+                    })),
+                    Err(err) => host_failure("Error", &format!("{}: {}", API, err)),
+                }
+            },
+        )?;
 
         let register_recurring_handle = scheduler_handle.clone();
         let script_uri_recurring = script_uri.to_string();
         let config_recurring = self.config.clone();
         let register_recurring = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, options: rquickjs::Object| -> JsResult<String> {
-                let handler: String = match options.get("handler") {
-                    Ok(value) => value,
-                    Err(_) => {
-                        return Ok(
-                            "schedulerService.registerRecurring requires options.handler"
-                                .to_string(),
-                        );
-                    }
+            move |options: rquickjs::Object<'_>| -> String {
+                const API: &str = "schedulerService.registerRecurring";
+                let handler_name = match handler_of(&options, API) {
+                    Ok(handler) => handler,
+                    Err(message) => return host_failure("TypeError", &message),
                 };
-                let handler_name = handler.trim();
-                if handler_name.is_empty() {
-                    return Ok(
-                        "schedulerService.registerRecurring requires a non-empty handler name"
-                            .to_string(),
-                    );
-                }
-
-                if !config_recurring.registration_phase {
-                    return Ok(registration_inactive(
-                        "schedulerService.registerRecurring",
-                        handler_name,
-                    ));
-                }
 
                 let interval_ms_opt = options.get::<_, f64>("intervalMilliseconds").ok();
                 let interval_min_opt = options.get::<_, f64>("intervalMinutes").ok();
+                let interval = match (interval_ms_opt, interval_min_opt) {
+                    (Some(_), Some(_)) => {
+                        return host_failure(
+                            "TypeError",
+                            &format!(
+                                "{}: give intervalMilliseconds or intervalMinutes, not both",
+                                API
+                            ),
+                        );
+                    }
+                    (Some(ms), None) if ms.is_finite() && ms >= 100.0 => {
+                        ChronoDuration::milliseconds(ms.floor() as i64)
+                    }
+                    (Some(_), None) => {
+                        return host_failure(
+                            "RangeError",
+                            &format!("{}: intervalMilliseconds must be at least 100", API),
+                        );
+                    }
+                    (None, Some(min)) if min.is_finite() && min >= 1.0 => {
+                        ChronoDuration::minutes(min.floor() as i64)
+                    }
+                    (None, Some(_)) => {
+                        return host_failure(
+                            "RangeError",
+                            &format!("{}: intervalMinutes must be at least 1", API),
+                        );
+                    }
+                    (None, None) => {
+                        return host_failure(
+                            "TypeError",
+                            &format!(
+                                "{}: options.intervalMilliseconds or options.intervalMinutes is required",
+                                API
+                            ),
+                        );
+                    }
+                };
 
-                if interval_ms_opt.is_some() && interval_min_opt.is_some() {
-                    return Ok(
-                        "schedulerService.registerRecurring accepts either intervalMilliseconds or intervalMinutes, not both"
-                            .to_string(),
-                    );
+                let first_run = match options.get::<_, String>("startAt") {
+                    Ok(start_at) => match scheduler::parse_utc_timestamp(&start_at) {
+                        Ok(ts) => Some(ts),
+                        Err(err) => {
+                            return host_failure("TypeError", &format!("{}: {}", API, err));
+                        }
+                    },
+                    Err(_) => None,
+                };
+                if !config_recurring.registration_phase {
+                    return refused(registration_inactive(API, &handler_name));
                 }
 
-                let (interval, interval_label) = if let Some(interval_ms_value) = interval_ms_opt {
-                    if !interval_ms_value.is_finite() || interval_ms_value < 100.0 {
-                        return Ok(
-                            "schedulerService.registerRecurring requires intervalMilliseconds >= 100"
-                                .to_string(),
-                        );
-                    }
-                    let interval_ms = interval_ms_value.floor() as i64;
-                    (
-                        ChronoDuration::milliseconds(interval_ms),
-                        format!("{} ms", interval_ms),
-                    )
-                } else if let Some(interval_min_value) = interval_min_opt {
-                    if !interval_min_value.is_finite() || interval_min_value < 1.0 {
-                        return Ok(
-                            "schedulerService.registerRecurring requires intervalMinutes >= 1"
-                                .to_string(),
-                        );
-                    }
-                    let interval_minutes = interval_min_value.floor() as i64;
-                    (
-                        ChronoDuration::minutes(interval_minutes),
-                        format!("{} minute(s)", interval_minutes),
-                    )
-                } else {
-                    return Ok(
-                        "schedulerService.registerRecurring requires intervalMilliseconds or intervalMinutes"
-                            .to_string(),
-                    );
-                };
-
                 let name = options.get::<_, String>("name").ok();
-                let first_run = if let Ok(start_at) = options.get::<_, String>("startAt") {
-                    match scheduler::parse_utc_timestamp(&start_at) {
-                        Ok(ts) => Some(ts),
-                        Err(err) => return Ok(format!("Scheduler error: {}", err)),
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(reply) = config_recurring.collect(
-                    CollectedRegistration::new(
-                        RegistrationKind::ScheduledJob,
-                        name.clone().unwrap_or_else(|| handler_name.to_string()),
+                if config_recurring
+                    .collect(
+                        CollectedRegistration::new(
+                            RegistrationKind::ScheduledJob,
+                            name.clone().unwrap_or_else(|| handler_name.clone()),
+                        )
+                        .with_handler(handler_name.clone()),
                     )
-                    .with_handler(handler_name),
-                ) {
-                    return Ok(reply);
+                    .is_some()
+                {
+                    return host_ok(serde_json::json!({ "ok": true }));
                 }
 
                 match register_recurring_handle.register_recurring(
                     &script_uri_recurring,
-                    handler_name,
+                    &handler_name,
                     name,
                     interval,
                     first_run,
                 ) {
-                    Ok(job) => Ok(format!(
-                        "Scheduled recurring job '{}' every {}; next run {} (id {})",
-                        job.key,
-                        interval_label,
-                        job.schedule.next_run().to_rfc3339(),
-                        job.id
-                    )),
-                    Err(err) => Ok(format!("Scheduler error: {}", err)),
+                    Ok(job) => host_ok(serde_json::json!({
+                        "ok": true,
+                        "jobId": job.id.to_string(),
+                        "name": job.key,
+                        "nextRun": job.schedule.next_run().to_rfc3339(),
+                    })),
+                    Err(err) => host_failure("Error", &format!("{}: {}", API, err)),
                 }
             },
         )?;
 
         let script_uri_clear = script_uri.to_string();
         let config_clear = self.config.clone();
-        let clear_all = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
-                // Clearing is the inverse of registering and mutates the same
-                // registry, so it follows the same phase rule.
-                if !config_clear.registration_phase {
-                    return Ok(
-                        "schedulerService.clearAll: no jobs cleared - scheduled job changes \
-                         only take effect during script startup and init()"
-                            .to_string(),
-                    );
-                }
+        let clear_all = Function::new(ctx.clone(), move || -> String {
+            // Clearing is the inverse of registering and mutates the same
+            // registry, so it follows the same phase rule.
+            if !config_clear.registration_phase {
+                return refused(
+                    "schedulerService.clearAll: no jobs cleared - scheduled job changes only \
+                     take effect during script startup and init()"
+                        .to_string(),
+                );
+            }
+            // A dry run reports what a script would register, and an emptied
+            // job table is not part of that.
+            if config_clear.is_dry_run() {
+                return host_ok(serde_json::json!({ "ok": true, "cleared": 0 }));
+            }
+            let removed = scheduler::clear_script_jobs(&script_uri_clear);
+            host_ok(serde_json::json!({ "ok": true, "cleared": removed }))
+        })?;
 
-                if config_clear.is_dry_run() {
-                    // Clearing mutates the live scheduler exactly as registering
-                    // does, and there is nothing to record: a dry run reports
-                    // what a script *would* register, and an emptied job table
-                    // is not part of that.
-                    return Ok(format!(
-                        "schedulerService.clearAll: no jobs cleared for {} - this is a dry run",
-                        script_uri_clear
-                    ));
-                }
-
-                let removed = scheduler::clear_script_jobs(&script_uri_clear);
-                Ok(format!(
-                    "Cleared {} scheduled job(s) for {}",
-                    removed, script_uri_clear
-                ))
-            },
-        )?;
-
-        scheduler_obj.set("registerOnce", register_once)?;
-        scheduler_obj.set("registerRecurring", register_recurring)?;
-        scheduler_obj.set("clearAll", clear_all)?;
-        global.set("schedulerService", scheduler_obj)?;
+        host.set("registerOnce", register_once)?;
+        host.set("registerRecurring", register_recurring)?;
+        host.set("clearAll", clear_all)?;
+        ctx.globals().set("__hostScheduler", host)?;
+        crate::bytecode::eval_program(ctx, "engine://scheduler-prelude", SCHEDULER_PRELUDE)
+            .map_err(|e| {
+                rquickjs::Error::new_from_js_message(
+                    "schedulerService",
+                    "prelude",
+                    &format!("scheduler prelude failed to load: {}", e),
+                )
+            })?;
 
         Ok(())
     }
@@ -6416,13 +6452,28 @@ mod api_surface_tests {
     /// request if these raised.
     #[test]
     fn registration_methods_report_instead_of_throwing_or_registering() {
-        // A route registration answers with a value rather than a sentence:
-        // the refusal is `{ ok: false, reason }`, and the reason is the
-        // sentence the other registries still return.
+        // Every registration answers with a value rather than a sentence:
+        // outside the registration phase the answer is `{ ok: false, reason }`.
         for (call, subject) in [
             ("routeRegistry.registerRoute('/r', { handler: 'h' })", "/r"),
             ("routeRegistry.registerRoute('/s', { stream: true })", "/s"),
             ("routeRegistry.registerRoute('/a', { file: 'a.txt' })", "/a"),
+            (
+                "mcpRegistry.registerTool('t', { description: 'd', inputSchema: {}, handler: 'h' })",
+                "t",
+            ),
+            (
+                "mcpRegistry.registerPrompt('p', { description: 'd', arguments: [], handler: 'h' })",
+                "p",
+            ),
+            (
+                "schedulerService.registerOnce({ handler: 'h', runAt: '2030-01-01T00:00:00Z' })",
+                "h",
+            ),
+            (
+                "schedulerService.registerRecurring({ handler: 'h', intervalMinutes: 5 })",
+                "h",
+            ),
         ] {
             let result = eval_outside_registration_phase(&format!(
                 "(function (r) {{ return r.ok + '|' + r.reason; }})({})",
@@ -6432,24 +6483,6 @@ mod api_surface_tests {
                 result.starts_with("false|")
                     && result.contains("not registered")
                     && result.contains(subject),
-                "`{}` should report that it did not register, got: {}",
-                call,
-                result
-            );
-        }
-
-        for (call, subject) in [
-            ("mcpRegistry.registerTool('t', 'd', '{}', 'h')", "t"),
-            ("mcpRegistry.registerPrompt('p', 'd', '[]', 'h')", "p"),
-            (
-                "schedulerService.registerOnce({handler: 'h', runAt: ''})",
-                "h",
-            ),
-            ("schedulerService.registerRecurring({handler: 'h'})", "h"),
-        ] {
-            let result = eval_outside_registration_phase(&format!("String({})", call));
-            assert!(
-                result.contains("not registered") && result.contains(subject),
                 "`{}` should report that it did not register, got: {}",
                 call,
                 result

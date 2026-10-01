@@ -26,24 +26,9 @@ const SCRIPT_URI: &str = "test://mcp/tasks";
 /// be handed a handle, hand off if so, and answer synchronously if not.
 const TASK_SCRIPT: &str = r#"
 function init() {
-  mcpRegistry.registerTool(
-    "slow",
-    "Work that takes a while",
-    JSON.stringify({ type: "object", properties: { n: { type: "number" } } }),
-    "slowTool"
-  );
-  mcpRegistry.registerTool(
-    "breaks",
-    "Work that fails",
-    JSON.stringify({ type: "object", properties: {} }),
-    "breakingTool"
-  );
-  mcpRegistry.registerTool(
-    "quick",
-    "Work that answers at once",
-    JSON.stringify({ type: "object", properties: {} }),
-    "quickTool"
-  );
+  mcpRegistry.registerTool("slow", { description: "Work that takes a while", inputSchema: { type: "object", properties: { n: { type: "number" } } }, handler: "slowTool" });
+  mcpRegistry.registerTool("breaks", { description: "Work that fails", inputSchema: { type: "object", properties: {} }, handler: "breakingTool" });
+  mcpRegistry.registerTool("quick", { description: "Work that answers at once", inputSchema: { type: "object", properties: {} }, handler: "quickTool" });
 }
 
 function slowTool(context) {

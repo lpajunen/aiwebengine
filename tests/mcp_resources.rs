@@ -26,12 +26,10 @@ const SCRIPT_URI: &str = "test://mcp/resources";
 /// A script that publishes two of its assets and nothing else.
 const RESOURCE_SCRIPT: &str = r#"
 function init() {
-  mcpRegistry.registerResource("docs://handbook", "resources/handbook.md", {
-    name: "Handbook",
+  mcpRegistry.registerResource("docs://handbook", { file: "resources/handbook.md", name: "Handbook",
     description: "How the team works",
-    mimeType: "text/markdown"
-  });
-  mcpRegistry.registerResource("docs://logo", "resources/logo.png");
+    mimeType: "text/markdown" });
+  mcpRegistry.registerResource("docs://logo", { file: "resources/logo.png" });
 }
 "#;
 

@@ -523,9 +523,11 @@ async fn background_work_cannot_change_the_persons_secrets_even_with_every_scope
     repository::upsert_script(
         script_uri,
         r#"
+        // Each attempted on its own: both are refused by throwing, and the
+        // second must not go untried because the first threw.
         function work() {
-          secretStorage.setSecret("THEIR_KEY", "replaced-by-the-agent");
-          secretStorage.removeSecret("OTHER_KEY");
+          try { secretStorage.setSecret("THEIR_KEY", "replaced-by-the-agent"); } catch (e) {}
+          try { secretStorage.removeSecret("OTHER_KEY"); } catch (e) {}
         }
         "#,
     )
@@ -568,7 +570,12 @@ async fn an_ordinary_request_is_narrowed_by_no_scope() {
         r#"
         function handler(context) {
           personalStorage.setItem("touched", "by the request");
-          const manage = secretStorage.setSecret("MINE", "sk-set-by-me");
+          let manage = "managed";
+          try {
+            secretStorage.setSecret("MINE", "sk-set-by-me");
+          } catch (e) {
+            manage = "refused: " + e.message;
+          }
           return { status: 200, body: manage, contentType: "text/plain" };
         }
         "#,
@@ -613,10 +620,9 @@ async fn an_ordinary_request_is_narrowed_by_no_scope() {
 
     let body = String::from_utf8_lossy(&response.body).to_string();
     assert_eq!(response.status, 200);
-    assert!(
-        !body.starts_with("Error:"),
-        "a person acting for themselves should still manage their own secrets: {}",
-        body
+    assert_eq!(
+        body, "managed",
+        "a person acting for themselves should still manage their own secrets"
     );
     assert_eq!(
         repository::get_user_properties_item(script_uri, &user_id, "touched").as_deref(),

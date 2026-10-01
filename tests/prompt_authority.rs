@@ -32,12 +32,7 @@ function handlePrompt(context) {
 }
 
 function init(context) {
-  mcpRegistry.registerPrompt(
-    "promptAuthority",
-    "Reports what authority the handler runs with",
-    JSON.stringify([]),
-    "handlePrompt"
-  );
+  mcpRegistry.registerPrompt("promptAuthority", { description: "Reports what authority the handler runs with", arguments: [], handler: "handlePrompt" });
 }
 "#;
 

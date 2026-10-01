@@ -65,11 +65,12 @@ declare function init(context?: HandlerContext): void;
  * - `mcpRegistry.registerTool` / `registerPrompt` / `registerResource`
  * - `schedulerService.registerOnce` / `registerRecurring` / `clearAll`
  *
- * take effect during startup and `init()`, and elsewhere return a string saying
- * the entry was not registered. They never throw for being called at the wrong
- * time — a script that registers at top level rather than inside `init()` would
- * otherwise fail on every request. Argument validation is unaffected: a bad
- * path or an empty name is reported the same way in every context.
+ * take effect during startup and `init()`, and elsewhere answer
+ * `{ ok: false, reason }` saying the entry was not registered. They never throw
+ * for being called at the wrong time — a script that registers at top level
+ * rather than inside `init()` would otherwise fail on every request. A mistake
+ * in the call — a bad path, an empty name, a malformed spec — throws in every
+ * context.
  *
  * Everything else — `database`, `files`, `secretStorage`,
  * `scriptStorage`, `personalStorage`, `fetch`, `convert`, `console`,
@@ -816,46 +817,31 @@ declare class DOMException extends Error {
  */
 interface SecretStorage {
   /**
-   * Check if a secret exists for the current script.
-   * First checks `user_secrets` for the authenticated user, then falls back to `script_secrets`.
-   * @param key - Secret key to check
-   * @returns true if the secret exists in either table, false otherwise
+   * Whether a secret is stored under `key`: the signed-in person's first,
+   * then the script's.
    * @example
-   * if (secretStorage.exists("API_TOKEN")) {
-   *   // secret is available (user-level or script-level)
-   * }
+   * if (!secretStorage.exists("API_TOKEN")) return askForToken();
    */
   exists(key: string): boolean;
 
   /**
-   * Store a secret for the authenticated user in the current script.
-   * @param key - Secret key
-   * @param value - Secret value to store (max {{limits.size.maxSecretValue}})
-   * @returns Success message or error string if unauthenticated or validation fails
+   * Store a secret for the signed-in person, in this script. Throws when
+   * nobody is signed in, when the value is over {{limits.size.maxSecretValue}},
+   * and in background work acting for somebody — storing a key is something
+   * the person does in their own session.
    * @example
-   * const result = secretStorage.setSecret("API_TOKEN", "abc123");
-   * if (result.startsWith("Error")) {
-   *   console.error(result);
-   * }
+   * secretStorage.setSecret("API_TOKEN", token);
    */
-  setSecret(key: string, value: string): string;
+  setSecret(key: string, value: string): void;
 
   /**
-   * Remove a single secret for the authenticated user in the current script.
-   * @param key - Secret key to remove
-   * @returns true if the secret existed and was removed, false otherwise
-   * @example
-   * secretStorage.removeSecret("OLD_TOKEN");
+   * Remove one of the signed-in person's secrets. Answers `false` when there
+   * was none; throws when the caller may not manage secrets.
    */
   removeSecret(key: string): boolean;
 
-  /**
-   * Clear all secrets for the authenticated user in the current script.
-   * @returns Success message or error string if unauthenticated
-   * @example
-   * secretStorage.clear();
-   */
-  clear(): string;
+  /** Remove every secret the signed-in person stored in this script. */
+  clear(): void;
 }
 
 // ============================================================================
@@ -875,49 +861,39 @@ interface SecretStorage {
  * after a few failures with a line in the script's log saying so. A recurring
  * job is not retried: it runs again at its next interval.
  */
+/** What a scheduler registration answers. */
+type ScheduledJobResult =
+  | { ok: true; jobId?: string; name?: string; nextRun?: string }
+  | { ok: false; reason: string };
+
 interface SchedulerService {
   /**
-   * Register a one-time scheduled job
-   * @param options - Job options
-   * @param options.handler - Name of the handler function to call
-   * @param options.runAt - UTC ISO timestamp when to run (e.g., "2025-12-17T15:30:00Z")
-   * @param options.name - Optional job name/key (1-{{limits.scheduler.maxJobNameChars}} characters)
-   * @returns Result message with job details
+   * Run `handler` once, at `runAt` (a UTC ISO timestamp).
+   * @param options.name - The job's key (1-{{limits.scheduler.maxJobNameChars}} characters); registering
+   *   the same name again replaces it. Defaults to the handler's name.
    * @example
-   * const oneHourFromNow = new Date(Date.now() + 3600000).toISOString();
    * schedulerService.registerOnce({
    *   handler: "sendReminder",
-   *   runAt: oneHourFromNow,
-   *   name: "reminder-job"
+   *   runAt: new Date(Date.now() + 3600000).toISOString(),
+   *   name: "reminder-job",
    * });
-   *
-   * Only takes effect during startup and `init()`. Called from a handler it
-   * returns a message saying nothing was registered, and does not throw.
    */
   registerOnce(options: {
     handler: string;
     runAt: string;
     name?: string;
-  }): string;
+  }): ScheduledJobResult;
 
   /**
-   * Register a recurring scheduled job
-   * @param options - Job options
-   * @param options.handler - Name of the handler function to call
-   * @param options.intervalMilliseconds - Interval in milliseconds (minimum 100)
-   * @param options.intervalMinutes - Interval in minutes (minimum 1, backward compatible)
-   * @param options.name - Optional job name/key (1-{{limits.scheduler.maxJobNameChars}} characters)
-   * @param options.startAt - Optional UTC ISO timestamp for first run
-   * @returns Result message with job details
+   * Run `handler` every `intervalMilliseconds` (at least 100) or
+   * `intervalMinutes` (at least 1) — one of the two.
+   * @param options.startAt - Optional UTC ISO timestamp for the first run
    * @example
    * schedulerService.registerRecurring({
    *   handler: "cleanupOldData",
-   *   intervalMilliseconds: 5000,
-   *   name: "cleanup-job"
+   *   intervalMinutes: 5,
+   *   name: "cleanup-job",
    * });
-   *
-   * Only takes effect during startup and `init()`. Called from a handler it
-   * returns a message saying nothing was registered, and does not throw.
    */
   registerRecurring(options: {
     handler: string;
@@ -925,18 +901,10 @@ interface SchedulerService {
     intervalMinutes?: number;
     name?: string;
     startAt?: string;
-  }): string;
+  }): ScheduledJobResult;
 
-  /**
-   * Clear all scheduled jobs for the current script
-   * @returns Result message with count of cleared jobs
-   * @example
-   * schedulerService.clearAll();
-   *
-   * Only takes effect during startup and `init()`. Called from a handler it
-   * clears nothing and says so in the returned message, and does not throw.
-   */
-  clearAll(): string;
+  /** Remove every job this script registered. */
+  clearAll(): { ok: true; cleared: number } | { ok: false; reason: string };
 }
 
 // ============================================================================
@@ -1287,131 +1255,96 @@ interface LinkInvitation {
 // MCP (Model Context Protocol) Registry API
 // ============================================================================
 
+/** What an MCP registration answers. */
+type McpRegistrationResult = { ok: true } | { ok: false; reason: string };
+
 /**
- * MCP Registry for registering tools and prompts
+ * MCP Registry: what this script exposes to MCP clients — tools to call,
+ * prompts to fill in, resources to read.
  */
 interface McpRegistry {
   /**
-   * Register an MCP tool
-   * @param name - Tool name (1-100 characters)
-   * @param description - Tool description (1-1000 characters)
-   * @param inputSchemaJson - JSON string defining input schema
-   * @param handlerFunction - Name of handler function to call
-   * @returns Registration result message
+   * Register an MCP tool.
+   * @param name - 1-100 characters
    * @example
-   * mcpRegistry.registerTool(
-   *   "calculateSum",
-   *   "Calculates the sum of two numbers",
-   *   JSON.stringify({
+   * mcpRegistry.registerTool("calculateSum", {
+   *   description: "Calculates the sum of two numbers",
+   *   inputSchema: {
    *     type: "object",
-   *     properties: {
-   *       a: { type: "number" },
-   *       b: { type: "number" }
-   *     },
-   *     required: ["a", "b"]
-   *   }),
-   *   "handleCalculateSum"
-   * );
-   *
-   * Only takes effect during startup and `init()`. Called from a handler it
-   * returns a message saying nothing was registered, and does not throw.
+   *     properties: { a: { type: "number" }, b: { type: "number" } },
+   *     required: ["a", "b"],
+   *   },
+   *   handler: "handleCalculateSum",
+   * });
    */
   registerTool(
     name: string,
-    description: string,
-    inputSchemaJson: string,
-    handlerFunction: string,
-  ): string;
+    spec: {
+      /** 1-1000 characters. */
+      description: string;
+      /** A JSON Schema object. Defaults to an object with no properties. */
+      inputSchema?: Record<string, unknown>;
+      /** Name of the function that handles a call. */
+      handler: string;
+    },
+  ): McpRegistrationResult;
 
   /**
-   * Register an MCP prompt
-   * @param name - Prompt name (1-100 characters)
-   * @param description - Prompt description (1-1000 characters)
-   * @param argumentsJson - JSON string: an **array** of argument descriptors,
-   *   each `{ name, description, required }`. An object keyed by argument name
-   *   is rejected — the engine parses this into a sequence.
-   * @param handlerFunction - Name of handler function to call (1-100 characters)
-   * @returns Registration result message
+   * Register an MCP prompt.
    * @example
-   * mcpRegistry.registerPrompt(
-   *   "generateCode",
-   *   "Generates code based on requirements",
-   *   JSON.stringify([
+   * mcpRegistry.registerPrompt("generateCode", {
+   *   description: "Generates code based on requirements",
+   *   arguments: [
    *     { name: "language", description: "Programming language", required: true },
-   *     { name: "task", description: "Task description", required: true }
-   *   ]),
-   *   "handleGenerateCode"
-   * );
-   *
-   * Only takes effect during startup and `init()`. Called from a handler it
-   * returns a message saying nothing was registered, and does not throw.
+   *     { name: "task", description: "Task description", required: true },
+   *   ],
+   *   handler: "handleGenerateCode",
+   * });
    */
   registerPrompt(
     name: string,
-    description: string,
-    argumentsJson: string,
-    handlerFunction: string,
-  ): string;
+    spec: {
+      description: string;
+      arguments?: Array<{
+        name: string;
+        description?: string;
+        required?: boolean;
+      }>;
+      handler: string;
+    },
+  ): McpRegistrationResult;
 
   /**
-   * Publish one of this script's assets as an MCP resource.
+   * Publish one of this script's files as an MCP resource: the read half of
+   * MCP, content a client fetches by URI. It is file-backed rather than
+   * handler-backed on purpose — a resource answering from a handler would be
+   * a tool with a different spelling — and the file is read when a client
+   * asks, so rewriting it needs no redeploy. The file must be under
+   * `resources/`, which is what says it is readable over MCP; one elsewhere
+   * is refused. Content that is not valid UTF-8 is served as base64 `blob`.
    *
-   * This is a file route (`routeRegistry.registerRoute(path, { file })`)
-   * aimed at `/mcp` instead of at a path: the same asset, under a name a different protocol reaches. A
-   * resource is the *read* half of MCP — content a client fetches by URI and
-   * puts in front of a model — as against a tool, which is something it runs.
-   *
-   * It is asset-backed rather than handler-backed on purpose. A resource whose
-   * content came from a handler would be a tool with a different spelling:
-   * free to read a database, call out, and answer differently every time, none
-   * of which a client caching by URI has reason to expect. An asset cannot,
-   * and `revisions.rs` already records every change to one.
-   *
-   * The asset is read when a client asks, not when this is called, so an asset
-   * rewritten later — by the script, or by an editor — is served without a
-   * redeploy. It must already exist and belong to this script at registration,
-   * so that a listed resource is never one a client cannot read.
-   *
-   * Published on the hosts this script publishes on, like every other
-   * registration, and requires `manage_mcp` — the same capability the rest of
-   * `mcpRegistry` takes, since what is being decided is whether the solution
-   * exposes an MCP surface rather than whether the asset may be written.
-   *
-   * @param uri - How clients name it. Must carry a scheme (`docs://handbook`,
-   *   `https://example.com/spec`), 3-500 characters, no whitespace.
-   * @param assetName - The backing asset, in this script's own asset store.
-   * @param metadata - Optional `{ name, description, mimeType }`. `name`
-   *   defaults to the asset's name; `mimeType` defaults to the asset's own at
-   *   read time, and is omitted from a listing when neither states one, since
-   *   a wrong type is worse than an absent one.
-   * @returns Registration result message
+   * @param uri - How clients name it: a scheme (`docs://handbook`), 3-500
+   *   characters, no whitespace.
    * @example
-   * mcpRegistry.registerResource("docs://handbook", "handbook.md", {
+   * mcpRegistry.registerResource("docs://handbook", {
+   *   file: "resources/handbook.md",
    *   name: "Handbook",
    *   description: "How the team works",
    *   mimeType: "text/markdown",
    * });
-   *
-   * Content that is not valid UTF-8 is served as base64 in `blob` rather than
-   * as `text`, decided by the bytes rather than by the declared type — so an
-   * image asset is reachable over MCP even though `fetch` cannot yet return
-   * one.
-   *
-   * Only takes effect during startup and `init()`. Called from a handler it
-   * returns a message saying nothing was registered, and does not throw.
    */
   registerResource(
     uri: string,
-    assetName: string,
-    metadata?: {
-      /** Shown in a client's resource picker. Defaults to the asset's name. */
+    spec: {
+      /** Path of the file in the script's tree, under `resources/`. */
+      file: string;
+      /** Shown in a client's resource picker. Defaults to the file's name. */
       name?: string;
-      /** What the resource is for. */
       description?: string;
-      /** Overrides the asset's own MIME type. */
+      /** Overrides the file's own MIME type. */
       mimeType?: string;
     },
-  ): string;
+  ): McpRegistrationResult;
 }
 
 // ============================================================================
