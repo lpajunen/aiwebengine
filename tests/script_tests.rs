@@ -407,7 +407,7 @@ async fn a_write_made_after_an_await_lands_inside_the_runs_transaction() {
     let script_uri = "test://script-tests-async-rollback";
 
     // The run's transaction is opened in Rust and held for the whole module, so
-    // unlike `database.beginTransaction()` it really is active. That makes this
+    // unlike a script's own `database.transaction()` it spans every case. That makes this
     // the place where the ordering matters: a case is settled before the guard
     // drops, so a write made after an await is inside the transaction and is
     // rolled back with everything else.
@@ -417,9 +417,8 @@ async fn a_write_made_after_an_await_lands_inside_the_runs_transaction() {
             "tests/setup.test.ts",
             r#"
             test("prepares the table", () => {
-              database.dropTable("late");
-              expect(JSON.parse(database.createTable("late")).success).toBeTruthy();
-              expect(JSON.parse(database.addTextColumn("late", "label", true)).success).toBeTruthy();
+              try { database.dropTable("late"); } catch (e) {}
+              expect(database.ensureTable("late", { columns: [{ name: "label", type: "text", nullable: true }] }).created).toBeTruthy();
             });
             "#,
         )],
@@ -440,9 +439,9 @@ async fn a_write_made_after_an_await_lands_inside_the_runs_transaction() {
             r#"
             test("writes after an await and reads it back", async () => {
               await Promise.resolve();
-              const inserted = JSON.parse(database.insert("late", JSON.stringify({ label: "late" })));
+              const inserted = database.insert("late", { label: "late" });
               expect(inserted.error).toBeUndefined();
-              const rows = JSON.parse(database.query("late"));
+              const rows = database.query("late");
               expect(rows).toHaveLength(1);
             });
             "#,
@@ -457,7 +456,7 @@ async fn a_write_made_after_an_await_lands_inside_the_runs_transaction() {
             "tests/observes.test.ts",
             r#"
             test("sees no rows from the previous run", () => {
-              const rows = JSON.parse(database.query("late"));
+              const rows = database.query("late");
               expect(rows).toHaveLength(0);
             });
             "#,
@@ -492,11 +491,9 @@ async fn database_writes_made_by_a_test_are_rolled_back() {
             "tests/setup.test.ts",
             r#"
             test("prepares the table", () => {
-              database.dropTable("boxes");
-              const created = JSON.parse(database.createTable("boxes"));
-              expect(created.success).toBeTruthy();
-              const column = JSON.parse(database.addTextColumn("boxes", "label", true));
-              expect(column.success).toBeTruthy();
+              try { database.dropTable("boxes"); } catch (e) {}
+              const created = database.ensureTable("boxes", { columns: [{ name: "label", type: "text", nullable: true }] });
+              expect(created.created).toBeTruthy();
             });
             "#,
         )],
@@ -517,9 +514,9 @@ async fn database_writes_made_by_a_test_are_rolled_back() {
             "tests/writes.test.ts",
             r#"
             test("inserts a row it can read back", () => {
-              const inserted = JSON.parse(database.insert("boxes", JSON.stringify({ label: "one" })));
+              const inserted = database.insert("boxes", { label: "one" });
               expect(inserted.error).toBeUndefined();
-              const rows = JSON.parse(database.query("boxes"));
+              const rows = database.query("boxes");
               expect(rows).toHaveLength(1);
             });
             "#,
@@ -535,7 +532,7 @@ async fn database_writes_made_by_a_test_are_rolled_back() {
             "tests/observes.test.ts",
             r#"
             test("sees no rows from the previous run", () => {
-              const rows = JSON.parse(database.query("boxes"));
+              const rows = database.query("boxes");
               expect(rows).toHaveLength(0);
             });
             "#,

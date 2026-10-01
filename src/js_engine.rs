@@ -316,8 +316,8 @@ pub(crate) fn promise_resolve<'js>(
 /// the script opened.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum TransactionHandling {
-    /// Commit once the promise resolves, roll back if it rejects. What a
-    /// handler that called `database.beginTransaction()` expects.
+    /// Commit once the promise resolves, roll back if it rejects: the
+    /// boundary closing a transaction the handler left open.
     Auto,
     /// Leave the transaction alone — the caller owns it. The test runner wraps
     /// whole modules in a transaction it always rolls back, and must not have
@@ -1607,8 +1607,9 @@ fn finish_transaction(succeeded: bool) -> Result<(), String> {
 
 /// Rolls back a transaction the invocation opened and never finished.
 ///
-/// `database.beginTransaction()` leaves the transaction open for the handler
-/// boundary to finish, which is what the handler paths do. Paths without such
+/// A transaction the script left open is the handler boundary's to finish,
+/// which is what the handler paths do. `database.transaction(fn)` closes its
+/// own, but an async `fn` still settling when the invocation ends does not. Paths without such
 /// a boundary — `init()`, an evaluation, a dry run — would otherwise leave it
 /// open on the thread, and since the transaction lives in thread-local storage
 /// the next invocation to land on that thread would inherit it and have its
@@ -1634,7 +1635,7 @@ impl Drop for StrayTransaction {
         if !self.outer_active && crate::database::get_current_transaction_active() {
             warn!(
                 "a transaction was left open and is being rolled back; \
-                 call database.commitTransaction() to keep its writes"
+                 do the work inside database.transaction(fn) to keep its writes"
             );
             let _ = crate::database::Database::rollback_transaction();
         }
@@ -1649,6 +1650,7 @@ fn build_http_response(result: Value<'_>) -> Result<JsHttpResponse, String> {
             .map_err(|e| format!("missing status: {}", e))?;
 
         // Try to get bodyBase64 first (for binary data), otherwise fall back to body (for text)
+        let mut serialized_as_json = false;
         let (body, used_body_base64): (Vec<u8>, bool) = if let Ok(body_base64) =
             response_obj.get::<_, String>("bodyBase64")
         {
@@ -1663,6 +1665,12 @@ fn build_http_response(result: Value<'_>) -> Result<JsHttpResponse, String> {
                 .get("body")
                 .map_err(|e| format!("missing body or bodyBase64: {}", e))?;
 
+            // An array or a plain object is data, and the only text form of
+            // data that a handler could have meant is JSON: `toString` would
+            // give "[object Object]" or the items joined by commas. Before
+            // `database` answered with values a query's rows were a `String`
+            // object, so `body: database.query(t)` worked; this keeps it
+            // working now that they are an array.
             let body_string: String = if body_value.is_string() {
                 // Direct string value
                 body_value
@@ -1677,9 +1685,20 @@ fn build_http_response(result: Value<'_>) -> Result<JsHttpResponse, String> {
                     // Bind the receiver: an inherited `toString` — `String`'s,
                     // for one — reads the value off `this` and throws when
                     // called with none.
-                    to_string_fn
+                    let text = to_string_fn
                         .call::<_, String>((rquickjs::function::This(obj.clone()),))
-                        .map_err(|e| format!("Failed to call toString: {}", e))?
+                        .map_err(|e| format!("Failed to call toString: {}", e))?;
+                    if body_value.is_array() || text == "[object Object]" {
+                        serialized_as_json = true;
+                        body_value
+                            .ctx()
+                            .json_stringify(body_value.clone())
+                            .map_err(|e| format!("Failed to serialise body as JSON: {}", e))?
+                            .and_then(|s| s.to_string().ok())
+                            .unwrap_or_else(|| "null".to_string())
+                    } else {
+                        text
+                    }
                 } else {
                     return Err("Body must be a string or have a toString() method".to_string());
                 }
@@ -1696,6 +1715,8 @@ fn build_http_response(result: Value<'_>) -> Result<JsHttpResponse, String> {
         let content_type = content_type.or_else(|| {
             if used_body_base64 {
                 Some("application/octet-stream".to_string())
+            } else if serialized_as_json {
+                Some("application/json".to_string())
             } else {
                 Some("text/plain; charset=UTF-8".to_string())
             }
@@ -3245,9 +3266,9 @@ pub fn evaluate_snippet(params: &EvalParams) -> EvalOutcome {
 
     let mut outcome = run_snippet(&rt, &ctx, params, &prepared.code, &console);
 
-    // A snippet that called `database.commitTransaction()` itself has already
-    // committed the guard's transaction, so the guard has nothing left to roll
-    // back. Report what is true rather than echoing the request.
+    // A snippet's own `database.transaction()` is a savepoint inside the
+    // guard's transaction, so committing it does not end the guard's. Report
+    // what is true rather than echoing the request all the same.
     let still_open = crate::database::get_current_transaction_active();
     outcome.rolled_back = rollback_guard.is_some() && still_open;
     drop(rollback_guard);

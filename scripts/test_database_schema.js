@@ -53,7 +53,7 @@ function testCreateTable(context) {
   console.log("Testing table creation...");
 
   // Create a users table
-  const result = database.createTable("users");
+  const result = database.ensureTable("users", { columns: [] });
   const data = JSON.parse(result);
 
   if (data.error) {
@@ -97,42 +97,46 @@ function testAddColumns(context) {
   const results = [];
 
   // Create table first
-  database.createTable("products");
+  database.ensureTable("products", { columns: [] });
 
   // Add integer column with default
-  const nameResult = database.addTextColumn(
-    "products",
-    "name",
-    false,
-    "Unnamed Product",
-  );
+  const nameResult = database.ensureTable("products", {
+    columns: [
+      {
+        name: "name",
+        type: "text",
+        nullable: false,
+        default: "Unnamed Product",
+      },
+    ],
+  });
   results.push({ type: "text", result: JSON.parse(nameResult) });
 
   // Add integer column with default
-  const priceResult = database.addIntegerColumn(
-    "products",
-    "price",
-    false,
-    "0",
-  );
+  const priceResult = database.ensureTable("products", {
+    columns: [
+      { name: "price", type: "integer", nullable: false, default: "0" },
+    ],
+  });
   results.push({ type: "integer", result: JSON.parse(priceResult) });
 
   // Add boolean column nullable
-  const activeResult = database.addBooleanColumn(
-    "products",
-    "active",
-    true,
-    null,
-  );
+  const activeResult = database.ensureTable("products", {
+    columns: [{ name: "active", type: "boolean", nullable: true }],
+  });
   results.push({ type: "boolean", result: JSON.parse(activeResult) });
 
   // Add timestamp with NOW() default
-  const createdResult = database.addTimestampColumn(
-    "products",
-    "created_at",
-    false,
-    "NOW()",
-  );
+  const createdResult = database.ensureTable("products", {
+    columns: [
+      {
+        name: "created_at",
+        type: "timestamp",
+        nullable: false,
+        default: "NOW()",
+      },
+    ],
+  });
   results.push({ type: "timestamp", result: JSON.parse(createdResult) });
 
   const allSuccess = results.every((r) => r.result.success);
@@ -159,16 +163,20 @@ function testForeignKeys(context) {
   console.log("Testing foreign key creation...");
 
   // Create two tables
-  database.createTable("authors");
-  database.createTable("books");
+  database.ensureTable("authors", { columns: [] });
+  database.ensureTable("books", { columns: [] });
 
   // Add a reference column (this now creates the column AND the FK in one step)
-  const fkResult = database.addReferenceColumn(
-    "books",
-    "author_id",
-    "authors",
-    false,
-  );
+  const fkResult = database.ensureTable("books", {
+    columns: [
+      {
+        name: "author_id",
+        type: "reference",
+        references: "authors",
+        nullable: false,
+      },
+    ],
+  });
   const data = JSON.parse(fkResult);
 
   if (data.error) {
@@ -206,8 +214,9 @@ function testDropColumn(context) {
   console.log("Testing column drop...");
 
   // Create a table and add a column
-  database.createTable("temp_table_col");
-  database.addTextColumn("temp_table_col", "temp_column", true, null);
+  database.ensureTable("temp_table_col", {
+    columns: [{ name: "temp_column", type: "text", nullable: true }],
+  });
 
   // Drop the column
   const dropResult = database.dropColumn("temp_table_col", "temp_column");
@@ -257,7 +266,7 @@ function testDropTable(context) {
   console.log("Testing table drop...");
 
   // Create and then drop a table
-  database.createTable("temp_table");
+  database.ensureTable("temp_table", { columns: [] });
 
   const dropResult = database.dropTable("temp_table");
   const data = JSON.parse(dropResult);
@@ -300,7 +309,7 @@ function testFullWorkflow(context) {
 
   try {
     // Step 1: Create a customers table
-    const createResult = database.createTable("customers");
+    const createResult = database.ensureTable("customers", { columns: [] });
     const createData = JSON.parse(createResult);
     steps.push({
       step: "createTable",
@@ -313,43 +322,57 @@ function testFullWorkflow(context) {
     }
 
     // Step 2: Add columns
-    const emailResult = database.addTextColumn(
-      "customers",
-      "email",
-      false,
-      "unknown@example.com",
-    );
+    const emailResult = database.ensureTable("customers", {
+      columns: [
+        {
+          name: "email",
+          type: "text",
+          nullable: false,
+          default: "unknown@example.com",
+        },
+      ],
+    });
     steps.push({
       step: "addTextColumn",
       success: !JSON.parse(emailResult).error,
       data: JSON.parse(emailResult),
     });
 
-    const ageResult = database.addIntegerColumn("customers", "age", true, null);
+    const ageResult = database.ensureTable("customers", {
+      columns: [{ name: "age", type: "integer", nullable: true }],
+    });
     steps.push({
       step: "addIntegerColumn",
       success: !JSON.parse(ageResult).error,
       data: JSON.parse(ageResult),
     });
 
-    const verifiedResult = database.addBooleanColumn(
-      "customers",
-      "verified",
-      false,
-      "false",
-    );
+    const verifiedResult = database.ensureTable("customers", {
+      columns: [
+        {
+          name: "verified",
+          type: "boolean",
+          nullable: false,
+          default: "false",
+        },
+      ],
+    });
     steps.push({
       step: "addBooleanColumn",
       success: !JSON.parse(verifiedResult).error,
       data: JSON.parse(verifiedResult),
     });
 
-    const joinedResult = database.addTimestampColumn(
-      "customers",
-      "joined_at",
-      false,
-      "NOW()",
-    );
+    const joinedResult = database.ensureTable("customers", {
+      columns: [
+        {
+          name: "joined_at",
+          type: "timestamp",
+          nullable: false,
+          default: "NOW()",
+        },
+      ],
+    });
     steps.push({
       step: "addTimestampColumn",
       success: !JSON.parse(joinedResult).error,
@@ -357,19 +380,21 @@ function testFullWorkflow(context) {
     });
 
     // Step 3: Create an orders table and add a foreign key
-    const ordersResult = database.createTable("orders");
+    const ordersResult = database.ensureTable("orders", { columns: [] });
     steps.push({
       step: "createOrdersTable",
       success: !JSON.parse(ordersResult).error,
       data: JSON.parse(ordersResult),
     });
 
-    database.addIntegerColumn("orders", "customer_id", false, null);
-    const fkResult = database.addReferenceColumn(
-      "orders",
-      "customer_id",
-      "customers",
-    );
+    database.ensureTable("orders", {
+      columns: [{ name: "customer_id", type: "integer", nullable: false }],
+    });
+    const fkResult = database.ensureTable("orders", {
+      columns: [
+        { name: "customer_id", type: "reference", references: "customers" },
+      ],
+    });
     steps.push({
       step: "createForeignKey",
       success: !JSON.parse(fkResult).error,

@@ -53,9 +53,8 @@ async fn fresh_counter(uri: &'static str) {
         let report = run(
             uri,
             r#"
-            database.createTable("counter");
-            database.addIntegerColumn("counter", "seq", false, "1");
-            database.insert("counter", JSON.stringify({ seq: 1 })).json()
+            database.ensureTable("counter", { columns: [{ name: "seq", type: "integer", nullable: false, default: "1" }] });
+            database.insert("counter", { seq: 1 })
             "#,
         );
         assert!(
@@ -108,14 +107,12 @@ async fn a_guarded_read_lets_ten_transactions_each_take_the_next_number() {
     let produced = race(
         URI,
         r#"
-        database.beginTransaction(20000);
-        const row = database
-            .query("counter", null, 1, null, "asc", JSON.stringify({ forUpdate: true }))
-            .json()[0];
-        const next = row.seq + 1;
-        database.update("counter", row.id, JSON.stringify({ seq: next })).json();
-        database.commitTransaction();
-        next
+        database.transaction(() => {
+            const row = database.query("counter", { limit: 1, order: "asc", forUpdate: true })[0];
+            const next = row.seq + 1;
+            database.update("counter", row.id, { seq: next });
+            return next;
+        }, { timeoutMs: 20000 })
         "#,
     )
     .await;
@@ -128,7 +125,7 @@ async fn a_guarded_read_lets_ten_transactions_each_take_the_next_number() {
 
     // And the row agrees with the last number handed out.
     let final_seq = tokio::task::spawn_blocking(|| {
-        run(URI, r#"database.query("counter").json()[0].seq"#)
+        run(URI, r#"database.query("counter")[0].seq"#)
             .outcome
             .value
             .and_then(|v| v.as_i64())
@@ -154,12 +151,12 @@ async fn an_unguarded_read_still_loses_updates() {
     let produced = race(
         URI,
         r#"
-        database.beginTransaction(20000);
-        const row = database.query("counter").json()[0];
-        const next = row.seq + 1;
-        database.update("counter", row.id, JSON.stringify({ seq: next })).json();
-        database.commitTransaction();
-        next
+        database.transaction(() => {
+            const row = database.query("counter")[0];
+            const next = row.seq + 1;
+            database.update("counter", row.id, { seq: next });
+            return next;
+        }, { timeoutMs: 20000 })
         "#,
     )
     .await;
@@ -189,9 +186,11 @@ async fn for_update_outside_a_transaction_is_refused() {
         run(
             URI,
             r#"
-            database
-                .query("counter", null, 1, null, "asc", JSON.stringify({ forUpdate: true }))
-                .json()
+            try {
+                database.query("counter", { limit: 1, order: "asc", forUpdate: true });
+            } catch (e) {
+                ({ error: e.message })
+            }
             "#,
         )
     })
@@ -204,7 +203,7 @@ async fn for_update_outside_a_transaction_is_refused() {
         .and_then(|e| e.as_str())
         .unwrap_or_else(|| panic!("forUpdate without a transaction should be refused: {answer}"));
     assert!(
-        error.contains("beginTransaction"),
+        error.contains("database.transaction"),
         "the refusal should say what to do about it: {error}"
     );
 }
@@ -224,11 +223,12 @@ async fn a_misspelled_option_is_refused_rather_than_ignored() {
         run(
             URI,
             r#"
-            database.beginTransaction(5000);
-            const answer = database
-                .query("counter", null, 1, null, "asc", JSON.stringify({ forupdate: true }))
-                .json();
-            database.rollbackTransaction();
+            let answer = null;
+            try {
+                database.query("counter", { limit: 1, order: "asc", forupdate: true });
+            } catch (e) {
+                answer = { error: e.message };
+            }
             answer
             "#,
         )
@@ -245,40 +245,4 @@ async fn a_misspelled_option_is_refused_rather_than_ignored() {
         error.contains("forupdate") && error.contains("forUpdate"),
         "the refusal should name what was passed and what is supported: {error}"
     );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_skipped_positional_argument_may_be_written_as_null() {
-    let _guard = test_mutex().lock().await;
-    setup_env().await;
-
-    const URI: &str = "test://concurrency/null-args";
-    fresh_counter(URI).await;
-
-    // The documented calling convention — `query(table, null, 100, "ts",
-    // "desc")` — used to raise a type error naming a conversion the script
-    // never asked for. There is no way to reach a later argument without it.
-    let report = tokio::task::spawn_blocking(|| {
-        run(
-            URI,
-            r#"
-            const all = database.query("counter", null, 10).json();
-            const ordered = database.query("counter", null, 10, "seq", "desc").json();
-            const skipped = database.query("counter", null, null, null, null).json();
-            ({ all: all.length, ordered: ordered.length, skipped: skipped.length })
-            "#,
-        )
-    })
-    .await
-    .expect("eval panicked");
-
-    assert!(report.ok, "{:?}", report.outcome.error);
-    let answer = report.outcome.value.expect("a value");
-    for key in ["all", "ordered", "skipped"] {
-        assert_eq!(
-            answer.get(key).and_then(|v| v.as_i64()),
-            Some(1),
-            "null should skip an argument, not fail the call: {answer}"
-        );
-    }
 }

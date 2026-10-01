@@ -84,11 +84,10 @@ async fn a_schema_change_completes_while_the_caller_holds_the_table() {
         "test://schema-locks/index",
         true,
         r#"
-        database.createTable("items");
-        database.addTextColumn("items", "item_id", true);
-        database.insert("items", JSON.stringify({ item_id: "sword" }));
-        const indexed = database.addUniqueIndex("items", JSON.stringify(["item_id"])).json();
-        ({ indexed: indexed.success === true, error: indexed.error || null })
+        database.ensureTable("items", { columns: [{ name: "item_id", type: "text", nullable: true }] });
+        database.insert("items", { item_id: "sword" });
+        const indexed = database.ensureTable("items", { columns: [], uniqueIndexes: [["item_id"]] });
+        ({ indexed: Array.isArray(indexed.uniqueIndexesEnsured), error: null })
         "#,
     )
     .await;
@@ -107,28 +106,31 @@ async fn a_failed_schema_change_leaves_the_transaction_usable() {
     // Joining the transaction is what makes this a question at all: a statement
     // that errors aborts the transaction it ran in, and every call after it
     // would fail with "current transaction is aborted". The savepoint around
-    // each schema change is what keeps the caller's transaction alive — and
-    // these calls answer with `{ error }` rather than throwing, so scripts
-    // routinely carry on after one.
+    // each schema change is what keeps the caller's transaction alive, so a
+    // script that catches the refusal can carry on.
     drop_table("test://schema-locks/recover", "dupes").await;
 
     let report = eval(
         "test://schema-locks/recover",
         true,
         r#"
-        database.createTable("dupes");
-        database.addTextColumn("dupes", "label", true);
-        database.insert("dupes", JSON.stringify({ label: "same" }));
-        database.insert("dupes", JSON.stringify({ label: "same" }));
+        database.ensureTable("dupes", { columns: [{ name: "label", type: "text", nullable: true }] });
+        database.insert("dupes", { label: "same" });
+        database.insert("dupes", { label: "same" });
 
-        const failed = database.addUniqueIndex("dupes", JSON.stringify(["label"])).json();
-        const rows = database.query("dupes").json();
-        database.insert("dupes", JSON.stringify({ label: "third" }));
+        let failed = {};
+        try {
+            database.ensureTable("dupes", { columns: [], uniqueIndexes: [["label"]] });
+        } catch (e) {
+            failed = { error: e.message };
+        }
+        const rows = database.query("dupes");
+        database.insert("dupes", { label: "third" });
 
         ({
           refused: typeof failed.error === "string",
           readable: rows.length,
-          writable: database.query("dupes").json().length,
+          writable: database.query("dupes").length,
         })
         "#,
     )
@@ -160,8 +162,7 @@ async fn a_rolled_back_transaction_takes_its_schema_with_it() {
         "test://schema-locks/rollback",
         true,
         r#"
-        database.createTable("ephemeral");
-        database.addTextColumn("ephemeral", "label", true);
+        database.ensureTable("ephemeral", { columns: [{ name: "label", type: "text", nullable: true }] });
         ({ created: true })
         "#,
     )
@@ -172,8 +173,9 @@ async fn a_rolled_back_transaction_takes_its_schema_with_it() {
         "test://schema-locks/rollback",
         true,
         r#"
-        const answer = database.query("ephemeral").json();
-        ({ gone: typeof answer.error === "string" })
+        let gone = false;
+        try { database.query("ephemeral"); } catch (e) { gone = true; }
+        ({ gone })
         "#,
     )
     .await;
@@ -240,7 +242,7 @@ async fn ensuring_a_table_converges_it_and_then_does_nothing() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
-    const SCHEMA: &str = r#"JSON.stringify({
+    const SCHEMA: &str = r#"({
         columns: [
           { name: "item_id", type: "text" },
           { name: "owner", type: "text" },
@@ -258,7 +260,7 @@ async fn ensuring_a_table_converges_it_and_then_does_nothing() {
         false,
         &format!(
             r#"
-            const answer = database.ensureTable("world_items", {SCHEMA}).json();
+            const answer = database.ensureTable("world_items", {SCHEMA});
             ({{ created: answer.created, added: answer.columnsAdded, error: answer.error || null }})
             "#
         ),
@@ -282,13 +284,13 @@ async fn ensuring_a_table_converges_it_and_then_does_nothing() {
         false,
         &format!(
             r#"
-            const answer = database.ensureTable("world_items", {SCHEMA}).json();
-            database.insert("world_items", JSON.stringify({{ item_id: "sword", owner: "me" }}));
+            const answer = database.ensureTable("world_items", {SCHEMA});
+            database.insert("world_items", {{ item_id: "sword", owner: "me" }});
             ({{
               created: answer.created,
               added: answer.columnsAdded,
               error: answer.error || null,
-              rows: database.query("world_items").json().length,
+              rows: database.query("world_items").length,
             }})
             "#
         ),
@@ -307,14 +309,14 @@ async fn ensuring_a_table_converges_it_and_then_does_nothing() {
         "test://schema-locks/ensure",
         false,
         r#"
-        const answer = database.ensureTable("world_items", JSON.stringify({
+        const answer = database.ensureTable("world_items", {
             columns: [
               { name: "item_id", type: "text" },
               { name: "durability", type: "integer" },
             ],
-        })).json();
+        });
         ({ added: answer.columnsAdded, error: answer.error || null,
-           rowsKept: database.query("world_items").json().length })
+           rowsKept: database.query("world_items").length })
         "#,
     )
     .await;

@@ -259,8 +259,8 @@ impl TransactionGuard {
     /// Gives up the rollback-on-drop without ending the transaction.
     ///
     /// For a caller that holds the guard across the work it is protecting,
-    /// dropping it is the point. `database.beginTransaction()` is the opposite
-    /// case: the script expects the transaction to still be open on the next
+    /// dropping it is the point. The host call behind `database.transaction()`
+    /// is the opposite case: the script expects the transaction to still be open on the next
     /// line, so the guard must not outlive the call that made it, and the
     /// transaction must. Whoever releases it takes on finishing it — for a
     /// script that is the handler boundary, which commits on success and rolls
@@ -397,7 +397,7 @@ impl SessionGuards {
 
     /// The guards a transaction with this budget runs under.
     ///
-    /// A budget may only tighten. `beginTransaction(600000)` must not be a way
+    /// A budget may only tighten. `transaction(fn, { timeoutMs: 600000 })` must not be a way
     /// for a script to buy itself ten minutes of lock waiting when the engine
     /// allows five seconds, so each guard is the lower of the two — treating a
     /// disabled ceiling as no ceiling at all.
@@ -796,126 +796,6 @@ impl Database {
             Ok(())
         })
     }
-
-    /// Create a named savepoint
-    pub fn create_savepoint(name: Option<&str>) -> Result<String, String> {
-        // Caller-supplied names are interpolated into DDL, so restrict them to
-        // safe SQL identifiers before touching the transaction (defense in
-        // depth: the extended query protocol already blocks multi-statement
-        // injection). Validated once here, so rollback/release — which only
-        // accept names already on the stack — are safe by construction.
-        if let Some(n) = name {
-            crate::db_schema_utils::validate_identifier(n)
-                .map_err(|e| format!("Invalid savepoint name: {}", e))?;
-        }
-
-        CURRENT_TRANSACTION.with(|tx_cell| {
-            let mut tx_option = tx_cell.borrow_mut();
-
-            let state = tx_option.as_mut().ok_or("No active transaction")?;
-
-            state.check_timeout()?;
-
-            let savepoint_name = if let Some(n) = name {
-                if state.savepoint_stack.contains(&n.to_string()) {
-                    return Err(format!("Savepoint already exists: {}", n));
-                }
-                n.to_string()
-            } else {
-                state.savepoint_counter += 1;
-                format!("sp_{}", state.savepoint_counter)
-            };
-
-            let tx_ref = state
-                .transaction
-                .as_mut()
-                .ok_or("Transaction not available")?;
-
-            run_blocking(async {
-                sqlx::query(sqlx::AssertSqlSafe(format!("SAVEPOINT {}", savepoint_name)))
-                    .execute(&mut **tx_ref)
-                    .await
-                    .map_err(|e| format!("Failed to create savepoint: {}", e))?;
-                Ok::<(), String>(())
-            })?;
-
-            state.savepoint_stack.push(savepoint_name.clone());
-            Ok(savepoint_name)
-        })
-    }
-
-    /// Rollback to a named savepoint
-    pub fn rollback_to_savepoint(name: &str) -> Result<(), String> {
-        CURRENT_TRANSACTION.with(|tx_cell| {
-            let mut tx_option = tx_cell.borrow_mut();
-
-            let state = tx_option.as_mut().ok_or("No active transaction")?;
-
-            state.check_timeout()?;
-
-            if !state.savepoint_stack.contains(&name.to_string()) {
-                return Err(format!("Savepoint not found: {}", name));
-            }
-
-            let tx_ref = state
-                .transaction
-                .as_mut()
-                .ok_or("Transaction not available")?;
-
-            run_blocking(async {
-                sqlx::query(sqlx::AssertSqlSafe(format!(
-                    "ROLLBACK TO SAVEPOINT {}",
-                    name
-                )))
-                .execute(&mut **tx_ref)
-                .await
-                .map_err(|e| format!("Failed to rollback to savepoint: {}", e))?;
-                Ok::<(), String>(())
-            })?;
-
-            // Remove this savepoint and all after it from the stack
-            if let Some(pos) = state.savepoint_stack.iter().position(|s| s == name) {
-                state.savepoint_stack.truncate(pos);
-            }
-
-            Ok(())
-        })
-    }
-
-    /// Release a named savepoint
-    pub fn release_savepoint(name: &str) -> Result<(), String> {
-        CURRENT_TRANSACTION.with(|tx_cell| {
-            let mut tx_option = tx_cell.borrow_mut();
-
-            let state = tx_option.as_mut().ok_or("No active transaction")?;
-
-            state.check_timeout()?;
-
-            if !state.savepoint_stack.contains(&name.to_string()) {
-                return Err(format!("Savepoint not found: {}", name));
-            }
-
-            let tx_ref = state
-                .transaction
-                .as_mut()
-                .ok_or("Transaction not available")?;
-
-            run_blocking(async {
-                sqlx::query(sqlx::AssertSqlSafe(format!("RELEASE SAVEPOINT {}", name)))
-                    .execute(&mut **tx_ref)
-                    .await
-                    .map_err(|e| format!("Failed to release savepoint: {}", e))?;
-                Ok::<(), String>(())
-            })?;
-
-            // Remove this savepoint and all after it from the stack
-            if let Some(pos) = state.savepoint_stack.iter().position(|s| s == name) {
-                state.savepoint_stack.truncate(pos);
-            }
-
-            Ok(())
-        })
-    }
 }
 
 /// Initialize database connection and optionally run migrations
@@ -1290,47 +1170,6 @@ mod tests {
     }
 
     #[test]
-    fn test_create_savepoint_without_transaction() {
-        // Test that creating savepoint without transaction returns error
-        let result = Database::create_savepoint(None);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("No active transaction"));
-    }
-
-    #[test]
-    fn test_create_savepoint_rejects_unsafe_name() {
-        // A savepoint name is interpolated into DDL; injection attempts must be
-        // rejected by identifier validation before any transaction work.
-        for bad in ["x; DROP TABLE users", "a b", "1foo", "foo\"bar", ""] {
-            let result = Database::create_savepoint(Some(bad));
-            assert!(
-                result
-                    .as_ref()
-                    .is_err_and(|e| e.contains("Invalid savepoint name")),
-                "name {:?} should be rejected as invalid, got {:?}",
-                bad,
-                result
-            );
-        }
-    }
-
-    #[test]
-    fn test_rollback_to_savepoint_without_transaction() {
-        // Test that rollback to savepoint without transaction returns error
-        let result = Database::rollback_to_savepoint("sp1");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("No active transaction"));
-    }
-
-    #[test]
-    fn test_release_savepoint_without_transaction() {
-        // Test that releasing savepoint without transaction returns error
-        let result = Database::release_savepoint("sp1");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("No active transaction"));
-    }
-
-    #[test]
     fn test_transaction_guard_commit() {
         // Test that transaction guard can be marked as committed
         let mut guard = TransactionGuard::new();
@@ -1379,20 +1218,16 @@ mod tests {
                         return Err("Transaction not active after begin".to_string());
                     }
 
-                    // Create a savepoint
-                    let sp_result = Database::create_savepoint(Some("test_sp"));
-                    if let Err(e) = sp_result {
-                        return Err(format!("Failed to create savepoint: {}", e));
+                    // A nested begin is a savepoint, and its commit releases it
+                    match Database::begin_transaction(None) {
+                        Ok(guard) => guard.release(),
+                        Err(e) => return Err(format!("Failed to open a savepoint: {}", e)),
                     }
-                    let sp_name = sp_result.unwrap();
-                    if sp_name != "test_sp" {
-                        return Err(format!("Unexpected savepoint name: {}", sp_name));
+                    if let Err(e) = Database::commit_transaction() {
+                        return Err(format!("Failed to release the savepoint: {}", e));
                     }
-
-                    // Release the savepoint
-                    let release_result = Database::release_savepoint("test_sp");
-                    if let Err(e) = release_result {
-                        return Err(format!("Failed to release savepoint: {}", e));
+                    if !get_current_transaction_active() {
+                        return Err("Releasing a savepoint ended the transaction".to_string());
                     }
 
                     // Commit transaction
@@ -1532,22 +1367,20 @@ mod tests {
                         return Err("Transaction not active".to_string());
                     }
 
-                    let sp1_name = match Database::create_savepoint(None) {
-                        Ok(name) => name,
-                        Err(e) => return Err(format!("Failed to create savepoint 1: {}", e)),
-                    };
-
-                    let sp2_name = match Database::create_savepoint(None) {
-                        Ok(name) => name,
-                        Err(e) => return Err(format!("Failed to create savepoint 2: {}", e)),
-                    };
-
-                    if sp1_name == sp2_name {
-                        return Err(format!("Savepoint names should be different: {}", sp1_name));
+                    // Two nested begins are two savepoints. Rolling back
+                    // twice unwinds both and leaves the outer transaction.
+                    for depth in 1..=2 {
+                        match Database::begin_transaction(None) {
+                            Ok(guard) => guard.release(),
+                            Err(e) => {
+                                return Err(format!("Failed to open savepoint {}: {}", depth, e));
+                            }
+                        }
                     }
-
-                    if let Err(e) = Database::rollback_to_savepoint(&sp1_name) {
-                        return Err(format!("Failed to rollback to savepoint: {}", e));
+                    for depth in (1..=2).rev() {
+                        if let Err(e) = Database::rollback_transaction() {
+                            return Err(format!("Failed to roll back savepoint {}: {}", depth, e));
+                        }
                     }
 
                     if !get_current_transaction_active() {

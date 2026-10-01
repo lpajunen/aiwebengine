@@ -203,9 +203,9 @@ into the abandoned run.
   resolvers and jobs with its own, and nothing would undo that.
 - **`schedulerService.clearAll()` clears nothing.**
 - **Database writes roll back** with `rollback` (the default), including assets
-  and secrets, which go through the same transaction. A script that calls
-  `database.commitTransaction()` itself commits the check's transaction and
-  defeats this.
+  and secrets, which go through the same transaction. A script's own
+  `database.transaction(fn)` is a savepoint inside the check's transaction, so
+  it cannot commit its way out of this.
 
 What is not isolated is everything the engine does not mediate: an outbound
 `fetch`, a write to a third-party system. Checking runs the script's own code —

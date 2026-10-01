@@ -255,7 +255,7 @@ async fn claim_slot(conn: &mut sqlx::postgres::PgConnection) -> Option<i32> {
 /// Give the claimed slot back the schema and nothing else.
 ///
 /// Recreated from the template rather than emptied table by table, because
-/// "empty" is more than truncation: a script's `database.createTable` leaves a
+/// "empty" is more than truncation: a script's `database.ensureTable` leaves a
 /// table the schema never mentions, and a test that asserts on what tables
 /// exist would see the previous test's. `WITH (FORCE)` because a process killed
 /// by a timeout can leave connections that outlive it by a moment.

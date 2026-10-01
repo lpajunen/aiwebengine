@@ -103,23 +103,26 @@ async fn a_planning_turn_reads_and_cannot_write() {
     let out = value(
         "test://attenuation/plan",
         r#"
-        database.ensureTable("notes", JSON.stringify({
+        database.ensureTable("notes", {
             columns: [{ name: "body", type: "text" }],
-        }));
-        database.insert("notes", JSON.stringify({ body: "before" }));
+        });
+        database.insert("notes", { body: "before" });
 
         const run = sandbox.run(`
-            const rows = database.query("notes").json();
-            // The database answers with an envelope rather than throwing, so
-            // a refusal is read rather than caught.
-            const write = database.insert("notes", JSON.stringify({ body: "during" })).json();
-            ({ read: rows.length, refused: write.error || null });
+            const rows = database.query("notes");
+            let refused = null;
+            try {
+                database.insert("notes", { body: "during" });
+            } catch (e) {
+                refused = e.message;
+            }
+            ({ read: rows.length, refused });
         `, { capabilities: ["read_script_data"] });
 
         ({
             value: run.value,
             error: run.error,
-            after: database.query("notes").json().length,
+            after: database.query("notes").length,
         })
         "#,
     )

@@ -28,9 +28,23 @@ async fn eval_against_table(uri: &str, source: &str) -> EvalReport {
 
     let prepared = format!(
         r#"
-        database.dropTable("readings");
-        database.createTable("readings");
-        database.addIntegerColumn("readings", "amount", true);
+        // A refusal throws; these read it back as the answer it used to be.
+        function attempt(f) {{
+            try {{ return f(); }} catch (e) {{ return {{ error: e.message }}; }}
+        }}
+        // Runs `f` in a transaction and rolls it back on purpose.
+        function rolledBack(f) {{
+            const ROLLBACK = {{}};
+            let out;
+            try {{
+                database.transaction(() => {{ out = f(); throw ROLLBACK; }}, {{ timeoutMs: 5000 }});
+            }} catch (e) {{
+                if (e !== ROLLBACK) throw e;
+            }}
+            return out;
+        }}
+        try {{ database.dropTable("readings"); }} catch (e) {{}}
+        database.ensureTable("readings", {{ columns: [{{ name: "amount", type: "integer", nullable: true }}] }});
         {}
         "#,
         source
@@ -69,7 +83,7 @@ async fn a_fractional_value_is_refused_by_an_integer_column() {
     let report = eval_against_table(
         "test://db-binding/fractional",
         r#"
-        database.insert("readings", JSON.stringify({ amount: 1.57 })).json()
+        attempt(() => database.insert("readings", { amount: 1.57 }))
         "#,
     )
     .await;
@@ -100,10 +114,10 @@ async fn an_integer_bind_does_not_poison_a_later_fractional_one() {
     let report = eval_against_table(
         "test://db-binding/poisoning",
         r#"
-        database.beginTransaction(5000);
-        const first = database.insert("readings", JSON.stringify({ amount: 2 })).json();
-        const second = database.insert("readings", JSON.stringify({ amount: 1.57 })).json();
-        database.rollbackTransaction();
+        const { first, second } = rolledBack(() => ({
+            first: database.insert("readings", { amount: 2 }),
+            second: attempt(() => database.insert("readings", { amount: 1.57 })),
+        }));
         ({ first: first, second: second })
         "#,
     )
@@ -133,10 +147,8 @@ async fn the_refusal_is_the_same_in_and_out_of_a_transaction() {
     let report = eval_against_table(
         "test://db-binding/consistency",
         r#"
-        const outside = database.insert("readings", JSON.stringify({ amount: 1.57 })).json();
-        database.beginTransaction(5000);
-        const inside = database.insert("readings", JSON.stringify({ amount: 1.57 })).json();
-        database.rollbackTransaction();
+        const outside = attempt(() => database.insert("readings", { amount: 1.57 }));
+        const inside = rolledBack(() => attempt(() => database.insert("readings", { amount: 1.57 })));
         ({ outside: outside, inside: inside })
         "#,
     )
@@ -162,7 +174,7 @@ async fn a_whole_number_that_arrived_as_a_float_is_accepted() {
     let report = eval_against_table(
         "test://db-binding/whole-float",
         r#"
-        database.insert("readings", JSON.stringify({ amount: 9 / 3 })).json()
+        database.insert("readings", { amount: 9 / 3 })
         "#,
     )
     .await;
@@ -182,7 +194,7 @@ async fn a_null_reaches_a_column_that_is_not_text() {
     let report = eval_against_table(
         "test://db-binding/null",
         r#"
-        database.insert("readings", JSON.stringify({ amount: null })).json()
+        database.insert("readings", { amount: null })
         "#,
     )
     .await;
@@ -208,12 +220,12 @@ async fn a_refused_value_leaves_the_transaction_usable() {
     let report = eval_against_table(
         "test://db-binding/survivable",
         r#"
-        database.beginTransaction(5000);
-        database.insert("readings", JSON.stringify({ amount: 1 }));
-        database.insert("readings", JSON.stringify({ amount: 1.57 }));
-        database.insert("readings", JSON.stringify({ amount: 3 }));
-        database.commitTransaction();
-        database.query("readings").json().map(row => row.amount).sort((a, b) => a - b)
+        database.transaction(() => {
+            database.insert("readings", { amount: 1 });
+            attempt(() => database.insert("readings", { amount: 1.57 }));
+            database.insert("readings", { amount: 3 });
+        }, { timeoutMs: 5000 });
+        database.query("readings").map(row => row.amount).sort((a, b) => a - b)
         "#,
     )
     .await;
@@ -237,10 +249,10 @@ async fn a_filter_is_bound_as_the_column_it_compares() {
     let report = eval_against_table(
         "test://db-binding/filter",
         r#"
-        database.insert("readings", JSON.stringify({ amount: 5 }));
-        database.insert("readings", JSON.stringify({ amount: 50 }));
-        const above = database.query("readings", JSON.stringify({ amount: { $gt: 9 } })).json();
-        const fractional = database.query("readings", JSON.stringify({ amount: 1.57 })).json();
+        database.insert("readings", { amount: 5 });
+        database.insert("readings", { amount: 50 });
+        const above = database.query("readings", { where: { amount: { $gt: 9 } } });
+        const fractional = attempt(() => database.query("readings", { where: { amount: 1.57 } }));
         ({ above: above, fractional: fractional })
         "#,
     )
@@ -271,15 +283,16 @@ async fn a_failed_statement_no_longer_takes_the_transaction_with_it() {
     let report = eval_against_table(
         "test://db-binding/survives-a-real-error",
         r#"
-        database.addUniqueIndex("readings", JSON.stringify(["amount"]));
-        database.beginTransaction(5000);
-        database.insert("readings", JSON.stringify({ amount: 1 }));
-        const duplicate = database.insert("readings", JSON.stringify({ amount: 1 })).json();
-        database.insert("readings", JSON.stringify({ amount: 2 }));
-        database.commitTransaction();
+        database.ensureTable("readings", { columns: [], uniqueIndexes: [["amount"]] });
+        const duplicate = database.transaction(() => {
+            database.insert("readings", { amount: 1 });
+            const duplicate = attempt(() => database.insert("readings", { amount: 1 }));
+            database.insert("readings", { amount: 2 });
+            return duplicate;
+        }, { timeoutMs: 5000 });
         ({
           duplicate: duplicate,
-          amounts: database.query("readings").json().map(row => row.amount).sort((a, b) => a - b),
+          amounts: database.query("readings").map(row => row.amount).sort((a, b) => a - b),
         })
         "#,
     )
@@ -306,10 +319,10 @@ async fn a_float_column_holds_a_javascript_number() {
     let report = eval_against_table(
         "test://db-binding/float-column",
         r#"
-        database.addFloatColumn("readings", "celsius", true);
-        database.insert("readings", JSON.stringify({ amount: 1, celsius: 21.5 }));
-        database.insert("readings", JSON.stringify({ amount: 2, celsius: 3.25 }));
-        const warm = database.query("readings", JSON.stringify({ celsius: { $gt: 10 } })).json();
+        database.ensureTable("readings", { columns: [{ name: "celsius", type: "float", nullable: true }] });
+        database.insert("readings", { amount: 1, celsius: 21.5 });
+        database.insert("readings", { amount: 2, celsius: 3.25 });
+        const warm = database.query("readings", { where: { celsius: { $gt: 10 } } });
         ({ stored: warm.length, celsius: warm[0].celsius })
         "#,
     )
@@ -336,10 +349,10 @@ async fn a_bigint_column_holds_epoch_milliseconds() {
     let report = eval_against_table(
         "test://db-binding/bigint-column",
         r#"
-        database.addBigintColumn("readings", "occurred_at_ms", true);
+        database.ensureTable("readings", { columns: [{ name: "occurred_at_ms", type: "bigint", nullable: true }] });
         const now = Date.now();
-        const refused = database.insert("readings", JSON.stringify({ amount: now })).json();
-        const stored = database.insert("readings", JSON.stringify({ occurred_at_ms: now })).json();
+        const refused = attempt(() => database.insert("readings", { amount: now }));
+        const stored = database.insert("readings", { occurred_at_ms: now });
         ({ refused: refused, stored: stored, now: now })
         "#,
     )

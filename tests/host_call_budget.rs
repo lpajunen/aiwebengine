@@ -81,10 +81,9 @@ async fn a_blocked_call_answers_within_the_budget_it_was_given() {
 
     let prepared = eval(
         r#"
-        database.dropTable("held");
-        database.createTable("held");
-        database.addTextColumn("held", "label", true);
-        database.insert("held", JSON.stringify({ label: "one" }));
+        try { database.dropTable("held"); } catch (e) {}
+        database.ensureTable("held", { columns: [{ name: "label", type: "text", nullable: true }] });
+        database.insert("held", { label: "one" });
         ({ ready: true })
         "#,
         10_000,
@@ -106,10 +105,13 @@ async fn a_blocked_call_answers_within_the_budget_it_was_given() {
     .expect("take the lock");
 
     let started = Instant::now();
-    // Read as a string: these calls answer with an error envelope rather than
-    // throwing, so the evaluation itself succeeds and the verdict is in the
-    // value it produced.
-    let blocked = eval(r#"String(database.query("held"))"#, BUDGET_MS).await;
+    // Caught and returned, so the evaluation itself succeeds and the verdict
+    // is in the value it produced.
+    let blocked = eval(
+        r#"(function () { try { return JSON.stringify(database.query("held")); } catch (e) { return e.message; } })()"#,
+        BUDGET_MS,
+    )
+    .await;
     let waited = started.elapsed();
 
     assert!(
@@ -136,7 +138,7 @@ async fn a_blocked_call_answers_within_the_budget_it_was_given() {
 
     // The connection whose query was dropped mid-flight must not poison the
     // pool: the engine has to keep working once the lock is gone.
-    let after = eval(r#"database.query("held").json().length"#, 10_000).await;
+    let after = eval(r#"database.query("held").length"#, 10_000).await;
     assert!(after.ok, "{:?}", after.outcome.error);
     assert_eq!(after.outcome.value.expect("a value"), serde_json::json!(1));
 

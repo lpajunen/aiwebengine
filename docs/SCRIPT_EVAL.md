@@ -126,9 +126,10 @@ circular structure, most often — `value` is absent and `valueError` explains
 why, while `ok` stays true. The snippet ran fine; only its value could not be
 carried back.
 
-`rolledBack` reports what happened, not what was asked for. A snippet that calls
-`database.commitTransaction()` itself commits the evaluation's transaction, and
-the response says so.
+`rolledBack` reports what happened, not what was asked for. A snippet's own
+`database.transaction(fn)` is a savepoint inside the evaluation's transaction,
+so committing it does not commit the evaluation's — the rollback still undoes
+it.
 
 ## Console capture
 

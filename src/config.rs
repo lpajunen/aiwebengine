@@ -457,7 +457,7 @@ pub struct RepositoryConfig {
     ///
     /// Deliberately generous. A transaction that has been idle this long is
     /// leaked by any reading, and the bound that should actually fire first is
-    /// the one `database.beginTransaction(timeoutMs)` asks for.
+    /// the one `database.transaction(fn, { timeoutMs })` asks for.
     #[serde(default = "default_idle_in_transaction_timeout_ms")]
     pub idle_in_transaction_timeout_ms: u64,
 }

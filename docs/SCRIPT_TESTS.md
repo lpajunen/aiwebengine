@@ -96,9 +96,9 @@ another file set, and a case is always attributed to the file it came from.
 
 With `rollback` (the default), the run holds a transaction it never commits, so
 **database writes disappear** when it ends. Nothing else does: assets written,
-secrets written, and outbound `fetch` calls are real and survive the run. A test
-that calls `database.commitTransaction()` itself commits the run's transaction
-and defeats the rollback.
+secrets written, and outbound `fetch` calls are real and survive the run. A
+test's own `database.transaction(fn)` is a savepoint inside the run's
+transaction, so it cannot commit its way past the rollback.
 
 Registrations are switched off during a run — `routeRegistry`, `mcpRegistry`,
 and `schedulerService` calls do nothing, because a route or job registered by a

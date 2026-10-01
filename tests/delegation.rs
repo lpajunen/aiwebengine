@@ -661,9 +661,11 @@ async fn a_read_only_grant_stops_a_delegated_task_from_writing() {
             if (String(e.message).indexOf("write_storage") < 0) { throw e; }
           }
 
-          const wrote = database.insert("notes", JSON.stringify({ body: "x" })).json();
-          if (!wrote.error || wrote.error.indexOf("write_script_data") < 0) {
-            throw new Error("the database was writable: " + JSON.stringify(wrote));
+          try {
+            database.insert("notes", { body: "x" });
+            throw new Error("the database was writable");
+          } catch (e) {
+            if (String(e.message).indexOf("write_script_data") < 0) { throw e; }
           }
 
           try {

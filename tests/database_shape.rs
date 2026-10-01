@@ -1,10 +1,9 @@
-//! The shape a `database` call answers with.
+//! The shape a `database` call answers in.
 //!
-//! Phase 2 gave `fetch` a response carrying `json()`; these calls answered with
-//! a bare JSON string, so reading a result depended on which API produced it.
-//! They now answer with the same affordances — and, because the value is a
-//! `String` object rather than a plain one, every string operation written
-//! against the old return keeps working to the letter.
+//! The calls used to answer with JSON text — and, for a while, with a `String`
+//! object that could also `.json()` itself — and reported a failure as
+//! `{"error": ...}` inside that text, so every caller parsed and then checked.
+//! They answer with values now, and a failure throws.
 
 mod common;
 
@@ -23,10 +22,9 @@ async fn eval_with_rows(uri: &str, source: &str) -> EvalReport {
 
     let prepared = format!(
         r#"
-        database.dropTable("notes");
-        database.createTable("notes");
-        database.addTextColumn("notes", "label", true);
-        database.insert("notes", JSON.stringify({{ label: "one" }}));
+        try {{ database.dropTable("notes"); }} catch (e) {{}}
+        database.ensureTable("notes", {{ columns: [{{ name: "label", type: "text", nullable: true }}] }});
+        database.insert("notes", {{ label: "one" }});
         {}
         "#,
         source
@@ -46,212 +44,149 @@ async fn eval_with_rows(uri: &str, source: &str) -> EvalReport {
         .expect("evaluation panicked")
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn the_json_string_form_still_parses() {
-    let _guard = test_mutex().lock().await;
-    setup_env().await;
-
-    // The idiom every deployed script uses. `JSON.parse` converts its argument
-    // with ToString first, so the raw envelope comes back.
-    let report = eval_with_rows(
-        "test://db-shape/legacy",
-        r#"
-        const rows = JSON.parse(database.query("notes"));
-        ({ count: rows.length, label: rows[0].label })
-        "#,
-    )
-    .await;
-
+async fn value_of(uri: &str, source: &str) -> serde_json::Value {
+    let report = eval_with_rows(uri, source).await;
     assert!(report.ok, "{:?}", report.outcome.error);
-    let value = report.outcome.value.expect("a value");
-    assert_eq!(value["count"], json!(1));
-    assert_eq!(value["label"], json!("one"));
+    report.outcome.value.expect("a value")
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_result_parses_itself() {
+async fn a_read_answers_with_rows() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
-
-    // The same affordance a `fetch` response has, so reading a result no longer
-    // depends on which API produced it.
-    let report = eval_with_rows(
-        "test://db-shape/json",
+    let value = value_of(
+        "test://db-shape/rows",
         r#"
-        const rows = database.query("notes").json();
-        ({ count: rows.length, label: rows[0].label })
+        const rows = database.query("notes");
+        ({ isArray: Array.isArray(rows), count: rows.length, label: rows[0].label })
         "#,
     )
     .await;
-
-    assert!(report.ok, "{:?}", report.outcome.error);
-    let value = report.outcome.value.expect("a value");
-    assert_eq!(value["count"], json!(1));
-    assert_eq!(value["label"], json!("one"));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_result_can_be_awaited() {
-    let _guard = test_mutex().lock().await;
-    setup_env().await;
-
-    let report = eval_with_rows(
-        "test://db-shape/await",
-        r#"
-        (async function () {
-          const answer = await database.query("notes");
-          const rows = answer.json();
-          return { count: rows.length, label: rows[0].label, thenGone: typeof answer.then };
-        })()
-        "#,
-    )
-    .await;
-
-    assert!(report.ok, "{:?}", report.outcome.error);
-    let value = report.outcome.value.expect("a value");
-    assert_eq!(value["count"], json!(1));
-    assert_eq!(value["label"], json!("one"));
     assert_eq!(
-        value["thenGone"],
-        json!("undefined"),
-        "the awaited value must not itself be thenable"
+        value,
+        json!({ "isArray": true, "count": 1, "label": "one" })
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn string_operations_on_a_result_still_work() {
+async fn a_write_answers_with_the_row_and_no_success_flag() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
-
-    // The reason the value is a `String` object rather than a plain one: code
-    // written against the string these calls used to return needs no change.
-    let report = eval_with_rows(
-        "test://db-shape/string-ops",
-        r#"
-        const answer = database.query("notes");
-        ({
-          hasLength: answer.length > 0,
-          mentionsLabel: answer.indexOf("label") > 0,
-          startsAsArray: answer.slice(0, 1),
-          concatenates: ("rows=" + answer).slice(0, 5),
-          truthy: !!answer,
-        })
-        "#,
-    )
-    .await;
-
-    assert!(report.ok, "{:?}", report.outcome.error);
-    let value = report.outcome.value.expect("a value");
-    assert_eq!(value["hasLength"], json!(true));
-    assert_eq!(value["mentionsLabel"], json!(true));
-    assert_eq!(value["startsAsArray"], json!("["));
-    assert_eq!(value["concatenates"], json!("rows="));
-    assert_eq!(value["truthy"], json!(true));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn typeof_is_the_one_thing_that_changed() {
-    let _guard = test_mutex().lock().await;
-    setup_env().await;
-
-    // Pinned rather than hidden: a `String` object reports "object". A script
-    // testing the answer this way has to use `String(result)` or `.json()`.
-    let report = eval_with_rows(
-        "test://db-shape/typeof",
-        r#"
-        const answer = database.query("notes");
-        ({ direct: typeof answer, coerced: typeof String(answer) })
-        "#,
-    )
-    .await;
-
-    assert!(report.ok, "{:?}", report.outcome.error);
-    let value = report.outcome.value.expect("a value");
-    assert_eq!(value["direct"], json!("object"));
-    assert_eq!(value["coerced"], json!("string"));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_write_answers_with_the_same_shape() {
-    let _guard = test_mutex().lock().await;
-    setup_env().await;
-
-    // Not just `query`: every call in the namespace answers the same way.
-    let report = eval_with_rows(
+    // A failure throws, so a `success: true` riding along with every answer
+    // would be the one field nobody could ever see false.
+    let value = value_of(
         "test://db-shape/write",
         r#"
-        const inserted = database.insert("notes", JSON.stringify({ label: "two" }));
-        const parsedOldWay = JSON.parse(inserted);
-        ({
-          viaJson: inserted.json().label,
-          viaParse: parsedOldWay.label,
-          rowsNow: database.query("notes").json().length,
-        })
+        const row = database.insert("notes", { label: "two" });
+        const ensured = database.ensureTable("notes", { columns: [{ name: "label", type: "text" }] });
+        ({ label: row.label, hasId: typeof row.id === "number",
+           ensuredHasSuccess: "success" in ensured, created: ensured.created })
         "#,
     )
     .await;
-
-    assert!(report.ok, "{:?}", report.outcome.error);
-    let value = report.outcome.value.expect("a value");
-    assert_eq!(value["viaJson"], json!("two"));
-    assert_eq!(value["viaParse"], json!("two"));
-    assert_eq!(value["rowsNow"], json!(2));
+    assert_eq!(
+        value,
+        json!({ "label": "two", "hasId": true, "ensuredHasSuccess": false, "created": false })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_error_answer_is_readable_both_ways() {
+async fn a_failure_throws_with_the_driver_message_intact() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
-
-    // These calls report failure in the answer rather than by throwing, so the
-    // failure has to survive the wrapper intact.
-    let report = eval_with_rows(
-        "test://db-shape/error",
-        r#"
-        const answer = database.query("no_such_table");
-        ({ viaJson: !!answer.json().error, viaParse: !!JSON.parse(answer).error })
-        "#,
-    )
-    .await;
-
-    assert!(report.ok, "{:?}", report.outcome.error);
-    let value = report.outcome.value.expect("a value");
-    assert_eq!(value["viaJson"], json!(true));
-    assert_eq!(value["viaParse"], json!(true));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn an_error_carrying_quotes_still_parses() {
-    let _guard = test_mutex().lock().await;
-    setup_env().await;
-
-    // The envelope used to be assembled by formatting the message into a JSON
-    // literal, which held up only while the message contained no JSON syntax of
-    // its own. Postgres names the constraint it rejected in double quotes, so
-    // `.json()` threw on exactly the errors worth reading and the only way to
-    // see one was to treat the answer as a string.
-    let report = eval_with_rows(
+    // Postgres names the constraint it rejected in double quotes. The answer
+    // used to be assembled by formatting that into a JSON literal, so the
+    // errors worth reading were the ones that broke the envelope; the message
+    // has to reach the script whole.
+    let value = value_of(
         "test://db-shape/quoted-error",
         r#"
-        database.insert("notes", JSON.stringify({ label: "one" }));
-        const answer = database.addUniqueIndex("notes", JSON.stringify(["label"]));
-        ({ viaJson: answer.json().error, viaParse: JSON.parse(answer).error })
+        database.insert("notes", { label: "one" });
+        let caught = null;
+        try {
+            database.ensureTable("notes", { columns: [], uniqueIndexes: [["label"]] });
+        } catch (e) {
+            caught = { name: e.name, message: e.message };
+        }
+        caught
         "#,
     )
     .await;
-
-    assert!(report.ok, "{:?}", report.outcome.error);
-    let value = report.outcome.value.expect("a value");
-
-    let message = value["viaJson"].as_str().expect("an error message");
-    assert_eq!(value["viaParse"].as_str(), Some(message));
-
-    // Without this the test would keep passing if the message ever stopped
-    // carrying the syntax that broke the envelope, and stop proving anything.
+    assert_eq!(value["name"], "Error");
+    let message = value["message"].as_str().expect("an error message");
     assert!(
-        message.contains('"'),
-        "the driver's message should carry quotes of its own, got: {}",
+        message.starts_with("database.ensureTable: ") && message.contains('"'),
+        "the driver's message should arrive whole, quotes included: {}",
         message
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_misspelt_query_option_is_refused() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+    // Silently ignoring `{ limt: 5 }` would answer every row.
+    let value = value_of(
+        "test://db-shape/option",
+        r#"
+        let caught = null;
+        try { database.query("notes", { limt: 5 }); } catch (e) { caught = e.name; }
+        caught
+        "#,
+    )
+    .await;
+    assert_eq!(value, json!("TypeError"));
+}
+
+/// `transaction(fn)` commits what `fn` did when it returns, undoes it when it
+/// throws, and inside another transaction undoes only its own work — which is
+/// what the six begin/commit/rollback/savepoint calls it replaced were for,
+/// without the one thing they made easy: leaving a transaction open.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transaction_commits_rolls_back_and_nests() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+    let value = value_of(
+        "test://db-shape/transaction",
+        r#"
+        const labels = () => database.query("notes", { orderBy: "label" }).map((r) => r.label);
+
+        const returned = database.transaction(() => {
+            database.insert("notes", { label: "committed" });
+            return "the answer";
+        });
+
+        let thrown = null;
+        try {
+            database.transaction(() => {
+                database.insert("notes", { label: "rolled back" });
+                throw new Error("no");
+            });
+        } catch (e) {
+            thrown = e.message;
+        }
+
+        database.transaction(() => {
+            database.insert("notes", { label: "outer" });
+            try {
+                database.transaction(() => {
+                    database.insert("notes", { label: "inner" });
+                    throw new Error("inner only");
+                });
+            } catch (e) {}
+        });
+
+        ({ returned, thrown, labels: labels() })
+        "#,
+    )
+    .await;
+    assert_eq!(
+        value,
+        json!({
+            "returned": "the answer",
+            "thrown": "no",
+            "labels": ["committed", "one", "outer"],
+        })
     );
 }
 
@@ -262,18 +197,13 @@ async fn a_result_can_be_returned_as_a_response_body() {
     // routes — which means the database has to be up before the write.
     setup_env().await;
 
-    // A result is a `String` object, not a primitive, so the engine takes its
-    // object branch when shaping the response and converts it with `toString`.
-    // That conversion has to bind a receiver — `String`'s own `toString` reads
-    // the value off `this` — and the result carries its own besides. Handing a
-    // result straight back is common enough that it is worth its own name:
-    // when it broke, the only tests that noticed were about transactions.
+    // Handing a result straight back as a body is common enough to be worth
+    // its own name: the rows are an array, and the engine serialises it.
     let script = r#"
         function seed(context) {
-          database.dropTable("passthrough");
-          database.createTable("passthrough");
-          database.addTextColumn("passthrough", "label", true);
-          database.insert("passthrough", JSON.stringify({ label: "straight through" }));
+          try { database.dropTable("passthrough"); } catch (e) {}
+          database.ensureTable("passthrough", { columns: [{ name: "label", type: "text", nullable: true }] });
+          database.insert("passthrough", { label: "straight through" });
           return { status: 200, body: "seeded" };
         }
 

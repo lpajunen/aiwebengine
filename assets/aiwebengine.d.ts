@@ -116,7 +116,7 @@ declare function init(context?: HandlerContext): void;
  * ({{limits.database.statementTimeout}}), `lock_timeout_ms`
  * ({{limits.database.lockTimeout}}) and `idle_in_transaction_timeout_ms`
  * ({{limits.database.idleInTransactionTimeout}}) are for, and why
- * `database.beginTransaction(timeoutMs)` can only tighten them.
+ * `database.transaction(fn, { timeoutMs })` can only tighten them.
  *
  * At most `javascript.max_concurrent_executions` scripts run at once
  * ({{limits.execution.maxConcurrent}}). Past that a request waits for a slot
@@ -1868,571 +1868,156 @@ declare function fetchStream(url: string, options?: FetchOptions): FetchStream;
 // Database API (Script-Scoped Table Management)
 // ============================================================================
 
-/**
- * Database interface for script-scoped table management and operations.
- * Each script can create and manage its own tables with automatic namespacing.
- */
-/**
- * The answer from a `database` call.
- *
- * Readable three ways, so the shape does not depend on which host API produced
- * it and the scripts written against the JSON string keep working:
- *
- * - `(await database.query("notes")).json()` — awaitable, like a `fetch` response
- * - `database.query("notes").json()` — the same, without awaiting
- * - `JSON.parse(database.query("notes"))` — `toString` yields the raw string
- *
- * `await` here is sequencing sugar: the call has already finished by the time
- * it returns.
- */
-interface DatabaseResult {
-  /** The answer, parsed. Throws if the call did not answer with JSON. */
-  json(): unknown;
-
-  /** The answer, as the raw string. */
-  text(): string;
-
+/** A column `ensureTable` makes sure a table has. */
+interface ColumnSpec {
+  /** `^[a-z][a-z0-9_]*$`, at most 63 characters. */
+  name: string;
   /**
-   * The raw JSON string, which is what these calls used to return.
-   * `JSON.parse(database.query(t))` still works because `JSON.parse` converts
-   * its argument with ToString first.
+   * `integer` holds whole numbers up to about 2.1 billion and refuses a
+   * fraction rather than rounding it; `bigint` is for epoch milliseconds and
+   * anything else past that; `float` keeps fractions; `reference` is an
+   * integer pointing at another of the script's tables, with a foreign key.
    */
-  toString(): string;
+  type:
+    | "integer"
+    | "bigint"
+    | "float"
+    | "text"
+    | "boolean"
+    | "timestamp"
+    | "reference";
+  /** Defaults to true: a column added to a table with rows cannot be NOT NULL without a default. */
+  nullable?: boolean;
+  /** SQL default, as text. */
+  default?: string;
+  /** For a `reference`: the table it points at. */
+  references?: string;
+}
+
+/** The shape `ensureTable` brings a table to. */
+interface TableSchema {
+  columns: ColumnSpec[];
+  /** Each entry is the column list of one unique index — what `upsert` needs as its key. */
+  uniqueIndexes?: string[][];
+}
+
+/** What `ensureTable` changed. */
+interface EnsuredTable {
+  created: boolean;
+  columnsAdded: string[];
+  uniqueIndexesEnsured: string[][];
+}
+
+/** A row as stored: its columns, plus the `id` every table has. */
+type DatabaseRow = { id: number } & Record<string, any>;
+
+/**
+ * Which rows: `{ col: value }` for equality, or
+ * `{ col: { $gt, $gte, $lt, $lte, $ne } }` for a comparison. Several
+ * conditions are AND-ed.
+ */
+type WhereClause = Record<string, any>;
+
+interface QueryOptions {
+  where?: WhereClause;
+  /** Default {{limits.database.defaultQueryLimit}}, at most {{limits.database.maxQueryLimit}}. */
+  limit?: number;
+  orderBy?: string;
+  /** `"asc"` (default) or `"desc"`; anything else is refused rather than sorted ascending. */
+  order?: "asc" | "desc";
+  /**
+   * Hold the returned rows until the surrounding transaction ends, so a
+   * read-modify-write cannot lose an update. Refused outside a transaction,
+   * where the lock would be released as soon as the query returned.
+   */
+  forUpdate?: boolean;
 }
 
 /**
- * A {@link DatabaseResult}, usable with or without `await`, and anywhere the
- * string these calls used to return was.
+ * The script's own tables.
  *
- * The `string` in this intersection is not a convenience: the value really is
- * a `String` object, so every string method works on it and existing code
- * needs no change. The single exception is `typeof`, which reports `"object"`
- * rather than `"string"` — a check written that way has to become
- * `typeof String(result)` or, better, `result.json()`.
+ * Every table belongs to the script that made it, named within it, so two
+ * scripts may both have a `notes` table. A script may have 50 tables of 50
+ * columns. Every call answers with a value and throws when it fails —
+ * including when the caller lacks the capability it takes.
  */
-type DatabaseAnswer = string & DatabaseResult & PromiseLike<DatabaseResult>;
-
 interface Database {
   /**
-   * Create a new table for this script
-   *
-   * A script may have 50 tables, each with 50 columns, and a name is at most
-   * 63 characters matching `^[a-z][a-z0-9_]*$`. Reaching a limit is an error
-   * in the result, not a thrown exception.
-   * @param tableName - Logical table name (will be prefixed with script namespace)
-   * @returns JSON string with result: {success: boolean, tableName: string, physicalName: string} or {error: string}
+   * Bring a table to the shape you describe, whatever shape it is in now:
+   * created if missing, missing columns added, unique indexes made. Calling
+   * it on a table that is already right changes nothing and costs one query,
+   * so it belongs at the top of `init()` rather than behind a "has this run"
+   * flag. Concurrent callers take turns rather than racing.
    * @example
-   * const result = database.createTable("users").json();
-   * // {success: true, tableName: "users", physicalName: "script_myapp_users"}
-   */
-  createTable(tableName: string): DatabaseAnswer;
-
-  /**
-   * Bring a table to the shape you describe, whatever shape it is in now.
-   *
-   * The idempotent form of `createTable` plus a run of `add*Column` plus
-   * `addUniqueIndex`. Every step is checked before it is attempted rather than
-   * attempted and forgiven, so calling this on a table that is already correct
-   * costs one query and reports that it changed nothing — and an error that
-   * comes back means something other than "already done".
-   *
-   * The whole convergence runs under one lock keyed on this script and table,
-   * so concurrent callers — a cold start where every instance's first write
-   * arrives at once — take turns instead of racing.
-   *
-   * Columns default to nullable. A column added to a table that already holds
-   * rows cannot be `NOT NULL` without a default, and being safe against a table
-   * already in use is the point of this call.
-   *
-   * @param tableName - Logical table name
-   * @param schema - JSON string: `{ columns: [{ name, type, nullable?, default? }], uniqueIndexes?: string[][] }`
-   *   where `type` is one of integer, bigint, float, text, boolean, timestamp
-   * @returns JSON string with result: {success, created, columnsAdded, uniqueIndexesEnsured} or {error: string}
-   * @example
-   * const result = database.ensureTable("world_items", JSON.stringify({
+   * database.ensureTable("notes", {
    *   columns: [
-   *     { name: "item_id", type: "text" },
    *     { name: "owner", type: "text" },
-   *     { name: "updated_at", type: "bigint" },
+   *     { name: "body", type: "text" },
+   *     { name: "created_at", type: "bigint" },
    *   ],
-   *   uniqueIndexes: [["item_id"]],
-   * })).json();
-   * // First run:  {success: true, created: true, columnsAdded: ["item_id", "owner", "updated_at"], ...}
-   * // Every run after: {success: true, created: false, columnsAdded: [], ...}
+   *   uniqueIndexes: [["owner", "created_at"]],
+   * });
    */
-  ensureTable(tableName: string, schema: string): DatabaseAnswer;
+  ensureTable(name: string, schema: TableSchema): EnsuredTable;
+
+  dropTable(name: string): { tableName: string; dropped: boolean };
+
+  dropColumn(
+    name: string,
+    column: string,
+  ): { tableName: string; columnName: string; dropped: boolean };
 
   /**
-   * Drop a table owned by this script
-   * @param tableName - Table name to drop
-   * @returns JSON string with result: {success: boolean, tableName: string, dropped: boolean} or {error: string}
+   * Rows of a table.
    * @example
-   * const result = database.dropTable("old_data").json();
+   * const recent = database.query("chat", { orderBy: "ts", order: "desc", limit: 100 });
+   * const active = database.query("presence", {
+   *   where: { last_active: { $gt: Date.now() - 90000 } },
+   * });
    */
-  dropTable(tableName: string): DatabaseAnswer;
+  query(name: string, options?: QueryOptions): DatabaseRow[];
+
+  /** Insert a row; answers it as stored, with its `id`. */
+  insert(name: string, row: Record<string, any>): DatabaseRow;
+
+  /** Change a row by id; answers it as stored. */
+  update(name: string, id: number, changes: Record<string, any>): DatabaseRow;
+
+  delete(name: string, id: number): { deleted: boolean };
 
   /**
-   * Add a 32-bit integer column to a table
-   *
-   * Holds whole numbers up to about 2.1 billion. A value with a fraction is
-   * refused rather than rounded — use `addFloatColumn` to keep it — and a
-   * value past the range is refused rather than wrapped. For epoch
-   * milliseconds and anything else that outgrows 2.1 billion, use
-   * `addBigintColumn`.
-   *
-   * @param tableName - Table name
-   * @param columnName - Column name
-   * @param nullable - Whether column can be NULL (default: true)
-   * @param defaultValue - Default value (optional)
-   * @returns JSON string with result: {success: boolean, column: string} or {error: string}
+   * Insert, or update the row with the same key. `keyColumns` must be a
+   * unique index — `ensureTable`'s `uniqueIndexes`.
    * @example
-   * database.addIntegerColumn("users", "age", true);
-   * database.addIntegerColumn("products", "stock", false, "0");
+   * database.upsert("presence", ["user_id"], { user_id: id, last_active: Date.now() });
    */
-  addIntegerColumn(
-    tableName: string,
-    columnName: string,
-    nullable?: boolean,
-    defaultValue?: string,
-  ): DatabaseAnswer;
+  upsert(
+    name: string,
+    keyColumns: string | string[],
+    row: Record<string, any>,
+  ): DatabaseRow;
+
+  /** Delete every row matching `where`, which may not be empty. */
+  deleteWhere(name: string, where: WhereClause): { deleted: number };
 
   /**
-   * Add a 64-bit integer column to a table
+   * Run `fn` in a transaction: committed when it returns, rolled back when it
+   * throws, and answering what it returned. Inside another transaction it is
+   * a savepoint, so an inner failure undoes only the inner work. An async
+   * `fn` is awaited before committing.
    *
-   * What `Date.now()` needs: epoch milliseconds are past 1.7 trillion, which
-   * an `addIntegerColumn` column cannot hold. JavaScript integers are exact to
-   * 2^53, so anything a script can count with round-trips exactly.
-   *
-   * @param tableName - Table name
-   * @param columnName - Column name
-   * @param nullable - Whether column can be NULL (default: true)
-   * @param defaultValue - Default value (optional)
-   * @returns JSON string with result: {success: boolean, column: string} or {error: string}
+   * `timeoutMs` is enforced by the database: within the transaction no
+   * statement runs longer, no lock is waited on longer, and an abandoned
+   * transaction is ended after that much idleness. It only tightens the
+   * engine's own limits.
    * @example
-   * database.addBigintColumn("events", "occurred_at_ms", false, "0");
-   * database.insert("events", JSON.stringify({ occurred_at_ms: Date.now() }));
-   */
-  addBigintColumn(
-    tableName: string,
-    columnName: string,
-    nullable?: boolean,
-    defaultValue?: string,
-  ): DatabaseAnswer;
-
-  /**
-   * Add a floating-point column to a table
-   *
-   * The column type that holds a JavaScript number as it is: rates, ratios,
-   * scores, measurements. The value round-trips exactly, because the column is
-   * a double and so is a JavaScript number.
-   *
-   * Not for money. `0.1 + 0.2` is not `0.3` in any double, here or in
-   * JavaScript. Store amounts as whole minor units — cents, not euros — in an
-   * `addIntegerColumn` or `addBigintColumn` column.
-   *
-   * @param tableName - Table name
-   * @param columnName - Column name
-   * @param nullable - Whether column can be NULL (default: true)
-   * @param defaultValue - Default value (optional)
-   * @returns JSON string with result: {success: boolean, column: string} or {error: string}
-   * @example
-   * database.addFloatColumn("readings", "celsius", true);
-   * database.insert("readings", JSON.stringify({ celsius: 21.5 }));
-   */
-  addFloatColumn(
-    tableName: string,
-    columnName: string,
-    nullable?: boolean,
-    defaultValue?: string,
-  ): DatabaseAnswer;
-
-  /**
-   * Add a text column to a table
-   * @param tableName - Table name
-   * @param columnName - Column name
-   * @param nullable - Whether column can be NULL (default: true)
-   * @param defaultValue - Default value (optional)
-   * @returns JSON string with result: {success: boolean, column: string} or {error: string}
-   * @example
-   * database.addTextColumn("users", "email", false);
-   * database.addTextColumn("posts", "title", false, "Untitled");
-   */
-  addTextColumn(
-    tableName: string,
-    columnName: string,
-    nullable?: boolean,
-    defaultValue?: string,
-  ): DatabaseAnswer;
-
-  /**
-   * Add a boolean column to a table
-   * @param tableName - Table name
-   * @param columnName - Column name
-   * @param nullable - Whether column can be NULL (default: true)
-   * @param defaultValue - Default value (optional, "true" or "false")
-   * @returns JSON string with result: {success: boolean, column: string} or {error: string}
-   * @example
-   * database.addBooleanColumn("users", "active", false, "true");
-   */
-  addBooleanColumn(
-    tableName: string,
-    columnName: string,
-    nullable?: boolean,
-    defaultValue?: string,
-  ): DatabaseAnswer;
-
-  /**
-   * Add a timestamp column to a table.
-   *
-   * `defaultValue` is either the moment the row is written — `"NOW()"` or
-   * `"CURRENT_TIMESTAMP"`, which mean the same thing — or a fixed instant as
-   * `"YYYY-MM-DD"`, `"YYYY-MM-DD HH:MM:SS"`, or ISO 8601. Anything else is
-   * refused rather than passed to the database to judge, so a default means
-   * the same time wherever the table is later read.
-   *
-   * @param tableName - Table name
-   * @param columnName - Column name
-   * @param nullable - Whether column can be NULL (default: true)
-   * @param defaultValue - `"NOW()"`, `"CURRENT_TIMESTAMP"`, or a fixed instant (optional)
-   * @returns JSON string with result: {success: boolean, column: string} or {error: string}
-   * @example
-   * database.addTimestampColumn("posts", "created_at", false, "CURRENT_TIMESTAMP");
-   * database.addTimestampColumn("posts", "embargoed_until", true, "2030-01-01");
-   */
-  addTimestampColumn(
-    tableName: string,
-    columnName: string,
-    nullable?: boolean,
-    defaultValue?: string,
-  ): DatabaseAnswer;
-
-  /**
-   * Add a foreign key reference column to a table
-   * @param tableName - Table name
-   * @param columnName - Column name
-   * @param referencedTableName - Referenced table name
-   * @param nullable - Whether column can be NULL (default: true)
-   * @returns JSON string with result: {success: boolean, foreignKey: string, nullable: boolean} or {error: string}
-   * @example
-   * database.addReferenceColumn("posts", "author_id", "users", false);
-   */
-  addReferenceColumn(
-    tableName: string,
-    columnName: string,
-    referencedTableName: string,
-    nullable?: boolean,
-  ): DatabaseAnswer;
-
-  /**
-   * Drop a column from a table
-   * @param tableName - Table name
-   * @param columnName - Column name
-   * @returns JSON string with result: {success: boolean, tableName: string, columnName: string, dropped: boolean} or {error: string}
-   * @example
-   * const result = database.dropColumn("users", "old_field").json();
-   */
-  dropColumn(tableName: string, columnName: string): DatabaseAnswer;
-
-  /**
-   * Query rows from a table with optional filters, limit, and ordering.
-   *
-   * `filters` supports two forms:
-   * - Equality: `{ "col": value }` → `col = value`
-   * - Comparison: `{ "col": { "$gt": v } }` → `col > v`
-   *   Supported operators: `$gt`, `$gte`, `$lt`, `$lte`, `$ne`
-   *   Multiple operators on the same column are AND-ed together.
-   *
-   * Any positional argument may be passed as `null` to skip it and take its
-   * default — `query("chat", null, 100)`.
-   *
-   * **Reading in order to write.** A plain query takes no lock, so two
-   * transactions can read the same row, each compute from what they read, and
-   * each commit — leaving only the second write. Both report success. To make
-   * a read-modify-write safe, open a transaction and pass
-   * `{ forUpdate: true }`: the rows the query returns are then held until the
-   * transaction ends, and a second caller waits and re-reads what the first
-   * one wrote. Asking for it outside a transaction is refused, because a lock
-   * taken there is released as soon as the query returns.
-   *
-   * @param tableName - Table name
-   * @param filters - JSON string with filter conditions (optional)
-   * @param limit - Maximum rows to return (default {{limits.database.defaultQueryLimit}}, max {{limits.database.maxQueryLimit}})
-   * @param orderBy - Column to sort by (optional)
-   * @param orderDir - Sort direction: `"asc"` (default) or `"desc"`. Anything
-   *                   else is refused rather than sorted ascending
-   * @param options - JSON string of query options: `{ forUpdate?: boolean }`.
-   *                  An unrecognised option is refused rather than ignored
-   * @returns JSON string array of matching rows or {error: string}
-   * @example
-   * // Range filter: users active in the last 90 seconds
-   * const cutoff = Date.now() - 90000;
-   * const active = database.query(
-   *   "presence",
-   *   JSON.stringify({ last_active: { "$gt": cutoff } })
-   * ).json();
-   *
-   * // Last 100 chat messages, newest first
-   * const msgs = database.query("chat", null, 100, "ts", "desc").json();
-   *
    * // A counter that stays correct under concurrency
-   * database.beginTransaction(5000);
-   * const row = database
-   *   .query("event_seq", null, 1, null, null, JSON.stringify({ forUpdate: true }))
-   *   .json()[0];
-   * database.update("event_seq", row.id, JSON.stringify({ seq: row.seq + 1 }));
-   * database.commitTransaction();
+   * database.transaction(() => {
+   *   const [row] = database.query("event_seq", { limit: 1, forUpdate: true });
+   *   database.update("event_seq", row.id, { seq: row.seq + 1 });
+   * }, { timeoutMs: 5000 });
    */
-  query(
-    tableName: string,
-    filters?: string | null,
-    limit?: number | null,
-    orderBy?: string | null,
-    orderDir?: "asc" | "desc" | null,
-    options?: string | null,
-  ): DatabaseAnswer;
-
-  /**
-   * Insert a row into a table
-   * @param tableName - Table name
-   * @param data - JSON string with column values
-   * @returns JSON string with inserted row (including generated id) or {error: string}
-   * @example
-   * const result = database
-   *   .insert("users", JSON.stringify({name: "John", email: "john@example.com"}))
-   *   .json();
-   */
-  insert(tableName: string, data: string): DatabaseAnswer;
-
-  /**
-   * Update a row in a table by ID
-   * @param tableName - Table name
-   * @param id - Row ID
-   * @param data - JSON string with column values to update
-   * @returns JSON string with updated row or {error: string}
-   * @example
-   * const result = database.update("users", 1, JSON.stringify({name: "Jane"})).json();
-   */
-  update(tableName: string, id: number, data: string): DatabaseAnswer;
-
-  /**
-   * Delete a row from a table by ID
-   * @param tableName - Table name
-   * @param id - Row ID
-   * @returns JSON string with result: {success: boolean, deleted: boolean} or {error: string}
-   * @example
-   * const result = database.delete("users", 5).json();
-   */
-  delete(tableName: string, id: number): DatabaseAnswer;
-
-  /**
-   * Insert or update a row by a unique key (atomic upsert).
-   *
-   * Uses PostgreSQL `INSERT … ON CONFLICT DO UPDATE`, so the table must have a
-   * unique index on `keyColumns` — create one with `database.addUniqueIndex()`.
-   *
-   * @param tableName - Table name
-   * @param keyColumns - JSON array of column names that form the conflict target, or a single column name string
-   * @param data - JSON string with all column values (including key columns)
-   * @returns JSON string with the upserted row or {error: string}
-   * @example
-   * // Ensure unique index exists first (idempotent):
-   * database.addUniqueIndex("presence", JSON.stringify(["user_id"]));
-   *
-   * database.upsert("presence",
-   *   JSON.stringify(["user_id"]),
-   *   JSON.stringify({ user_id: userId, nick: nick, last_active: Date.now() })
-   * );
-   */
-  upsert(tableName: string, keyColumns: string, data: string): DatabaseAnswer;
-
-  /**
-   * Delete rows matching filter conditions (bulk delete).
-   *
-   * Supports the same filter syntax as `query()` including range operators.
-   * At least one filter is required to prevent accidental full-table deletes.
-   *
-   * @param tableName - Table name
-   * @param filters - JSON string with filter conditions (required)
-   * @returns JSON string with result: {success: boolean, deleted: number} or {error: string}
-   * @example
-   * // Prune stale presence rows
-   * const cutoff = Date.now() - 90000;
-   * database.deleteWhere("presence",
-   *   JSON.stringify({ last_active: { "$lt": cutoff } })
-   * );
-   */
-  deleteWhere(tableName: string, filters: string): DatabaseAnswer;
-
-  /**
-   * Atomically acquire or extend a distributed lease (compare-and-swap).
-   *
-   * The table must be created with `database.createLeaseTable()`, which sets up
-   * the required schema.
-   *
-   * Acquisition rules:
-   * - No existing row → acquired.
-   * - Existing row is expired → acquired.
-   * - Existing row belongs to the same owner → acquired, extending the TTL.
-   * - Existing row belongs to a different owner and is not expired → not acquired.
-   *
-   * Expiry is measured against the engine's clock, not the database's, so
-   * instances competing for one lease must keep time to well inside the TTL —
-   * an instance whose clock runs ahead may take a lease slightly before it
-   * truly lapses. Seconds-long TTLs on NTP-synchronised hosts are well clear
-   * of this; sub-second TTLs across several machines are not.
-   *
-   * A `ttlMs` that is not positive is refused, as is one so large that the
-   * moment it would expire cannot be represented.
-   *
-   * @param tableName - Lease table created with `createLeaseTable`
-   * @param leaseId - Unique identifier for this lease slot (e.g., `"npc_tick_world_42"`)
-   * @param owner - Unique token for this process/server instance
-   * @param ttlMs - Lease duration in milliseconds
-   * @returns JSON string: `{acquired: boolean, owner: string, expires_at: string}` or `{error: string}`
-   * @example
-   * const lease = database
-   *   .acquireLease("npc_leases", "world_" + worldId, myServerId, 2000)
-   *   .json();
-   * if (!lease.acquired) return; // another instance owns the lease
-   */
-  acquireLease(
-    tableName: string,
-    leaseId: string,
-    owner: string,
-    ttlMs: number,
-  ): DatabaseAnswer;
-
-  /**
-   * Create a lease table with the correct schema for use with `acquireLease()`.
-   *
-   * The table is idempotent — calling it a second time returns the existing physical name.
-   * Its columns are the lease id (the slot), its owner, and when the lease
-   * expires; they are managed by the engine and not added or altered directly.
-   *
-   * @param tableName - Logical table name
-   * @returns JSON string: `{success: boolean, tableName: string, physicalName: string}` or `{error: string}`
-   * @example
-   * database.createLeaseTable("npc_leases");
-   */
-  createLeaseTable(tableName: string): DatabaseAnswer;
-
-  /**
-   * Add a unique index to a table column (or set of columns).
-   *
-   * Required before using those columns as the conflict target in `upsert()`.
-   * Uses `CREATE UNIQUE INDEX IF NOT EXISTS` — safe to call repeatedly.
-   *
-   * @param tableName - Table name
-   * @param columns - JSON array of column names, or a single column name string
-   * @returns JSON string: `{success: boolean, tableName: string, columns: …}` or `{error: string}`
-   * @example
-   * database.addUniqueIndex("presence", JSON.stringify(["user_id"]));
-   * database.addUniqueIndex("scores", JSON.stringify(["user_id", "world_id"]));
-   */
-  addUniqueIndex(tableName: string, columns: string): DatabaseAnswer;
-
-  // Transaction Management
-
-  /**
-   * Begin a new database transaction or create a savepoint if already in a transaction.
-   * Transactions auto-commit on normal handler exit and auto-rollback on exceptions.
-   *
-   * `timeout_ms` is enforced by the database, not merely recorded. Within the
-   * transaction, no single statement runs longer than the budget, no wait for
-   * a lock exceeds it, and if the handler is stopped mid-transaction the
-   * database ends the transaction and releases its locks once the budget's
-   * worth of idleness has passed. It bounds each step, not their sum: many
-   * fast statements can still take longer than the budget between them.
-   *
-   * A budget can only tighten the engine's own limits, never loosen them —
-   * asking for ten minutes on an engine that allows five seconds gets five.
-   * Omitting it leaves the engine's configured limits in force.
-   *
-   * @param timeout_ms - Optional budget in milliseconds for each statement,
-   *   lock wait and idle gap in the transaction
-   * @returns JSON string with result: {success: boolean, message: string} or {error: string}
-   * @example
-   * // Start transaction with 5 second timeout
-   * const result = database.beginTransaction(5000).json();
-   * if (result.error) {
-   *   console.error(`Failed to start transaction: ${result.error}`);
-   *   return ResponseBuilder.error(500, "Transaction error");
-   * }
-   *
-   * // Perform database operations...
-   * // Transaction auto-commits on normal return or auto-rollbacks on exception
-   */
-  beginTransaction(timeout_ms?: number): DatabaseAnswer;
-
-  /**
-   * Commit the current transaction or release the most recent savepoint.
-   * Note: Transactions auto-commit on handler success, so explicit commit is optional.
-   * @returns JSON string with result: {success: boolean, message: string} or {error: string}
-   * @example
-   * const result = database.commitTransaction().json();
-   * if (result.error) {
-   *   console.error(`Failed to commit: ${result.error}`);
-   * }
-   */
-  commitTransaction(): DatabaseAnswer;
-
-  /**
-   * Rollback the current transaction or to the most recent savepoint.
-   * Note: Transactions auto-rollback on exceptions, so explicit rollback is optional.
-   * @returns JSON string with result: {success: boolean, message: string} or {error: string}
-   * @example
-   * // Explicitly rollback on validation failure
-   * if (!isValid(data)) {
-   *   database.rollbackTransaction();
-   *   return ResponseBuilder.error(400, "Invalid data");
-   * }
-   */
-  rollbackTransaction(): DatabaseAnswer;
-
-  /**
-   * Create a named or auto-generated savepoint for nested transaction control.
-   * Savepoints allow partial rollback within a transaction.
-   * @param name - Optional savepoint name. If omitted, generates name like "sp_1", "sp_2", etc.
-   * @returns JSON string with result: {success: boolean, savepoint: string} or {error: string}
-   * @example
-   * // Auto-generated savepoint
-   * const sp = database.createSavepoint().json();
-   * console.log(`Savepoint: ${sp.savepoint}`); // "sp_1"
-   *
-   * // Named savepoint
-   * database.createSavepoint("checkpoint_before_insert");
-   */
-  createSavepoint(name?: string): DatabaseAnswer;
-
-  /**
-   * Rollback to a specific savepoint without ending the transaction.
-   * @param name - Savepoint name to rollback to
-   * @returns JSON string with result: {success: boolean, message: string} or {error: string}
-   * @example
-   * const sp = database.createSavepoint("before_update").json();
-   *
-   * try {
-   *   database.update("users", userId, JSON.stringify({status: "active"}));
-   * } catch (error) {
-   *   // Rollback just this update, keep other changes
-   *   database.rollbackToSavepoint(sp.savepoint);
-   * }
-   */
-  rollbackToSavepoint(name: string): DatabaseAnswer;
-
-  /**
-   * Release a savepoint, making its changes permanent within the transaction scope.
-   * @param name - Savepoint name to release
-   * @returns JSON string with result: {success: boolean, message: string} or {error: string}
-   * @example
-   * const sp = database.createSavepoint("checkpoint").json();
-   *
-   * // Perform operations...
-   *
-   * // Release savepoint (changes become permanent in transaction)
-   * database.releaseSavepoint(sp.savepoint);
-   */
-  releaseSavepoint(name: string): DatabaseAnswer;
+  transaction<T>(fn: () => T, options?: { timeoutMs?: number }): T;
 }
 
 // ============================================================================

@@ -451,6 +451,9 @@ pub struct EnsuredColumn {
     pub column_type: crate::db_schema_utils::ColumnType,
     pub nullable: bool,
     pub default_value: Option<String>,
+    /// For a reference column: the logical table it points at. The column is
+    /// an integer holding that table's `id`, with a foreign key behind it.
+    pub references: Option<String>,
 }
 
 /// Which way a query orders its rows.
@@ -3629,16 +3632,31 @@ async fn db_ensure_script_table(
         if present.iter().any(|name| name == &column.name) {
             continue;
         }
-        db_add_column_to_script_table(
-            &mut *conn,
-            script_uri,
-            logical_table_name,
-            &column.name,
-            column.column_type,
-            column.nullable,
-            column.default_value.as_deref(),
-        )
-        .await?;
+        match column.references.as_deref() {
+            Some(referenced) => {
+                db_add_reference_column(
+                    &mut *conn,
+                    script_uri,
+                    logical_table_name,
+                    &column.name,
+                    referenced,
+                    column.nullable,
+                )
+                .await?
+            }
+            None => {
+                db_add_column_to_script_table(
+                    &mut *conn,
+                    script_uri,
+                    logical_table_name,
+                    &column.name,
+                    column.column_type,
+                    column.nullable,
+                    column.default_value.as_deref(),
+                )
+                .await?
+            }
+        }
         present.push(column.name.clone());
         outcome.columns_added.push(column.name.clone());
     }
@@ -4814,10 +4832,10 @@ async fn db_query_table(
     if options.for_update && !crate::database::get_current_transaction_active() {
         return Err(AppError::Validation {
             field: "forUpdate".to_string(),
-            reason: "forUpdate needs an open transaction to hold the rows it locks — call \
-                     beginTransaction() first, and commitTransaction() once the write is done. \
-                     Outside a transaction the lock is released as soon as the query returns, \
-                     which would read like a guard without being one."
+            reason: "forUpdate needs an open transaction to hold the rows it locks — make \
+                     the read and the write inside database.transaction(fn). Outside a \
+                     transaction the lock is released as soon as the query returns, which \
+                     would read like a guard without being one."
                 .to_string(),
         });
     }
@@ -5248,245 +5266,6 @@ async fn db_delete_where(
     })?;
 
     Ok(result.rows_affected())
-}
-
-/// Atomically acquire or extend a distributed lease stored in a script-owned table.
-///
-/// The table must have been created with `db_create_lease_table` (or manually
-/// given the schema `lease_id TEXT, owner TEXT, expires_at TIMESTAMPTZ` with a
-/// UNIQUE constraint on `lease_id`).
-///
-/// Returns `{acquired: bool, owner: string, expires_at: string}`.
-///
-/// How it works (single-statement, race-free):
-/// - If no row with `lease_id` exists → INSERT succeeds → we own the lease.
-/// - If a row exists and is expired OR already owned by us → UPDATE succeeds → we own it.
-/// - If a row exists, is not expired, and belongs to someone else → nothing changes → we do NOT own it.
-async fn db_acquire_lease(
-    conn: &mut PgConnection,
-    script_uri: &str,
-    logical_table_name: &str,
-    lease_id: &str,
-    owner: &str,
-    ttl_ms: i64,
-) -> AppResult<serde_json::Value> {
-    let physical_table_name = get_physical_table_name(conn, script_uri, logical_table_name).await?;
-
-    if ttl_ms <= 0 {
-        return Err(AppError::Validation {
-            field: "ttl_ms".to_string(),
-            reason: "ttl_ms must be a positive integer".to_string(),
-        });
-    }
-
-    // Both instants come from the engine's clock rather than the database's,
-    // and both come from the same read of it, so the window a lease is judged
-    // against is exactly the window it was granted for.
-    //
-    // The trade this makes is worth naming. `NOW()` was one clock shared by
-    // every instance pointed at the one database, which made a lease immune to
-    // clock skew between them. Wall-clock instants are not: an instance whose
-    // clock runs ahead by δ writes expiries δ late and judges other instances'
-    // expiries δ early, so a lease can be taken up to δ before it truly lapses.
-    // That is the usual guarantee of a wall-clock lease and it holds as long as
-    // instances keep time to well inside the TTL — which is the assumption a
-    // multi-instance deployment was already making everywhere else the engine
-    // reads a clock. What it buys is a lease that no longer depends on one
-    // database's interval arithmetic to say when it ends.
-    let now = Utc::now();
-    let expires_at = chrono::TimeDelta::try_milliseconds(ttl_ms)
-        .and_then(|ttl| now.checked_add_signed(ttl))
-        .ok_or_else(|| AppError::Validation {
-            field: "ttl_ms".to_string(),
-            reason: format!("ttl_ms of {} is too far in the future to represent", ttl_ms),
-        })?;
-
-    // Single-statement atomic upsert: wins only if the slot is free or ours.
-    let sql = format!(
-        r#"
-        INSERT INTO {tbl} (lease_id, owner, expires_at)
-        VALUES ({lease_id}, {owner}, {expires_at})
-        ON CONFLICT (lease_id) DO UPDATE
-            SET owner      = EXCLUDED.owner,
-                expires_at = EXCLUDED.expires_at
-        WHERE {tbl}.expires_at <= {now}
-           OR {tbl}.owner = EXCLUDED.owner
-        RETURNING owner, expires_at
-        "#,
-        tbl = quote_identifier(&physical_table_name),
-        lease_id = dialect().placeholder(1, BindType::Text),
-        owner = dialect().placeholder(2, BindType::Text),
-        expires_at = dialect().placeholder(3, BindType::Timestamptz),
-        now = dialect().placeholder(4, BindType::Timestamptz),
-    );
-
-    let upsert_row = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
-        .bind(lease_id)
-        .bind(owner)
-        .bind(expires_at)
-        .bind(now)
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(|e| {
-            error!("Database error in acquireLease: {}", e);
-            AppError::Database {
-                message: format!("Lease error: {}", e),
-                source: None,
-            }
-        })?;
-
-    if let Some(row) = upsert_row {
-        // Upsert succeeded — we hold the lease
-        let row_owner: String = row.try_get("owner").unwrap_or_default();
-        let expires_at: String = row
-            .try_get::<DateTime<Utc>, _>("expires_at")
-            .map(|dt| dt.to_rfc3339())
-            .unwrap_or_default();
-        return Ok(serde_json::json!({
-            "acquired": row_owner == owner,
-            "owner": row_owner,
-            "expires_at": expires_at,
-        }));
-    }
-
-    // Upsert produced no row — someone else holds an active lease.
-    // Do a plain SELECT to return current lease info (best-effort, non-critical).
-    let select_sql = format!(
-        "SELECT owner, expires_at FROM {} WHERE lease_id = {}",
-        quote_identifier(&physical_table_name),
-        dialect().placeholder(1, BindType::Text),
-    );
-    let current = sqlx::query(sqlx::AssertSqlSafe(select_sql.as_str()))
-        .bind(lease_id)
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(|e| {
-            error!("Database error reading current lease: {}", e);
-            AppError::Database {
-                message: format!("Lease read error: {}", e),
-                source: None,
-            }
-        })?;
-
-    if let Some(row) = current {
-        let row_owner: String = row.try_get("owner").unwrap_or_default();
-        let expires_at: String = row
-            .try_get::<DateTime<Utc>, _>("expires_at")
-            .map(|dt| dt.to_rfc3339())
-            .unwrap_or_default();
-        Ok(serde_json::json!({
-            "acquired": false,
-            "owner": row_owner,
-            "expires_at": expires_at,
-        }))
-    } else {
-        Ok(serde_json::json!({
-            "acquired": false,
-            "owner": serde_json::Value::Null,
-            "expires_at": serde_json::Value::Null,
-        }))
-    }
-}
-
-/// Create a properly structured lease table owned by the given script.
-///
-/// The table schema is: `lease_id TEXT UNIQUE NOT NULL, owner TEXT NOT NULL,
-/// expires_at TIMESTAMPTZ NOT NULL`. An explicit UNIQUE index on `lease_id`
-/// is created so that `acquireLease` can use it as a conflict target.
-///
-/// Returns the physical table name on success.
-async fn db_create_lease_table(
-    conn: &mut PgConnection,
-    script_uri: &str,
-    logical_table_name: &str,
-) -> AppResult<String> {
-    use crate::db_schema_utils::{
-        MAX_TABLES_PER_SCRIPT, generate_physical_table_name, validate_identifier,
-    };
-
-    validate_identifier(logical_table_name).map_err(|e| AppError::Validation {
-        field: "table_name".to_string(),
-        reason: e.to_string(),
-    })?;
-
-    // Count existing tables for this script
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM script_tables WHERE script_uri = $1")
-        .bind(script_uri)
-        .fetch_one(&mut *conn)
-        .await
-        .map_err(|e| AppError::Database {
-            message: format!("Database error: {}", e),
-            source: None,
-        })?;
-
-    if count >= MAX_TABLES_PER_SCRIPT as i64 {
-        return Err(AppError::Validation {
-            field: "table_name".to_string(),
-            reason: format!("Maximum table limit of {} reached", MAX_TABLES_PER_SCRIPT),
-        });
-    }
-
-    // Check for duplicates
-    let existing: Option<String> = sqlx::query_scalar(
-        "SELECT physical_table_name FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
-    )
-    .bind(script_uri)
-    .bind(logical_table_name)
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(|e| AppError::Database {
-        message: format!("Database error: {}", e),
-        source: None,
-    })?;
-
-    if let Some(existing_physical) = existing {
-        // Table already exists — idempotent
-        return Ok(existing_physical);
-    }
-
-    let physical_name = generate_physical_table_name(script_uri, logical_table_name);
-
-    // Create the table with the required lease schema
-    let create_sql = format!(
-        r#"CREATE TABLE {} (
-            lease_id  TEXT        NOT NULL,
-            owner     TEXT        NOT NULL,
-            expires_at TIMESTAMPTZ NOT NULL,
-            CONSTRAINT {}_pkey PRIMARY KEY (lease_id)
-        )"#,
-        quote_identifier(&physical_name),
-        physical_name,
-    );
-
-    sqlx::query(sqlx::AssertSqlSafe(create_sql.as_str()))
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| AppError::Database {
-            message: format!("Error creating lease table: {}", e),
-            source: None,
-        })?;
-
-    // Register in metadata
-    sqlx::query(
-        "INSERT INTO script_tables (script_uri, logical_table_name, physical_table_name, created_at)
-         VALUES ($1, $2, $3, NOW())",
-    )
-    .bind(script_uri)
-    .bind(logical_table_name)
-    .bind(&physical_name)
-    .execute(&mut *conn)
-    .await
-    .map_err(|e| AppError::Database {
-        message: format!("Error registering lease table: {}", e),
-        source: None,
-    })?;
-
-    debug!(
-        "Created lease table '{}' (physical: '{}') for script '{}'",
-        logical_table_name, physical_name, script_uri
-    );
-
-    Ok(physical_name)
 }
 
 /// Add a unique index on one or more columns of a script-owned table.
@@ -6266,30 +6045,6 @@ pub fn delete_where(
     })
 }
 
-/// Atomically acquire or extend a distributed lease in a script-owned table
-pub fn acquire_lease(
-    script_uri: &str,
-    logical_table_name: &str,
-    lease_id: &str,
-    owner: &str,
-    ttl_ms: i64,
-) -> AppResult<serde_json::Value> {
-    let repo = get_repository();
-    run_bounded(async {
-        repo.acquire_lease(script_uri, logical_table_name, lease_id, owner, ttl_ms)
-            .await
-    })
-}
-
-/// Create a lease table with the required schema in a script-owned table
-pub fn create_lease_table(script_uri: &str, logical_table_name: &str) -> AppResult<String> {
-    let repo = get_repository();
-    run_bounded(async {
-        repo.create_lease_table(script_uri, logical_table_name)
-            .await
-    })
-}
-
 /// Bring a script-owned table to the shape `spec` describes
 pub fn ensure_script_table(
     script_uri: &str,
@@ -6299,19 +6054,6 @@ pub fn ensure_script_table(
     let repo = get_repository();
     run_bounded(async {
         repo.ensure_script_table(script_uri, logical_table_name, spec)
-            .await
-    })
-}
-
-/// Add a unique index on one or more columns of a script-owned table
-pub fn add_unique_index(
-    script_uri: &str,
-    logical_table_name: &str,
-    columns: &[String],
-) -> AppResult<()> {
-    let repo = get_repository();
-    run_bounded(async {
-        repo.add_unique_index(script_uri, logical_table_name, columns)
             .await
     })
 }
@@ -7119,25 +6861,6 @@ pub trait Repository: Send + Sync {
         logical_table_name: &str,
         filters: &HashMap<String, serde_json::Value>,
     ) -> AppResult<u64>;
-    async fn acquire_lease(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-        lease_id: &str,
-        owner: &str,
-        ttl_ms: i64,
-    ) -> AppResult<serde_json::Value>;
-    async fn create_lease_table(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-    ) -> AppResult<String>;
-    async fn add_unique_index(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-        columns: &[String],
-    ) -> AppResult<()>;
     async fn ensure_script_table(
         &self,
         script_uri: &str,
@@ -8213,49 +7936,6 @@ impl Repository for PostgresRepository {
         scope.finish(deleted).await
     }
 
-    /// Leases run on their own pooled connection on purpose, unlike the row
-    /// operations above: a lease taken inside a caller's transaction would be
-    /// invisible to every other instance until that transaction committed, and
-    /// would vanish on rollback — which defeats the point of a lease.
-    ///
-    /// The cost of that choice is the hazard [`ScopedConn`] exists to avoid: a
-    /// caller whose own transaction has already written to the lease table
-    /// blocks here on a row lock it holds itself, and nothing in Postgres can
-    /// break the wait. Scripts must not write to a lease table directly.
-    async fn acquire_lease(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-        lease_id: &str,
-        owner: &str,
-        ttl_ms: i64,
-    ) -> AppResult<serde_json::Value> {
-        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
-            message: format!("Failed to acquire connection: {}", e),
-            source: None,
-        })?;
-        db_acquire_lease(
-            &mut conn,
-            script_uri,
-            logical_table_name,
-            lease_id,
-            owner,
-            ttl_ms,
-        )
-        .await
-    }
-
-    async fn create_lease_table(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-    ) -> AppResult<String> {
-        let mut schema =
-            ScopedConn::for_schema_of(&self.pool, script_uri, logical_table_name).await?;
-        let created = db_create_lease_table(schema.conn(), script_uri, logical_table_name).await;
-        schema.finish(created).await
-    }
-
     async fn ensure_script_table(
         &self,
         script_uri: &str,
@@ -8267,19 +7947,6 @@ impl Repository for PostgresRepository {
         let ensured =
             db_ensure_script_table(schema.conn(), script_uri, logical_table_name, spec).await;
         schema.finish(ensured).await
-    }
-
-    async fn add_unique_index(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-        columns: &[String],
-    ) -> AppResult<()> {
-        let mut schema =
-            ScopedConn::for_schema_of(&self.pool, script_uri, logical_table_name).await?;
-        let added =
-            db_add_unique_index(schema.conn(), script_uri, logical_table_name, columns).await;
-        schema.finish(added).await
     }
 }
 

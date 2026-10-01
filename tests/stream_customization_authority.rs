@@ -25,7 +25,11 @@ use common::{setup_env, test_mutex};
 /// criterion — the only thing it can return.
 const SCRIPT: &str = r#"
 function customize(context) {
-  return { verdict: String(database.createTable("stream_authority_probe")) };
+  try {
+    return { verdict: JSON.stringify(database.ensureTable("stream_authority_probe", { columns: [] })) };
+  } catch (e) {
+    return { verdict: e.message };
+  }
 }
 
 function init(context) {

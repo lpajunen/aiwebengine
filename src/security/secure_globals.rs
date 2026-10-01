@@ -10,7 +10,7 @@ const FETCH_PRELUDE: &str = include_str!("../../assets/fetch_prelude.js");
 
 /// Gives the host namespaces that answer with a JSON string the same shape a
 /// `fetch` response has.
-const RESULT_PRELUDE: &str = include_str!("../../assets/result_prelude.js");
+const DATABASE_PRELUDE: &str = include_str!("../../assets/database_prelude.js");
 
 /// The JavaScript half of `console`: joins a variadic call, fills in format
 /// specifiers and renders values, so the host binding — which takes one string
@@ -258,9 +258,9 @@ fn build_query_options(
 
 /// Reads the schema a script wants a table to have.
 ///
-/// Shaped like the `columns` a script would otherwise pass to `addTextColumn`
-/// and friends one at a time: `{ "columns": [{ "name", "type", "nullable"?,
-/// "default"? }], "uniqueIndexes"?: [["col"]] }`. `nullable` defaults to true,
+/// `{ "columns": [{ "name", "type", "nullable"?, "default"?, "references"? }],
+/// "uniqueIndexes"?: [["col"]] }`. A `"reference"` column names the table it
+/// points at in `references`. `nullable` defaults to true,
 /// because a column added to a table that already has rows cannot be `NOT NULL`
 /// without a default, and the whole point of this call is that it is safe to
 /// make against a table that is already in use.
@@ -286,8 +286,28 @@ fn parse_table_spec(schema_json: &str) -> Result<crate::repository::TableSpec, S
             .get("type")
             .and_then(|kind| kind.as_str())
             .ok_or_else(|| format!("column \"{}\" needs a \"type\"", name))?;
-        let column_type = crate::db_schema_utils::ColumnType::from_str(type_name)
-            .map_err(|e| format!("column \"{}\": {}", name, e))?;
+        let references = column
+            .get("references")
+            .and_then(|table| table.as_str())
+            .map(str::to_string);
+        let column_type = if type_name == "reference" {
+            if references.is_none() {
+                return Err(format!(
+                    "column \"{}\" is a reference and needs \"references\": the table it points at",
+                    name
+                ));
+            }
+            crate::db_schema_utils::ColumnType::Integer
+        } else {
+            if references.is_some() {
+                return Err(format!(
+                    "column \"{}\" has \"references\" but is not of type \"reference\"",
+                    name
+                ));
+            }
+            crate::db_schema_utils::ColumnType::from_str(type_name)
+                .map_err(|e| format!("column \"{}\": {}", name, e))?
+        };
 
         spec.columns.push(crate::repository::EnsuredColumn {
             name: name.to_string(),
@@ -300,6 +320,7 @@ fn parse_table_spec(schema_json: &str) -> Result<crate::repository::TableSpec, S
                 .get("default")
                 .and_then(|default| default.as_str())
                 .map(str::to_string),
+            references,
         });
     }
 
@@ -3296,39 +3317,6 @@ impl SecureGlobalContext {
         // Create the database namespace object for schema management
         let database_obj = rquickjs::Object::new(ctx.clone())?;
 
-        // database.createTable(tableName) - Create a new table for this script
-        let script_uri_create = script_uri_owned.clone();
-        let user_ctx_create = user_context.clone();
-        let create_table = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, table_name: String| -> JsResult<String> {
-                debug!(
-                    "database.createTable called for script {} with table: {}",
-                    script_uri_create, table_name
-                );
-
-                // Check permission
-                if user_ctx_create
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
-                            .to_string(),
-                    );
-                }
-
-                match crate::repository::create_script_table(&script_uri_create, &table_name) {
-                    Ok(physical_name) => Ok(success_answer(serde_json::json!({
-                        "tableName": table_name,
-                        "physicalName": physical_name,
-                    }))),
-                    Err(e) => Ok(error_answer(e)),
-                }
-            },
-        )?;
-        database_obj.set("createTable", create_table)?;
-
         // database.ensureTable(tableName, schemaJson) - Converge a table's shape
         let script_uri_ensure = script_uri_owned.clone();
         let user_ctx_ensure = user_context.clone();
@@ -3367,330 +3355,6 @@ impl SecureGlobalContext {
             },
         )?;
         database_obj.set("ensureTable", ensure_table)?;
-
-        // database.addIntegerColumn(tableName, columnName, nullable, defaultValue)
-        let script_uri_add_int = script_uri_owned.clone();
-        let user_ctx_add_int = user_context.clone();
-        let add_integer_column = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  table_name: String,
-                  column_name: String,
-                  nullable: Opt<bool>,
-                  default_value: Opt<String>|
-                  -> JsResult<String> {
-                debug!(
-                    "database.addIntegerColumn called for script {}",
-                    script_uri_add_int
-                );
-
-                if user_ctx_add_int
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
-                            .to_string(),
-                    );
-                }
-
-                let nullable = nullable.0.unwrap_or(true);
-                let default_val = default_value.0.as_deref();
-
-                match crate::repository::add_column_to_script_table(
-                    &script_uri_add_int,
-                    &table_name,
-                    &column_name,
-                    crate::db_schema_utils::ColumnType::Integer,
-                    nullable,
-                    default_val,
-                ) {
-                    Ok(()) => Ok(success_answer(serde_json::json!({
-                        "column": column_name,
-                    }))),
-                    Err(e) => Ok(error_answer(e)),
-                }
-            },
-        )?;
-        database_obj.set("addIntegerColumn", add_integer_column)?;
-
-        // database.addBigintColumn(tableName, columnName, nullable, defaultValue)
-        let script_uri_add_bigint = script_uri_owned.clone();
-        let user_ctx_add_bigint = user_context.clone();
-        let add_bigint_column = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  table_name: String,
-                  column_name: String,
-                  nullable: Opt<bool>,
-                  default_value: Opt<String>|
-                  -> JsResult<String> {
-                debug!(
-                    "database.addBigintColumn called for script {}",
-                    script_uri_add_bigint
-                );
-
-                if user_ctx_add_bigint
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
-                            .to_string(),
-                    );
-                }
-
-                let nullable = nullable.0.unwrap_or(true);
-                let default_val = default_value.0.as_deref();
-
-                match crate::repository::add_column_to_script_table(
-                    &script_uri_add_bigint,
-                    &table_name,
-                    &column_name,
-                    crate::db_schema_utils::ColumnType::Bigint,
-                    nullable,
-                    default_val,
-                ) {
-                    Ok(()) => Ok(success_answer(serde_json::json!({
-                        "column": column_name,
-                    }))),
-                    Err(e) => Ok(error_answer(e)),
-                }
-            },
-        )?;
-        database_obj.set("addBigintColumn", add_bigint_column)?;
-
-        // database.addFloatColumn(tableName, columnName, nullable, defaultValue)
-        let script_uri_add_float = script_uri_owned.clone();
-        let user_ctx_add_float = user_context.clone();
-        let add_float_column = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  table_name: String,
-                  column_name: String,
-                  nullable: Opt<bool>,
-                  default_value: Opt<String>|
-                  -> JsResult<String> {
-                debug!(
-                    "database.addFloatColumn called for script {}",
-                    script_uri_add_float
-                );
-
-                if user_ctx_add_float
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
-                            .to_string(),
-                    );
-                }
-
-                let nullable = nullable.0.unwrap_or(true);
-                let default_val = default_value.0.as_deref();
-
-                match crate::repository::add_column_to_script_table(
-                    &script_uri_add_float,
-                    &table_name,
-                    &column_name,
-                    crate::db_schema_utils::ColumnType::Float,
-                    nullable,
-                    default_val,
-                ) {
-                    Ok(()) => Ok(success_answer(serde_json::json!({
-                        "column": column_name,
-                    }))),
-                    Err(e) => Ok(error_answer(e)),
-                }
-            },
-        )?;
-        database_obj.set("addFloatColumn", add_float_column)?;
-
-        // database.addTextColumn(tableName, columnName, nullable, defaultValue)
-        let script_uri_add_text = script_uri_owned.clone();
-        let user_ctx_add_text = user_context.clone();
-        let add_text_column = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  table_name: String,
-                  column_name: String,
-                  nullable: Opt<bool>,
-                  default_value: Opt<String>|
-                  -> JsResult<String> {
-                debug!(
-                    "database.addTextColumn called for script {}",
-                    script_uri_add_text
-                );
-
-                if user_ctx_add_text
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
-                            .to_string(),
-                    );
-                }
-
-                let nullable = nullable.0.unwrap_or(true);
-                let default_val = default_value.0.as_deref();
-
-                match crate::repository::add_column_to_script_table(
-                    &script_uri_add_text,
-                    &table_name,
-                    &column_name,
-                    crate::db_schema_utils::ColumnType::Text,
-                    nullable,
-                    default_val,
-                ) {
-                    Ok(()) => Ok(success_answer(serde_json::json!({
-                        "column": column_name,
-                    }))),
-                    Err(e) => Ok(error_answer(e)),
-                }
-            },
-        )?;
-        database_obj.set("addTextColumn", add_text_column)?;
-
-        // database.addBooleanColumn(tableName, columnName, nullable, defaultValue)
-        let script_uri_add_bool = script_uri_owned.clone();
-        let user_ctx_add_bool = user_context.clone();
-        let add_boolean_column = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  table_name: String,
-                  column_name: String,
-                  nullable: Opt<bool>,
-                  default_value: Opt<String>|
-                  -> JsResult<String> {
-                debug!(
-                    "database.addBooleanColumn called for script {}",
-                    script_uri_add_bool
-                );
-
-                if user_ctx_add_bool
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
-                            .to_string(),
-                    );
-                }
-
-                let nullable = nullable.0.unwrap_or(true);
-                let default_val = default_value.0.as_deref();
-
-                match crate::repository::add_column_to_script_table(
-                    &script_uri_add_bool,
-                    &table_name,
-                    &column_name,
-                    crate::db_schema_utils::ColumnType::Boolean,
-                    nullable,
-                    default_val,
-                ) {
-                    Ok(()) => Ok(success_answer(serde_json::json!({
-                        "column": column_name,
-                    }))),
-                    Err(e) => Ok(error_answer(e)),
-                }
-            },
-        )?;
-        database_obj.set("addBooleanColumn", add_boolean_column)?;
-
-        // database.addTimestampColumn(tableName, columnName, nullable, defaultValue)
-        let script_uri_add_ts = script_uri_owned.clone();
-        let user_ctx_add_ts = user_context.clone();
-        let add_timestamp_column = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  table_name: String,
-                  column_name: String,
-                  nullable: Opt<bool>,
-                  default_value: Opt<String>|
-                  -> JsResult<String> {
-                debug!(
-                    "database.addTimestampColumn called for script {}",
-                    script_uri_add_ts
-                );
-
-                if user_ctx_add_ts
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
-                            .to_string(),
-                    );
-                }
-
-                let nullable = nullable.0.unwrap_or(true);
-                let default_val = default_value.0.as_deref();
-
-                match crate::repository::add_column_to_script_table(
-                    &script_uri_add_ts,
-                    &table_name,
-                    &column_name,
-                    crate::db_schema_utils::ColumnType::Timestamp,
-                    nullable,
-                    default_val,
-                ) {
-                    Ok(()) => Ok(success_answer(serde_json::json!({
-                        "column": column_name,
-                    }))),
-                    Err(e) => Ok(error_answer(e)),
-                }
-            },
-        )?;
-        database_obj.set("addTimestampColumn", add_timestamp_column)?;
-
-        // database.addReferenceColumn(tableName, columnName, referencedTableName, nullable)
-        let script_uri_ref = script_uri_owned.clone();
-        let user_ctx_ref = user_context.clone();
-        let add_reference_column = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  table_name: String,
-                  column_name: String,
-                  referenced_table_name: String,
-                  nullable: Opt<bool>|
-                  -> JsResult<String> {
-                debug!(
-                    "database.addReferenceColumn called for script {}",
-                    script_uri_ref
-                );
-
-                if user_ctx_ref
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
-                            .to_string(),
-                    );
-                }
-
-                let nullable = nullable.0.unwrap_or(true);
-
-                match crate::repository::add_reference_column(
-                    &script_uri_ref,
-                    &table_name,
-                    &column_name,
-                    &referenced_table_name,
-                    nullable,
-                ) {
-                    Ok(()) => Ok(success_answer(serde_json::json!({
-                        "foreignKey": format!(
-                            "{}.{} -> {}",
-                            table_name, column_name, referenced_table_name
-                        ),
-                        "nullable": nullable,
-                    }))),
-                    Err(e) => Ok(error_answer(e)),
-                }
-            },
-        )?;
-        database_obj.set("addReferenceColumn", add_reference_column)?;
 
         // database.dropColumn(tableName, columnName)
         let script_uri_drop_col = script_uri_owned.clone();
@@ -3785,7 +3449,8 @@ impl SecureGlobalContext {
         )?;
         database_obj.set("dropTable", drop_table)?;
 
-        // database.query(tableName, filters, limit, orderBy, orderDir, options)
+        // query(tableName, filters, limit, orderBy, orderDir, options): the prelude
+        // maps `database.query`'s options object onto these positions.
         // filters supports equality {"col": val} and range operators {"col": {"$gt": val, ...}}
         // options supports {"forUpdate": true} to hold the returned rows for
         // the rest of the transaction.
@@ -4085,139 +3750,10 @@ impl SecureGlobalContext {
         )?;
         database_obj.set("deleteWhere", delete_where)?;
 
-        // database.acquireLease(tableName, leaseId, owner, ttlMs)
-        // Atomic compare-and-swap lease acquisition using a script-owned lease table
-        let script_uri_lease = script_uri_owned.clone();
-        let user_ctx_lease = user_context.clone();
-        let acquire_lease = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  table_name: String,
-                  lease_id: String,
-                  owner: String,
-                  ttl_ms: i64|
-                  -> JsResult<String> {
-                debug!(
-                    "database.acquireLease called for script {} on table: {}, lease: {}",
-                    script_uri_lease, table_name, lease_id
-                );
-
-                if !user_ctx_lease.has_capability(&Capability::WriteScriptData) {
-                    return Ok(error_answer(capability_refusal(
-                        "database",
-                        &Capability::WriteScriptData,
-                        &user_ctx_lease,
-                    )));
-                }
-
-                match crate::repository::acquire_lease(
-                    &script_uri_lease,
-                    &table_name,
-                    &lease_id,
-                    &owner,
-                    ttl_ms,
-                ) {
-                    Ok(result) => match serde_json::to_string(&result) {
-                        Ok(json) => Ok(json),
-                        Err(e) => Ok(error_answer(format!("Serialization error: {}", e))),
-                    },
-                    Err(e) => Ok(error_answer(e)),
-                }
-            },
-        )?;
-        database_obj.set("acquireLease", acquire_lease)?;
-
-        // database.createLeaseTable(tableName)
-        // Create a correctly-structured lease table with a UNIQUE constraint on lease_id
-        let script_uri_clt = script_uri_owned.clone();
-        let user_ctx_clt = user_context.clone();
-        let create_lease_table = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, table_name: String| -> JsResult<String> {
-                debug!(
-                    "database.createLeaseTable called for script {} with table: {}",
-                    script_uri_clt, table_name
-                );
-
-                if user_ctx_clt
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
-                            .to_string(),
-                    );
-                }
-
-                match crate::repository::create_lease_table(&script_uri_clt, &table_name) {
-                    Ok(physical_name) => Ok(success_answer(serde_json::json!({
-                        "tableName": table_name,
-                        "physicalName": physical_name,
-                    }))),
-                    Err(e) => Ok(error_answer(e)),
-                }
-            },
-        )?;
-        database_obj.set("createLeaseTable", create_lease_table)?;
-
-        // database.addUniqueIndex(tableName, columns)
-        // Add a unique index to enable upsert() with a conflict target
-        let script_uri_idx = script_uri_owned.clone();
-        let user_ctx_idx = user_context.clone();
-        let add_unique_index = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  table_name: String,
-                  columns_json: String|
-                  -> JsResult<String> {
-                debug!(
-                    "database.addUniqueIndex called for script {} on table: {}",
-                    script_uri_idx, table_name
-                );
-
-                if user_ctx_idx
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
-                    .is_err()
-                {
-                    return Ok(
-                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
-                            .to_string(),
-                    );
-                }
-
-                let columns: Vec<String> = match serde_json::from_str::<serde_json::Value>(
-                    &columns_json,
-                ) {
-                    Ok(serde_json::Value::Array(arr)) => arr
-                        .into_iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect(),
-                    Ok(serde_json::Value::String(s)) => vec![s],
-                    _ => {
-                        return Ok(
-                                "{\"error\": \"columns must be a JSON array of strings or a single string\"}"
-                                    .to_string(),
-                            );
-                    }
-                };
-
-                match crate::repository::add_unique_index(&script_uri_idx, &table_name, &columns) {
-                    // The parsed columns rather than the caller's raw
-                    // `columns_json`: echoing an argument back verbatim puts
-                    // whatever it contained into the answer.
-                    Ok(()) => Ok(success_answer(serde_json::json!({
-                        "tableName": table_name,
-                        "columns": columns,
-                    }))),
-                    Err(e) => Ok(error_answer(e)),
-                }
-            },
-        )?;
-        database_obj.set("addUniqueIndex", add_unique_index)?;
-
         // Transaction management functions
 
-        // database.beginTransaction(timeoutMs?) - Start a new transaction or savepoint
+        // beginTransaction(timeoutMs?): start a transaction, or a savepoint inside one.
+        // These three are the host half of `database.transaction(fn)`.
         let begin_transaction = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, timeout_ms: Opt<u64>| -> JsResult<String> {
@@ -4239,7 +3775,7 @@ impl SecureGlobalContext {
         )?;
         database_obj.set("beginTransaction", begin_transaction)?;
 
-        // database.commitTransaction() - Commit the current transaction or release savepoint
+        // commitTransaction(): commit, or release the innermost savepoint
         let commit_transaction = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
@@ -4253,7 +3789,7 @@ impl SecureGlobalContext {
         )?;
         database_obj.set("commitTransaction", commit_transaction)?;
 
-        // database.rollbackTransaction() - Rollback the current transaction or to savepoint
+        // rollbackTransaction(): roll back, or to the innermost savepoint
         let rollback_transaction = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
@@ -4267,59 +3803,17 @@ impl SecureGlobalContext {
         )?;
         database_obj.set("rollbackTransaction", rollback_transaction)?;
 
-        // database.createSavepoint(name?) - Create a named or auto-generated savepoint
-        let create_savepoint = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, name: Opt<String>| -> JsResult<String> {
-                match crate::database::Database::create_savepoint(name.0.as_deref()) {
-                    Ok(savepoint_name) => Ok(success_answer(serde_json::json!({
-                        "savepoint": savepoint_name,
-                    }))),
-                    Err(e) => Ok(error_answer(e)),
-                }
-            },
-        )?;
-        database_obj.set("createSavepoint", create_savepoint)?;
-
-        // database.rollbackToSavepoint(name) - Rollback to a named savepoint
-        let rollback_to_savepoint = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, name: String| -> JsResult<String> {
-                match crate::database::Database::rollback_to_savepoint(&name) {
-                    Ok(()) => Ok(success_answer(serde_json::json!({
-                        "message": format!("Rolled back to savepoint: {}", name),
-                    }))),
-                    Err(e) => Ok(error_answer(e)),
-                }
-            },
-        )?;
-        database_obj.set("rollbackToSavepoint", rollback_to_savepoint)?;
-
-        // database.releaseSavepoint(name) - Release a named savepoint
-        let release_savepoint = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, name: String| -> JsResult<String> {
-                match crate::database::Database::release_savepoint(&name) {
-                    Ok(()) => Ok(success_answer(serde_json::json!({
-                        "message": format!("Released savepoint: {}", name),
-                    }))),
-                    Err(e) => Ok(error_answer(e)),
-                }
-            },
-        )?;
-        database_obj.set("releaseSavepoint", release_savepoint)?;
-
         // Installed under a private name: the prelude below builds `database`
-        // from it, wrapping each answer so a result can be awaited and read
-        // the same way a `fetch` response is.
+        // from it, turning each JSON answer into a value and each `{error}`
+        // into a thrown error.
         global.set("__hostDatabase", database_obj)?;
 
-        crate::bytecode::eval_program(ctx, "engine://result-prelude", RESULT_PRELUDE).map_err(
+        crate::bytecode::eval_program(ctx, "engine://database-prelude", DATABASE_PRELUDE).map_err(
             |e| {
                 rquickjs::Error::new_from_js_message(
                     "database",
                     "prelude",
-                    &format!("result prelude failed to load: {}", e),
+                    &format!("database prelude failed to load: {}", e),
                 )
             },
         )?;

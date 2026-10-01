@@ -28,8 +28,8 @@ async fn eval_with_probe_table(uri: &str, source: &str) -> EvalReport {
 
     let prepared = format!(
         r#"
-        database.dropTable("probe");
-        database.createTable("probe");
+        try {{ database.dropTable("probe"); }} catch (e) {{}}
+        database.ensureTable("probe", {{ columns: [] }});
         {}
         "#,
         source
@@ -67,23 +67,23 @@ async fn every_column_type_reads_back_as_the_type_it_was_declared() {
     let report = eval_with_probe_table(
         "test://db-round-trip/types",
         r#"
-        database.addIntegerColumn("probe", "count", true);
-        database.addBigintColumn("probe", "at_ms", true);
-        database.addFloatColumn("probe", "celsius", true);
-        database.addTextColumn("probe", "label", true);
-        database.addBooleanColumn("probe", "active", true);
-        database.addTimestampColumn("probe", "seen_at", true);
+        database.ensureTable("probe", { columns: [{ name: "count", type: "integer", nullable: true }] });
+        database.ensureTable("probe", { columns: [{ name: "at_ms", type: "bigint", nullable: true }] });
+        database.ensureTable("probe", { columns: [{ name: "celsius", type: "float", nullable: true }] });
+        database.ensureTable("probe", { columns: [{ name: "label", type: "text", nullable: true }] });
+        database.ensureTable("probe", { columns: [{ name: "active", type: "boolean", nullable: true }] });
+        database.ensureTable("probe", { columns: [{ name: "seen_at", type: "timestamp", nullable: true }] });
 
-        database.insert("probe", JSON.stringify({
+        database.insert("probe", {
             count: 7,
             at_ms: 1700000000000,
             celsius: 21.5,
             label: "hello",
             active: true,
             seen_at: "2024-03-01T12:30:00Z",
-        })).json();
+        });
 
-        database.query("probe").json()[0]
+        database.query("probe")[0]
         "#,
     )
     .await;
@@ -127,9 +127,9 @@ async fn a_false_is_not_mistaken_for_a_zero() {
     let report = eval_with_probe_table(
         "test://db-round-trip/false",
         r#"
-        database.addBooleanColumn("probe", "active", true);
-        database.insert("probe", JSON.stringify({ active: false })).json();
-        database.query("probe").json()[0]
+        database.ensureTable("probe", { columns: [{ name: "active", type: "boolean", nullable: true }] });
+        database.insert("probe", { active: false });
+        database.query("probe")[0]
         "#,
     )
     .await;
@@ -153,15 +153,15 @@ async fn a_null_reads_back_as_null_in_every_column_type() {
     let report = eval_with_probe_table(
         "test://db-round-trip/nulls",
         r#"
-        database.addIntegerColumn("probe", "count", true);
-        database.addBigintColumn("probe", "at_ms", true);
-        database.addFloatColumn("probe", "celsius", true);
-        database.addTextColumn("probe", "label", true);
-        database.addBooleanColumn("probe", "active", true);
-        database.addTimestampColumn("probe", "seen_at", true);
+        database.ensureTable("probe", { columns: [{ name: "count", type: "integer", nullable: true }] });
+        database.ensureTable("probe", { columns: [{ name: "at_ms", type: "bigint", nullable: true }] });
+        database.ensureTable("probe", { columns: [{ name: "celsius", type: "float", nullable: true }] });
+        database.ensureTable("probe", { columns: [{ name: "label", type: "text", nullable: true }] });
+        database.ensureTable("probe", { columns: [{ name: "active", type: "boolean", nullable: true }] });
+        database.ensureTable("probe", { columns: [{ name: "seen_at", type: "timestamp", nullable: true }] });
 
-        database.insert("probe", JSON.stringify({ label: "only this one" })).json();
-        database.query("probe").json()[0]
+        database.insert("probe", { label: "only this one" });
+        database.query("probe")[0]
         "#,
     )
     .await;
@@ -191,21 +191,17 @@ async fn a_write_answers_with_the_same_row_a_query_returns() {
     let report = eval_with_probe_table(
         "test://db-round-trip/write-answers",
         r#"
-        database.addTextColumn("probe", "label", true);
-        database.addBooleanColumn("probe", "active", true);
-        database.addUniqueIndex("probe", JSON.stringify(["label"]));
+        database.ensureTable("probe", { columns: [{ name: "label", type: "text", nullable: true }] });
+        database.ensureTable("probe", { columns: [{ name: "active", type: "boolean", nullable: true }] });
+        database.ensureTable("probe", { columns: [], uniqueIndexes: [["label"]] });
 
         const inserted = database
-            .insert("probe", JSON.stringify({ label: "a", active: true }))
-            .json();
+            .insert("probe", { label: "a", active: true });
         const updated = database
-            .update("probe", inserted.id, JSON.stringify({ active: false }))
-            .json();
+            .update("probe", inserted.id, { active: false });
         const upserted = database
-            .upsert("probe", JSON.stringify(["label"]),
-                    JSON.stringify({ label: "a", active: true }))
-            .json();
-        const queried = database.query("probe").json()[0];
+            .upsert("probe", ["label"], { label: "a", active: true });
+        const queried = database.query("probe")[0];
 
         ({ inserted: inserted, updated: updated, upserted: upserted, queried: queried })
         "#,
@@ -231,16 +227,16 @@ async fn a_default_reaches_the_column_as_the_value_it_names() {
     let report = eval_with_probe_table(
         "test://db-round-trip/defaults",
         r#"
-        database.addTextColumn("probe", "marker", true);
-        database.addTextColumn("probe", "label", false, "it's default");
-        database.addIntegerColumn("probe", "count", false, "7");
-        database.addBooleanColumn("probe", "active", false, "true");
-        database.addFloatColumn("probe", "celsius", false, "21.5");
+        database.ensureTable("probe", { columns: [{ name: "marker", type: "text", nullable: true }] });
+        database.ensureTable("probe", { columns: [{ name: "label", type: "text", nullable: false, default: "it's default" }] });
+        database.ensureTable("probe", { columns: [{ name: "count", type: "integer", nullable: false, default: "7" }] });
+        database.ensureTable("probe", { columns: [{ name: "active", type: "boolean", nullable: false, default: "true" }] });
+        database.ensureTable("probe", { columns: [{ name: "celsius", type: "float", nullable: false, default: "21.5" }] });
 
         // A row naming only the column with no default, so every other value
         // in it is the one the default put there.
-        database.insert("probe", JSON.stringify({ marker: "x" })).json();
-        database.query("probe").json()[0]
+        database.insert("probe", { marker: "x" });
+        database.query("probe")[0]
         "#,
     )
     .await;
@@ -263,12 +259,12 @@ async fn now_is_accepted_by_either_name() {
     let report = eval_with_probe_table(
         "test://db-round-trip/now",
         r#"
-        database.addTextColumn("probe", "marker", true);
-        database.addTimestampColumn("probe", "made_at", false, "NOW()");
-        database.addTimestampColumn("probe", "seen_at", false, "CURRENT_TIMESTAMP");
+        database.ensureTable("probe", { columns: [{ name: "marker", type: "text", nullable: true }] });
+        database.ensureTable("probe", { columns: [{ name: "made_at", type: "timestamp", nullable: false, default: "NOW()" }] });
+        database.ensureTable("probe", { columns: [{ name: "seen_at", type: "timestamp", nullable: false, default: "CURRENT_TIMESTAMP" }] });
 
-        database.insert("probe", JSON.stringify({ marker: "x" })).json();
-        database.query("probe").json()[0]
+        database.insert("probe", { marker: "x" });
+        database.query("probe")[0]
         "#,
     )
     .await;
@@ -300,7 +296,11 @@ async fn a_timestamp_default_that_names_no_instant_is_refused() {
     let report = eval_with_probe_table(
         "test://db-round-trip/bad-default",
         r#"
-        database.addTimestampColumn("probe", "seen_at", false, "whenever").json()
+        try {
+            database.ensureTable("probe", { columns: [{ name: "seen_at", type: "timestamp", nullable: false, default: "whenever" }] });
+        } catch (e) {
+            ({ error: e.message })
+        }
         "#,
     )
     .await;
@@ -314,5 +314,45 @@ async fn a_timestamp_default_that_names_no_instant_is_refused() {
         error.contains("whenever"),
         "the refusal should name the value it refused: {}",
         error
+    );
+}
+
+/// A `reference` column is `ensureTable`'s spelling of what
+/// `addReferenceColumn` did: an integer pointing at another of the script's
+/// tables, with a foreign key behind it, so a row cannot point at nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reference_column_points_at_another_table() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let report = eval_with_probe_table(
+        "test://db-round-trip/reference",
+        r#"
+        try { database.dropTable("probe_books"); } catch (e) {}
+        try { database.dropTable("probe_authors"); } catch (e) {}
+        database.ensureTable("probe_authors", { columns: [{ name: "name", type: "text" }] });
+        database.ensureTable("probe_books", { columns: [
+            { name: "title", type: "text" },
+            { name: "author_id", type: "reference", references: "probe_authors" },
+        ] });
+        const author = database.insert("probe_authors", { name: "Tove" });
+        const book = database.insert("probe_books", { title: "Moomin", author_id: author.id });
+        let dangling = null;
+        try {
+            database.insert("probe_books", { title: "Nobody's", author_id: author.id + 1000 });
+        } catch (e) {
+            dangling = e.message;
+        }
+        ({ stored: book.author_id === author.id, dangling })
+        "#,
+    )
+    .await;
+
+    let value = value_of(&report);
+    assert_eq!(value["stored"], Value::Bool(true), "{}", value);
+    assert!(
+        value["dangling"].as_str().is_some(),
+        "a reference to a row that does not exist should be refused: {}",
+        value
     );
 }

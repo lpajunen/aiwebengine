@@ -219,15 +219,15 @@ async fn writes_made_after_an_await_are_committed() {
         r#"
         function prepare(context) {
           database.dropTable("notes");
-          database.createTable("notes");
-          database.addTextColumn("notes", "label", true);
+          database.ensureTable("notes", { columns: [{ name: "label", type: "text", nullable: true }] });
           return { status: 200, body: "prepared" };
         }
 
         async function handler(context) {
-          database.beginTransaction(5000);
-          await Promise.resolve();
-          database.insert("notes", JSON.stringify({ label: "written after await" }));
+          await database.transaction(async () => {
+            await Promise.resolve();
+            database.insert("notes", { label: "written after await" });
+          }, { timeoutMs: 5000 });
           return { status: 200, body: "ok" };
         }
 
@@ -288,33 +288,35 @@ async fn writes_made_after_an_await_are_committed() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn writes_are_rolled_back_when_the_handler_fails() {
-    let context = TestContext::new();
-
     // Both failure shapes have to roll back, and roll back the same: a throw
     // before the handler returns, and a rejection that only arrives once the
     // queue is drained.
-    let base = serve(
-        &context,
+    //
+    // Signed in: an anonymous caller may not write at all, and when refusals
+    // came back as ignored `{error}` values that made this test pass without a
+    // single write ever having been made for the rollback to undo.
+    let engine = serve_signed_in(
         "test_rollback_both",
         r#"
         function prepare(context) {
           database.dropTable("ledger");
-          database.createTable("ledger");
-          database.addTextColumn("ledger", "label", true);
+          database.ensureTable("ledger", { columns: [{ name: "label", type: "text", nullable: true }] });
           return { status: 200, body: "prepared" };
         }
 
         function syncHandler(context) {
-          database.beginTransaction(5000);
-          database.insert("ledger", JSON.stringify({ label: "sync" }));
-          throw new Error("sync failure");
+          database.transaction(() => {
+            database.insert("ledger", { label: "sync" });
+            throw new Error("sync failure");
+          }, { timeoutMs: 5000 });
         }
 
         async function asyncHandler(context) {
-          database.beginTransaction(5000);
-          await Promise.resolve();
-          database.insert("ledger", JSON.stringify({ label: "async" }));
-          throw new Error("async failure");
+          await database.transaction(async () => {
+            await Promise.resolve();
+            database.insert("ledger", { label: "async" });
+            throw new Error("async failure");
+          }, { timeoutMs: 5000 });
         }
 
         function readBack(context) {
@@ -331,8 +333,9 @@ async fn writes_are_rolled_back_when_the_handler_fails() {
         "#,
     )
     .await;
+    let base = format!("http://127.0.0.1:{}", engine.port());
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     assert_eq!(
         client
             .post(format!("{}/rollback/prepare", base))
@@ -366,32 +369,36 @@ async fn writes_are_rolled_back_when_the_handler_fails() {
         rows
     );
 
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_transaction_left_open_does_not_leak_into_the_next_request() {
-    // A handler that opens a transaction and returns without finishing it is
-    // committed at the boundary, so the thread it ran on must be left clean for
-    // whatever request lands there next.
+    // `database.transaction(fn)` closes what it opens, except when `fn` is
+    // async and never settles. The handler boundary finishes that transaction,
+    // so the thread it ran on must be left clean for whatever request lands
+    // there next.
     let engine = serve_signed_in(
         "test_tx_no_leak",
         r#"
         function prepare(context) {
           database.dropTable("leaky");
-          database.createTable("leaky");
-          database.addTextColumn("leaky", "label", true);
+          database.ensureTable("leaky", { columns: [{ name: "label", type: "text", nullable: true }] });
           return { status: 200, body: "prepared" };
         }
 
+        // The one way left to leave a transaction open: an async function
+        // that never settles, which the handler does not wait for.
         function opener(context) {
-          database.beginTransaction(5000);
-          database.insert("leaky", JSON.stringify({ label: "first" }));
+          database.transaction(async () => {
+            database.insert("leaky", { label: "first" });
+            await new Promise(() => {});
+          }, { timeoutMs: 5000 });
           return { status: 200, body: "opened" };
         }
 
         function follower(context) {
-          database.insert("leaky", JSON.stringify({ label: "second" }));
+          database.insert("leaky", { label: "second" });
           return { status: 200, body: "followed" };
         }
 

@@ -18,7 +18,12 @@ use common::{TestContext, wait_for_server};
 /// returns — a prompt's answer is the channel it has.
 const SCRIPT: &str = r#"
 function handlePrompt(context) {
-  const verdict = String(database.createTable("prompt_authority_probe"));
+  let verdict;
+  try {
+    verdict = JSON.stringify(database.ensureTable("prompt_authority_probe", { columns: [] }));
+  } catch (e) {
+    verdict = e.message;
+  }
   return {
     messages: [
       { role: "user", content: { type: "text", text: verdict } }
