@@ -725,11 +725,15 @@ impl Database {
                     Ok::<(), String>(())
                 })?;
             } else {
-                // Commit the entire transaction
-                let tx = state
-                    .transaction
-                    .take()
-                    .ok_or("Transaction not available")?;
+                // Commit the entire transaction. The state is cleared whatever
+                // the commit answers: the transaction has been taken out of
+                // it, and a state left holding none reads to every later
+                // begin on this pooled thread as one still open — so the
+                // thread could never start a transaction again.
+                let tx = state.transaction.take();
+                state.finalized = true;
+                *tx_option = None;
+                let tx = tx.ok_or("Transaction not available")?;
 
                 run_blocking(async {
                     tx.commit()
@@ -737,9 +741,6 @@ impl Database {
                         .map_err(|e| format!("Failed to commit transaction: {}", e))?;
                     Ok::<(), String>(())
                 })?;
-
-                state.finalized = true;
-                *tx_option = None;
             }
 
             Ok(())
@@ -776,11 +777,17 @@ impl Database {
                     Ok::<(), String>(())
                 })?;
             } else {
-                // Rollback the entire transaction
-                let tx = state
-                    .transaction
-                    .take()
-                    .ok_or("Transaction not available")?;
+                // Rollback the entire transaction, clearing the state first
+                // for the reason `commit_transaction` does. A rollback that
+                // fails is usually one whose connection the database already
+                // ended — an idle-in-transaction timeout — which has rolled
+                // the work back itself; what must not survive it is the state.
+                let tx = state.transaction.take();
+                state.finalized = true;
+                *tx_option = None;
+                let Some(tx) = tx else {
+                    return Ok(());
+                };
 
                 run_blocking(async {
                     tx.rollback()
@@ -788,9 +795,6 @@ impl Database {
                         .map_err(|e| format!("Failed to rollback transaction: {}", e))?;
                     Ok::<(), String>(())
                 })?;
-
-                state.finalized = true;
-                *tx_option = None;
             }
 
             Ok(())
@@ -1414,5 +1418,48 @@ mod tests {
                 eprintln!("Skipping nested savepoints test - Failed to connect: {}", e);
             }
         }
+    }
+
+    /// A transaction that outlives its budget must not outlive the call that
+    /// finds out. The commit refuses it, the rollback that follows may find
+    /// its connection already ended by the database, and either way the next
+    /// transaction on this thread has to start — threads are pooled, so a
+    /// state left behind here poisons every later execution that lands on it.
+    #[tokio::test]
+    async fn an_expired_transaction_leaves_the_thread_usable() {
+        let Some(database_url) = crate::test_db::connection_string_blocking() else {
+            return;
+        };
+        let Ok(pool) = PgPoolOptions::new()
+            .max_connections(10)
+            .acquire_timeout(Duration::from_secs(5))
+            .connect(database_url)
+            .await
+        else {
+            return;
+        };
+        initialize_global_database(Arc::new(Database::from_pool(pool)));
+
+        let outcome = tokio::task::spawn_blocking(|| {
+            Database::begin_transaction(Some(50))
+                .map_err(|e| format!("begin: {}", e))?
+                .release();
+            std::thread::sleep(Duration::from_millis(400));
+            if Database::commit_transaction().is_ok() {
+                return Err("an expired transaction should not commit".to_string());
+            }
+            let _ = Database::rollback_transaction();
+            if get_current_transaction_active() {
+                return Err("the expired transaction is still on the thread".to_string());
+            }
+            Database::begin_transaction(Some(5000))
+                .map_err(|e| format!("the next transaction could not start: {}", e))?
+                .release();
+            Database::commit_transaction().map_err(|e| format!("next commit: {}", e))
+        })
+        .await
+        .expect("the blocking task panicked");
+
+        assert_eq!(outcome, Ok(()));
     }
 }

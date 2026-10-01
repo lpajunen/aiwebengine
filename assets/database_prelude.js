@@ -194,14 +194,22 @@
       } catch (e) {
         rollback(e);
       }
-      if (result && typeof result.then === "function") {
-        return result.then(function (value) {
-          unwrap(host.commitTransaction(), api);
-          return value;
-        }, rollback);
+      // A commit can be refused — a transaction past its budget, say — and
+      // a refused commit leaves the transaction open, so it is rolled back
+      // before the refusal is reported.
+      function commit(value) {
+        var answer = host.commitTransaction();
+        try {
+          unwrap(answer, api);
+        } catch (e) {
+          rollback(e);
+        }
+        return value;
       }
-      unwrap(host.commitTransaction(), api);
-      return result;
+      if (result && typeof result.then === "function") {
+        return result.then(commit, rollback);
+      }
+      return commit(result);
     },
   };
 
