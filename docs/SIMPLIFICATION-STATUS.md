@@ -23,7 +23,7 @@ across 45 files) and is **merged into `main`**.
 | §3    | One operation table, HTTP generated from it | Not started (Phase 2)                         |
 | §4    | Collision refusal (no mounts)               | Not started (Phase 3)                         |
 | §4    | Slug + stable identity                      | Not started (Phase 4)                         |
-| §5    | Prelude every global                        | In progress (Phase 1): `routeRegistry` done   |
+| §5    | Prelude every global                        | In progress: `routeRegistry`, `files` done    |
 | §6    | Trim `database` to ~10 methods              | Not started (Phase 1)                         |
 
 ## What is true of the tree now
@@ -179,15 +179,15 @@ engine beyond the JS API:
     by bytes but not by the engine's 256-file ceiling.
   - `aiwebengine-examples/auth_roles_demo` registers `/auth/demo`, which is a
     reserved prefix. A script bug, not an engine one.
-  - **The connection pool ran dry after about an hour** with every script
-    loaded: `Rate limit DB error: pool timed out while waiting for an open
-connection`, and `/auth/local/login` hung, while Postgres showed every one
-    of the ten connections (`APP_REPOSITORY__MAX_CONNECTIONS=10`) idle — so
-    they were checked out and held in-process, not busy. Not reproduced in the
-    first 25 minutes after a restart, which reads as a leak rather than load.
-    Suspects are what runs unattended: `virtual-world`'s NPC tick and the
-    private script's scheduled feeds. Open; worth finding before Phase 1,
-    since a cutover rehearsal is exactly an hour-long run of these scripts.
+  - ~~**The connection pool ran dry after about an hour.**~~ The development
+    Mac was sleeping. `pmset -g log` shows Maintenance Sleep every ~15
+    minutes with brief DarkWakes, and a sleep freezes the engine and the
+    Postgres VM mid-request: the "hang" lasted as long as the machine slept,
+    including past a 20-second curl timeout. Kept awake (`caffeinate -i`),
+    the same runs answer in well under a second. What remains is a weaker
+    question — whether the engine recovers by itself after the database
+    vanishes under it for a while — which matters for a laptop and not for a
+    server. Anything long-running locally belongs under `caffeinate -i`.
 - ~~Fix or quarantine `desktop::tests::generated_config_loads_and_validates`~~
   — it passes now; a full `cargo nextest run --all-features` on `47fb7b0` is
   1705 passed, 0 failed.
@@ -211,8 +211,17 @@ of the four repositories, unpushed and undeployed until the phase is whole.
   into the local engine, the same 30 of 32 scripts initialise as before, with
   165 routes.
 - `git_push files_the_script_does_not_own_survive` timed out once under the
-  full suite (180s) and passes alone in 0.3s: a hang under load, not this
-  change. Watch for it.
+  full suite (180s) and passes alone in 0.3s — very likely the same sleep.
+- **1b done** (engine `9f282c0`). `files.list/read/write/delete` replaced
+  `assetStorage`: a read is text or `null`, binary is asked for with
+  `{ encoding: "base64" }`, failures throw, the listing is sorted and keyed
+  by `path`. `files` is configurable and writable so a script's own
+  top-level `const files` shadows it. The agent's skill code, the dev
+  repository's docs script and editor, and the dev reference and assets
+  guide moved with it. Verified locally with the Mac kept awake: the same 30
+  of 32 scripts initialise, the docs script serves Markdown through
+  `files.read`, and the agent's 86 and the private script's 313 in-engine
+  tests pass.
 
 Breaking for every script; do it as one release with one cutover. One commit
 per global, each with its `aiwebengine.d.ts` change:
