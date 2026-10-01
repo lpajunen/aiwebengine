@@ -1,11 +1,10 @@
 /// <reference path="../../assets/aiwebengine.d.ts" />
 
 // Test script for personalStorage functionality
-routeRegistry.registerRoute(
-  "/test-personal-storage",
-  "testPersonalStorageHandler",
-  "GET",
-);
+routeRegistry.registerRoute("/test-personal-storage", {
+  handler: "testPersonalStorageHandler",
+  method: "GET",
+});
 
 function testPersonalStorageHandler(context) {
   const req = context.request;

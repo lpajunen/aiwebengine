@@ -261,7 +261,7 @@ async fn a_batch_writes_every_file_and_runs_init_once() {
         import { PATH, listItems } from "./assets_batch_deploy/handlers.ts";
         globalThis.listItems = listItems;
         function init() {
-            routeRegistry.registerRoute(PATH, "listItems", "GET");
+            routeRegistry.registerRoute(PATH, { handler: "listItems", method: "GET" });
         }
         "#,
     );
@@ -473,7 +473,7 @@ async fn reinit_never_writes_the_files_and_leaves_init_alone() {
         r#"
         function handler(context) { return ResponseBuilder.json({}); }
         globalThis.handler = handler;
-        function init() { routeRegistry.registerRoute("/assets-batch/no-reinit", "handler", "GET"); }
+        function init() { routeRegistry.registerRoute("/assets-batch/no-reinit", { handler: "handler", method: "GET" }); }
         "#,
     );
 
@@ -609,7 +609,7 @@ async fn the_mcp_tool_writes_the_same_batch() {
         import { PATH } from "./assets_batch_mcp/routes.ts";
         function handler(context) { return ResponseBuilder.json({}); }
         globalThis.handler = handler;
-        function init() { routeRegistry.registerRoute(PATH, "handler", "GET"); }
+        function init() { routeRegistry.registerRoute(PATH, { handler: "handler", method: "GET" }); }
         "#,
     );
 
@@ -656,7 +656,7 @@ async fn the_tool_takes_a_module_as_text() {
         import { PATH } from "./assets_batch_mcp_text/routes.ts";
         function handler(context) { return ResponseBuilder.json({}); }
         globalThis.handler = handler;
-        function init() { routeRegistry.registerRoute(PATH, "handler", "GET"); }
+        function init() { routeRegistry.registerRoute(PATH, { handler: "handler", method: "GET" }); }
         "#,
     );
 
@@ -982,14 +982,14 @@ async fn the_root_source_travels_with_the_modules_as_one_change() {
         import { PATH } from "./assets_batch_root/routes.ts";
         function handler(context) { return ResponseBuilder.json({}); }
         globalThis.handler = handler;
-        function init() { routeRegistry.registerRoute(PATH, "handler", "GET"); }
+        function init() { routeRegistry.registerRoute(PATH, { handler: "handler", method: "GET" }); }
         "#,
     );
 
     let root = "import { PATH } from \"./assets_batch_root/routes.ts\";\n\
                 function handler(context) { return ResponseBuilder.json({ v: 2 }); }\n\
                 globalThis.handler = handler;\n\
-                function init() { routeRegistry.registerRoute(PATH, \"handler\", \"POST\"); }\n";
+                function init() { routeRegistry.registerRoute(PATH, { handler: \"handler\", method: \"POST\" }); }\n";
 
     let (status, body) = post_batch(
         &format!("script={}", uri),

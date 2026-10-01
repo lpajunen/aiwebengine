@@ -27,15 +27,26 @@ function delete_handler(context) {
 function init(context) {
   console.log("Initializing method_test.js at " + new Date().toISOString());
   // Register handlers for different methods on the same path
-  routeRegistry.registerRoute("/api/test", "get_handler", "GET");
-  routeRegistry.registerRoute("/api/test", "post_handler", "POST");
-  routeRegistry.registerRoute("/api/test", "put_handler", "PUT");
-  routeRegistry.registerRoute("/api/test", "delete_handler", "DELETE");
+  routeRegistry.registerRoute("/api/test", {
+    handler: "get_handler",
+    method: "GET",
+  });
+  routeRegistry.registerRoute("/api/test", {
+    handler: "post_handler",
+    method: "POST",
+  });
+  routeRegistry.registerRoute("/api/test", {
+    handler: "put_handler",
+    method: "PUT",
+  });
+  routeRegistry.registerRoute("/api/test", {
+    handler: "delete_handler",
+    method: "DELETE",
+  });
   // Untagged asset route; used to test the default "Assets" OpenAPI group
-  routeRegistry.registerAssetRoute(
-    "/method-test.css",
-    "public/method-test.css",
-  );
+  routeRegistry.registerRoute("/method-test.css", {
+    file: "public/method-test.css",
+  });
   console.log("HTTP method test endpoints registered");
   return { success: true };
 }

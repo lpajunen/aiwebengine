@@ -32,7 +32,10 @@ function health_test_handler(context) {
 // Initialization function
 function init(context) {
   console.log("Initializing health_test.js at " + new Date().toISOString());
-  routeRegistry.registerRoute("/health-test", "health_test_handler", "GET");
+  routeRegistry.registerRoute("/health-test", {
+    handler: "health_test_handler",
+    method: "GET",
+  });
   console.log("Health test endpoint registered");
   return { success: true };
 }

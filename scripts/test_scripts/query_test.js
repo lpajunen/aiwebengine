@@ -23,7 +23,10 @@ function query_handler(context) {
 // Initialization function
 function init(context) {
   console.log("Initializing query_test.js at " + new Date().toISOString());
-  routeRegistry.registerRoute("/api/query", "query_handler", "GET");
+  routeRegistry.registerRoute("/api/query", {
+    handler: "query_handler",
+    method: "GET",
+  });
   console.log("Query test endpoint registered");
   return { success: true };
 }

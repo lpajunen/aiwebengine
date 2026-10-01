@@ -10,7 +10,10 @@ function js_log_test_handler(context) {
 // Initialization function
 function init(context) {
   console.log("Initializing js_log_test.js at " + new Date().toISOString());
-  routeRegistry.registerRoute("/js-log-test", "js_log_test_handler", "GET");
+  routeRegistry.registerRoute("/js-log-test", {
+    handler: "js_log_test_handler",
+    method: "GET",
+  });
   console.log("JS log test endpoint registered");
   return { success: true };
 }

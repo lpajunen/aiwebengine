@@ -64,8 +64,8 @@ async fn a_file_outside_public_is_refused_and_reported() {
     store(uri, "public/ok.css", "body { color: blue; }");
 
     let script = r#"
-        routeRegistry.registerAssetRoute("/exposure-misplaced.css", "branding/logo.css");
-        routeRegistry.registerAssetRoute("/exposure-ok.css", "public/ok.css");
+        routeRegistry.registerRoute("/exposure-misplaced.css", { file: "branding/logo.css" });
+        routeRegistry.registerRoute("/exposure-ok.css", { file: "public/ok.css" });
     "#;
     let result = execute_script_secure(uri, script, admin.clone());
     assert!(
@@ -159,8 +159,8 @@ async fn a_refusal_does_not_stop_the_rest_of_init() {
     store(uri, "public/after.css", "body { color: black; }");
 
     let script = r#"
-        routeRegistry.registerAssetRoute("/exposure-still.css", "branding/still.css");
-        routeRegistry.registerAssetRoute("/exposure-after.css", "public/after.css");
+        routeRegistry.registerRoute("/exposure-still.css", { file: "branding/still.css" });
+        routeRegistry.registerRoute("/exposure-after.css", { file: "public/after.css" });
     "#;
     let result = execute_script_secure(uri, script, admin);
     assert!(
@@ -268,13 +268,9 @@ async fn an_asset_route_can_refuse_to_serve_its_file() {
         }
 
         function init(context) {
-          routeRegistry.registerAssetRoute("/authz-secret.css", "public/secret.css", {
-            authorize: "mayRead",
-          });
-          routeRegistry.registerAssetRoute("/authz-broken.css", "public/secret.css", {
-            authorize: "broken",
-          });
-          routeRegistry.registerAssetRoute("/authz-open.css", "public/open.css");
+          routeRegistry.registerRoute("/authz-secret.css", { file: "public/secret.css", authorize: "mayRead" });
+          routeRegistry.registerRoute("/authz-broken.css", { file: "public/secret.css", authorize: "broken" });
+          routeRegistry.registerRoute("/authz-open.css", { file: "public/open.css" });
           return { success: true };
         }
     "#;
@@ -369,9 +365,7 @@ async fn a_file_route_matches_a_pattern_and_the_guard_sees_it() {
         }
 
         function init(context) {
-          routeRegistry.registerAssetRoute("/reports/:id", "public/report.csv", {
-            authorize: "mayRead",
-          });
+          routeRegistry.registerRoute("/reports/:id", { file: "public/report.csv", authorize: "mayRead" });
           return { success: true };
         }
     "#;
@@ -423,7 +417,7 @@ async fn a_stream_matches_a_pattern_and_the_guard_sees_it() {
         }
 
         function init(context) {
-          routeRegistry.registerStreamRoute("/orders/:id/events", "mayWatch");
+          routeRegistry.registerRoute("/orders/:id/events", { stream: true, authorize: "mayWatch" });
           return { success: true };
         }
     "#;

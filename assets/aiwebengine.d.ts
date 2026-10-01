@@ -17,7 +17,7 @@
  * }
  *
  * function init() {
- *   routeRegistry.registerRoute("/api/hello", "myHandler", "GET");
+ *   routeRegistry.registerRoute("/api/hello", { handler: "myHandler", method: "GET" });
  * }
  */
 
@@ -34,11 +34,11 @@
  * @example
  * function init() {
  *   // Register HTTP routes
- *   routeRegistry.registerRoute("/api/users", "listUsers", "GET");
- *   routeRegistry.registerRoute("/api/users/:id", "getUser", "GET");
+ *   routeRegistry.registerRoute("/api/users", { handler: "listUsers", method: "GET" });
+ *   routeRegistry.registerRoute("/api/users/:id", { handler: "getUser", method: "GET" });
  *
  *   // Register streams
- *   routeRegistry.registerStreamRoute("/events/notifications");
+ *   routeRegistry.registerRoute("/events/notifications", { stream: true });
  *
  *   // Log initialization
  *   console.log("Script initialized successfully");
@@ -61,7 +61,7 @@ declare function init(context?: HandlerContext): void;
  * A script's top-level program is re-evaluated on every invocation, and only
  * `init()` runs in the registration phase. So these methods:
  *
- * - `routeRegistry.registerRoute` / `registerAssetRoute` / `registerStreamRoute`
+ * - `routeRegistry.registerRoute`
  * - `mcpRegistry.registerTool` / `registerPrompt` / `registerResource`
  * - `schedulerService.registerOnce` / `registerRecurring` / `clearAll`
  *
@@ -396,220 +396,166 @@ interface TaskContext {
 // ============================================================================
 
 /**
- * Route registry for HTTP endpoints and streaming
+ * What a path leads to. Exactly one of `handler`, `stream` or `file`.
+ */
+type RouteSpec = HandlerRouteSpec | StreamRouteSpec | FileRouteSpec;
+
+/** OpenAPI documentation every kind of route may carry. */
+interface RouteDocs {
+  summary?: string;
+  description?: string;
+  /** Swagger group. Defaults to "Streams" for a stream and "Assets" for a file. */
+  tags?: string[];
+}
+
+/** A script function answering one HTTP method. */
+interface HandlerRouteSpec extends RouteDocs {
+  /** Name of the handler function to call. */
+  handler: string;
+  /**
+   * HTTP method. Defaults to GET. Registering GET also serves HEAD, running
+   * the same handler and returning its headers with an empty body; register
+   * HEAD explicitly to answer it differently.
+   */
+  method?: string;
+  /** OpenAPI parameters array. */
+  parameters?: unknown[];
+  /** OpenAPI requestBody object. */
+  requestBody?: Record<string, unknown>;
+  stream?: never;
+  file?: never;
+  /** A handler decides who may call it itself; there is nothing to name. */
+  authorize?: never;
+}
+
+/** A Server-Sent Events stream the engine holds open. GET only. */
+interface StreamRouteSpec extends RouteDocs {
+  stream: true;
+  /**
+   * Name of the function that **decides who may subscribe**. Without one,
+   * anyone who can reach the host gets the stream. See {@link AuthorizeFunction}.
+   */
+  authorize?: string;
+  handler?: never;
+  file?: never;
+}
+
+/** A file of the script's tree, served by the engine. GET only. */
+interface FileRouteSpec extends RouteDocs {
+  /** Path of the file in the script's tree. Must be under `public/`. */
+  file: string;
+  /**
+   * Name of the function that decides who may read the file. Without one,
+   * it is served to anyone who can reach the host — right for a stylesheet,
+   * and why a served file lives under `public/`. See {@link AuthorizeFunction}.
+   */
+  authorize?: string;
+  handler?: never;
+  stream?: never;
+}
+
+/**
+ * The function a stream's or a file route's `authorize` names.
+ *
+ * Whose order `/orders/1234/events` is, is a fact about your data model rather
+ * than one the engine can know, so this is where that decision lives. It runs
+ * under the requester's own context and answers either an allow — any object
+ * without `deny`; for a stream, a flat object of strings that
+ * `sendStreamMessageFiltered` matches against — or a refusal:
+ *
+ * ```ts
+ * function mayWatchOrder(context) {
+ *   if (!context.auth?.userId) return { deny: 401 };
+ *   const orderId = context.request.params.id;
+ *   if (!ownsOrder(context.auth.userId, orderId)) {
+ *     return { deny: 403, reason: "not your order" };
+ *   }
+ *   return { orderId };
+ * }
+ * ```
+ *
+ * `deny` is `true` for a plain refusal or any 4xx status — `401` "sign in",
+ * `403` "not yours", `404` "and I will not tell you it exists". `reason` is
+ * returned to whoever was refused and trimmed to 200 characters. Throwing is
+ * **not** how you deny: it means the function itself failed, answers 500, and
+ * a file it guards is not served.
+ */
+type AuthorizeFunction = (
+  context: HandlerContext,
+) => Record<string, string> | { deny: true | number; reason?: string };
+
+/** What `registerRoute` answers. A refusal is a value, not an exception. */
+type RegisterRouteResult = { ok: true } | { ok: false; reason: string };
+
+/** What sending to a stream answers. */
+interface StreamSendResult {
+  /** Connections the message reached. */
+  delivered: number;
+  /** Connections open on the path when it was sent. */
+  connections: number;
+  /** Connections that could not be written to. */
+  failed: number;
+}
+
+/**
+ * Route registry for HTTP endpoints, streams and served files
  */
 interface RouteRegistry {
   /**
-   * Register an HTTP route handler
-   * @param path - URL path pattern (e.g., "/blog/post/:id")
-   * @param handlerName - Name of the handler function to call
-   * @param method - HTTP method (GET, POST, PUT, DELETE, etc.). Registering
-   *   GET automatically serves HEAD requests too, running the same handler
-   *   and returning its headers with an empty body. Register HEAD explicitly
-   *   to override this with custom behavior.
-   * @param metadata - Optional OpenAPI metadata (summary, description, tags, parameters, requestBody)
-   * @returns Registration result message
-   * @example
-   * routeRegistry.registerRoute("/api/users", "listUsers", "GET");
-   * routeRegistry.registerRoute("/api/users", "createUser", "POST", {
-   *   summary: "Create user",
-   *   description: "Create a new user account",
-   *   tags: ["Users"]
-   * });
-   * routeRegistry.registerRoute("/api/users/:id", "updateUser", "PUT", {
+   * Publish a path. The spec says what it leads to:
+   *
+   * ```ts
+   * routeRegistry.registerRoute("/api/users", { handler: "listUsers" });
+   * routeRegistry.registerRoute("/api/users/:id", {
+   *   handler: "updateUser",
+   *   method: "PUT",
    *   summary: "Update user",
-   *   description: "Update an existing user account",
    *   tags: ["Users"],
-   *   parameters: JSON.stringify([
-   *     {
-   *       name: "id",
-   *       in: "path",
-   *       required: true,
-   *       schema: { type: "string" }
-   *     }
-   *   ]),
-   *   requestBody: JSON.stringify({
-   *     required: true,
-   *     content: {
-   *       "application/json": {
-   *         schema: {
-   *           type: "object"
-   *         }
-   *       }
-   *     }
-   *   })
+   *   parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+   *   requestBody: { required: true, content: { "application/json": { schema: { type: "object" } } } },
    * });
-   *
-   * Only takes effect during startup and `init()`. Called from a handler it
-   * returns a message saying nothing was registered, and does not throw.
-   */
-  registerRoute(
-    path: string,
-    handlerName: string,
-    method: string,
-    metadata?: {
-      summary?: string;
-      description?: string;
-      tags?: string[];
-      parameters?: string; // JSON string of OpenAPI parameters array
-      requestBody?: string; // JSON string of OpenAPI requestBody object
-    },
-  ): string;
-
-  /**
-   * Register a Server-Sent Events (SSE) stream endpoint
-   *
-   * `customizationFunction` names the function that **decides who may
-   * subscribe**, and it is the only place that decision can live: whose order
-   * `/orders/1234/events` is, is a fact about your data model, not one the
-   * engine can know. Without one, anyone who can reach the host gets the
-   * stream.
-   *
-   * It runs under the subscriber's own context and returns either filter
-   * criteria — a flat object of strings, matched against what
-   * `sendStreamMessage` targets — or a refusal:
-   *
-   * ```ts
-   * function authorizeOrder(context) {
-   *   if (!context.auth?.userId) return { deny: 401 };
-   *   const orderId = context.request.query.orderId;
-   *   if (!ownsOrder(context.auth.userId, orderId)) {
-   *     return { deny: 403, reason: "not your order" };
-   *   }
-   *   return { orderId };
-   * }
+   * routeRegistry.registerRoute("/orders/:id/events", { stream: true, authorize: "mayWatchOrder" });
+   * routeRegistry.registerRoute("/styles/main.css", { file: "public/main.css" });
    * ```
    *
-   * `deny` is `true` for a plain refusal or any 4xx status to choose one —
-   * `401` to say "sign in", `403` "not yours", `404` "and I will not tell you
-   * it exists". `reason` is optional, is returned to whoever was refused, and
-   * is trimmed to 200 characters. Throwing is **not** how you deny: it means
-   * the function itself failed and still answers 500.
-   *
-   * @param path - URL path for the stream (must start with /)
-   * @param customizationFunction - Name of the function that authorizes a
-   *   connection and returns its filter criteria
-   * @param metadata - Optional OpenAPI metadata. `tags` sets the Swagger group
-   *   (defaults to "Streams"); `summary`/`description` override the
-   *   auto-generated documentation text.
-   * @returns Registration result message
-   * @example
-   * routeRegistry.registerStreamRoute("/events/notifications");
-   * routeRegistry.registerStreamRoute("/events/chat", "chatCustomizer");
-   * routeRegistry.registerStreamRoute("/events/alerts", undefined, {
-   *   tags: ["Alerts"],
-   *   summary: "Alert stream",
-   * });
-   *
-   * Only takes effect during startup and `init()`. Called from a handler it
-   * returns a message saying nothing was registered, and does not throw.
+   * `:param` and a trailing `/*` work for all three. A mistake in the call —
+   * a spec naming no target or two, an unknown key, a reserved path, a
+   * capability you do not hold — throws. A **refusal** is returned:
+   * `{ ok: false, reason }` for a file outside `public/` or not in the tree,
+   * and for any call made outside startup and `init()`, where there is
+   * nothing to register into.
    */
-  registerStreamRoute(
-    path: string,
-    customizationFunction?: string,
-    metadata?: {
-      summary?: string;
-      description?: string;
-      tags?: string[];
-    },
-  ): string;
+  registerRoute(path: string, spec: RouteSpec): RegisterRouteResult;
 
   /**
-   * Register a static asset route
-   *
-   * With no `authorize`, the file is served to **anyone who can reach the
-   * host** — no session, no check. That is right for a stylesheet or a logo,
-   * and it is why a served file belongs under `public/`.
-   *
-   * `authorize` names the function that decides who may read it, for the
-   * files where that is a question. The engine still moves the bytes — an
-   * authorized asset is streamed rather than marshalled through JavaScript as
-   * a string — so what the function costs is one call, not the file.
-   *
-   * ```ts
-   * function mayReadInvoice(context) {
-   *   if (!context.auth?.userId) return { deny: 401 };
-   *   const id = context.request.query.id;
-   *   if (!ownsInvoice(context.auth.userId, id)) {
-   *     return { deny: 404 };   // do not confirm it exists
-   *   }
-   *   return {};
-   * }
-   *
-   * routeRegistry.registerAssetRoute("/invoice.pdf", "public/invoice.pdf", {
-   *   authorize: "mayReadInvoice",
-   * });
-   * ```
-   *
-   * It answers exactly as a stream's customization function does: any object
-   * without `deny` allows, `{ deny: true }` or `{ deny: <4xx>, reason? }`
-   * refuses. Throwing is not how you deny — it means the function itself is
-   * broken, and the file is **not** served, since falling through to the
-   * bytes when the thing guarding them has failed is the wrong way round.
-   *
-   * @param httpPath - HTTP path where asset will be served (e.g., "/styles/main.css")
-   * @param assetName - Name of the asset in the asset storage (e.g., "main.css")
-   * @param metadata - `authorize` names the function that decides who may
-   *   read the file. The rest is OpenAPI metadata: `tags` sets the Swagger
-   *   group (defaults to "Assets"); `summary`/`description` override the
-   *   auto-generated documentation text.
-   * @returns Registration result message
-   * @example
-   * routeRegistry.registerAssetRoute("/styles/main.css", "public/main.css");
-   * routeRegistry.registerAssetRoute("/logo.svg", "public/logo.svg", {
-   *   tags: ["Branding"],
-   *   summary: "Company logo",
-   * });
-   *
-   * Only takes effect during startup and `init()`. Called from a handler it
-   * returns a message saying nothing was registered, and does not throw.
-   */
-  registerAssetRoute(
-    httpPath: string,
-    assetName: string,
-    metadata?: {
-      /** Name of the function that decides who may read this file. */
-      authorize?: string;
-      summary?: string;
-      description?: string;
-      tags?: string[];
-    },
-  ): string;
-
-  /**
-   * Broadcast a message to all connections on a stream
-   * @param path - Stream path
-   * @param data - Data to send (will be JSON serialized)
-   * @returns Broadcast result message
+   * Send a message to every connection on a stream.
+   * @param data - Any JSON-serializable value
    * @example
    * routeRegistry.sendStreamMessage("/events/notifications", {
    *   type: "alert",
-   *   message: "New update available"
+   *   message: "New update available",
    * });
    */
-  sendStreamMessage(path: string, data: any): string;
+  sendStreamMessage(path: string, data: any): StreamSendResult;
 
   /**
-   * Send a message to filtered connections based on metadata
-   * @param path - Stream path
-   * @param data - Data to send (will be JSON serialized)
-   * @param filterJson - JSON filter criteria for connection metadata
-   * @param matchMode - Optional filter matching mode. Defaults to "subset".
-   * @returns Broadcast result message
+   * Send a message to the connections whose authorize function returned
+   * criteria matching `filter`.
+   * @param matchMode - "subset" (default): every filter entry must match.
+   *   "overlap": any one may.
    * @example
    * routeRegistry.sendStreamMessageFiltered(
    *   "/events/notifications",
    *   { message: "Admin alert" },
-   *   JSON.stringify({ role: "admin" }),
-   *   "subset"
+   *   { role: "admin" },
    * );
    */
   sendStreamMessageFiltered(
     path: string,
     data: any,
-    filterJson: string,
+    filter?: Record<string, string>,
     matchMode?: "subset" | "overlap",
-  ): string;
+  ): StreamSendResult;
 }
 
 // ============================================================================
@@ -1411,8 +1357,8 @@ interface McpRegistry {
   /**
    * Publish one of this script's assets as an MCP resource.
    *
-   * This is `routeRegistry.registerAssetRoute` aimed at `/mcp` instead of at
-   * a path: the same asset, under a name a different protocol reaches. A
+   * This is a file route (`routeRegistry.registerRoute(path, { file })`)
+   * aimed at `/mcp` instead of at a path: the same asset, under a name a different protocol reaches. A
    * resource is the *read* half of MCP — content a client fetches by URI and
    * puts in front of a model — as against a tool, which is something it runs.
    *

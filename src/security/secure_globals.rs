@@ -27,6 +27,8 @@ const SANDBOX_PRELUDE: &str = include_str!("../../assets/sandbox_prelude.js");
 const CRYPTO_PRELUDE: &str = include_str!("../../assets/crypto_prelude.js");
 const ENGINE_PRELUDE: &str = include_str!("../../assets/engine_prelude.js");
 const MCP_PRELUDE: &str = include_str!("../../assets/mcp_prelude.js");
+/// Builds `routeRegistry` over `__hostRouteRegistry`.
+const ROUTE_PRELUDE: &str = include_str!("../../assets/route_prelude.js");
 
 /// What `secretStorage`'s mutating methods answer in a delegated execution.
 ///
@@ -307,9 +309,9 @@ impl RegistrationKind {
     /// skipped.
     pub fn api(self) -> &'static str {
         match self {
-            RegistrationKind::Route => "routeRegistry.registerRoute",
-            RegistrationKind::Stream => "routeRegistry.registerStreamRoute",
-            RegistrationKind::AssetRoute => "routeRegistry.registerAssetRoute",
+            RegistrationKind::Route | RegistrationKind::Stream | RegistrationKind::AssetRoute => {
+                "routeRegistry.registerRoute"
+            }
             RegistrationKind::McpTool => "mcpRegistry.registerTool",
             RegistrationKind::McpPrompt => "mcpRegistry.registerPrompt",
             RegistrationKind::McpResource => "mcpRegistry.registerResource",
@@ -396,46 +398,6 @@ pub type ConsoleSink = std::sync::Arc<std::sync::Mutex<ConsoleCapture>>;
 /// response without bound. Lines past the cap are dropped and the caller is
 /// told how many.
 pub const MAX_CAPTURED_CONSOLE_LINES: usize = 1_000;
-
-fn parse_filter_match_mode(
-    match_mode: Option<String>,
-) -> JsResult<crate::stream_registry::FilterMatchMode> {
-    match match_mode {
-        Some(raw_mode) => raw_mode.parse().map_err(|err: String| {
-            rquickjs::Error::new_from_js_message("matchMode", "FilterMatchMode", &err)
-        }),
-        None => Ok(crate::stream_registry::FilterMatchMode::Subset),
-    }
-}
-
-/// Extract optional OpenAPI documentation metadata (`tags`, `summary`,
-/// `description`) from the `metadata` object accepted by
-/// `registerAssetRoute`/`registerStreamRoute`. Returns `(tags, summary,
-/// description)`; missing fields yield an empty vector / `None`, so callers
-/// fall back to their default Swagger group and auto-generated text.
-fn extract_route_metadata(
-    metadata: Option<&rquickjs::Object<'_>>,
-) -> (Vec<String>, Option<String>, Option<String>) {
-    let mut tags = Vec::new();
-    let mut summary = None;
-    let mut description = None;
-    if let Some(meta) = metadata {
-        if let Ok(tags_arr) = meta.get::<_, rquickjs::Array>("tags") {
-            for i in 0..tags_arr.len() {
-                if let Ok(tag) = tags_arr.get::<String>(i) {
-                    tags.push(tag);
-                }
-            }
-        }
-        if let Ok(value) = meta.get::<_, Option<String>>("summary") {
-            summary = value;
-        }
-        if let Ok(value) = meta.get::<_, Option<String>>("description") {
-            description = value;
-        }
-    }
-    (tags, summary, description)
-}
 
 /// `{ name, description, mimeType }` off an optional metadata object, for
 /// `mcpRegistry.registerResource`.
@@ -806,6 +768,497 @@ fn registration_inactive(api: &str, name: &str) -> String {
          startup and init()",
         api, name
     )
+}
+
+/// `{ok: value}` — the envelope every host-object prelude unwraps into a
+/// return value.
+fn host_ok(value: serde_json::Value) -> String {
+    serde_json::json!({ "ok": value }).to_string()
+}
+
+/// `{error: {name, message}}` — the envelope a prelude turns into a thrown
+/// error of that name. A host binding cannot throw a JavaScript exception of
+/// the right type, which is why the throw happens on the JavaScript side.
+fn host_failure(name: &str, message: &str) -> String {
+    serde_json::json!({ "error": { "name": name, "message": message } }).to_string()
+}
+
+/// What a registered path leads to.
+#[derive(Debug, Clone, PartialEq)]
+enum RouteTarget {
+    /// A script function, called for one HTTP method.
+    Handler { name: String, method: String },
+    /// A server-sent event stream the engine holds open. `authorize` names
+    /// the function that decides who may connect.
+    Stream { authorize: Option<String> },
+    /// A file of the script's tree, served by the engine. `authorize` names
+    /// the function that decides who may read it.
+    File {
+        path: String,
+        authorize: Option<String>,
+    },
+}
+
+/// One `registerRoute` spec, once read.
+#[derive(Debug, Clone, PartialEq)]
+struct RouteSpec {
+    target: RouteTarget,
+    summary: Option<String>,
+    description: Option<String>,
+    tags: Vec<String>,
+    parameters: Option<serde_json::Value>,
+    request_body: Option<serde_json::Value>,
+}
+
+/// The keys a spec may carry. Anything else is refused rather than ignored,
+/// since a misspelt `authorize` that was silently dropped would publish the
+/// file it was meant to guard.
+const ROUTE_SPEC_KEYS: [&str; 10] = [
+    "handler",
+    "stream",
+    "file",
+    "method",
+    "authorize",
+    "summary",
+    "description",
+    "tags",
+    "parameters",
+    "requestBody",
+];
+
+/// Read a `registerRoute` spec. The error is the message a `TypeError`
+/// carries: every way a spec can be wrong is a mistake in the call.
+fn parse_route_spec(value: &serde_json::Value) -> Result<RouteSpec, String> {
+    let object = value
+        .as_object()
+        .ok_or("the spec is an object: { handler }, { stream: true } or { file }")?;
+    if let Some(unknown) = object
+        .keys()
+        .find(|key| !ROUTE_SPEC_KEYS.contains(&key.as_str()))
+    {
+        return Err(format!(
+            "unknown spec key '{}' (expected one of {})",
+            unknown,
+            ROUTE_SPEC_KEYS.join(", ")
+        ));
+    }
+
+    let text = |key: &str| -> Result<Option<String>, String> {
+        match object.get(key) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(serde_json::Value::String(s)) if !s.trim().is_empty() => Ok(Some(s.clone())),
+            Some(_) => Err(format!("'{}' must be a non-empty string", key)),
+        }
+    };
+
+    let handler = text("handler")?;
+    let file = text("file")?;
+    let stream = match object.get("stream") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::Bool(true)) => true,
+        Some(_) => return Err("'stream' is either true or absent".to_string()),
+    };
+    let targets = [handler.is_some(), stream, file.is_some()]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+    if targets != 1 {
+        return Err(
+            "a spec names exactly one target: { handler }, { stream: true } or { file }"
+                .to_string(),
+        );
+    }
+
+    let authorize = text("authorize")?;
+    if let Some(name) = authorize.as_deref() {
+        validate_function_name("authorize", name)?;
+    }
+    let parameters = object.get("parameters").filter(|v| !v.is_null()).cloned();
+    let request_body = object.get("requestBody").filter(|v| !v.is_null()).cloned();
+    let method = text("method")?;
+
+    let target = if let Some(name) = handler {
+        // The handler *is* a handler route's authorization: it runs as the
+        // requesting user and answers whatever it decides to. A second
+        // function in front of it would be two places deciding one thing.
+        if authorize.is_some() {
+            return Err(
+                "'authorize' is for streams and files; a handler route's handler is \
+                 where it decides who may call it"
+                    .to_string(),
+            );
+        }
+        validate_function_name("handler", &name)?;
+        RouteTarget::Handler {
+            name,
+            method: method.unwrap_or_else(|| "GET".to_string()),
+        }
+    } else {
+        if method.is_some() {
+            return Err("'method' is for handler routes; streams and files answer GET".to_string());
+        }
+        if parameters.is_some() || request_body.is_some() {
+            return Err("'parameters' and 'requestBody' describe a handler route".to_string());
+        }
+        match file {
+            Some(path) => RouteTarget::File { path, authorize },
+            None => RouteTarget::Stream { authorize },
+        }
+    };
+
+    let tags = match object.get("tags") {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| "'tags' is an array of strings".to_string())
+            })
+            .collect::<Result<_, _>>()?,
+        Some(_) => return Err("'tags' is an array of strings".to_string()),
+    };
+
+    Ok(RouteSpec {
+        target,
+        summary: text("summary")?,
+        description: text("description")?,
+        tags,
+        parameters,
+        request_body,
+    })
+}
+
+/// A function a registration names must be one a script can define.
+fn validate_function_name(key: &str, name: &str) -> Result<(), String> {
+    if name.len() > 100 {
+        return Err(format!("'{}' is too long (max 100 characters)", key));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+    {
+        return Err(format!(
+            "'{}' must name a function: letters, digits, '_' and '$' only",
+            key
+        ));
+    }
+    Ok(())
+}
+
+/// What a well-formed registration came to.
+#[derive(Debug, PartialEq)]
+enum Registered {
+    Done,
+    /// Not registered, for a reason the script is told about rather than
+    /// thrown at, so its other registrations survive.
+    Refused(String),
+}
+
+/// A registration that could not be attempted: the name is the error type
+/// the prelude throws.
+struct RegistrationFailure {
+    name: &'static str,
+    message: String,
+}
+
+impl RegistrationFailure {
+    fn type_error(message: impl Into<String>) -> Self {
+        Self {
+            name: "TypeError",
+            message: message.into(),
+        }
+    }
+
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            name: "Error",
+            message: message.into(),
+        }
+    }
+}
+
+/// Everything `registerRoute` needs, captured once per execution.
+struct RouteRegistrar {
+    user_context: UserContext,
+    auditor: SecurityAuditor,
+    script_uri: String,
+    config: GlobalSecurityConfig,
+    record: Option<RouteRegisterFn>,
+}
+
+const REGISTER_ROUTE: &str = "routeRegistry.registerRoute";
+
+impl RouteRegistrar {
+    fn register(&self, path: &str, spec: RouteSpec) -> Result<Registered, RegistrationFailure> {
+        // Path checks run in every context, so a bad path is reported the same
+        // way wherever the call is made.
+        if let Some(prefix) = crate::engine_api::reserved_route_prefix(path) {
+            return Err(RegistrationFailure::error(format!(
+                "path '{}' is reserved for the engine (prefix '{}')",
+                path, prefix
+            )));
+        }
+        if !path.starts_with('/') {
+            return Err(RegistrationFailure::type_error(format!(
+                "path '{}' must start with '/'",
+                path
+            )));
+        }
+        if path.len() > 500 {
+            return Err(RegistrationFailure::type_error(
+                "path too long (max 500 characters)",
+            ));
+        }
+        if path.contains("..") || path.contains('\\') {
+            return Err(RegistrationFailure::type_error(format!(
+                "path '{}' may not contain '..' or '\\'",
+                path
+            )));
+        }
+
+        let RouteSpec {
+            target,
+            summary,
+            description,
+            tags,
+            parameters,
+            request_body,
+        } = spec;
+
+        let (mut meta, method) = match target {
+            RouteTarget::Handler { name, method } => {
+                let Some(record) = self.record.as_ref() else {
+                    return Ok(Registered::Refused(registration_inactive(
+                        REGISTER_ROUTE,
+                        path,
+                    )));
+                };
+                let mut meta = repository::RouteMetadata::simple(name);
+                meta.summary = summary;
+                meta.description = description;
+                meta.tags = tags;
+                meta.parameters = parameters;
+                meta.request_body = request_body;
+                record(path, &meta, Some(&method))
+                    .map_err(|e| RegistrationFailure::error(e.to_string()))?;
+                return Ok(Registered::Done);
+            }
+            RouteTarget::Stream { authorize } => {
+                self.require(&crate::security::Capability::ManageStreams, "stream", path)?;
+                if !self.config.registration_phase {
+                    return Ok(Registered::Refused(registration_inactive(
+                        REGISTER_ROUTE,
+                        path,
+                    )));
+                }
+                let registration = CollectedRegistration::new(RegistrationKind::Stream, path);
+                let registration = match authorize.as_ref() {
+                    Some(function) => registration.with_handler(function.clone()),
+                    None => registration,
+                };
+                if self.config.collect(registration).is_some() {
+                    return Ok(Registered::Done);
+                }
+                (
+                    repository::RouteMetadata::stream(authorize),
+                    repository::STREAM_METHOD,
+                )
+            }
+            RouteTarget::File {
+                path: file,
+                authorize,
+            } => {
+                self.require(&crate::security::Capability::WriteAssets, "file", path)?;
+                if file.len() > 255 || file.contains("..") || file.contains('\\') {
+                    return Err(RegistrationFailure::type_error(format!(
+                        "'{}' is not a file path of this script's tree",
+                        file
+                    )));
+                }
+                if !self.config.registration_phase {
+                    return Ok(Registered::Refused(registration_inactive(
+                        REGISTER_ROUTE,
+                        path,
+                    )));
+                }
+                if repository::fetch_asset(&self.script_uri, &file).is_none() {
+                    return Ok(Registered::Refused(format!(
+                        "'{}' is not a file of this script",
+                        file
+                    )));
+                }
+                // Exposure belongs to the tree, not to this call. A file
+                // outside `public/` is one the directory says is private, and
+                // publishing it was the mistake nothing else in the engine
+                // could see — not the write path, not the revision manifest,
+                // not a git diff. Refused rather than warned about, which is
+                // what makes the directory the answer rather than a
+                // suggestion; publishing a file is now moving it, which is a
+                // reviewable act.
+                if !crate::exposure::is_publishable(&file) {
+                    crate::exposure::note_refusal(&self.script_uri, false, path, &file);
+                    tracing::warn!(
+                        script = %self.script_uri,
+                        path = %path,
+                        file = %file,
+                        "Refused to publish a file from outside '{}'",
+                        crate::exposure::PUBLIC_DIR,
+                    );
+                    return Ok(Registered::Refused(format!(
+                        "'{}' is not under '{}', so it is not a file the world may read. \
+                         Move it to '{}{}' and register that. A file's directory is what \
+                         says whether it is public; see GET /engine/exposure.",
+                        file,
+                        crate::exposure::PUBLIC_DIR,
+                        crate::exposure::PUBLIC_DIR,
+                        file,
+                    )));
+                }
+                if self
+                    .config
+                    .collect(CollectedRegistration::new(
+                        RegistrationKind::AssetRoute,
+                        path,
+                    ))
+                    .is_some()
+                {
+                    return Ok(Registered::Done);
+                }
+                (
+                    repository::RouteMetadata::file(file, authorize),
+                    repository::ASSET_METHOD,
+                )
+            }
+        };
+
+        // A stream and a file route record into the sink a handler route
+        // does: one kind of registration, differing only in what the engine
+        // does once the path matches. Being in the script's registrations is
+        // what gives them `:param` and `/*`, the host filter, and an
+        // unregistration when the script stops making the call.
+        let Some(record) = self.record.as_ref() else {
+            return Ok(Registered::Refused(registration_inactive(
+                REGISTER_ROUTE,
+                path,
+            )));
+        };
+        meta.summary = summary;
+        meta.description = description;
+        meta.tags = tags;
+        record(path, &meta, Some(method)).map_err(|e| RegistrationFailure::error(e.to_string()))?;
+        Ok(Registered::Done)
+    }
+
+    /// The capability a stream or a file route takes, audited when missing.
+    fn require(
+        &self,
+        capability: &crate::security::Capability,
+        resource: &str,
+        path: &str,
+    ) -> Result<(), RegistrationFailure> {
+        let Err(e) = self.user_context.require_capability(capability) else {
+            return Ok(());
+        };
+        if self.config.enable_audit_logging
+            && let Ok(rt) = tokio::runtime::Handle::try_current()
+        {
+            let auditor = self.auditor.clone();
+            let user_id = self.user_context.user_id.clone();
+            let resource = resource.to_string();
+            let path = path.to_string();
+            rt.spawn(async move {
+                let _ = auditor
+                    .log_event(
+                        crate::security::SecurityEvent::new(
+                            crate::security::SecurityEventType::AuthorizationFailure,
+                            crate::security::SecuritySeverity::Medium,
+                            user_id,
+                        )
+                        .with_resource(resource)
+                        .with_action("register".to_string())
+                        .with_detail("path", &path),
+                    )
+                    .await;
+            });
+        }
+        Err(RegistrationFailure::error(e.to_string()))
+    }
+}
+
+/// Send to a stream's connections, answering in the host envelope.
+///
+/// The shared `/system/` namespace is open to every script. The engine's own
+/// script-update stream is deliberately not: it is broadcast to from Rust
+/// (`engine_api::broadcast_script_update`), which never passes through here,
+/// so exempting it would only let a script forge engine notifications to
+/// every subscriber.
+fn send_stream_message(
+    user_context: &UserContext,
+    auditor: &SecurityAuditor,
+    api: &str,
+    path: &str,
+    message: &str,
+    filter: Option<(
+        &HashMap<String, String>,
+        crate::stream_registry::FilterMatchMode,
+    )>,
+) -> String {
+    let audit = |event_type, severity, action: &str| {
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let auditor = auditor.clone();
+            let user_id = user_context.user_id.clone();
+            let action = action.to_string();
+            let path = path.to_string();
+            let length = message.len().to_string();
+            rt.spawn(async move {
+                let _ = auditor
+                    .log_event(
+                        crate::security::SecurityEvent::new(event_type, severity, user_id)
+                            .with_resource("stream".to_string())
+                            .with_action(action)
+                            .with_detail("path", &path)
+                            .with_detail("message_length", length),
+                    )
+                    .await;
+            });
+        }
+    };
+
+    if !path.starts_with("/system/")
+        && let Err(e) = user_context.require_capability(&crate::security::Capability::ManageStreams)
+    {
+        audit(
+            crate::security::SecurityEventType::AuthorizationFailure,
+            crate::security::SecuritySeverity::Medium,
+            api,
+        );
+        return host_failure("Error", &format!("routeRegistry.{}: {}", api, e));
+    }
+    audit(
+        crate::security::SecurityEventType::SystemSecurityEvent,
+        crate::security::SecuritySeverity::Low,
+        api,
+    );
+
+    let registry = &crate::stream_registry::GLOBAL_STREAM_REGISTRY;
+    let result = match filter {
+        Some((filter, mode)) => {
+            registry.broadcast_to_stream_with_filter_mode(path, message, filter, mode)
+        }
+        None => registry.broadcast_to_stream(path, message),
+    };
+    match result {
+        Ok(sent) => host_ok(serde_json::json!({
+            "delivered": sent.successful_sends,
+            "connections": sent.total_connections,
+            "failed": sent.failed_connections.len(),
+        })),
+        Err(e) => host_failure(
+            "Error",
+            &format!("routeRegistry.{}: '{}': {}", api, path, e),
+        ),
+    }
 }
 
 impl SecureGlobalContext {
@@ -1721,7 +2174,8 @@ impl SecureGlobalContext {
 
         // registerResource function - publishes one of this script's assets as
         // an MCP resource. Deliberately shaped after
-        // `routeRegistry.registerAssetRoute` rather than after `registerTool`:
+        // a file route (`registerRoute(path, { file })`) rather than after
+        // `registerTool`:
         // what is being published is an asset the script already has, and the
         // only difference between the two is which protocol reaches it.
         let user_ctx_resource = user_context.clone();
@@ -1783,7 +2237,7 @@ impl SecureGlobalContext {
                     ));
                 }
 
-                // The same two checks `registerAssetRoute` makes, and for the
+                // The same two checks a file route makes, and for the
                 // same reason: an asset name is a relative path, so `..` is
                 // how one script would name another's file.
                 if asset_name.is_empty() || asset_name.len() > 255 {
@@ -1800,7 +2254,7 @@ impl SecureGlobalContext {
                 let name = name.unwrap_or_else(|| asset_name.clone());
 
                 // Verify the asset exists and belongs to this script, exactly
-                // as `registerAssetRoute` does. Registering a URI that answers
+                // as a file route does. Registering a URI that answers
                 // nothing would be a resource a client lists and cannot read.
                 if repository::fetch_asset(&script_uri_resource, &asset_name).is_none() {
                     return Ok(format!(
@@ -2327,643 +2781,146 @@ impl SecureGlobalContext {
         Ok(())
     }
 
-    /// Setup routeRegistry object with all route-related functions
+    /// Install `__hostRouteRegistry` and the prelude that builds
+    /// `routeRegistry` over it.
+    ///
+    /// One registration call, `registerRoute(path, spec)`, whose spec says what
+    /// the path leads to: `{ handler }`, `{ stream: true }` or `{ file }`. The
+    /// three used to be three functions with three signatures, and the internals
+    /// had already become one record (`RouteMetadata` carries a `RouteKind`), so
+    /// the only thing three names still bought was three ways to answer.
+    ///
+    /// They answered with strings. A refusal, a success and a misuse were all a
+    /// sentence the script could not tell apart without parsing English. Now
+    /// misuse throws — a malformed spec, a reserved path, a capability the
+    /// caller lacks — and a *refusal* is a value, `{ ok: false, reason }`, so a
+    /// script that gets one path wrong keeps the rest of its registrations.
     fn setup_route_registry(
         &self,
         ctx: &rquickjs::Ctx<'_>,
         script_uri: &str,
         register_fn: Option<RouteRegisterFn>,
     ) -> JsResult<()> {
-        let global = ctx.globals();
-        let user_context = self.user_context.clone();
-        let auditor = self.auditor.clone();
-        let script_uri_owned = script_uri.to_string();
-        let config = self.config.clone();
+        let host = rquickjs::Object::new(ctx.clone())?;
 
-        // Create the routeRegistry object
-        let route_registry = rquickjs::Object::new(ctx.clone())?;
-
-        // 1. registerRoute function
-        if let Some(register_impl) = register_fn.clone() {
-            let register_route = Function::new(
-                ctx.clone(),
-                move |_ctx: rquickjs::Ctx<'_>,
-                      path: String,
-                      handler: String,
-                      method: Option<String>,
-                      metadata: Opt<rquickjs::Object>|
-                      -> JsResult<String> {
-                    // Engine-owned prefixes are off-limits; any script may
-                    // register any other path.
-                    if let Some(prefix) = crate::engine_api::reserved_route_prefix(&path) {
-                        return Err(rquickjs::Error::new_from_js_message(
-                            "routeRegistry.registerRoute",
-                            "reserved_path",
-                            &format!(
-                                "Path '{}' is reserved for the engine (prefix '{}')",
-                                path, prefix
-                            ),
-                        ));
-                    }
-
-                    // Build RouteMetadata from parameters
-                    let mut route_meta = repository::RouteMetadata::simple(handler.clone());
-
-                    if let Some(meta_obj) = metadata.0 {
-                        // Extract summary
-                        if let Ok(summary) = meta_obj.get::<_, Option<String>>("summary") {
-                            route_meta.summary = summary;
-                        }
-                        // Extract description
-                        if let Ok(description) = meta_obj.get::<_, Option<String>>("description") {
-                            route_meta.description = description;
-                        }
-                        // Extract tags
-                        if let Ok(tags_arr) = meta_obj.get::<_, rquickjs::Array>("tags") {
-                            let mut tags = Vec::new();
-                            for i in 0..tags_arr.len() {
-                                if let Ok(tag) = tags_arr.get::<String>(i) {
-                                    tags.push(tag);
-                                }
-                            }
-                            route_meta.tags = tags;
-                        }
-                        // Extract parameters
-                        if let Ok(Some(params_json)) =
-                            meta_obj.get::<_, Option<String>>("parameters")
-                            && let Ok(params_value) =
-                                serde_json::from_str::<serde_json::Value>(&params_json)
-                        {
-                            route_meta.parameters = Some(params_value);
-                        }
-                        // Extract requestBody
-                        if let Ok(Some(body_json)) =
-                            meta_obj.get::<_, Option<String>>("requestBody")
-                            && let Ok(body_value) =
-                                serde_json::from_str::<serde_json::Value>(&body_json)
-                        {
-                            route_meta.request_body = Some(body_value);
-                        }
-                    }
-
-                    let method_ref = method.as_deref();
-                    register_impl(&path, &route_meta, method_ref)?;
-                    Ok(format!(
-                        "Route '{} {}' registered to handler '{}'",
-                        method_ref.unwrap_or("GET"),
-                        path,
-                        route_meta.handler_name
-                    ))
-                },
-            )?;
-            route_registry.set("registerRoute", register_route)?;
-        } else {
-            // Outside the registration phase there is nothing to register into,
-            // but the reserved-path check still applies so a bad path is
-            // reported the same way in every context.
-            let reg_noop = Function::new(
-                ctx.clone(),
-                move |_c: rquickjs::Ctx<'_>,
-                      path: String,
-                      _h: String,
-                      _m: Option<String>,
-                      _meta: Opt<rquickjs::Object>|
-                      -> JsResult<String> {
-                    if let Some(prefix) = crate::engine_api::reserved_route_prefix(&path) {
-                        return Err(rquickjs::Error::new_from_js_message(
-                            "routeRegistry.registerRoute",
-                            "reserved_path",
-                            &format!(
-                                "Path '{}' is reserved for the engine (prefix '{}')",
-                                path, prefix
-                            ),
-                        ));
-                    }
-
-                    Ok(registration_inactive("routeRegistry.registerRoute", &path))
-                },
-            )?;
-            route_registry.set("registerRoute", reg_noop)?;
-        }
-
-        // 2. registerStreamRoute function
-        let user_ctx_stream = user_context.clone();
-        let auditor_stream = auditor.clone();
-        let config_stream = config.clone();
-        let script_uri_stream = script_uri_owned.clone();
-        let stream_register_fn = register_fn.clone();
-        let register_stream_route = Function::new(
+        let registrar = RouteRegistrar {
+            user_context: self.user_context.clone(),
+            auditor: self.auditor.clone(),
+            script_uri: script_uri.to_string(),
+            config: self.config.clone(),
+            record: register_fn,
+        };
+        let register = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  path: String,
-                  customization_function: Opt<String>,
-                  metadata: Opt<rquickjs::Object>|
-                  -> JsResult<String> {
-                // Convert Opt to Option
-                let customization_function = customization_function.0;
-                // Extract optional OpenAPI metadata (tags/summary/description)
-                let (tags, summary, description) = extract_route_metadata(metadata.0.as_ref());
-                // Argument validation runs in every context, so a malformed
-                // path is reported the same way wherever the call is made.
-                //
-                // Engine-owned prefixes are off-limits; any script may
-                // register any other stream path.
-                if let Some(prefix) = crate::engine_api::reserved_route_prefix(&path) {
-                    return Err(rquickjs::Error::new_from_js_message(
-                        "routeRegistry.registerStreamRoute",
-                        "reserved_path",
-                        &format!(
-                            "Path '{}' is reserved for the engine (prefix '{}')",
-                            path, prefix
-                        ),
-                    ));
-                }
-
-                // Validate path format
-                if path.is_empty() || !path.starts_with('/') {
-                    return Ok(format!(
-                        "Invalid stream path '{}': path must start with '/' and not be empty",
-                        path
-                    ));
-                }
-
-                if !config_stream.registration_phase {
-                    return Ok(registration_inactive(
-                        "routeRegistry.registerStreamRoute",
-                        &path,
-                    ));
-                }
-
-                if path.len() > 200 {
-                    return Ok(format!(
-                        "Invalid stream path '{}': path too long (max 200 characters)",
-                        path
-                    ));
-                }
-
-                // Validate customization function name if provided
-                if let Some(ref func_name) = customization_function {
-                    if func_name.is_empty() {
-                        return Ok(
-                            "Invalid customization function: name cannot be empty".to_string()
+            move |path: String, spec_json: String| -> String {
+                let spec = match serde_json::from_str::<serde_json::Value>(&spec_json)
+                    .map_err(|e| e.to_string())
+                    .and_then(|value| parse_route_spec(&value))
+                {
+                    Ok(spec) => spec,
+                    Err(message) => {
+                        return host_failure(
+                            "TypeError",
+                            &format!("routeRegistry.registerRoute: {}", message),
                         );
                     }
-                    if func_name.len() > 100 {
-                        return Ok(
-                            "Invalid customization function: name too long (max 100 characters)"
-                                .to_string(),
-                        );
-                    }
-                    // Basic validation: should be a valid identifier
-                    if !func_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                        return Ok("Invalid customization function: name must contain only alphanumeric characters and underscores".to_string());
-                    }
-                }
-
-                // Check capability
-                if let Err(e) =
-                    user_ctx_stream.require_capability(&crate::security::Capability::ManageStreams)
-                {
-                    if config_stream.enable_audit_logging
-                        && let Ok(rt) = tokio::runtime::Handle::try_current()
-                    {
-                        let auditor_clone = auditor_stream.clone();
-                        let user_id = user_ctx_stream.user_id.clone();
-                        rt.spawn(async move {
-                            let _ = auditor_clone
-                                .log_event(
-                                    crate::security::SecurityEvent::new(
-                                        crate::security::SecurityEventType::AuthorizationFailure,
-                                        crate::security::SecuritySeverity::Medium,
-                                        user_id,
-                                    )
-                                    .with_resource("stream".to_string())
-                                    .with_action("register".to_string()),
-                                )
-                                .await;
-                        });
-                    }
-                    return Ok(format!("Error: {}", e));
-                }
-
-                // Validate stream path
-                if path.contains("..") || path.contains('\\') {
-                    return Ok("Invalid stream path: path traversal not allowed".to_string());
-                }
-
-                // Log the operation attempt
-                if config_stream.enable_audit_logging
-                    && let Ok(rt) = tokio::runtime::Handle::try_current()
-                {
-                    let auditor_clone = auditor_stream.clone();
-                    let user_id = user_ctx_stream.user_id.clone();
-                    let path_clone = path.clone();
-                    let script_uri_clone = script_uri_stream.clone();
-                    rt.spawn(async move {
-                        let _ = auditor_clone
-                            .log_event(
-                                crate::security::SecurityEvent::new(
-                                    crate::security::SecurityEventType::SystemSecurityEvent,
-                                    crate::security::SecuritySeverity::Medium,
-                                    user_id,
-                                )
-                                .with_resource("stream".to_string())
-                                .with_action("register".to_string())
-                                .with_detail("path", &path_clone)
-                                .with_detail("script_uri", &script_uri_clone),
-                            )
-                            .await;
-                    });
-                }
-
-                if let Some(reply) = config_stream.collect({
-                    let registration =
-                        CollectedRegistration::new(RegistrationKind::Stream, path.clone());
-                    match customization_function.as_ref() {
-                        Some(function) => registration.with_handler(function.clone()),
-                        None => registration,
-                    }
-                }) {
-                    return Ok(reply);
-                }
-
-                // Register the stream
-                // The same sink a handler route and a file route record
-                // into. A stream is a route whose target is a connection the
-                // engine holds open, so where it is published belongs with
-                // the rest of the script's registrations; `stream_registry`
-                // keeps what it is actually for, which is the connections.
-                let Some(record) = stream_register_fn.as_ref() else {
-                    return Ok(registration_inactive(
-                        "routeRegistry.registerStreamRoute",
-                        &path,
-                    ));
                 };
-                let mut route_meta = repository::RouteMetadata::stream(customization_function);
-                route_meta.tags = tags;
-                route_meta.summary = summary;
-                route_meta.description = description;
-
-                match record(&path, &route_meta, Some(repository::STREAM_METHOD)) {
-                    Ok(()) => Ok(format!("Web stream '{}' registered successfully", path)),
-                    Err(e) => Ok(format!("Failed to register stream '{}': {}", path, e)),
+                match registrar.register(&path, spec) {
+                    Ok(Registered::Done) => host_ok(serde_json::json!({ "ok": true })),
+                    Ok(Registered::Refused(reason)) => {
+                        host_ok(serde_json::json!({ "ok": false, "reason": reason }))
+                    }
+                    Err(failure) => host_failure(
+                        failure.name,
+                        &format!("routeRegistry.registerRoute: {}", failure.message),
+                    ),
                 }
             },
         )?;
-        route_registry.set("registerStreamRoute", register_stream_route)?;
+        host.set("register", register)?;
 
-        // 3. registerAssetRoute function
-        let asset_register_fn = register_fn.clone();
-        let user_ctx_asset = user_context.clone();
-        let script_uri_asset = script_uri_owned.clone();
-        let config_asset_route = self.config.clone();
-        let register_asset_route = Function::new(
+        let user_ctx_send = self.user_context.clone();
+        let auditor_send = self.auditor.clone();
+        let send = Function::new(
             ctx.clone(),
-            move |_c: rquickjs::Ctx<'_>,
-                  path: String,
-                  asset_name: String,
-                  metadata: Opt<rquickjs::Object>|
-                  -> Result<String, rquickjs::Error> {
-                // Engine-owned prefixes are off-limits; any script may
-                // register any other asset path.
-                if let Some(prefix) = crate::engine_api::reserved_route_prefix(&path) {
-                    return Err(rquickjs::Error::new_from_js_message(
-                        "routeRegistry.registerAssetRoute",
-                        "reserved_path",
-                        &format!(
-                            "Path '{}' is reserved for the engine (prefix '{}')",
-                            path, prefix
-                        ),
-                    ));
-                }
-
-                // Check capability
-                if let Err(e) =
-                    user_ctx_asset.require_capability(&crate::security::Capability::WriteAssets)
-                {
-                    return Ok(format!("Access denied: {}", e));
-                }
-
-                // Validate path
-                if !path.starts_with('/') {
-                    return Ok("Path must start with '/'".to_string());
-                }
-                if path.len() > 500 {
-                    return Ok("Path too long (max 500 characters)".to_string());
-                }
-
-                // Validate asset name
-                if asset_name.is_empty() || asset_name.len() > 255 {
-                    return Ok("Invalid asset name: must be 1-255 characters".to_string());
-                }
-                if asset_name.contains("..") || asset_name.contains('\\') {
-                    return Ok("Invalid asset name: path characters not allowed".to_string());
-                }
-
-                if !config_asset_route.registration_phase {
-                    return Ok(registration_inactive(
-                        "routeRegistry.registerAssetRoute",
-                        &path,
-                    ));
-                }
-
-                // Verify the asset exists and belongs to this script
-                match repository::fetch_asset(&script_uri_asset, &asset_name) {
-                    Some(_) => {
-                        // Asset exists and belongs to this script, proceed
-                    }
-                    None => {
-                        return Ok(format!(
-                            "Asset '{}' not found or not owned by script '{}'",
-                            asset_name, script_uri_asset
-                        ));
-                    }
-                }
-
-                // Exposure belongs to the tree, not to this call. A file
-                // outside `public/` is one the directory says is private, and
-                // publishing it was the mistake nothing else in the engine
-                // could see — not the write path, not the revision manifest,
-                // not a git diff. Refused rather than warned about, which is
-                // what makes the directory the answer rather than a
-                // suggestion; publishing a file is now moving it, which is a
-                // reviewable act.
-                if !crate::exposure::is_publishable(&asset_name) {
-                    crate::exposure::note_refusal(&script_uri_asset, false, &path, &asset_name);
-                    tracing::warn!(
-                        script = %script_uri_asset,
-                        path = %path,
-                        asset = %asset_name,
-                        "Refused to publish a file from outside '{}'",
-                        crate::exposure::PUBLIC_DIR,
-                    );
-                    return Ok(format!(
-                        "Refused: '{}' is not under '{}', so it is not a file the world may \
-                         read. Move it to '{}{}' and register that. A file's directory is \
-                         what says whether it is public; see GET /engine/exposure.",
-                        asset_name,
-                        crate::exposure::PUBLIC_DIR,
-                        crate::exposure::PUBLIC_DIR,
-                        asset_name,
-                    ));
-                }
-
-                // Extract optional OpenAPI metadata (tags/summary/description)
-                let (tags, summary, description) = extract_route_metadata(metadata.0.as_ref());
-                // And the one part of the registration that is not cosmetic:
-                // who may read the file. It rides in the same object because
-                // the second argument is the file's name and the shape
-                // `registerStreamRoute` uses is therefore not available, not
-                // because deciding access is metadata.
-                let authorize = metadata
-                    .0
-                    .as_ref()
-                    .and_then(|object| object.get::<_, Option<String>>("authorize").ok())
-                    .flatten()
-                    .filter(|name| !name.trim().is_empty());
-
-                if let Some(reply) = config_asset_route.collect(CollectedRegistration::new(
-                    RegistrationKind::AssetRoute,
-                    path.clone(),
-                )) {
-                    return Ok(reply);
-                }
-
-                // The same sink a handler route records into. A file route is
-                // a route whose target is a file rather than a function, so
-                // it belongs in the script's registrations with the rest:
-                // indexed by `route_index` (which is what gives it `:param`
-                // and `/*`), filtered by host once, invalidated once, and —
-                // because the registrations are rebuilt on every `init()` —
-                // actually gone when the script stops registering it. The
-                // registry it used to live in never unregistered anything.
-                let Some(record) = asset_register_fn.as_ref() else {
-                    return Ok(registration_inactive(
-                        "routeRegistry.registerAssetRoute",
-                        &path,
-                    ));
-                };
-                let mut route_meta = repository::RouteMetadata::file(asset_name.clone(), authorize);
-                route_meta.tags = tags;
-                route_meta.summary = summary;
-                route_meta.description = description;
-
-                match record(&path, &route_meta, Some(repository::ASSET_METHOD)) {
-                    Ok(()) => Ok(format!(
-                        "Asset path '{}' registered to asset '{}'",
-                        path, asset_name
-                    )),
-                    Err(e) => Ok(format!("Failed to register asset path: {}", e)),
-                }
-            },
-        )?;
-        route_registry.set("registerAssetRoute", register_asset_route)?;
-
-        // 4. sendStreamMessage function
-        let user_ctx_send = user_context.clone();
-        let auditor_send = auditor.clone();
-        let send_stream_message = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  path: String,
-                  message: rquickjs::Value<'_>|
-                  -> JsResult<String> {
+            move |path: String, message: rquickjs::Value<'_>| -> JsResult<String> {
                 // Typed `any` in the declarations and serialized here, so the
                 // object every example passes is the object that arrives.
                 let message = json_arg(message, "data")?;
-                // Allow system-level broadcasting without capability checks on
-                // the shared /system/ namespace. The engine's script-update
-                // stream is deliberately not exempt: it is broadcast to from
-                // Rust (`engine_api::broadcast_script_update`), which never
-                // passes through here, so exempting it only let any script
-                // forge engine notifications to every subscriber.
-                let is_system_broadcast = path.starts_with("/system/");
-
-                if !is_system_broadcast {
-                    // Check capability for non-system operations
-                    if let Err(e) = user_ctx_send
-                        .require_capability(&crate::security::Capability::ManageStreams)
-                    {
-                        let auditor_clone = auditor_send.clone();
-                        let user_id = user_ctx_send.user_id.clone();
-                        tokio::task::spawn(async move {
-                            let _ = auditor_clone
-                                .log_event(
-                                    crate::security::SecurityEvent::new(
-                                        crate::security::SecurityEventType::AuthorizationFailure,
-                                        crate::security::SecuritySeverity::Medium,
-                                        user_id,
-                                    )
-                                    .with_resource("stream".to_string())
-                                    .with_action("send_message".to_string()),
-                                )
-                                .await;
-                        });
-                        return Ok(format!("Error: {}", e));
-                    }
-                }
-
-                // Log the operation attempt
-                let auditor_clone = auditor_send.clone();
-                let user_id = user_ctx_send.user_id.clone();
-                let path_clone = path.clone();
-                let message_clone = message.clone();
-                tokio::task::spawn(async move {
-                    let _ = auditor_clone
-                        .log_event(
-                            crate::security::SecurityEvent::new(
-                                crate::security::SecurityEventType::SystemSecurityEvent,
-                                crate::security::SecuritySeverity::Low,
-                                user_id,
-                            )
-                            .with_resource("stream".to_string())
-                            .with_action("send_message".to_string())
-                            .with_detail("path", &path_clone)
-                            .with_detail("message_length", message_clone.len().to_string()),
-                        )
-                        .await;
-                });
-
-                // Send the message
-                match crate::stream_registry::GLOBAL_STREAM_REGISTRY
-                    .broadcast_to_stream(&path, &message)
-                {
-                    Ok(result) => {
-                        if result.is_fully_successful() {
-                            Ok(format!(
-                                "Successfully sent message to {} connections on path '{}'",
-                                result.successful_sends, path
-                            ))
-                        } else {
-                            Ok(format!(
-                                "Sent message to {}/{} connections on path '{}' ({} failed)",
-                                result.successful_sends,
-                                result.total_connections,
-                                path,
-                                result.failed_connections.len()
-                            ))
-                        }
-                    }
-                    Err(e) => Ok(format!("Failed to send message to path '{}': {}", path, e)),
-                }
+                Ok(send_stream_message(
+                    &user_ctx_send,
+                    &auditor_send,
+                    "sendStreamMessage",
+                    &path,
+                    &message,
+                    None,
+                ))
             },
         )?;
-        route_registry.set("sendStreamMessage", send_stream_message)?;
+        host.set("send", send)?;
 
-        // 5. sendStreamMessageFiltered function
-        let user_ctx_filtered = user_context.clone();
-        let auditor_filtered = auditor.clone();
-        let send_stream_message_filtered = Function::new(
+        let user_ctx_filtered = self.user_context.clone();
+        let auditor_filtered = self.auditor.clone();
+        let send_filtered = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  path: String,
+            move |path: String,
                   message: rquickjs::Value<'_>,
                   filter_json: Option<String>,
                   match_mode: Option<String>|
                   -> JsResult<String> {
-                // As in `sendStreamMessage`: the data is whatever the script
-                // has, the filter is the JSON string the declarations ask for.
                 let message = json_arg(message, "data")?;
-                // Parse filter criteria
-                let metadata_filter: HashMap<String, String> = if let Some(json_str) = filter_json {
-                    serde_json::from_str(&json_str).map_err(|e| {
-                        rquickjs::Error::new_from_js_message(
-                            "filter",
-                            "MetadataFilter",
-                            &format!("Invalid filter JSON: {}", e),
-                        )
-                    })?
-                } else {
-                    HashMap::new()
-                };
-                let match_mode = parse_filter_match_mode(match_mode)?;
-
-                // Allow system-level broadcasting on the shared /system/
-                // namespace only; see the note in `sendStreamMessage`.
-                let is_system_broadcast = path.starts_with("/system/");
-
-                if !is_system_broadcast
-                    && let Err(e) = user_ctx_filtered
-                        .require_capability(&crate::security::Capability::ManageStreams)
-                {
-                    let auditor_clone = auditor_filtered.clone();
-                    let user_id = user_ctx_filtered.user_id.clone();
-                    tokio::task::spawn(async move {
-                        let _ = auditor_clone
-                            .log_event(
-                                crate::security::SecurityEvent::new(
-                                    crate::security::SecurityEventType::AuthorizationFailure,
-                                    crate::security::SecuritySeverity::Medium,
-                                    user_id,
-                                )
-                                .with_resource("stream".to_string())
-                                .with_action("send_filtered_message".to_string()),
-                            )
-                            .await;
-                    });
-                    return Ok(format!("Error: {}", e));
-                }
-
-                // Log the operation
-                let auditor_clone = auditor_filtered.clone();
-                let user_id = user_ctx_filtered.user_id.clone();
-                let path_clone = path.clone();
-                let message_clone = message.clone();
-                let filter_clone = metadata_filter.clone();
-                tokio::task::spawn(async move {
-                    let _ = auditor_clone
-                        .log_event(
-                            crate::security::SecurityEvent::new(
-                                crate::security::SecurityEventType::SystemSecurityEvent,
-                                crate::security::SecuritySeverity::Low,
-                                user_id,
-                            )
-                            .with_resource("stream".to_string())
-                            .with_action("send_filtered_message".to_string())
-                            .with_detail("path", &path_clone)
-                            .with_detail("message_length", message_clone.len().to_string())
-                            .with_detail("filter_criteria_count", filter_clone.len().to_string()),
-                        )
-                        .await;
-                });
-
-                // Send filtered message
-                let result = crate::stream_registry::GLOBAL_STREAM_REGISTRY
-                    .broadcast_to_stream_with_filter_mode(
-                        &path,
-                        &message,
-                        &metadata_filter,
-                        match_mode,
-                    );
-
-                match result {
-                    Ok(broadcast_result) => {
-                        if broadcast_result.is_fully_successful() {
-                            Ok(format!(
-                                "Successfully sent filtered message to {} connections on path '{}'",
-                                broadcast_result.successful_sends, path
-                            ))
-                        } else {
-                            Ok(format!(
-                                "Sent filtered message to {}/{} connections on path '{}' ({} failed)",
-                                broadcast_result.successful_sends,
-                                broadcast_result.total_connections,
-                                path,
-                                broadcast_result.failed_connections.len()
-                            ))
+                // The prelude serialises the filter object, so a parse failure
+                // here is the engine's bug rather than the caller's.
+                let filter: HashMap<String, String> = match filter_json {
+                    Some(json) => match serde_json::from_str(&json) {
+                        Ok(filter) => filter,
+                        Err(e) => {
+                            return Ok(host_failure(
+                                "TypeError",
+                                &format!(
+                                    "routeRegistry.sendStreamMessageFiltered: the filter maps \
+                                     names to strings: {}",
+                                    e
+                                ),
+                            ));
                         }
+                    },
+                    None => HashMap::new(),
+                };
+                let match_mode = match match_mode
+                    .map(|raw| raw.parse::<crate::stream_registry::FilterMatchMode>())
+                    .transpose()
+                {
+                    Ok(mode) => mode.unwrap_or(crate::stream_registry::FilterMatchMode::Subset),
+                    Err(message) => {
+                        return Ok(host_failure(
+                            "TypeError",
+                            &format!("routeRegistry.sendStreamMessageFiltered: {}", message),
+                        ));
                     }
-                    Err(e) => Ok(format!(
-                        "Failed to send filtered message to path '{}': {}",
-                        path, e
-                    )),
-                }
+                };
+                Ok(send_stream_message(
+                    &user_ctx_filtered,
+                    &auditor_filtered,
+                    "sendStreamMessageFiltered",
+                    &path,
+                    &message,
+                    Some((&filter, match_mode)),
+                ))
             },
         )?;
-        route_registry.set("sendStreamMessageFiltered", send_stream_message_filtered)?;
+        host.set("sendFiltered", send_filtered)?;
 
-        // Set the routeRegistry object on global scope
-        global.set("routeRegistry", route_registry)?;
+        ctx.globals().set("__hostRouteRegistry", host)?;
+        crate::bytecode::eval_program(ctx, "engine://route-prelude", ROUTE_PRELUDE).map_err(
+            |e| {
+                rquickjs::Error::new_from_js_message(
+                    "routeRegistry",
+                    "prelude",
+                    &format!("route prelude failed to load: {}", e),
+                )
+            },
+        )?;
 
         Ok(())
     }
@@ -5207,7 +5164,7 @@ impl SecureGlobalContext {
                 if config_enqueue.is_dry_run() {
                     // A check that deploys nothing must not leave work behind
                     // for a worker to pick up afterwards.
-                    return Ok(Self::task_failure(
+                    return Ok(host_failure(
                         "DryRunError",
                         "scriptTasks.enqueue: nothing was enqueued - this is a dry run",
                     ));
@@ -5222,7 +5179,7 @@ impl SecureGlobalContext {
                 // is a fact about this execution and nothing in the row
                 // remembers it.
                 if !user_enqueue.has_capability(&Capability::EnqueueTasks) {
-                    return Ok(Self::task_failure(
+                    return Ok(host_failure(
                         "SecurityError",
                         &capability_refusal(
                             "scriptTasks.enqueue",
@@ -5235,7 +5192,7 @@ impl SecureGlobalContext {
                 let options: serde_json::Value = match serde_json::from_str(&options_json) {
                     Ok(options) => options,
                     Err(e) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "TypeError",
                             &format!("scriptTasks.enqueue: options are not valid JSON: {}", e),
                         ));
@@ -5245,7 +5202,7 @@ impl SecureGlobalContext {
                 let lane = match Self::lane_from_options(&options) {
                     Ok(lane) => lane,
                     Err(message) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "TypeError",
                             &format!("scriptTasks.enqueue: {}", message),
                         ));
@@ -5256,7 +5213,7 @@ impl SecureGlobalContext {
                     Some(value) => match crate::scheduler::parse_utc_timestamp(value) {
                         Ok(parsed) => Some(parsed),
                         Err(_) => {
-                            return Ok(Self::task_failure(
+                            return Ok(host_failure(
                                 "RangeError",
                                 "scriptTasks.enqueue: runAt must be a UTC timestamp ending with 'Z'",
                             ));
@@ -5272,7 +5229,7 @@ impl SecureGlobalContext {
                             Some(number as i32)
                         }
                         _ => {
-                            return Ok(Self::task_failure(
+                            return Ok(host_failure(
                                 "RangeError",
                                 "scriptTasks.enqueue: maxAttempts must be a whole number",
                             ));
@@ -5308,8 +5265,8 @@ impl SecureGlobalContext {
                 };
 
                 match crate::tasks::blocking::enqueue(new_task) {
-                    Ok(task) => Ok(Self::task_ok(crate::tasks::to_json(&task))),
-                    Err(e) => Ok(Self::task_failure(
+                    Ok(task) => Ok(host_ok(crate::tasks::to_json(&task))),
+                    Err(e) => Ok(host_failure(
                         Self::task_error_name(&e),
                         &format!("scriptTasks.enqueue: {}", e),
                     )),
@@ -5322,7 +5279,7 @@ impl SecureGlobalContext {
         let user_cancel = self.user_context.clone();
         let cancel = Function::new(ctx.clone(), move |task_id: String| -> JsResult<String> {
             if config_cancel.is_dry_run() {
-                return Ok(Self::task_failure(
+                return Ok(host_failure(
                     "DryRunError",
                     "scriptTasks.cancel: nothing was cancelled - this is a dry run",
                 ));
@@ -5332,7 +5289,7 @@ impl SecureGlobalContext {
             // capability enqueueing does. A narrowed turn that could delete
             // work the script had accepted would be a write by another name.
             if !user_cancel.has_capability(&Capability::EnqueueTasks) {
-                return Ok(Self::task_failure(
+                return Ok(host_failure(
                     "SecurityError",
                     &capability_refusal(
                         "scriptTasks.cancel",
@@ -5343,18 +5300,15 @@ impl SecureGlobalContext {
             }
 
             let Ok(parsed) = uuid::Uuid::parse_str(task_id.trim()) else {
-                return Ok(Self::task_failure(
+                return Ok(host_failure(
                     "TypeError",
                     "scriptTasks.cancel: that is not a task id",
                 ));
             };
 
             match crate::tasks::blocking::cancel(parsed) {
-                Ok(cancelled) => Ok(Self::task_ok(serde_json::Value::Bool(cancelled))),
-                Err(e) => Ok(Self::task_failure(
-                    "Error",
-                    &format!("scriptTasks.cancel: {}", e),
-                )),
+                Ok(cancelled) => Ok(host_ok(serde_json::Value::Bool(cancelled))),
+                Err(e) => Ok(host_failure("Error", &format!("scriptTasks.cancel: {}", e))),
             }
         })?;
         host.set("cancel", cancel)?;
@@ -5365,7 +5319,7 @@ impl SecureGlobalContext {
         let script_uri_get = script_uri.to_string();
         let get = Function::new(ctx.clone(), move |task_id: String| -> JsResult<String> {
             let Ok(parsed) = uuid::Uuid::parse_str(task_id.trim()) else {
-                return Ok(Self::task_failure(
+                return Ok(host_failure(
                     "TypeError",
                     "scriptTasks.get: that is not a task id",
                 ));
@@ -5373,13 +5327,10 @@ impl SecureGlobalContext {
 
             match crate::tasks::blocking::get(parsed) {
                 Ok(Some(task)) if task.script_uri == script_uri_get => {
-                    Ok(Self::task_ok(crate::tasks::to_json(&task)))
+                    Ok(host_ok(crate::tasks::to_json(&task)))
                 }
-                Ok(_) => Ok(Self::task_ok(serde_json::Value::Null)),
-                Err(e) => Ok(Self::task_failure(
-                    "Error",
-                    &format!("scriptTasks.get: {}", e),
-                )),
+                Ok(_) => Ok(host_ok(serde_json::Value::Null)),
+                Err(e) => Ok(host_failure("Error", &format!("scriptTasks.get: {}", e))),
             }
         })?;
         host.set("get", get)?;
@@ -5399,7 +5350,7 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |ctx: rquickjs::Ctx<'_>, options_json: String| -> JsResult<String> {
                 if config_personal.is_dry_run() {
-                    return Ok(Self::task_failure(
+                    return Ok(host_failure(
                         "DryRunError",
                         "personalTasks.enqueue: nothing was enqueued - this is a dry run",
                     ));
@@ -5409,7 +5360,7 @@ impl SecureGlobalContext {
                 // what the grant allows, which is not what this turn was
                 // narrowed to.
                 if !user_personal_enqueue.has_capability(&Capability::EnqueueTasks) {
-                    return Ok(Self::task_failure(
+                    return Ok(host_failure(
                         "SecurityError",
                         &capability_refusal(
                             "personalTasks.enqueue",
@@ -5424,7 +5375,7 @@ impl SecureGlobalContext {
                 // script serving a request runs under the requesting user, and
                 // that is who is in a position to have consented.
                 let Some(user_id) = Self::current_user_id(&ctx) else {
-                    return Ok(Self::task_failure(
+                    return Ok(host_failure(
                         "SecurityError",
                         "personalTasks.enqueue requires an authenticated user",
                     ));
@@ -5436,19 +5387,19 @@ impl SecureGlobalContext {
                 )) {
                     Ok(Some(grant)) if grant.is_live(chrono::Utc::now()) => {}
                     Ok(Some(_)) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "SecurityError",
                             "personalTasks.enqueue: this person's authorisation for this script has expired",
                         ));
                     }
                     Ok(None) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "SecurityError",
                             "personalTasks.enqueue: this person has not authorised this script to act for them",
                         ));
                     }
                     Err(e) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "Error",
                             &format!(
                                 "personalTasks.enqueue: could not read the authorisation: {}",
@@ -5461,7 +5412,7 @@ impl SecureGlobalContext {
                 let options: serde_json::Value = match serde_json::from_str(&options_json) {
                     Ok(options) => options,
                     Err(e) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "TypeError",
                             &format!("personalTasks.enqueue: options are not valid JSON: {}", e),
                         ));
@@ -5471,7 +5422,7 @@ impl SecureGlobalContext {
                 let lane = match Self::lane_from_options(&options) {
                     Ok(lane) => lane,
                     Err(message) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "TypeError",
                             &format!("personalTasks.enqueue: {}", message),
                         ));
@@ -5482,7 +5433,7 @@ impl SecureGlobalContext {
                     Some(value) => match crate::scheduler::parse_utc_timestamp(value) {
                         Ok(parsed) => Some(parsed),
                         Err(_) => {
-                            return Ok(Self::task_failure(
+                            return Ok(host_failure(
                                 "RangeError",
                                 "personalTasks.enqueue: runAt must be a UTC timestamp ending with 'Z'",
                             ));
@@ -5526,8 +5477,8 @@ impl SecureGlobalContext {
                 };
 
                 match crate::tasks::blocking::enqueue(new_task) {
-                    Ok(task) => Ok(Self::task_ok(crate::tasks::to_json(&task))),
-                    Err(e) => Ok(Self::task_failure(
+                    Ok(task) => Ok(host_ok(crate::tasks::to_json(&task))),
+                    Err(e) => Ok(host_failure(
                         Self::task_error_name(&e),
                         &format!("personalTasks.enqueue: {}", e),
                     )),
@@ -5565,14 +5516,14 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |options_json: String| -> JsResult<String> {
                 if config_from.is_dry_run() {
-                    return Ok(Self::task_failure(
+                    return Ok(host_failure(
                         "DryRunError",
                         "personalTasks.enqueueFrom: nothing was enqueued - this is a dry run",
                     ));
                 }
 
                 if !user_from.has_capability(&Capability::EnqueueTasks) {
-                    return Ok(Self::task_failure(
+                    return Ok(host_failure(
                         "SecurityError",
                         &capability_refusal(
                             "personalTasks.enqueueFrom",
@@ -5585,7 +5536,7 @@ impl SecureGlobalContext {
                 let options: serde_json::Value = match serde_json::from_str(&options_json) {
                     Ok(options) => options,
                     Err(e) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "TypeError",
                             &format!(
                                 "personalTasks.enqueueFrom: options are not valid JSON: {}",
@@ -5598,7 +5549,7 @@ impl SecureGlobalContext {
                 let (channel, identity) = match Self::sender_from_options(&options) {
                     Ok(pair) => pair,
                     Err(message) => {
-                        return Ok(Self::task_failure("TypeError", &message));
+                        return Ok(host_failure("TypeError", &message));
                     }
                 };
 
@@ -5609,14 +5560,14 @@ impl SecureGlobalContext {
                 ) {
                     Ok(Some(user_id)) => user_id,
                     Ok(None) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "SecurityError",
                             "personalTasks.enqueueFrom: nobody has linked that sender to this \
                              script - `personalTasks.inviteLink()` mints a link to send them",
                         ));
                     }
                     Err(e) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "Error",
                             &format!("personalTasks.enqueueFrom: could not read the link: {}", e),
                         ));
@@ -5633,21 +5584,21 @@ impl SecureGlobalContext {
                 )) {
                     Ok(Some(grant)) if grant.is_live(chrono::Utc::now()) => {}
                     Ok(Some(_)) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "SecurityError",
                             "personalTasks.enqueueFrom: this person's authorisation for this \
                              script has expired",
                         ));
                     }
                     Ok(None) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "SecurityError",
                             "personalTasks.enqueueFrom: this person has not authorised this \
                              script to act for them",
                         ));
                     }
                     Err(e) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "Error",
                             &format!(
                                 "personalTasks.enqueueFrom: could not read the authorisation: {}",
@@ -5664,13 +5615,13 @@ impl SecureGlobalContext {
                 if let Err(message) =
                     Self::spend_channel_budget(&script_uri_from, &channel, &identity)
                 {
-                    return Ok(Self::task_failure("RangeError", &message));
+                    return Ok(host_failure("RangeError", &message));
                 }
 
                 let lane = match Self::lane_from_options(&options) {
                     Ok(lane) => lane,
                     Err(message) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "TypeError",
                             &format!("personalTasks.enqueueFrom: {}", message),
                         ));
@@ -5681,7 +5632,7 @@ impl SecureGlobalContext {
                     Some(value) => match crate::scheduler::parse_utc_timestamp(value) {
                         Ok(parsed) => Some(parsed),
                         Err(_) => {
-                            return Ok(Self::task_failure(
+                            return Ok(host_failure(
                                 "RangeError",
                                 "personalTasks.enqueueFrom: runAt must be a UTC timestamp ending \
                                  with 'Z'",
@@ -5737,9 +5688,9 @@ impl SecureGlobalContext {
                             task_id = %task.task_id,
                             "Delegated work queued by an inbound sender"
                         );
-                        Ok(Self::task_ok(crate::tasks::to_json(&task)))
+                        Ok(host_ok(crate::tasks::to_json(&task)))
                     }
-                    Err(e) => Ok(Self::task_failure(
+                    Err(e) => Ok(host_failure(
                         Self::task_error_name(&e),
                         &format!("personalTasks.enqueueFrom: {}", e),
                     )),
@@ -5758,7 +5709,7 @@ impl SecureGlobalContext {
                 let options: serde_json::Value = match serde_json::from_str(&options_json) {
                     Ok(options) => options,
                     Err(e) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "TypeError",
                             &format!("personalTasks.sender: options are not valid JSON: {}", e),
                         ));
@@ -5767,7 +5718,7 @@ impl SecureGlobalContext {
 
                 let (channel, identity) = match Self::sender_from_options(&options) {
                     Ok(pair) => pair,
-                    Err(message) => return Ok(Self::task_failure("TypeError", &message)),
+                    Err(message) => return Ok(host_failure("TypeError", &message)),
                 };
 
                 let linked = match crate::database::run_blocking(
@@ -5775,7 +5726,7 @@ impl SecureGlobalContext {
                 ) {
                     Ok(linked) => linked,
                     Err(e) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "Error",
                             &format!("personalTasks.sender: {}", e),
                         ));
@@ -5788,7 +5739,7 @@ impl SecureGlobalContext {
                 // would put an account identifier into whatever the bot logs
                 // or echoes back to the chat.
                 let Some(user_id) = linked else {
-                    return Ok(Self::task_ok(serde_json::json!({
+                    return Ok(host_ok(serde_json::json!({
                         "linked": false,
                         "granted": false,
                         "channel": channel,
@@ -5817,7 +5768,7 @@ impl SecureGlobalContext {
                     _ => (false, false, Vec::new()),
                 };
 
-                Ok(Self::task_ok(serde_json::json!({
+                Ok(host_ok(serde_json::json!({
                     "linked": true,
                     "granted": granted,
                     "expired": expired,
@@ -5853,7 +5804,7 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |options_json: String| -> JsResult<String> {
                 if config_invite.is_dry_run() {
-                    return Ok(Self::task_failure(
+                    return Ok(host_failure(
                         "DryRunError",
                         "personalTasks.inviteLink: nothing was minted - this is a dry run",
                     ));
@@ -5865,7 +5816,7 @@ impl SecureGlobalContext {
                 // narrowed read-only turn writes nothing" is worth more as a
                 // rule without exceptions than this is as a convenience.
                 if !user_invite.has_capability(&Capability::EnqueueTasks) {
-                    return Ok(Self::task_failure(
+                    return Ok(host_failure(
                         "SecurityError",
                         &capability_refusal(
                             "personalTasks.inviteLink",
@@ -5878,7 +5829,7 @@ impl SecureGlobalContext {
                 let options: serde_json::Value = match serde_json::from_str(&options_json) {
                     Ok(options) => options,
                     Err(e) => {
-                        return Ok(Self::task_failure(
+                        return Ok(host_failure(
                             "TypeError",
                             &format!(
                                 "personalTasks.inviteLink: options are not valid JSON: {}",
@@ -5890,7 +5841,7 @@ impl SecureGlobalContext {
 
                 let (channel, identity) = match Self::sender_from_options(&options) {
                     Ok(pair) => pair,
-                    Err(message) => return Ok(Self::task_failure("TypeError", &message)),
+                    Err(message) => return Ok(host_failure("TypeError", &message)),
                 };
 
                 // Minting is inbound-triggered and writes, so it spends the
@@ -5899,7 +5850,7 @@ impl SecureGlobalContext {
                 if let Err(message) =
                     Self::spend_channel_budget(&script_uri_invite, &channel, &identity)
                 {
-                    return Ok(Self::task_failure("RangeError", &message));
+                    return Ok(host_failure("RangeError", &message));
                 }
 
                 match crate::database::run_blocking(crate::delegation::invite_link(
@@ -5907,13 +5858,13 @@ impl SecureGlobalContext {
                     &channel,
                     &identity,
                 )) {
-                    Ok(url) => Ok(Self::task_ok(serde_json::json!({
+                    Ok(url) => Ok(host_ok(serde_json::json!({
                         "linkUrl": url,
                         "channel": channel,
                         "identity": identity,
                         "expiresInMinutes": crate::delegation::LINK_TOKEN_MINUTES,
                     }))),
-                    Err(refusal) => Ok(Self::task_failure(
+                    Err(refusal) => Ok(host_failure(
                         "Error",
                         &format!("personalTasks.inviteLink: {}", refusal),
                     )),
@@ -5929,7 +5880,7 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
                 let Some(user_id) = Self::current_user_id(&ctx) else {
-                    return Ok(Self::task_ok(serde_json::json!({
+                    return Ok(host_ok(serde_json::json!({
                         "authenticated": false,
                         "granted": false,
                         "scopes": [],
@@ -5942,7 +5893,7 @@ impl SecureGlobalContext {
                 )) {
                     Ok(Some(grant)) => {
                         let live = grant.is_live(chrono::Utc::now());
-                        Ok(Self::task_ok(serde_json::json!({
+                        Ok(host_ok(serde_json::json!({
                             "authenticated": true,
                             "granted": live,
                             "expired": !live,
@@ -5951,14 +5902,14 @@ impl SecureGlobalContext {
                             "consentUrl": crate::delegation::consent_url(&script_uri_grant),
                         })))
                     }
-                    Ok(None) => Ok(Self::task_ok(serde_json::json!({
+                    Ok(None) => Ok(host_ok(serde_json::json!({
                         "authenticated": true,
                         "granted": false,
                         "expired": false,
                         "scopes": [],
                         "consentUrl": crate::delegation::consent_url(&script_uri_grant),
                     }))),
-                    Err(e) => Ok(Self::task_failure(
+                    Err(e) => Ok(host_failure(
                         "Error",
                         &format!("personalTasks.authorization: {}", e),
                     )),
@@ -6062,15 +6013,6 @@ impl SecureGlobalContext {
             Err("personalTasks.enqueueFrom: this sender has queued too much too quickly - the                  budget refills over the next few minutes"
                 .to_string())
         }
-    }
-
-    /// The envelope shape `tasks_prelude.js` unwraps.
-    fn task_ok(value: serde_json::Value) -> String {
-        serde_json::json!({ "ok": value }).to_string()
-    }
-
-    fn task_failure(name: &str, message: &str) -> String {
-        serde_json::json!({ "error": { "name": name, "message": message } }).to_string()
     }
 
     /// Which kind of exception a refusal becomes, so a script can tell a
@@ -6837,36 +6779,89 @@ impl SecureGlobalContext {
 }
 
 #[cfg(test)]
-mod metadata_tests {
-    use super::extract_route_metadata;
-    use rquickjs::{Context, Runtime};
+mod route_spec_tests {
+    use super::{RouteTarget, parse_route_spec};
+    use serde_json::json;
 
     #[test]
-    fn extract_route_metadata_reads_tags_summary_description() {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        ctx.with(|ctx| {
-            // Build a metadata object like `{ tags: ["Foo"], summary: "S" }`.
-            let obj = rquickjs::Object::new(ctx.clone()).unwrap();
-            let arr = rquickjs::Array::new(ctx.clone()).unwrap();
-            arr.set(0, "Foo").unwrap();
-            arr.set(1, "Bar").unwrap();
-            obj.set("tags", arr).unwrap();
-            obj.set("summary", "S").unwrap();
-
-            let (tags, summary, description) = extract_route_metadata(Some(&obj));
-            assert_eq!(tags, vec!["Foo".to_string(), "Bar".to_string()]);
-            assert_eq!(summary, Some("S".to_string()));
-            assert_eq!(description, None);
-        });
+    fn a_handler_spec_defaults_to_get_and_keeps_its_documentation() {
+        let spec = parse_route_spec(&json!({
+            "handler": "getThing",
+            "summary": "One thing",
+            "tags": ["Things"],
+            "parameters": [{ "name": "id", "in": "path" }],
+        }))
+        .expect("a handler spec should parse");
+        assert_eq!(
+            spec.target,
+            RouteTarget::Handler {
+                name: "getThing".to_string(),
+                method: "GET".to_string()
+            }
+        );
+        assert_eq!(spec.summary.as_deref(), Some("One thing"));
+        assert_eq!(spec.tags, vec!["Things".to_string()]);
+        assert!(spec.parameters.is_some(), "parameters are an object now");
     }
 
     #[test]
-    fn extract_route_metadata_handles_missing_object() {
-        let (tags, summary, description) = extract_route_metadata(None);
-        assert!(tags.is_empty());
-        assert_eq!(summary, None);
-        assert_eq!(description, None);
+    fn streams_and_files_carry_their_authorize_function() {
+        let stream = parse_route_spec(&json!({ "stream": true, "authorize": "mayWatch" }))
+            .expect("a stream spec should parse");
+        assert_eq!(
+            stream.target,
+            RouteTarget::Stream {
+                authorize: Some("mayWatch".to_string())
+            }
+        );
+        let file =
+            parse_route_spec(&json!({ "file": "public/a.css" })).expect("a file spec should parse");
+        assert_eq!(
+            file.target,
+            RouteTarget::File {
+                path: "public/a.css".to_string(),
+                authorize: None
+            }
+        );
+    }
+
+    /// Every one of these is a mistake in the call, and every one is the kind
+    /// that would otherwise do something other than what was written: a
+    /// silently dropped `authorize` publishes the file it was meant to guard.
+    #[test]
+    fn a_spec_that_is_not_exactly_one_thing_is_refused() {
+        for (spec, why) in [
+            (json!({}), "no target"),
+            (json!({ "handler": "h", "file": "public/a" }), "two targets"),
+            (json!({ "stream": false }), "stream must be true"),
+            (
+                json!({ "file": "public/a", "authorise": "f" }),
+                "a misspelt key",
+            ),
+            (
+                json!({ "handler": "h", "authorize": "f" }),
+                "authorize on a handler",
+            ),
+            (
+                json!({ "stream": true, "method": "POST" }),
+                "a method on a stream",
+            ),
+            (
+                json!({ "file": "public/a", "parameters": [] }),
+                "parameters on a file",
+            ),
+            (
+                json!({ "handler": "not a name" }),
+                "a handler that is not a name",
+            ),
+            (
+                json!({ "handler": "h", "tags": "x" }),
+                "tags that are not an array",
+            ),
+            (json!("h"), "not an object"),
+        ] {
+            assert!(parse_route_spec(&spec).is_err(), "should refuse {}", why);
+        }
     }
 }
 
@@ -6940,10 +6935,29 @@ mod api_surface_tests {
     /// request if these raised.
     #[test]
     fn registration_methods_report_instead_of_throwing_or_registering() {
+        // A route registration answers with a value rather than a sentence:
+        // the refusal is `{ ok: false, reason }`, and the reason is the
+        // sentence the other registries still return.
         for (call, subject) in [
-            ("routeRegistry.registerRoute('/r', 'h', 'GET')", "/r"),
-            ("routeRegistry.registerStreamRoute('/s')", "/s"),
-            ("routeRegistry.registerAssetRoute('/a', 'a.txt')", "/a"),
+            ("routeRegistry.registerRoute('/r', { handler: 'h' })", "/r"),
+            ("routeRegistry.registerRoute('/s', { stream: true })", "/s"),
+            ("routeRegistry.registerRoute('/a', { file: 'a.txt' })", "/a"),
+        ] {
+            let result = eval_outside_registration_phase(&format!(
+                "(function (r) {{ return r.ok + '|' + r.reason; }})({})",
+                call
+            ));
+            assert!(
+                result.starts_with("false|")
+                    && result.contains("not registered")
+                    && result.contains(subject),
+                "`{}` should report that it did not register, got: {}",
+                call,
+                result
+            );
+        }
+
+        for (call, subject) in [
             ("mcpRegistry.registerTool('t', 'd', '{}', 'h')", "t"),
             ("mcpRegistry.registerPrompt('p', 'd', '[]', 'h')", "p"),
             (
@@ -7069,9 +7083,14 @@ mod api_surface_tests {
     /// the same way wherever it is made, rather than being masked by the phase.
     #[test]
     fn argument_validation_runs_before_the_phase_check() {
+        let thrown = eval_outside_registration_phase(
+            "(function () { try { routeRegistry.registerRoute('no-slash', { stream: true }); \
+             return 'did not throw'; } catch (e) { return e.name + ': ' + e.message; } })()",
+        );
         assert!(
-            eval_outside_registration_phase("routeRegistry.registerStreamRoute('no-slash')")
-                .contains("must start with"),
+            thrown.starts_with("TypeError: ") && thrown.contains("must start with"),
+            "a malformed path is a mistake in the call, got: {}",
+            thrown
         );
     }
 }

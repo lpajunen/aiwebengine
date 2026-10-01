@@ -51,7 +51,8 @@ pub struct McpPrompt {
 /// A resource is the read half of MCP: content a client may fetch by URI and
 /// put in front of a model, as against a tool, which is something it may run.
 /// The engine's answer to it is deliberately not a handler — it is
-/// `routeRegistry.registerAssetRoute` pointed at `/mcp` instead of at a path.
+/// a file route (`routeRegistry.registerRoute(path, { file })`) pointed at
+/// `/mcp` instead of at a path.
 /// Both publish an asset the script already has under a name callers can
 /// reach; the only difference is which protocol does the reaching, which is
 /// why this carries an `asset_name` rather than a `handler_function`.
@@ -291,7 +292,7 @@ pub fn register_mcp_prompt(
 /// answers with what the asset says now rather than with what it said at
 /// `init()` — an asset written after startup, by the script itself or by an
 /// editor, is served without a redeploy. The same reason
-/// `registerAssetRoute` does not copy an asset into the route index.
+/// a file route does not copy its file into the route index.
 pub fn register_mcp_resource(
     uri: String,
     name: String,

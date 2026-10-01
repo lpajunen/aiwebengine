@@ -1,7 +1,10 @@
 /// <reference path="../../assets/aiwebengine.d.ts" />
 
 // Test script for scriptStorage functionality
-routeRegistry.registerRoute("/test-storage", "testStorageHandler", "GET");
+routeRegistry.registerRoute("/test-storage", {
+  handler: "testStorageHandler",
+  method: "GET",
+});
 
 function testStorageHandler(context) {
   // Test setting an item

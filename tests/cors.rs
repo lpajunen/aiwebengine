@@ -23,7 +23,7 @@ function handler(context) {
 }
 
 function init(context) {
-  routeRegistry.registerRoute("/cors-script-route", "handler", "GET");
+  routeRegistry.registerRoute("/cors-script-route", { handler: "handler", method: "GET" });
 }
 "#;
 

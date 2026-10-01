@@ -70,7 +70,10 @@ function testEditorAPI(context) {
 // Initialization function
 function init(context) {
   console.log("Initializing test_editor.js at " + new Date().toISOString());
-  routeRegistry.registerRoute("/test-editor", "testEditorAPI", "GET");
+  routeRegistry.registerRoute("/test-editor", {
+    handler: "testEditorAPI",
+    method: "GET",
+  });
   console.log("Editor test endpoint registered");
   return { success: true };
 }

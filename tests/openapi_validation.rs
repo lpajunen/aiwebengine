@@ -567,7 +567,7 @@ async fn test_openapi_asset_and_stream_default_groups() {
     let engine = AdminServer::start().await.expect("server failed to start");
 
     // core.js no longer registers asset routes; load a script that does.
-    // registerAssetRoute requires the asset to exist and be owned by the
+    // A file route requires the asset to exist and be owned by the
     // registering script, so store the asset first.
     // In this order, and the write of each is checked: an asset is keyed by the
     // script that owns it, so the row has to exist before the asset can be

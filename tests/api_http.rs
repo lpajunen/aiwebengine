@@ -636,7 +636,7 @@ async fn test_head_request_on_asset_route_strips_body() {
 
     let script = r#"
         function init(context) {
-          routeRegistry.registerAssetRoute("/head-test.css", "public/head-test.css");
+          routeRegistry.registerRoute("/head-test.css", { file: "public/head-test.css" });
           return { success: true };
         }
     "#;
@@ -693,8 +693,8 @@ async fn test_explicit_head_handler_overrides_get_fallback() {
           return { status: 200, body: "", headers: { "x-head-handler": "custom" } };
         }
         function init(context) {
-          routeRegistry.registerRoute("/api/explicit-head", "get_handler", "GET");
-          routeRegistry.registerRoute("/api/explicit-head", "head_handler", "HEAD");
+          routeRegistry.registerRoute("/api/explicit-head", { handler: "get_handler", method: "GET" });
+          routeRegistry.registerRoute("/api/explicit-head", { handler: "head_handler", method: "HEAD" });
           return { success: true };
         }
     "#;
@@ -1045,7 +1045,7 @@ async fn test_script_logs_correlate_with_the_request_that_emitted_them() {
           return { status: 200, body: context.invocationId };
         }
         function init(context) {
-          routeRegistry.registerRoute("/vw/:id/move", "move_handler", "GET");
+          routeRegistry.registerRoute("/vw/:id/move", { handler: "move_handler", method: "GET" });
           return { success: true };
         }
     "#;
@@ -1186,7 +1186,7 @@ async fn test_script_logs_stream_tails_entries_as_they_are_written() {
           return { status: 200, body: "ok" };
         }
         function init(context) {
-          routeRegistry.registerRoute("/tail/tick", "tick_handler", "GET");
+          routeRegistry.registerRoute("/tail/tick", { handler: "tick_handler", method: "GET" });
           return { success: true };
         }
     "#;
@@ -1401,7 +1401,7 @@ async fn test_script_logs_correlate_what_the_engine_reports_about_a_request() {
         }
 
         function init(context) {
-          routeRegistry.registerRoute("/vw-engine/:id/move", "moveHandler", "POST");
+          routeRegistry.registerRoute("/vw-engine/:id/move", { handler: "moveHandler", method: "POST" });
           return { success: true };
         }
     "#;

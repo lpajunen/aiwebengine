@@ -474,7 +474,7 @@ async fn test_secure_script_execution_authenticated() {
     let script_content = r#"
         console.log("Hello from secure context!");
         
-        routeRegistry.registerRoute("/test", "handleTest", "GET");
+        routeRegistry.registerRoute("/test", { handler: "handleTest", method: "GET" });
         
         function handleTest(request) {
             return {

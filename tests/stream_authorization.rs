@@ -58,7 +58,7 @@ function broken(context) {
 }
 
 function init(context) {
-  routeRegistry.registerStreamRoute("/stream-authorization", "plainDeny");
+  routeRegistry.registerRoute("/stream-authorization", { stream: true, authorize: "plainDeny" });
 }
 "#;
 

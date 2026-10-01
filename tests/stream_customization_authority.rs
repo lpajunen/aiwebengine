@@ -29,7 +29,7 @@ function customize(context) {
 }
 
 function init(context) {
-  routeRegistry.registerStreamRoute("/stream-authority", "customize");
+  routeRegistry.registerRoute("/stream-authority", { stream: true, authorize: "customize" });
 }
 "#;
 

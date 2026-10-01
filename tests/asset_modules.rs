@@ -568,7 +568,7 @@ async fn imported_asset_module_executes_in_init_path() {
 
         function init(context) {
             console.info(buildMessage("init-log"));
-            routeRegistry.registerRoute("/asset-init", "importedInitHandler", "GET");
+            routeRegistry.registerRoute("/asset-init", { handler: "importedInitHandler", method: "GET" });
         }
     "#;
 
@@ -613,10 +613,8 @@ async fn register_asset_route_records_metadata_tags() {
 
     let script_content = r#"
         function init(context) {
-          routeRegistry.registerAssetRoute("/repro-asset.css", "public/repro.css", {
-            tags: ["ReproGroup"],
-            summary: "Repro asset",
-          });
+          routeRegistry.registerRoute("/repro-asset.css", { file: "public/repro.css", tags: ["ReproGroup"],
+            summary: "Repro asset" });
         }
     "#;
 

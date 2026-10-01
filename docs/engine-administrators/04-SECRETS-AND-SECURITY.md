@@ -631,7 +631,7 @@ function aiChatHandler(req) {
   };
 }
 
-routeRegistry.registerRoute('/api/chat', 'aiChatHandler', 'POST');
+routeRegistry.registerRoute('/api/chat', { handler: 'aiChatHandler', method: 'POST' });
 ```
 
 #### Common Application Secrets

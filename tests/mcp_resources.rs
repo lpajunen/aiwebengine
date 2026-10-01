@@ -1,7 +1,7 @@
 //! Publishing a script's assets as MCP resources.
 //!
-//! `mcpRegistry.registerResource` is `routeRegistry.registerAssetRoute` aimed
-//! at `/mcp` instead of at a path: the same asset, published under a name a
+//! `mcpRegistry.registerResource` is a file route
+//! (`routeRegistry.registerRoute(path, { file })`) aimed at `/mcp` instead of at a path: the same asset, published under a name a
 //! different protocol reaches. So what these assert is the part that differs
 //! from an asset route — that a listing describes what is registered, that a
 //! read answers with what the asset says *now* rather than at `init()`, and

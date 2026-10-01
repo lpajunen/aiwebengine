@@ -41,8 +41,8 @@
 //! ## What is enforced
 //!
 //! A registration naming a file outside its directory is **refused**.
-//! `registerAssetRoute` may only publish from `public/`, `registerResource`
-//! only from `resources/`; anything else is not registered and the script is
+//! A file route (`registerRoute(path, { file })`) may only publish from
+//! `public/`, `registerResource` only from `resources/`; anything else is not registered and the script is
 //! told why.
 //!
 //! It landed as a report first, because a deployment's scripts were written

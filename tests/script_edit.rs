@@ -97,7 +97,7 @@ async fn an_edit_rewrites_the_root_source_and_runs_init_once() {
     let uri = "test://script-edit/edit";
     let source = "function handler(context) { return ResponseBuilder.json({}); }\n\
                   globalThis.handler = handler;\n\
-                  function init() { routeRegistry.registerRoute(\"/script-edit/before\", \"handler\", \"GET\"); }\n";
+                  function init() { routeRegistry.registerRoute(\"/script-edit/before\", { handler: \"handler\", method: \"GET\" }); }\n";
     deploy(uri, source);
 
     let (status, body) = edit(json!({
@@ -451,7 +451,7 @@ async fn the_mcp_tool_edits_the_same_way() {
     let uri = "test://script-edit/mcp";
     let source = "function handler(context) { return ResponseBuilder.json({}); }\n\
                   globalThis.handler = handler;\n\
-                  function init() { routeRegistry.registerRoute(\"/script-edit/mcp-before\", \"handler\", \"GET\"); }\n";
+                  function init() { routeRegistry.registerRoute(\"/script-edit/mcp-before\", { handler: \"handler\", method: \"GET\" }); }\n";
     deploy(uri, source);
 
     let read = execute_native_mcp_tool(

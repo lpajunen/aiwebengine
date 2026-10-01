@@ -174,16 +174,8 @@ Can register same path with different methods, but the routing system doesn't cl
 
 ```javascript
 // Both registered on same path, differentiation happens in handler
-routeRegistry.registerRoute(
-  "/api/scripts/*/owners",
-  "apiAddScriptOwner",
-  "POST",
-);
-routeRegistry.registerRoute(
-  "/api/scripts/*/owners",
-  "apiRemoveScriptOwner",
-  "DELETE",
-);
+routeRegistry.registerRoute("/api/scripts/*/owners", { handler: "apiAddScriptOwner", method: "POST" });
+routeRegistry.registerRoute("/api/scripts/*/owners", { handler: "apiRemoveScriptOwner", method: "DELETE" });
 ```
 
 **Proposed Solution:**

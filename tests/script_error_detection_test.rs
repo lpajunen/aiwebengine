@@ -26,7 +26,7 @@ function test_handler(context) {
     return { status: 200, body: 'Test' };
 }
 function init(context) {
-    routeRegistry.registerRoute('/error-detection-test', 'test_handler', 'GET');
+    routeRegistry.registerRoute('/error-detection-test', { handler: 'test_handler', method: 'GET' });
     return { success: true };
 }
 "#;

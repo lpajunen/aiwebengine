@@ -29,7 +29,10 @@ function helloHandler(context) {
   };
 }
 
-routeRegistry.registerRoute("/hello", "helloHandler", "GET");
+routeRegistry.registerRoute("/hello", {
+  handler: "helloHandler",
+  method: "GET",
+});
 ```
 
 ---

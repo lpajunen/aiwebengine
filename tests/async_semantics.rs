@@ -51,7 +51,7 @@ async fn an_async_handler_resumes_after_its_awaits() {
         }
 
         function init(context) {
-          routeRegistry.registerRoute("/async/resumes", "handler", "GET");
+          routeRegistry.registerRoute("/async/resumes", { handler: "handler", method: "GET" });
           return { success: true };
         }
         "#,
@@ -85,7 +85,7 @@ async fn a_handler_rejecting_after_an_await_fails_the_request() {
         }
 
         function init(context) {
-          routeRegistry.registerRoute("/async/rejects", "handler", "GET");
+          routeRegistry.registerRoute("/async/rejects", { handler: "handler", method: "GET" });
           return { success: true };
         }
         "#,
@@ -121,7 +121,7 @@ async fn a_handler_returning_an_unsettleable_promise_is_told_so() {
         }
 
         function init(context) {
-          routeRegistry.registerRoute("/async/pending", "handler", "GET");
+          routeRegistry.registerRoute("/async/pending", { handler: "handler", method: "GET" });
           return { success: true };
         }
         "#,
@@ -160,7 +160,7 @@ async fn a_thenable_that_resolves_to_itself_does_not_hang_the_request() {
         }
 
         function init(context) {
-          routeRegistry.registerRoute("/async/self-thenable", "handler", "GET");
+          routeRegistry.registerRoute("/async/self-thenable", { handler: "handler", method: "GET" });
           return { success: true };
         }
         "#,
@@ -194,7 +194,7 @@ async fn a_runaway_await_loop_is_stopped_by_the_deadline() {
         }
 
         function init(context) {
-          routeRegistry.registerRoute("/async/runaway", "handler", "GET");
+          routeRegistry.registerRoute("/async/runaway", { handler: "handler", method: "GET" });
           return { success: true };
         }
         "#,
@@ -236,9 +236,9 @@ async fn writes_made_after_an_await_are_committed() {
         }
 
         function init(context) {
-          routeRegistry.registerRoute("/async/commit/prepare", "prepare", "POST");
-          routeRegistry.registerRoute("/async/commit", "handler", "POST");
-          routeRegistry.registerRoute("/async/commit", "readBack", "GET");
+          routeRegistry.registerRoute("/async/commit/prepare", { handler: "prepare", method: "POST" });
+          routeRegistry.registerRoute("/async/commit", { handler: "handler", method: "POST" });
+          routeRegistry.registerRoute("/async/commit", { handler: "readBack", method: "GET" });
           return { success: true };
         }
         "#,
@@ -322,10 +322,10 @@ async fn writes_are_rolled_back_when_the_handler_fails() {
         }
 
         function init(context) {
-          routeRegistry.registerRoute("/rollback/prepare", "prepare", "POST");
-          routeRegistry.registerRoute("/rollback/sync", "syncHandler", "POST");
-          routeRegistry.registerRoute("/rollback/async", "asyncHandler", "POST");
-          routeRegistry.registerRoute("/rollback", "readBack", "GET");
+          routeRegistry.registerRoute("/rollback/prepare", { handler: "prepare", method: "POST" });
+          routeRegistry.registerRoute("/rollback/sync", { handler: "syncHandler", method: "POST" });
+          routeRegistry.registerRoute("/rollback/async", { handler: "asyncHandler", method: "POST" });
+          routeRegistry.registerRoute("/rollback", { handler: "readBack", method: "GET" });
           return { success: true };
         }
         "#,
@@ -400,10 +400,10 @@ async fn a_transaction_left_open_does_not_leak_into_the_next_request() {
         }
 
         function init(context) {
-          routeRegistry.registerRoute("/leak/prepare", "prepare", "POST");
-          routeRegistry.registerRoute("/leak/open", "opener", "POST");
-          routeRegistry.registerRoute("/leak/follow", "follower", "POST");
-          routeRegistry.registerRoute("/leak", "readBack", "GET");
+          routeRegistry.registerRoute("/leak/prepare", { handler: "prepare", method: "POST" });
+          routeRegistry.registerRoute("/leak/open", { handler: "opener", method: "POST" });
+          routeRegistry.registerRoute("/leak/follow", { handler: "follower", method: "POST" });
+          routeRegistry.registerRoute("/leak", { handler: "readBack", method: "GET" });
           return { success: true };
         }
         "#,

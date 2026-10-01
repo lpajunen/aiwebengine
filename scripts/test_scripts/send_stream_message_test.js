@@ -10,8 +10,8 @@ function init(context) {
   );
 
   // Register stream endpoints
-  routeRegistry.registerStreamRoute("/notifications");
-  routeRegistry.registerStreamRoute("/chat");
+  routeRegistry.registerRoute("/notifications", { stream: true });
+  routeRegistry.registerRoute("/chat", { stream: true });
 
   console.log("Stream endpoints registered successfully");
   return { success: true };

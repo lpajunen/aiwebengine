@@ -23,7 +23,10 @@ function form_handler(context) {
 // Initialization function
 function init(context) {
   console.log("Initializing form_test.js at " + new Date().toISOString());
-  routeRegistry.registerRoute("/api/form", "form_handler", "POST");
+  routeRegistry.registerRoute("/api/form", {
+    handler: "form_handler",
+    method: "POST",
+  });
   console.log("Form test endpoint registered");
   return { success: true };
 }

@@ -282,8 +282,8 @@ async fn a_result_can_be_returned_as_a_response_body() {
         }
 
         function init(context) {
-          routeRegistry.registerRoute("/passthrough/seed", "seed", "POST");
-          routeRegistry.registerRoute("/passthrough", "rows", "GET");
+          routeRegistry.registerRoute("/passthrough/seed", { handler: "seed", method: "POST" });
+          routeRegistry.registerRoute("/passthrough", { handler: "rows", method: "GET" });
           return { success: true };
         }
     "#;

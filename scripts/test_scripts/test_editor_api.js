@@ -26,7 +26,10 @@ function testEditorAPI(context) {
 // Initialization function
 function init(context) {
   console.log("Initializing test_editor_api.js at " + new Date().toISOString());
-  routeRegistry.registerRoute("/test-editor-api", "testEditorAPI", "GET");
+  routeRegistry.registerRoute("/test-editor-api", {
+    handler: "testEditorAPI",
+    method: "GET",
+  });
   console.log("Editor API test endpoint registered");
   return { success: true };
 }

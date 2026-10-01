@@ -162,7 +162,7 @@ async fn a_script_route_can_list_users_as_the_administrator_calling_it() {
         }
 
         function init() {
-          routeRegistry.registerRoute('/who-are-the-users', 'whoAreTheUsers', 'GET');
+          routeRegistry.registerRoute('/who-are-the-users', { handler: 'whoAreTheUsers', method: 'GET' });
         }
         "#,
     )

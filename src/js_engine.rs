@@ -4375,7 +4375,7 @@ mod tests {
             return;
         }
         let content = r#"
-            routeRegistry.registerRoute("/test", "handler_function", "GET");
+            routeRegistry.registerRoute("/test", { handler: "handler_function", method: "GET" });
         "#;
 
         let result = execute_script("test-script", content);
@@ -4516,9 +4516,9 @@ mod tests {
             return;
         }
         let content = r#"
-            routeRegistry.registerRoute("/api/users", "getUsers", "GET");
-            routeRegistry.registerRoute("/api/users", "createUser", "POST");
-            routeRegistry.registerRoute("/api/users/:id", "updateUser", "PUT");
+            routeRegistry.registerRoute("/api/users", { handler: "getUsers", method: "GET" });
+            routeRegistry.registerRoute("/api/users", { handler: "createUser", method: "POST" });
+            routeRegistry.registerRoute("/api/users/:id", { handler: "updateUser", method: "PUT" });
         "#;
 
         let result = execute_script("multi-script", content);
@@ -4548,7 +4548,7 @@ mod tests {
             return;
         }
         let content = r#"
-            routeRegistry.registerRoute("/default-method", "handler", "GET");
+            routeRegistry.registerRoute("/default-method", { handler: "handler", method: "GET" });
         "#;
 
         let result = execute_script("default-method-script", content);
@@ -4605,8 +4605,8 @@ mod tests {
         }
         let content = r#"
             function setupRoutes() {
-                routeRegistry.registerRoute("/api/health", "healthCheck", "GET");
-                routeRegistry.registerRoute("/api/status", "statusCheck", "GET");
+                routeRegistry.registerRoute("/api/health", { handler: "healthCheck", method: "GET" });
+                routeRegistry.registerRoute("/api/status", { handler: "statusCheck", method: "GET" });
             }
 
             setupRoutes();
@@ -4650,7 +4650,7 @@ mod tests {
             return;
         }
         let content = r#"
-            routeRegistry.registerRoute("/logged", "loggedHandler", "GET");
+            routeRegistry.registerRoute("/logged", { handler: "loggedHandler", method: "GET" });
         "#;
 
         let result = execute_script("console-script", content);
@@ -4727,7 +4727,7 @@ mod tests {
         });
 
         let script_content = r#"
-            routeRegistry.registerStreamRoute('/test-stream-func');
+            routeRegistry.registerRoute('/test-stream-func', { stream: true });
             console.log('Stream registered successfully');
         "#;
 
@@ -4773,7 +4773,7 @@ mod tests {
         setup_db();
         let script_content = r#"
             try {
-                routeRegistry.registerStreamRoute('invalid-path-test');
+                routeRegistry.registerRoute('invalid-path-test', { stream: true });
                 console.error('ERROR: Should have failed');
             } catch (e) {
                 console.log('Expected error: ' + String(e));
@@ -4811,7 +4811,7 @@ mod tests {
 
         let script_content = r#"
             // Register a stream first
-            routeRegistry.registerStreamRoute('/test-message-stream');
+            routeRegistry.registerRoute('/test-message-stream', { stream: true });
 
             // Send a message to the specific stream
             routeRegistry.sendStreamMessage('/test-message-stream', '{"type": "test", "data": "Hello World"}');
@@ -4864,7 +4864,7 @@ mod tests {
 
         let script_content = r#"
             // Register a stream first
-            routeRegistry.registerStreamRoute('/test-json-stream');
+            routeRegistry.registerRoute('/test-json-stream', { stream: true });
 
             // Send a complex JSON message
             var messageObj = {
@@ -4926,7 +4926,7 @@ mod tests {
         }
         // Test with a script that exceeds the default 1MB limit
         let large_script =
-            "// ".repeat(600_000) + "routeRegistry.registerRoute('/test', 'handler');";
+            "// ".repeat(600_000) + "routeRegistry.registerRoute('/test', { handler: 'handler' });";
         assert!(large_script.len() > 1_000_000);
 
         let result = execute_script("test-large-script", &large_script);

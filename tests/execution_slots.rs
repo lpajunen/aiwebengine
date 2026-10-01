@@ -27,7 +27,7 @@ fn busy_handler(path: &str, ms: u64) -> String {
         }}
 
         function init(context) {{
-          routeRegistry.registerRoute("{path}", "handler", "GET");
+          routeRegistry.registerRoute("{path}", {{ handler: "handler", method: "GET" }});
         }}
         "#
     )

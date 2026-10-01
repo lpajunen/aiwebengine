@@ -81,10 +81,9 @@ function testHandlebarsTemplate(context) {
 
 function init(context) {
   console.log("Initializing handlebars test script");
-  routeRegistry.registerRoute(
-    "/test/handlebars",
-    "testHandlebarsTemplate",
-    "GET",
-  );
+  routeRegistry.registerRoute("/test/handlebars", {
+    handler: "testHandlebarsTemplate",
+    method: "GET",
+  });
   return { success: true };
 }

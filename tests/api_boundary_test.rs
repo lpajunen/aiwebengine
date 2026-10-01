@@ -319,12 +319,12 @@ async fn test_register_route_allowed_for_any_script() {
     repository::upsert_script("test://any-script-routes", "").expect("Failed to create script");
 
     let script = r#"
-        routeRegistry.registerRoute("/test", "handler", "GET");
+        routeRegistry.registerRoute("/test", { handler: "handler", method: "GET" });
         // OAuth2 now lives entirely under /auth, so the top-level names it
         // used to occupy are available to solution developers.
-        routeRegistry.registerRoute("/token", "handler", "GET");
-        routeRegistry.registerRoute("/authorize", "handler", "GET");
-        routeRegistry.registerRoute("/oauth2/token", "handler", "GET");
+        routeRegistry.registerRoute("/token", { handler: "handler", method: "GET" });
+        routeRegistry.registerRoute("/authorize", { handler: "handler", method: "GET" });
+        routeRegistry.registerRoute("/oauth2/token", { handler: "handler", method: "GET" });
         // Should not throw
     "#;
 
@@ -347,7 +347,7 @@ async fn test_register_route_denied_for_reserved_path() {
         const reserved = ["/engine/fake", "/health", "/mcp", "/auth/login", "/auth/oauth2/token", "/.well-known/x"];
         for (const path of reserved) {
             try {
-                routeRegistry.registerRoute(path, "handler", "GET");
+                routeRegistry.registerRoute(path, { handler: "handler", method: "GET" });
                 throw new Error("Should have been denied: " + path);
             } catch (e) {
                 if (!e.message.includes("reserved")) {
@@ -373,10 +373,10 @@ async fn test_register_stream_route_allowed_for_any_script() {
     repository::upsert_script("test://any-script-streams", "").expect("Failed to create script");
 
     let script = r#"
-        if (typeof routeRegistry === "undefined" || typeof routeRegistry.registerStreamRoute !== "function") {
-            throw new Error("routeRegistry.registerStreamRoute should be defined");
+        if (typeof routeRegistry === "undefined" || typeof routeRegistry.registerRoute !== "function") {
+            throw new Error("routeRegistry.registerRoute should be defined");
         }
-        routeRegistry.registerStreamRoute("/test-stream-any-script");
+        routeRegistry.registerRoute("/test-stream-any-script", { stream: true });
         // Should not throw
     "#;
 
@@ -397,7 +397,7 @@ async fn test_register_stream_route_denied_for_reserved_path() {
 
     let script = r#"
         try {
-            routeRegistry.registerStreamRoute("/engine/fake-stream");
+            routeRegistry.registerRoute("/engine/fake-stream", { stream: true });
             throw new Error("Should have been denied");
         } catch (e) {
             if (!e.message.includes("reserved")) {
@@ -423,7 +423,7 @@ async fn test_register_asset_route_denied_for_reserved_path() {
 
     let script = r#"
         try {
-            routeRegistry.registerAssetRoute("/engine/fake.css", "test.css");
+            routeRegistry.registerRoute("/engine/fake.css", { file: "test.css" });
             throw new Error("Should have been denied");
         } catch (e) {
             if (!e.message.includes("reserved")) {
@@ -449,9 +449,9 @@ async fn test_register_routes_allowed_for_any_script() {
 
     let script = r#"
         // Any script should be able to register routes
-        routeRegistry.registerRoute("/test-priv", "handler", "GET");
-        routeRegistry.registerStreamRoute("/test-stream-priv");
-        routeRegistry.registerAssetRoute("/test-priv.css", "test.css");
+        routeRegistry.registerRoute("/test-priv", { handler: "handler", method: "GET" });
+        routeRegistry.registerRoute("/test-stream-priv", { stream: true });
+        routeRegistry.registerRoute("/test-priv.css", { file: "test.css" });
         // Should not throw errors
     "#;
 
@@ -481,8 +481,8 @@ async fn test_route_introspection_includes_stream_and_asset_routes() {
     .expect("Failed to create asset for route introspection test");
 
     let script = r#"
-        routeRegistry.registerStreamRoute("/test-introspection-stream", "streamCustomizer");
-        routeRegistry.registerAssetRoute("/test-introspection.css", "public/test-introspection.css");
+        routeRegistry.registerRoute("/test-introspection-stream", { stream: true, authorize: "streamCustomizer" });
+        routeRegistry.registerRoute("/test-introspection.css", { file: "public/test-introspection.css" });
     "#;
 
     let result = execute_script_secure("test://route-introspection", script, admin.clone());
@@ -535,9 +535,14 @@ async fn test_send_stream_message_requires_manage_streams() {
         if (typeof routeRegistry === "undefined" || typeof routeRegistry.sendStreamMessage !== "function") {
             throw new Error("routeRegistry.sendStreamMessage should be defined");
         }
-        const result = routeRegistry.sendStreamMessage("/stream", "message");
-        if (!result.startsWith("Error:")) {
-            throw new Error("Expected capability error, got: " + result);
+        let denied = null;
+        try {
+            routeRegistry.sendStreamMessage("/stream", "message");
+        } catch (e) {
+            denied = e;
+        }
+        if (!denied || !denied.message.includes("manage_streams")) {
+            throw new Error("Expected a capability error, got: " + denied);
         }
     "#;
 
@@ -558,13 +563,14 @@ async fn test_send_stream_message_filtered_accepts_optional_match_mode() {
     let script = r#"
         const result = routeRegistry.sendStreamMessageFiltered(
             "/missing-stream",
-            JSON.stringify({ kind: "test" }),
-            JSON.stringify({ recipient_id: "a" }),
+            { kind: "test" },
+            { recipient_id: "a" },
             "overlap"
         );
 
-        if (typeof result !== "string") {
-            throw new Error("Expected string result from sendStreamMessageFiltered");
+        // A stream nobody is connected to is not an error: it reached no one.
+        if (result.connections !== 0 || result.delivered !== 0) {
+            throw new Error("Expected an empty send, got: " + JSON.stringify(result));
         }
     "#;
 
@@ -590,8 +596,8 @@ async fn test_send_stream_message_filtered_rejects_invalid_match_mode() {
     let script = r#"
         routeRegistry.sendStreamMessageFiltered(
             "/missing-stream",
-            JSON.stringify({ kind: "test" }),
-            JSON.stringify({ recipient_id: "a" }),
+            { kind: "test" },
+            { recipient_id: "a" },
             "invalid-mode"
         );
     "#;
@@ -620,7 +626,7 @@ async fn test_engine_script_updates_stream_cannot_be_claimed() {
 
     let script = r#"
         try {
-            routeRegistry.registerStreamRoute("/engine/script_updates");
+            routeRegistry.registerRoute("/engine/script_updates", { stream: true });
             throw new Error("Should have been denied");
         } catch (e) {
             if (!e.message.includes("reserved")) {
@@ -650,13 +656,16 @@ async fn test_script_update_broadcast_requires_capability() {
 
     let script = r#"
         const forged = JSON.stringify({ type: "script_update", uri: "victim.js", action: "deleted" });
-        const engineStream = routeRegistry.sendStreamMessage("/engine/script_updates", forged);
-        if (!engineStream.startsWith("Error:")) {
-            throw new Error("Engine stream broadcast should be denied, got: " + engineStream);
-        }
-        const legacyPath = routeRegistry.sendStreamMessage("/script_updates", forged);
-        if (!legacyPath.startsWith("Error:")) {
-            throw new Error("Legacy path broadcast should be denied, got: " + legacyPath);
+        for (const path of ["/engine/script_updates", "/script_updates"]) {
+            let denied = null;
+            try {
+                routeRegistry.sendStreamMessage(path, forged);
+            } catch (e) {
+                denied = e;
+            }
+            if (!denied || !denied.message.includes("manage_streams")) {
+                throw new Error("Broadcast to " + path + " should be denied, got: " + denied);
+            }
         }
     "#;
 

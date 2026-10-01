@@ -20,12 +20,30 @@ function init() {
   console.log("Database Schema Management Test Script initialized");
 
   // Register test routes
-  routeRegistry.registerRoute("/test/db/create", "testCreateTable", "GET");
-  routeRegistry.registerRoute("/test/db/columns", "testAddColumns", "GET");
-  routeRegistry.registerRoute("/test/db/references", "testForeignKeys", "GET");
-  routeRegistry.registerRoute("/test/db/drop-column", "testDropColumn", "GET");
-  routeRegistry.registerRoute("/test/db/drop", "testDropTable", "GET");
-  routeRegistry.registerRoute("/test/db/full", "testFullWorkflow", "GET");
+  routeRegistry.registerRoute("/test/db/create", {
+    handler: "testCreateTable",
+    method: "GET",
+  });
+  routeRegistry.registerRoute("/test/db/columns", {
+    handler: "testAddColumns",
+    method: "GET",
+  });
+  routeRegistry.registerRoute("/test/db/references", {
+    handler: "testForeignKeys",
+    method: "GET",
+  });
+  routeRegistry.registerRoute("/test/db/drop-column", {
+    handler: "testDropColumn",
+    method: "GET",
+  });
+  routeRegistry.registerRoute("/test/db/drop", {
+    handler: "testDropTable",
+    method: "GET",
+  });
+  routeRegistry.registerRoute("/test/db/full", {
+    handler: "testFullWorkflow",
+    method: "GET",
+  });
 }
 
 /**

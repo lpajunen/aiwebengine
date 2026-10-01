@@ -30,7 +30,7 @@ async fn test_dynamic_script_lifecycle() {
     // Upsert a dynamic script
     let _ = repository::upsert_script(
         "https://example.com/dyn",
-        "routeRegistry.registerRoute('/dyn', (req) => ({ status: 200, body: 'dyn' }));",
+        "routeRegistry.registerRoute('/dyn', { handler: (req) => ({ status: 200, body: 'dyn' }) });",
     );
     let scripts = repository::fetch_scripts();
     assert!(scripts.contains_key("https://example.com/dyn"));
@@ -63,10 +63,8 @@ async fn test_upsert_overwrites_existing_script() {
     wait_for_server(port, 20).await.expect("Server not ready");
 
     let uri = "https://example.com/dyn2";
-    let content_v1 =
-        "routeRegistry.registerRoute('/dyn2', (req) => ({ status: 200, body: 'v1' }));";
-    let content_v2 =
-        "routeRegistry.registerRoute('/dyn2', (req) => ({ status: 200, body: 'v2' }));";
+    let content_v1 = "routeRegistry.registerRoute('/dyn2', { handler: (req) => ({ status: 200, body: 'v1' }) });";
+    let content_v2 = "routeRegistry.registerRoute('/dyn2', { handler: (req) => ({ status: 200, body: 'v2' }) });";
     // Upsert v1 and verify
     let _ = repository::upsert_script(uri, content_v1);
     let got = repository::fetch_script(uri);

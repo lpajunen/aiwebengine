@@ -299,7 +299,7 @@ async fn registrations_made_by_a_snippet_do_not_take_effect() {
     let report = eval(
         uri,
         &format!(
-            r#"routeRegistry.registerStreamRoute("{}"); "registered";"#,
+            r#"routeRegistry.registerRoute("{}", {{ stream: true }}); "registered";"#,
             path
         ),
     );

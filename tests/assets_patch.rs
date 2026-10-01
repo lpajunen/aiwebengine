@@ -131,7 +131,7 @@ async fn an_edit_rewrites_the_file_and_runs_init_once() {
         r#"
         import { PATH, handler } from "./assets_patch_edit/routes.ts";
         globalThis.handler = handler;
-        function init() { routeRegistry.registerRoute(PATH, "handler", "GET"); }
+        function init() { routeRegistry.registerRoute(PATH, { handler: "handler", method: "GET" }); }
         "#,
     );
     let source = "export const PATH = \"/assets-patch/before\";\n\
@@ -708,7 +708,7 @@ async fn the_mcp_tool_edits_the_same_way() {
         import { PATH } from "./assets_patch_mcp/routes.ts";
         function handler(context) { return ResponseBuilder.json({}); }
         globalThis.handler = handler;
-        function init() { routeRegistry.registerRoute(PATH, "handler", "GET"); }
+        function init() { routeRegistry.registerRoute(PATH, { handler: "handler", method: "GET" }); }
         "#,
     );
     let source = "export const PATH = \"/assets-patch/mcp-before\";\n";

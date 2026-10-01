@@ -30,7 +30,7 @@ const PROBE: &str = r#"
     }
 
     function init(context) {
-      routeRegistry.registerRoute("/probe/client-address", "handler", "GET");
+      routeRegistry.registerRoute("/probe/client-address", { handler: "handler", method: "GET" });
       return { success: true };
     }
 "#;

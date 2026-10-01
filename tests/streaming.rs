@@ -185,7 +185,7 @@ async fn test_basic_streaming_functionality() {
 
     let test_script = r#"
         // Register the stream
-        routeRegistry.registerStreamRoute('/test_stream');
+        routeRegistry.registerRoute('/test_stream', { stream: true });
     "#;
 
     info!("Testing basic streaming functionality");
@@ -281,7 +281,7 @@ async fn test_direct_stream_message() {
     // Test direct stream message sending without using request handlers
 
     let test_script = r#"
-        routeRegistry.registerStreamRoute('/direct_test');
+        routeRegistry.registerRoute('/direct_test', { stream: true });
         
         // Send a message directly
         routeRegistry.sendStreamMessage('/direct_test', JSON.stringify({
@@ -388,7 +388,7 @@ async fn test_script_update_streaming_integration() {
     let core_script_content = r#"
         // A script-owned stream. The engine's own script-update stream lives at
         // the reserved /engine/script_updates and cannot be registered here.
-        routeRegistry.registerStreamRoute('/my_script_updates');
+        routeRegistry.registerRoute('/my_script_updates', { stream: true });
 
         // Helper function to broadcast script update messages
         function broadcastScriptUpdate(uri, action, details = {}) {
@@ -514,8 +514,8 @@ async fn test_script_update_message_format() {
 
         function init(context) {
             console.log('Initializing message format test script at ' + new Date().toISOString());
-            routeRegistry.registerStreamRoute('/script_updates_format_test');
-            routeRegistry.registerRoute('/test_message_format', 'test_message_format', 'GET');
+            routeRegistry.registerRoute('/script_updates_format_test', { stream: true });
+            routeRegistry.registerRoute('/test_message_format', { handler: 'test_message_format', method: 'GET' });
             console.log('Message format test script initialized');
             return { success: true };
         }
@@ -590,9 +590,9 @@ async fn test_stream_endpoints() {
         function init(context) {
             console.log('Initializing stream integration test');
             // Register a stream endpoint
-            routeRegistry.registerStreamRoute('/test-stream');
+            routeRegistry.registerRoute('/test-stream', { stream: true });
             // Register a regular handler to test stream vs regular route handling
-            routeRegistry.registerRoute('/regular-endpoint', 'handleRegular', 'GET');
+            routeRegistry.registerRoute('/regular-endpoint', { handler: 'handleRegular', method: 'GET' });
             console.log('Stream and regular endpoints registered');
             return { success: true };
         }
@@ -731,10 +731,10 @@ async fn test_stream_messaging() {
         function init(context) {
             console.log('Initializing notification system');
             // Register a stream endpoint
-            routeRegistry.registerStreamRoute('/notification-stream');
+            routeRegistry.registerRoute('/notification-stream', { stream: true });
             // Register an endpoint to send messages for both GET and POST
-            routeRegistry.registerRoute('/send-notification', 'sendNotification', 'POST');
-            routeRegistry.registerRoute('/send-notification', 'sendNotificationGet', 'GET');
+            routeRegistry.registerRoute('/send-notification', { handler: 'sendNotification', method: 'POST' });
+            routeRegistry.registerRoute('/send-notification', { handler: 'sendNotificationGet', method: 'GET' });
             console.log('Registered POST and GET /send-notification');
             console.log('Notification system initialized');
             return { success: true };
@@ -1048,7 +1048,7 @@ async fn test_simple_stream_registration() {
     // Test just the stream registration part first
 
     let test_script = r#"
-        routeRegistry.registerStreamRoute('/simple_test');
+        routeRegistry.registerRoute('/simple_test', { stream: true });
         console.log('Stream registered successfully');
     "#;
 
@@ -1113,7 +1113,7 @@ async fn test_combined_functionality() {
     // Test both registration and sending together
 
     let test_script = r#"
-        routeRegistry.registerStreamRoute('/combined_test');
+        routeRegistry.registerRoute('/combined_test', { stream: true });
         console.log('Stream registered');
         
         try {

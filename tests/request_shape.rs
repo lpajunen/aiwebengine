@@ -40,8 +40,8 @@ fn probe_script(route: &str, body: &str) -> String {
         }}
 
         function init(context) {{
-          routeRegistry.registerRoute("{route}", "handler", "GET");
-          routeRegistry.registerRoute("{route}", "handler", "POST");
+          routeRegistry.registerRoute("{route}", {{ handler: "handler", method: "GET" }});
+          routeRegistry.registerRoute("{route}", {{ handler: "handler", method: "POST" }});
           return {{ success: true }};
         }}
         "#,

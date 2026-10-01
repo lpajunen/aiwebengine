@@ -157,7 +157,7 @@ function test_endpoint_handler(req) {
 }
 
 function init(context) {
-    routeRegistry.registerRoute('/test-endpoint', 'test_endpoint_handler', 'GET');
+    routeRegistry.registerRoute('/test-endpoint', { handler: 'test_endpoint_handler', method: 'GET' });
     return { success: true };
 }
 "#;
@@ -244,7 +244,7 @@ function delete_test_handler(req) {
 }
 
 function init(context) {
-    routeRegistry.registerRoute('/delete-test-endpoint', 'delete_test_handler', 'GET');
+    routeRegistry.registerRoute('/delete-test-endpoint', { handler: 'delete_test_handler', method: 'GET' });
     return { success: true };
 }
 "#;
@@ -381,7 +381,7 @@ function lifecycle_test_handler(req) {
 }
 
 function init(context) {
-    routeRegistry.registerRoute('/lifecycle-test', 'lifecycle_test_handler', 'GET');
+    routeRegistry.registerRoute('/lifecycle-test', { handler: 'lifecycle_test_handler', method: 'GET' });
     return { success: true };
 }
 "#;
@@ -477,7 +477,7 @@ function read_test_handler(req) {
 }
 
 function init(context) {
-    routeRegistry.registerRoute('/read-test-endpoint', 'read_test_handler', 'GET');
+    routeRegistry.registerRoute('/read-test-endpoint', { handler: 'read_test_handler', method: 'GET' });
     return { success: true };
 }
 "#;
@@ -782,7 +782,7 @@ async fn test_redeploy_keeps_routes_when_reinit_fails() {
 
     let working_version = r#"
         function init(context) {
-            routeRegistry.registerRoute('/redeploy-probe', 'probe_handler', 'GET');
+            routeRegistry.registerRoute('/redeploy-probe', { handler: 'probe_handler', method: 'GET' });
         }
         function probe_handler(request) { return { status: 200, body: "v1" }; }
     "#;
@@ -804,7 +804,7 @@ async fn test_redeploy_keeps_routes_when_reinit_fails() {
     // Redeploy a version whose init() fails after registering.
     let broken_version = r#"
         function init(context) {
-            routeRegistry.registerRoute('/redeploy-probe', 'probe_handler', 'GET');
+            routeRegistry.registerRoute('/redeploy-probe', { handler: 'probe_handler', method: 'GET' });
             throw new Error("init failed after registering");
         }
         function probe_handler(request) { return { status: 200, body: "v2" }; }
@@ -854,7 +854,7 @@ async fn test_failed_first_init_keeps_routes_it_registered() {
 
     let script_content = r#"
         function init(context) {
-            routeRegistry.registerRoute('/partial-probe', 'probe_handler', 'GET');
+            routeRegistry.registerRoute('/partial-probe', { handler: 'probe_handler', method: 'GET' });
             throw new Error("setup failed after registering");
         }
         function probe_handler(request) { return { status: 200, body: "ok" }; }

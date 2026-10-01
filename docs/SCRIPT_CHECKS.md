@@ -137,7 +137,10 @@ perfectly and then 500s on the first request:
 import { listUsers } from "./server/handlers.ts"; // tsc: fine
 
 function init() {
-  routeRegistry.registerRoute("/api/users", "listUsers", "GET"); // not a global
+  routeRegistry.registerRoute("/api/users", {
+    handler: "listUsers",
+    method: "GET",
+  }); // not a global
 }
 ```
 
@@ -244,7 +247,7 @@ code it is about to write without leaving the protocol:
   "name": "check_script",
   "arguments": {
     "uri": "myapp",
-    "content": "function init() { routeRegistry.registerRoute(\"/x\", \"h\", \"GET\"); }"
+    "content": "function init() { routeRegistry.registerRoute(\"/x\", { handler: \"h\", method: \"GET\" }); }"
   }
 }
 ```

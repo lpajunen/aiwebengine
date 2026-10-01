@@ -159,7 +159,7 @@ async fn a_working_script_reports_its_registrations_and_no_errors() {
         r#"
         function listUsers(context) { return ResponseBuilder.json({ users: [] }); }
         function init() {
-            routeRegistry.registerRoute("/check-clean/users", "listUsers", "GET");
+            routeRegistry.registerRoute("/check-clean/users", { handler: "listUsers", method: "GET" });
         }
         "#,
     );
@@ -193,7 +193,7 @@ async fn a_handler_named_but_not_defined_is_reported_before_it_can_500() {
         uri,
         r#"
         function init() {
-            routeRegistry.registerRoute("/check-missing/users", "listUsers", "GET");
+            routeRegistry.registerRoute("/check-missing/users", { handler: "listUsers", method: "GET" });
         }
         "#,
     );
@@ -221,7 +221,7 @@ async fn a_handler_defined_only_inside_an_imported_module_is_reported() {
         r#"
         import { listUsers } from "./check_delegate/handlers.ts";
         function init() {
-            routeRegistry.registerRoute("/check-delegate/users", "listUsers", "GET");
+            routeRegistry.registerRoute("/check-delegate/users", { handler: "listUsers", method: "GET" });
         }
         "#,
         &[(
@@ -254,7 +254,7 @@ async fn a_handler_that_is_defined_as_a_global_by_the_entrypoint_passes() {
         import { listUsers } from "./check_assigned/handlers.ts";
         globalThis.listUsers = listUsers;
         function init() {
-            routeRegistry.registerRoute("/check-assigned/users", "listUsers", "GET");
+            routeRegistry.registerRoute("/check-assigned/users", { handler: "listUsers", method: "GET" });
         }
         "#,
         &[(
@@ -372,7 +372,7 @@ async fn an_init_that_throws_is_reported_with_what_it_registered_first() {
         r#"
         function ok(context) { return ResponseBuilder.json({}); }
         function init() {
-            routeRegistry.registerRoute("/check-throws/ok", "ok", "GET");
+            routeRegistry.registerRoute("/check-throws/ok", { handler: "ok", method: "GET" });
             throw new Error("setup exploded");
         }
         "#,
@@ -400,14 +400,14 @@ async fn candidate_content_is_checked_without_being_deployed() {
     let uri = "test://check/candidate";
     let deployed = r#"
         function original(context) { return ResponseBuilder.json({}); }
-        function init() { routeRegistry.registerRoute("/check-candidate/v1", "original", "GET"); }
+        function init() { routeRegistry.registerRoute("/check-candidate/v1", { handler: "original", method: "GET" }); }
         "#;
     deploy(uri, deployed);
 
     let report = check_candidate(
         uri,
         r#"
-        function init() { routeRegistry.registerRoute("/check-candidate/v2", "replacement", "GET"); }
+        function init() { routeRegistry.registerRoute("/check-candidate/v2", { handler: "replacement", method: "GET" }); }
         "#,
     );
 
@@ -432,7 +432,7 @@ async fn a_dry_run_leaves_the_stream_registry_alone() {
     let report = check_candidate(
         uri,
         &format!(
-            r#"function init() {{ routeRegistry.registerStreamRoute("{}"); }}"#,
+            r#"function init() {{ routeRegistry.registerRoute("{}", {{ stream: true }}); }}"#,
             path
         ),
     );
@@ -461,7 +461,7 @@ async fn a_route_another_script_already_serves_is_reported_as_a_conflict() {
         &format!(
             r#"
             function serve(context) {{ return ResponseBuilder.json({{}}); }}
-            function init() {{ routeRegistry.registerRoute("{}", "serve", "GET"); }}
+            function init() {{ routeRegistry.registerRoute("{}", {{ handler: "serve", method: "GET" }}); }}
             "#,
             path
         ),
@@ -484,7 +484,7 @@ async fn a_route_another_script_already_serves_is_reported_as_a_conflict() {
         &format!(
             r#"
             function serve(context) {{ return ResponseBuilder.json({{}}); }}
-            function init() {{ routeRegistry.registerRoute("{}", "serve", "GET"); }}
+            function init() {{ routeRegistry.registerRoute("{}", {{ handler: "serve", method: "GET" }}); }}
             "#,
             path
         ),
@@ -546,7 +546,7 @@ async fn the_check_tool_is_advertised_and_dispatches_over_mcp() {
     let uri = "test://check/mcp";
     deploy(
         uri,
-        r#"function init() { routeRegistry.registerRoute("/check-mcp/x", "absent", "GET"); }"#,
+        r#"function init() { routeRegistry.registerRoute("/check-mcp/x", { handler: "absent", method: "GET" }); }"#,
     );
 
     let result = execute_native_mcp_tool(
@@ -623,7 +623,7 @@ async fn the_endpoint_reports_diagnostics_with_a_200() {
     let uri = "test://check/http-report";
     deploy(
         uri,
-        r#"function init() { routeRegistry.registerRoute("/check-http/x", "absent", "GET"); }"#,
+        r#"function init() { routeRegistry.registerRoute("/check-http/x", { handler: "absent", method: "GET" }); }"#,
     );
 
     let (status, body) = post_check(&format!("uri={}", uri), None, "").await;
@@ -648,14 +648,14 @@ async fn a_raw_body_is_taken_as_candidate_source() {
     setup_env().await;
 
     let uri = "test://check/http-raw";
-    let deployed = r#"function init() { routeRegistry.registerRoute("/check-raw/v1", "serve", "GET"); }
+    let deployed = r#"function init() { routeRegistry.registerRoute("/check-raw/v1", { handler: "serve", method: "GET" }); }
                       function serve(context) { return ResponseBuilder.json({}); }"#;
     deploy(uri, deployed);
 
     let (status, body) = post_check(
         &format!("uri={}", uri),
         Some("text/plain"),
-        r#"function init() { routeRegistry.registerRoute("/check-raw/v2", "gone", "GET"); }"#,
+        r#"function init() { routeRegistry.registerRoute("/check-raw/v2", { handler: "gone", method: "GET" }); }"#,
     )
     .await;
 
@@ -675,7 +675,7 @@ async fn a_json_body_carries_the_uri_and_the_candidate() {
     let request = json!({
         "uri": uri,
         "content": r#"function serve(context) { return ResponseBuilder.json({}); }
-                      function init() { routeRegistry.registerRoute("/check-json/ok", "serve", "GET"); }"#,
+                      function init() { routeRegistry.registerRoute("/check-json/ok", { handler: "serve", method: "GET" }); }"#,
     });
     let (status, body) = post_check("", Some("application/json"), &request.to_string()).await;
 
@@ -737,7 +737,7 @@ fn deploy_slow_init(uri: &str, path: &str, spin_ms: u64) {
             r#"
             function serve(context) {{ return ResponseBuilder.json({{}}); }}
             function init() {{
-                routeRegistry.registerRoute("{}", "serve", "GET");
+                routeRegistry.registerRoute("{}", {{ handler: "serve", method: "GET" }});
                 const until = Date.now() + {};
                 while (Date.now() < until) {{}}
             }}

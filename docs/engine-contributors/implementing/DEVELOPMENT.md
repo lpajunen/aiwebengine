@@ -232,7 +232,7 @@ async fn test_route_endpoint_with_registered_handler() {
         }
 
         function init() {
-            routeRegistry.registerRoute('/users/:id', 'getUser', 'GET');
+            routeRegistry.registerRoute('/users/:id', { handler: 'getUser', method: 'GET' });
         }
     "#;
 
