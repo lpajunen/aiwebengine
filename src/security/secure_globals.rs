@@ -7061,17 +7061,18 @@ mod api_surface_tests {
         for call in [
             "routeRegistry.sendStreamMessage('/events/x', { type: 'alert', n: 1 })",
             "routeRegistry.sendStreamMessageFiltered('/events/x', { type: 'alert' }, \
-             JSON.stringify({ role: 'admin' }))",
+             { role: 'admin' })",
         ] {
             // The call is wrapped in JavaScript so a refusal comes back as
             // text: what is being asserted is which refusal it is, and an
             // exception out of `eval` would take that with it.
             let result = eval_outside_registration_phase(&format!(
-                "(function () {{ try {{ return String({}); }}                  catch (e) {{ return 'threw: ' + e; }} }})()",
+                "(function () {{ try {{ return JSON.stringify({}); }} \
+                 catch (e) {{ return 'threw: ' + e; }} }})()",
                 call
             ));
             assert!(
-                !result.contains("converting from js"),
+                !result.starts_with("threw: "),
                 "`{}` should serialize its data rather than refusing it, got: {}",
                 call,
                 result

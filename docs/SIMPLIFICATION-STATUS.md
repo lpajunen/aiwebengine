@@ -23,7 +23,7 @@ across 45 files) and is **merged into `main`**.
 | §3    | One operation table, HTTP generated from it | Not started (Phase 2)                         |
 | §4    | Collision refusal (no mounts)               | Not started (Phase 3)                         |
 | §4    | Slug + stable identity                      | Not started (Phase 4)                         |
-| §5    | Prelude every global                        | Not started (Phase 1)                         |
+| §5    | Prelude every global                        | In progress (Phase 1): `routeRegistry` done   |
 | §6    | Trim `database` to ~10 methods              | Not started (Phase 1)                         |
 
 ## What is true of the tree now
@@ -195,6 +195,24 @@ connection`, and `/auth/local/login` hung, while Postgres showed every one
   point §4 at the decisions above.~~
 
 ### Phase 1 — one JavaScript convention (§5, §6, rest of §1)
+
+**Progress.** Work is on `simplify-js-convention`, in the engine and in each
+of the four repositories, unpushed and undeployed until the phase is whole.
+
+- **1a done** (engine `d5c7dea`). `registerRoute(path, spec)` with the three
+  old names deleted, `routeRegistry` preluded over `__hostRouteRegistry`,
+  sends answering `{ delivered, connections, failed }` with the filter as an
+  object. Two choices the plan above left open: `authorize` is refused on a
+  handler spec, since a handler decides for itself; and a reserved path
+  throws rather than being refused, since no script can ever hold one. The
+  four repositories were rewritten by codemod (`register-route.js` and
+  `filter-object.js` in the session scratchpad — mechanical, then by hand
+  for prose and for the three places that parsed the old sentences). Loaded
+  into the local engine, the same 30 of 32 scripts initialise as before, with
+  165 routes.
+- `git_push files_the_script_does_not_own_survive` timed out once under the
+  full suite (180s) and passes alone in 0.3s: a hang under load, not this
+  change. Watch for it.
 
 Breaking for every script; do it as one release with one cutover. One commit
 per global, each with its `aiwebengine.d.ts` change:
