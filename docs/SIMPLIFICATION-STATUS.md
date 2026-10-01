@@ -10,21 +10,21 @@ across 45 files) and is **merged into `main`**.
 
 ## What is done
 
-| §     | Thing                                       | State                                         |
-| ----- | ------------------------------------------- | --------------------------------------------- |
-| §1    | Script and assets are one tree              | **Done** — storage and MCP surface            |
-| §1    | `assetStorage`'s four methods               | Not started; waits for §5's prelude           |
-| §2    | `.md` / `.txt` as string modules            | **Done**                                      |
-| §2    | Exposure by directory                       | **Done and enforced**                         |
-| §2.1  | Deny shape for per-resource authorization   | **Done** (`resource_access.rs`)               |
-| §2.1  | Asset-route authorization hook              | **Done**                                      |
-| §2/§7 | `asset_registry` → `route_index`            | **Done**; the module is deleted               |
-| §2/§7 | Stream routing → `route_index`              | **Done**; `stream_registry` keeps connections |
-| §3    | One operation table, HTTP generated from it | Not started (Phase 2)                         |
-| §4    | Collision refusal (no mounts)               | Not started (Phase 3)                         |
-| §4    | Slug + stable identity                      | Not started (Phase 4)                         |
-| §5    | Prelude every global                        | In progress: `routeRegistry`, `files` done    |
-| §6    | Trim `database` to ~10 methods              | Not started (Phase 1)                         |
+| §     | Thing                                       | State                                                  |
+| ----- | ------------------------------------------- | ------------------------------------------------------ |
+| §1    | Script and assets are one tree              | **Done** — storage and MCP surface                     |
+| §1    | `assetStorage`'s four methods               | Not started; waits for §5's prelude                    |
+| §2    | `.md` / `.txt` as string modules            | **Done**                                               |
+| §2    | Exposure by directory                       | **Done and enforced**                                  |
+| §2.1  | Deny shape for per-resource authorization   | **Done** (`resource_access.rs`)                        |
+| §2.1  | Asset-route authorization hook              | **Done**                                               |
+| §2/§7 | `asset_registry` → `route_index`            | **Done**; the module is deleted                        |
+| §2/§7 | Stream routing → `route_index`              | **Done**; `stream_registry` keeps connections          |
+| §3    | One operation table, HTTP generated from it | Not started (Phase 2)                                  |
+| §4    | Collision refusal (no mounts)               | Not started (Phase 3)                                  |
+| §4    | Slug + stable identity                      | Not started (Phase 4)                                  |
+| §5    | Prelude every global                        | In progress: `routeRegistry`, `files`, `database` done |
+| §6    | Trim `database` to ~10 methods              | **Done** — ten                                         |
 
 ## What is true of the tree now
 
@@ -222,6 +222,20 @@ of the four repositories, unpushed and undeployed until the phase is whole.
   of 32 scripts initialise, the docs script serves Markdown through
   `files.read`, and the agent's 86 and the private script's 313 in-engine
   tests pass.
+- **1c done** (engine `3326e09`, `6cd770c`). `database` is preluded and ten
+  methods: `ensureTable` describes a table (with a new `reference` column
+  type standing in for `addReferenceColumn`), `query` takes an options
+  object, `transaction(fn)` replaced the six transaction and savepoint calls,
+  and the lease calls went with their repository code — a row read
+  `forUpdate` in a transaction does the same, which is what virtual-world now
+  does. Three things it surfaced: a handler returning an array or plain
+  object as its body got `"[object Object]"` (now JSON); an async-semantics
+  rollback test ran anonymously and passed without ever writing; and a
+  failed commit or rollback stranded the transaction state on its pooled
+  thread, so that thread could never start a transaction again and schema
+  setup run on it failed silently — the cause of virtual-world's migration
+  "not running" locally. All four repositories pass their in-engine tests
+  (agent 86, private 313, virtual-world 339) with the Mac kept awake.
 
 Breaking for every script; do it as one release with one cutover. One commit
 per global, each with its `aiwebengine.d.ts` change:
