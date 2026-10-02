@@ -13,32 +13,28 @@ here.
 ## Running a check
 
 ```bash
-curl -X POST "https://your-engine/engine/check_script?uri=myapp"
+curl -X POST "https://your-engine/engine/check_script" \
+     -H "Content-Type: application/json" -d '{"script": "myapp"}'
 ```
 
-| Parameter    | Default          | Meaning                                      |
-| ------------ | ---------------- | -------------------------------------------- |
-| `uri`        | —                | The script to check (required)               |
-| `rollback`   | `true`           | Roll back the database writes `init()` makes |
-| `timeout_ms` | 4x deploy budget | Ceiling for the `init()` run                 |
+| Parameter   | Default          | Meaning                                      |
+| ----------- | ---------------- | -------------------------------------------- |
+| `script`    | —                | The script to check (required)               |
+| `content`   | —                | Candidate source to check instead            |
+| `rollback`  | `true`           | Roll back the database writes `init()` makes |
+| `timeoutMs` | 4x deploy budget | Ceiling for the `init()` run                 |
 
-To check code that is not deployed yet — the point of the endpoint in an
-editing loop — send it as the request body:
+To check code that is not deployed yet — the point of the operation in an
+editing loop — send it as `content`:
 
 ```bash
-# Raw source, any content type but application/json
-curl -X POST "https://your-engine/engine/check_script?uri=myapp" \
-     --data-binary @myapp.ts
-
-# Or as JSON, which also carries uri and rollback
 curl -X POST "https://your-engine/engine/check_script" \
      -H "Content-Type: application/json" \
-     -d '{"uri": "myapp", "content": "function init() {}"}'
+     -d '{"script": "myapp", "content": "function init() {}"}'
 ```
 
-A script is source text, so the body cannot be sniffed for structure — `{}` is a
-valid program. The content type decides: `application/json` is parsed as
-`{uri, content, rollback}`, anything else is taken as the source itself.
+The body is always a JSON object; a script is source text and rides in a string
+field, so there is nothing to sniff.
 
 Checking runs the script's own code, so it needs the same rights as changing the
 script: an administrator, or an owner who may write scripts. Sending candidate
@@ -237,7 +233,7 @@ limit.
 
 ## Over MCP
 
-The same check is the `check_script` tool, taking the same `uri`, `content`,
+The same check is the `check_script` tool, taking the same `script`, `content`,
 `rollback` and `timeoutMs` arguments and returning the same report — including
 the partial one an `init()` that will not stop produces — so an agent can check the
 code it is about to write without leaving the protocol:
@@ -246,7 +242,7 @@ code it is about to write without leaving the protocol:
 {
   "name": "check_script",
   "arguments": {
-    "uri": "myapp",
+    "script": "myapp",
     "content": "function init() { routeRegistry.registerRoute(\"/x\", { handler: \"h\", method: \"GET\" }); }"
   }
 }

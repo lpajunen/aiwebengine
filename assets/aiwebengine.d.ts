@@ -2665,7 +2665,7 @@ declare function expect(actual: unknown): Matchers;
 /**
  * Register a test case. Available only while the engine is running a script's
  * test modules — assets named `*.test.ts` (or `.js`, `.jsx`, `.tsx`) — which it
- * does on request via `POST /engine/run_tests` with `{ "uri": <script> }`.
+ * does on request via `POST /engine/run_tests` with `{ "script": <script> }`.
  *
  * The body may be `async`: each case is settled before the next one starts, so
  * the verdict reflects the assertions it reached. `await` does not make

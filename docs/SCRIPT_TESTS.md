@@ -40,12 +40,12 @@ Every engine global the script normally has — `database`, `files`,
 ## Running them
 
 ```bash
-curl -X POST "https://your-engine/engine/run_tests?uri=myapp"
+curl -X POST "https://your-engine/engine/run_tests" -d '{"script":"myapp"}'
 ```
 
 | Parameter  | Default | Meaning                                      |
 | ---------- | ------- | -------------------------------------------- |
-| `uri`      | —       | The script whose tests to run (required)     |
+| `script`   | —       | The script whose tests to run (required)     |
 | `filter`   | none    | Run only cases whose name contains this text |
 | `rollback` | `true`  | Roll back the database writes the tests make |
 
@@ -86,7 +86,7 @@ Running tests executes the script's code, so it requires the same rights as
 changing the script — an administrator, or an owner who may write scripts.
 
 The same run is available over MCP as the `run_tests` tool, taking the same
-`uri`, `filter`, and `rollback` arguments and returning the same report — so an
+`script`, `filter`, and `rollback` arguments and returning the same report — so an
 agent editing a script can check its work without leaving the protocol.
 
 ## What a run does and does not isolate

@@ -59,7 +59,7 @@ These override `docs/SIMPLIFICATION.md` where the two disagree.
 
 ## Left on purpose, in the order they matter
 
-Three of the original seven were done afterwards and are not listed: a refusal
+Four of the original seven were done afterwards and are not listed: a refusal
 now says what kind it is (`engine_api::Refusal`, a `status` in the result that
 `engine_http` reads; about 110 sites, with the typed error enums mapped by what
 they are); `engine.call`'s arguments are typed from the operation table
@@ -79,15 +79,8 @@ found` there is still a 404.
    exactly the cases that matter, and enforcing it in the router would be a
    second place to keep in step with the first. Worth doing only together with
    moving the checks out of the cores.
-3. **`uri` and `script` are both argument names.** Operations take `uri` for the
-   script's name in some places (`list_script_owners`, `delete_script`,
-   `read_logs`, `check_script`, `eval_script`, `run_tests`, the user-admin and
-   host operations) and `script` in others (the file, revision, task, git,
-   secret and limit operations), and the tooling's `--script-uri` keeps the
-   older spelling. Unifying them is one table edit and a breaking change for
-   every caller, deployed tooling and the editor included.
-4. **`mcp.ask` has no user.** See §7. Reconsider after the next MCP revision.
-5. **Not verified in a browser:** the editor's and admin's own flows after the
+3. **`mcp.ask` has no user.** See §7. Reconsider after the next MCP revision.
+4. **Not verified in a browser:** the editor's and admin's own flows after the
    operations and slug changes, and `git-sync` run against a real repository
    (its paths and bindings are covered by tests).
 

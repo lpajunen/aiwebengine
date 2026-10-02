@@ -3516,7 +3516,7 @@ const LOG_TAIL_MAX_BACKLOG: i64 = 1000;
 /// [`LogParams`] carries; what differs is where the stream starts.
 #[derive(Deserialize, Default)]
 pub struct LogTailParams {
-    uri: Option<String>,
+    script: Option<String>,
     level: Option<String>,
     contains: Option<String>,
     request_id: Option<String>,
@@ -3539,7 +3539,7 @@ impl LogTailParams {
     /// The filters, with the starting point left to the caller.
     fn to_query(&self) -> repository::LogQuery {
         repository::LogQuery {
-            script_uri: self.uri.clone(),
+            script_uri: self.script.clone(),
             level: self.level.clone(),
             since: None,
             after_seq: None,
@@ -3600,7 +3600,7 @@ async fn query_logs_off_runtime(
     path = "/engine/script_logs/stream",
     tags = ["Logging"],
     params(
-        ("uri" = Option<String>, Query, description = "Script URI; omit to tail every script"),
+        ("script" = Option<String>, Query, description = "Script name; omit to tail every script"),
         ("level" = Option<String>, Query, description = "Only entries at this level, e.g. ERROR"),
         ("contains" = Option<String>, Query, description = "Only entries whose message contains this substring"),
         ("request_id" = Option<String>, Query, description = "Only the entries one invocation emits"),
@@ -5349,10 +5349,10 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "Current name of the script" },
+                        "script": { "type": "string", "description": "Current name of the script" },
                         "to": { "type": "string", "description": "The new name, a slug" }
                     },
-                    "required": ["uri", "to"]
+                    "required": ["script", "to"]
                 })
             },
             tool_rename_script,
@@ -5364,9 +5364,9 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "URI of the script to delete" }
+                        "script": { "type": "string", "description": "URI of the script to delete" }
                     },
-                    "required": ["uri"]
+                    "required": ["script"]
                 })
             },
             tool_delete_script,
@@ -5390,12 +5390,12 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "read_logs",
-            "Read log messages (useful for debugging). Returns logs for one script when uri is given, otherwise across all scripts. Each entry carries the invocation that emitted it (requestId, kind, route), so the lines from one request, scheduler tick or stream connection can be read on their own.",
+            "Read log messages (useful for debugging). Returns logs for one script when 'script' is given, otherwise across all scripts. Each entry carries the invocation that emitted it (requestId, kind, route), so the lines from one request, scheduler tick or stream connection can be read on their own.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "Optional script URI to retrieve logs for; omit for all scripts" },
+                        "script": { "type": "string", "description": "Optional script URI to retrieve logs for; omit for all scripts" },
                         "level": { "type": "string", "description": "Only entries at this level, e.g. ERROR" },
                         "since": { "type": "string", "description": "Only entries at or after this time (epoch millis or RFC 3339)" },
                         "after_seq": { "type": "integer", "description": "Only entries written after this seq; pass the highest seq from a previous read to see only what is new" },
@@ -5417,9 +5417,9 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "Script URI whose logs to clear" }
+                        "script": { "type": "string", "description": "Script URI whose logs to clear" }
                     },
-                    "required": ["uri"]
+                    "required": ["script"]
                 })
             },
             tool_clear_logs,
@@ -5450,12 +5450,12 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "read_init_status",
-            "Read init() status for scripts (useful for debugging). Returns status for one script when uri is given, otherwise for all scripts.",
+            "Read init() status for scripts (useful for debugging). Returns status for one script when 'script' is given, otherwise for all scripts.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "Optional script URI to retrieve init status for; omit to list all scripts" }
+                        "script": { "type": "string", "description": "Optional script URI to retrieve init status for; omit to list all scripts" }
                     }
                 })
             },
@@ -5616,9 +5616,9 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "Script URI" }
+                        "script": { "type": "string", "description": "Script URI" }
                     },
-                    "required": ["uri"]
+                    "required": ["script"]
                 })
             },
             tool_list_script_owners,
@@ -5630,10 +5630,10 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "Script URI" },
+                        "script": { "type": "string", "description": "Script URI" },
                         "owner": { "type": "string", "description": "User id to add as owner" }
                     },
-                    "required": ["uri", "owner"]
+                    "required": ["script", "owner"]
                 })
             },
             tool_add_script_owner,
@@ -5645,10 +5645,10 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "Script URI" },
+                        "script": { "type": "string", "description": "Script URI" },
                         "owner": { "type": "string", "description": "Owner user id to remove" }
                     },
-                    "required": ["uri", "owner"]
+                    "required": ["script", "owner"]
                 })
             },
             tool_remove_script_owner,
@@ -5786,9 +5786,9 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "URI of the script to inspect" }
+                        "script": { "type": "string", "description": "URI of the script to inspect" }
                     },
-                    "required": ["uri"]
+                    "required": ["script"]
                 })
             },
             tool_get_script_hosts,
@@ -5800,14 +5800,14 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "URI of the script to modify" },
+                        "script": { "type": "string", "description": "URI of the script to modify" },
                         "hosts": {
                             "type": "array",
                             "description": "Hostnames to publish on. ['*'] means every configured host; [] returns the script to the default host.",
                             "items": { "type": "string" }
                         }
                     },
-                    "required": ["uri", "hosts"]
+                    "required": ["script", "hosts"]
                 })
             },
             tool_set_script_hosts,
@@ -5819,7 +5819,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "URI of the script whose tests to run" },
+                        "script": { "type": "string", "description": "URI of the script whose tests to run" },
                         "filter": { "type": "string", "description": "Run only cases whose name contains this text" },
                         "rollback": {
                             "type": "boolean",
@@ -5831,7 +5831,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
                             "description": "Which version to use: a revision number, 'head', 'last-good', or a label. Omit for what is deployed."
                         }
                     },
-                    "required": ["uri"]
+                    "required": ["script"]
                 })
             },
             tool_run_tests,
@@ -6164,7 +6164,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "URI of the script to check" },
+                        "script": { "type": "string", "description": "URI of the script to check" },
                         "content": {
                             "type": "string",
                             "description": "Candidate source to check instead of what is deployed. Use this to check code before writing it."
@@ -6188,7 +6188,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
                             "additionalProperties": true
                         }
                     },
-                    "required": ["uri"]
+                    "required": ["script"]
                 })
             },
             tool_check_script,
@@ -6207,7 +6207,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "URI of the script whose sandbox to evaluate in" },
+                        "script": { "type": "string", "description": "URI of the script whose sandbox to evaluate in" },
                         "source": {
                             "type": "string",
                             "description": "The snippet. Its last expression is the returned value; scripts run synchronously, so do not use async/await."
@@ -6222,7 +6222,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
                             "description": "Budget for the evaluation, clamped to the engine's execution timeout"
                         }
                     },
-                    "required": ["uri", "source"]
+                    "required": ["script", "source"]
                 })
             },
             tool_eval_script,
@@ -6298,8 +6298,8 @@ pub fn execute_native_mcp_tool(
 /// Runs on the blocking pool, like every native tool — which is also what the
 /// isolating transaction needs, being thread-local.
 fn tool_eval_script(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
+    let Some(uri) = arg_str(args, "script") else {
+        return missing_arg("script");
     };
     let Some(source) = arg_str(args, "source").filter(|source| !source.trim().is_empty()) else {
         return missing_arg("source");
@@ -6346,8 +6346,8 @@ fn tool_eval_script(args: &Value, user: &UserContext) -> Value {
 /// script's program and calls its `init()` under the deploy budget, and the
 /// transaction that isolates it is bound to the thread that opens it.
 fn tool_check_script(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
+    let Some(uri) = arg_str(args, "script") else {
+        return missing_arg("script");
     };
     let content = arg_str(args, "content").map(str::to_string);
     let files: CandidateFiles = match args.get("files") {
@@ -6910,8 +6910,8 @@ fn tool_revert_script(args: &Value, user: &UserContext) -> Value {
 }
 
 fn tool_run_tests(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
+    let Some(uri) = arg_str(args, "script") else {
+        return missing_arg("script");
     };
 
     match authorize_test_run(user, uri) {
@@ -7021,8 +7021,8 @@ fn tool_list_scripts(args: &Value, user: &UserContext) -> Value {
 }
 
 fn tool_rename_script(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
+    let Some(uri) = arg_str(args, "script") else {
+        return missing_arg("script");
     };
     let Some(to) = arg_str(args, "to") else {
         return missing_arg("to");
@@ -7039,8 +7039,8 @@ fn tool_rename_script(args: &Value, user: &UserContext) -> Value {
 }
 
 fn tool_delete_script(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
+    let Some(uri) = arg_str(args, "script") else {
+        return missing_arg("script");
     };
     if delete_script_authorized(user, uri, Some("mcp")) {
         json!({
@@ -7080,7 +7080,7 @@ fn tool_search_files(args: &Value, user: &UserContext) -> Value {
 }
 
 fn tool_read_logs(args: &Value, user: &UserContext) -> Value {
-    let uri = arg_str(args, "uri");
+    let uri = arg_str(args, "script");
     let since = match arg_str(args, "since") {
         Some(raw) => match parse_since(raw) {
             Some(since) => Some(since),
@@ -7135,7 +7135,7 @@ fn tool_read_logs(args: &Value, user: &UserContext) -> Value {
 }
 
 fn tool_clear_logs(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
+    let Some(uri) = arg_str(args, "script") else {
         return refuse(
             Refusal::BadRequest,
             "uri is required: name the script whose logs to clear",
@@ -7190,7 +7190,7 @@ fn tool_list_routes(args: &Value, user: &UserContext) -> Value {
 }
 
 fn tool_read_init_status(args: &Value, user: &UserContext) -> Value {
-    match arg_str(args, "uri") {
+    match arg_str(args, "script") {
         Some(uri) => json!({
             "uri": uri,
             "status": init_status_authorized(user, uri),
@@ -7562,8 +7562,8 @@ fn secret_error_json(error: SecretAccessError) -> Value {
 }
 
 fn tool_list_script_owners(args: &Value, _user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
+    let Some(uri) = arg_str(args, "script") else {
+        return missing_arg("script");
     };
     match owners_authorized(uri) {
         Ok(owners) => json!({
@@ -7577,8 +7577,8 @@ fn tool_list_script_owners(args: &Value, _user: &UserContext) -> Value {
 }
 
 fn tool_add_script_owner(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
+    let Some(uri) = arg_str(args, "script") else {
+        return missing_arg("script");
     };
     let Some(owner) = arg_str(args, "owner") else {
         return missing_arg("owner");
@@ -7595,8 +7595,8 @@ fn tool_add_script_owner(args: &Value, user: &UserContext) -> Value {
 }
 
 fn tool_remove_script_owner(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
+    let Some(uri) = arg_str(args, "script") else {
+        return missing_arg("script");
     };
     let Some(owner) = arg_str(args, "owner") else {
         return missing_arg("owner");
@@ -7749,8 +7749,8 @@ fn script_hosts_json(uri: &str, stored: Vec<String>, effective: Vec<String>) -> 
 }
 
 fn tool_get_script_hosts(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
+    let Some(uri) = arg_str(args, "script") else {
+        return missing_arg("script");
     };
     match get_script_hosts_authorized(user, uri) {
         Ok((stored, effective)) => script_hosts_json(uri, stored, effective),
@@ -7759,8 +7759,8 @@ fn tool_get_script_hosts(args: &Value, user: &UserContext) -> Value {
 }
 
 fn tool_set_script_hosts(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
+    let Some(uri) = arg_str(args, "script") else {
+        return missing_arg("script");
     };
     // An explicit empty array is meaningful: it clears the binding.
     let Some(hosts) = args.get("hosts").and_then(|value| value.as_array()) else {

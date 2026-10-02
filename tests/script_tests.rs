@@ -693,7 +693,7 @@ async fn the_endpoint_maps_refusals_to_status_codes() {
         Some(admin_session()),
         None,
         axum::body::Bytes::from(
-            serde_json::json!({ "uri": "test://script-tests-nope" }).to_string(),
+            serde_json::json!({ "script": "test://script-tests-nope" }).to_string(),
         ),
     )
     .await;
@@ -704,7 +704,7 @@ async fn the_endpoint_maps_refusals_to_status_codes() {
         axum::http::Method::POST,
         None,
         None,
-        axum::body::Bytes::from(serde_json::json!({ "uri": script_uri }).to_string()),
+        axum::body::Bytes::from(serde_json::json!({ "script": script_uri }).to_string()),
     )
     .await;
     assert_eq!(
@@ -776,7 +776,7 @@ async fn endpoint_report(uri: &str) -> (u16, serde_json::Value) {
         axum::http::Method::POST,
         Some(admin_session()),
         None,
-        axum::body::Bytes::from(serde_json::json!({ "uri": uri }).to_string()),
+        axum::body::Bytes::from(serde_json::json!({ "script": uri }).to_string()),
     )
     .await;
 
@@ -862,9 +862,9 @@ async fn the_mcp_tool_is_advertised_with_its_schema() {
         .expect("run_tests should be a native tool");
 
     let schema = &descriptor.input_schema;
-    assert_eq!(schema["required"], serde_json::json!(["uri"]));
+    assert_eq!(schema["required"], serde_json::json!(["script"]));
     assert_eq!(
-        schema["properties"]["uri"]["type"],
+        schema["properties"]["script"]["type"],
         serde_json::json!("string")
     );
     assert_eq!(
@@ -896,7 +896,7 @@ async fn the_mcp_tool_reports_verdicts_and_refuses_the_unauthorized() {
         )],
     );
 
-    let args = serde_json::json!({ "uri": script_uri });
+    let args = serde_json::json!({ "script": script_uri });
     let report = execute_native_mcp_tool(
         "run_tests",
         &args,
@@ -913,7 +913,7 @@ async fn the_mcp_tool_reports_verdicts_and_refuses_the_unauthorized() {
     // A filter reaches the runner the same way it does over HTTP.
     let filtered = execute_native_mcp_tool(
         "run_tests",
-        &serde_json::json!({ "uri": script_uri, "filter": "passes" }),
+        &serde_json::json!({ "script": script_uri, "filter": "passes" }),
         &UserContext::admin("test-admin".to_string()),
     )
     .expect("native tool");
@@ -947,7 +947,7 @@ async fn the_mcp_tool_reports_verdicts_and_refuses_the_unauthorized() {
         missing["error"]
             .as_str()
             .unwrap_or_default()
-            .contains("uri"),
+            .contains("script"),
         "a missing uri should name the parameter: {:?}",
         missing
     );

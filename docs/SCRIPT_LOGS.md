@@ -11,7 +11,7 @@ written**.
 
 ```bash
 # What did this one request do?
-curl "https://your-engine/engine/read_logs?uri=myapp&request_id=$REQUEST_ID"
+curl "https://your-engine/engine/read_logs?script=myapp&request_id=$REQUEST_ID"
 
 # Watch a live session, one route only
 curl -N "https://your-engine/engine/script_logs/stream?uri=myapp&route=/world/:id/move"
@@ -95,7 +95,7 @@ GET /engine/read_logs
 
 | Parameter    | Meaning                                                     |
 | ------------ | ----------------------------------------------------------- |
-| `uri`        | One script; omit for every script                           |
+| `script`     | One script; omit for every script                           |
 | `level`      | One level, e.g. `error` (case-insensitive)                  |
 | `contains`   | Message contains this substring (case-insensitive, literal) |
 | `request_id` | Only the lines one invocation emitted                       |
@@ -118,7 +118,7 @@ keeps the next page after the cursor instead.
 after it:
 
 ```bash
-curl "https://your-engine/engine/read_logs?uri=myapp&after_seq=91423&limit=200"
+curl "https://your-engine/engine/read_logs?script=myapp&after_seq=91423&limit=200"
 ```
 
 Unlike `since`, this can neither repeat nor skip entries that share a timestamp,

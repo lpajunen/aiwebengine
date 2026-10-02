@@ -95,7 +95,7 @@ async fn test_script_logs_endpoint() {
     // Test script_logs endpoint with a valid URI parameter
     let logs_response = client
         .get(format!(
-            "http://127.0.0.1:{}/engine/read_logs?uri=https://example.com/core",
+            "http://127.0.0.1:{}/engine/read_logs?script=https://example.com/core",
             port
         ))
         .send()
@@ -147,7 +147,7 @@ async fn test_script_logs_all_scripts_and_filters() {
     // level filters, case-insensitively
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/read_logs?uri={}&level=error",
+            "{}/engine/read_logs?script={}&level=error",
             base, first
         ))
         .send()
@@ -162,7 +162,10 @@ async fn test_script_logs_all_scripts_and_filters() {
 
     // limit keeps the newest entries
     let body: serde_json::Value = client
-        .get(format!("{}/engine/read_logs?uri={}&limit=1", base, first))
+        .get(format!(
+            "{}/engine/read_logs?script={}&limit=1",
+            base, first
+        ))
         .send()
         .await
         .expect("limited logs request failed")
@@ -176,7 +179,7 @@ async fn test_script_logs_all_scripts_and_filters() {
     // contains matches a substring of the message, case-insensitively
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/read_logs?uri={}&contains=ERR",
+            "{}/engine/read_logs?script={}&contains=ERR",
             base, first
         ))
         .send()
@@ -202,7 +205,7 @@ async fn test_script_logs_all_scripts_and_filters() {
 
     // after_seq reads forward from an entry the caller already has
     let body: serde_json::Value = client
-        .get(format!("{}/engine/read_logs?uri={}", base, first))
+        .get(format!("{}/engine/read_logs?script={}", base, first))
         .send()
         .await
         .expect("seq logs request failed")
@@ -213,7 +216,7 @@ async fn test_script_logs_all_scripts_and_filters() {
     let first_seq = logs[0]["seq"].as_i64().expect("entry has no seq");
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/read_logs?uri={}&after_seq={}",
+            "{}/engine/read_logs?script={}&after_seq={}",
             base, first, first_seq
         ))
         .send()
@@ -230,7 +233,7 @@ async fn test_script_logs_all_scripts_and_filters() {
     // entries — otherwise reading forward would skip what falls between pages.
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/read_logs?uri={}&after_seq={}&limit=1",
+            "{}/engine/read_logs?script={}&after_seq={}&limit=1",
             base,
             first,
             first_seq - 1
@@ -299,7 +302,7 @@ async fn test_script_logs_delete_clears_one_named_script() {
     // A uri clears that script's logs and leaves every other script alone.
     let response = client
         .post(format!("{}/engine/clear_logs", base))
-        .json(&serde_json::json!({ "uri": cleared }))
+        .json(&serde_json::json!({ "script": cleared }))
         .send()
         .await
         .expect("clear logs request failed");
@@ -385,7 +388,7 @@ async fn test_engine_management_endpoints() {
     // /engine/read_logs is the canonical alias of /script_logs
     let response = client
         .get(format!(
-            "{}/engine/read_logs?uri=https://example.com/core",
+            "{}/engine/read_logs?script=https://example.com/core",
             base
         ))
         .send()
@@ -419,7 +422,7 @@ async fn test_engine_management_endpoints() {
     engine.deploy_script(script_uri, "function init() {}").await;
     let response = client
         .get(format!(
-            "{}/engine/list_script_owners?uri={}",
+            "{}/engine/list_script_owners?script={}",
             base, script_uri
         ))
         .send()
@@ -1083,7 +1086,7 @@ async fn test_script_logs_correlate_with_the_request_that_emitted_them() {
     // Filtering by request id returns that call's lines and nothing else.
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/read_logs?uri={}&request_id={}",
+            "{}/engine/read_logs?script={}&request_id={}",
             base, script_uri, first_request_id
         ))
         .send()
@@ -1107,7 +1110,7 @@ async fn test_script_logs_correlate_with_the_request_that_emitted_them() {
     // Filtering by route collects both calls, parameter values and all.
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/read_logs?uri={}&route=/vw/:id/move",
+            "{}/engine/read_logs?script={}&route=/vw/:id/move",
             base, script_uri
         ))
         .send()
@@ -1123,7 +1126,7 @@ async fn test_script_logs_correlate_with_the_request_that_emitted_them() {
     // and its output must not come back under httpRoute.
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/read_logs?uri={}&kind=httproute&contains=failed",
+            "{}/engine/read_logs?script={}&kind=httproute&contains=failed",
             base, script_uri
         ))
         .send()
@@ -1198,7 +1201,7 @@ async fn test_script_logs_stream_tails_entries_as_they_are_written() {
 
     let mut tail = client
         .get(format!(
-            "{}/engine/script_logs/stream?uri={}",
+            "{}/engine/script_logs/stream?script={}",
             base, script_uri
         ))
         .send()
@@ -1271,7 +1274,7 @@ async fn test_script_logs_stream_tails_entries_as_they_are_written() {
     // A backlog replays what is already there, for a session joining late.
     let mut replay = client
         .get(format!(
-            "{}/engine/script_logs/stream?uri={}&backlog=2",
+            "{}/engine/script_logs/stream?script={}&backlog=2",
             base, script_uri
         ))
         .send()
@@ -1293,7 +1296,7 @@ async fn test_script_logs_stream_tails_entries_as_they_are_written() {
     // Filters apply to a tail exactly as they do to a listing.
     let mut filtered = client
         .get(format!(
-            "{}/engine/script_logs/stream?uri={}&backlog=10&level=warn",
+            "{}/engine/script_logs/stream?script={}&backlog=10&level=warn",
             base, script_uri
         ))
         .send()
@@ -1316,7 +1319,7 @@ async fn test_script_logs_stream_tails_entries_as_they_are_written() {
     // it just missed and then follow along.
     let mut from_past = client
         .get(format!(
-            "{}/engine/script_logs/stream?uri={}&since=0",
+            "{}/engine/script_logs/stream?script={}&since=0",
             base, script_uri
         ))
         .send()
@@ -1340,7 +1343,7 @@ async fn test_script_logs_stream_tails_entries_as_they_are_written() {
     let future_millis = chrono::Utc::now().timestamp_millis() + 60_000;
     let mut from_future = client
         .get(format!(
-            "{}/engine/script_logs/stream?uri={}&since={}",
+            "{}/engine/script_logs/stream?script={}&since={}",
             base, script_uri, future_millis
         ))
         .send()
@@ -1448,7 +1451,7 @@ async fn test_script_logs_correlate_what_the_engine_reports_about_a_request() {
 
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/read_logs?uri={}&request_id={}",
+            "{}/engine/read_logs?script={}&request_id={}",
             base, script_uri, request_id
         ))
         .send()

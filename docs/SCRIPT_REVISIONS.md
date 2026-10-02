@@ -12,10 +12,10 @@ curl "https://your-engine/engine/list_revisions?script=myapp"
 curl "https://your-engine/engine/list_revisions?script=myapp&asset=server/move-player.ts"
 
 # Check revision 41 without deploying it
-curl -X POST "https://your-engine/engine/check_script?uri=myapp&revision=41"
+curl -X POST "https://your-engine/engine/check_script" -d '{"script":"myapp","revision":"41"}'
 
 # Run the tests revision 41 had, against the modules revision 41 had
-curl -X POST "https://your-engine/engine/run_tests?uri=myapp&revision=41"
+curl -X POST "https://your-engine/engine/run_tests" -d '{"script":"myapp","revision":"41"}'
 ```
 
 ## Why the write records it, and not the caller
@@ -125,7 +125,8 @@ other people are using — before anything could say whether it bundled.
 `files` describes the whole change, none of it stored:
 
 ```bash
-curl -X POST "…/engine/check_script?uri=myapp" -H "Content-Type: application/json" -d '{
+curl -X POST "…/engine/check_script" -H "Content-Type: application/json" -d '{
+  "script": "myapp",
   "content": "import { LIMIT } from \'./server/limits.ts\'; function init() { … }",
   "files": {
     "server/limits.ts": { "content": "export const LIMIT = 5;" },
@@ -297,7 +298,7 @@ alongside the invocation attribution it already carried:
 
 ```bash
 # Everything revision 41 produced
-curl "…/engine/read_logs?uri=myapp&revision=41"
+curl "…/engine/read_logs?script=myapp&revision=41"
 ```
 
 This is what makes rollback _decidable_ rather than merely possible. Without

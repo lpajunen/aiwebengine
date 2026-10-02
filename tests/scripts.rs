@@ -272,7 +272,7 @@ function init(context) {
     // Now test the delete_script endpoint
     let delete_request = client
         .post(format!("http://127.0.0.1:{}/engine/delete_script", port))
-        .json(&serde_json::json!({ "uri": "delete-test-script" }))
+        .json(&serde_json::json!({ "script": "delete-test-script" }))
         .send();
 
     let delete_response = match timeout(Duration::from_secs(5), delete_request).await {
@@ -314,7 +314,7 @@ function init(context) {
     // Test deleting a non-existent script
     let nonexistent_delete_request = client
         .post(format!("http://127.0.0.1:{}/engine/delete_script", port))
-        .json(&serde_json::json!({ "uri": "nonexistent-script" }))
+        .json(&serde_json::json!({ "script": "nonexistent-script" }))
         .send();
 
     let nonexistent_delete_response =
@@ -419,7 +419,7 @@ function init(context) {
     // 3. Delete script via HTTP API
     let delete_request = client
         .post(format!("http://127.0.0.1:{}/engine/delete_script", port))
-        .json(&serde_json::json!({ "uri": "lifecycle-test-script" }))
+        .json(&serde_json::json!({ "script": "lifecycle-test-script" }))
         .send();
 
     let delete_response = match timeout(Duration::from_secs(5), delete_request).await {

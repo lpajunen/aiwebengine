@@ -244,7 +244,7 @@ async fn mcp_set_script_hosts_binds_for_an_admin() {
 
     let result = execute_native_mcp_tool(
         "set_script_hosts",
-        &json!({ "uri": uri, "hosts": ["world.softagen.com"] }),
+        &json!({ "script": uri, "hosts": ["world.softagen.com"] }),
         &admin(),
     )
     .expect("set_script_hosts is a native tool");
@@ -357,7 +357,7 @@ async fn mcp_host_tools_enforce_admin() {
     for tool in ["get_script_hosts", "set_script_hosts"] {
         let result = execute_native_mcp_tool(
             tool,
-            &json!({ "uri": uri, "hosts": ["manage.softagen.com"] }),
+            &json!({ "script": uri, "hosts": ["manage.softagen.com"] }),
             &caller,
         )
         .expect("tool should exist");

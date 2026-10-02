@@ -538,7 +538,7 @@ async fn the_check_tool_is_advertised_and_dispatches_over_mcp() {
         .find(|descriptor| descriptor.name == "check_script")
         .expect("check_script should be a native MCP tool");
     let schema: &Value = &advertised.input_schema;
-    assert_eq!(schema["required"], json!(["uri"]));
+    assert_eq!(schema["required"], json!(["script"]));
     assert!(schema["properties"]["content"].is_object());
 
     let uri = "test://check/mcp";
@@ -549,7 +549,7 @@ async fn the_check_tool_is_advertised_and_dispatches_over_mcp() {
 
     let result = execute_native_mcp_tool(
         "check_script",
-        &json!({ "uri": uri }),
+        &json!({ "script": uri }),
         &UserContext::admin("checker".to_string()),
     )
     .expect("check_script should dispatch");
@@ -649,7 +649,7 @@ async fn the_endpoint_reports_diagnostics_with_a_200() {
         r#"function init() { routeRegistry.registerRoute("/check-http/x", { handler: "absent", method: "GET" }); }"#,
     );
 
-    let (status, body) = post_check(&format!("uri={}", uri), None, "").await;
+    let (status, body) = post_check(&format!("script={}", uri), None, "").await;
 
     // A script full of errors still answers 200: the request succeeded, the
     // script did not. Callers read `ok`.
@@ -676,7 +676,7 @@ async fn a_raw_body_is_taken_as_candidate_source() {
     deploy(uri, deployed);
 
     let (status, body) = post_check(
-        &format!("uri={}", uri),
+        &format!("script={}", uri),
         Some("text/plain"),
         r#"function init() { routeRegistry.registerRoute("/check-raw/v2", { handler: "gone", method: "GET" }); }"#,
     )
@@ -696,7 +696,7 @@ async fn a_json_body_carries_the_uri_and_the_candidate() {
     deploy(uri, "function init() {}");
 
     let request = json!({
-        "uri": uri,
+        "script": uri,
         "content": r#"function serve(context) { return ResponseBuilder.json({}); }
                       function init() { routeRegistry.registerRoute("/check-json/ok", { handler: "serve", method: "GET" }); }"#,
     });
@@ -727,7 +727,7 @@ async fn the_endpoint_reports_its_missing_parameters_and_refusals() {
     let (missing, _) = post_check("", None, "").await;
     assert_eq!(missing, 400);
 
-    let (not_found, body) = post_check("uri=test://check/http-nope", None, "").await;
+    let (not_found, body) = post_check("script=test://check/http-nope", None, "").await;
     assert_eq!(not_found, 404);
     assert!(
         body["message"]
@@ -742,7 +742,7 @@ async fn the_endpoint_reports_its_missing_parameters_and_refusals() {
         axum::http::Method::POST,
         None,
         None,
-        axum::body::Bytes::from(json!({ "uri": uri }).to_string()),
+        axum::body::Bytes::from(json!({ "script": uri }).to_string()),
     )
     .await;
     assert_eq!(
@@ -876,7 +876,7 @@ async fn a_slow_init_answers_over_http_instead_of_hanging() {
     deploy_slow_init(uri, "/check-http-slow/a", 30_000);
 
     let started = std::time::Instant::now();
-    let (status, body) = post_check(&format!("uri={}&timeout_ms=600", uri), None, "").await;
+    let (status, body) = post_check(&format!("script={}&timeout_ms=600", uri), None, "").await;
 
     assert_eq!(status, 200, "a slow init() must still answer");
     assert!(
@@ -941,7 +941,7 @@ async fn a_slow_init_answers_over_mcp_with_what_it_registered() {
     let started = std::time::Instant::now();
     let result = execute_native_mcp_tool(
         "check_script",
-        &json!({ "uri": uri, "timeoutMs": 600 }),
+        &json!({ "script": uri, "timeoutMs": 600 }),
         &UserContext::admin("checker".to_string()),
     )
     .expect("check_script should dispatch");
@@ -999,7 +999,7 @@ async fn a_candidate_change_across_modules_is_checked_before_any_of_it_lands() {
     // same change and has nowhere to be.
     let candidate_root = "import { rate } from './server/rules.ts';\nfunction init() { rate(); }";
     let (status, body) = post_check(
-        &format!("uri={}", uri),
+        &format!("script={}", uri),
         Some("application/json"),
         &json!({
             "content": "import { LIMIT } from './server/limits.ts';\nfunction init() { LIMIT; }",
@@ -1016,7 +1016,7 @@ async fn a_candidate_change_across_modules_is_checked_before_any_of_it_lands() {
 
     // Sent as the change it actually is, it does.
     let (status, body) = post_check(
-        &format!("uri={}", uri),
+        &format!("script={}", uri),
         Some("application/json"),
         &json!({
             "content": "import { LIMIT } from './server/limits.ts';\nfunction init() { LIMIT; }",
@@ -1061,14 +1061,14 @@ async fn a_candidate_can_say_a_file_is_removed() {
     );
 
     // Deployed, this bundles.
-    let (_, before) = post_check(&format!("uri={}", uri), None, "").await;
+    let (_, before) = post_check(&format!("script={}", uri), None, "").await;
     assert_eq!(before["ok"], json!(true), "{:?}", before["diagnostics"]);
 
     // A change that removes the module has to be checked as removing it. A
     // check that kept reading the deleted file would pass on a program that
     // cannot be built once the change lands.
     let (status, body) = post_check(
-        &format!("uri={}", uri),
+        &format!("script={}", uri),
         Some("application/json"),
         &json!({ "files": { "server/doomed.ts": null } }).to_string(),
     )
@@ -1092,7 +1092,7 @@ async fn a_candidate_path_that_escapes_the_script_is_refused() {
     deploy(uri, "function init() {}");
 
     let (status, body) = post_check(
-        &format!("uri={}", uri),
+        &format!("script={}", uri),
         Some("application/json"),
         &json!({ "files": { "../elsewhere/main.ts": { "content": "export const x = 1;" } } })
             .to_string(),
@@ -1121,7 +1121,7 @@ async fn the_mcp_tool_takes_the_same_candidate_change() {
     let result = execute_native_mcp_tool(
         "check_script",
         &json!({
-            "uri": uri,
+            "script": uri,
             "content": "import { LIMIT } from './server/limits.ts';\nfunction init() { LIMIT; }",
             "files": { "server/limits.ts": { "content": "export const LIMIT = 5;" } }
         }),

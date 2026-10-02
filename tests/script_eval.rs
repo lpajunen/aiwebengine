@@ -530,7 +530,7 @@ async fn the_endpoint_takes_a_snippet() {
         "function double(n) { return n * 2; } function init() {}",
     );
 
-    let (status, body) = post_eval(json!({ "uri": uri, "source": "double(21)" })).await;
+    let (status, body) = post_eval(json!({ "script": uri, "source": "double(21)" })).await;
 
     assert_eq!(status, 200);
     assert_eq!(body["ok"], json!(true), "{}", body);
@@ -546,7 +546,7 @@ async fn the_endpoint_takes_a_json_envelope() {
     let uri = "test://eval/http-json";
     deploy(uri, "function init() {}");
 
-    let request = json!({ "uri": uri, "source": r#"console.log("hi"); 7;"# });
+    let request = json!({ "script": uri, "source": r#"console.log("hi"); 7;"# });
     let (status, body) = post_eval(request).await;
 
     assert_eq!(status, 200);
@@ -563,7 +563,7 @@ async fn a_snippet_that_throws_still_answers_200() {
     let uri = "test://eval/http-throws";
     deploy(uri, "function init() {}");
 
-    let (status, body) = post_eval(json!({ "uri": uri, "source": "nope()" })).await;
+    let (status, body) = post_eval(json!({ "script": uri, "source": "nope()" })).await;
 
     // The request succeeded; the snippet did not. Callers read `ok`.
     assert_eq!(status, 200);
@@ -582,13 +582,14 @@ async fn the_endpoint_reports_its_missing_parameters_and_refusals() {
     let (missing_uri, _) = post_eval(json!({ "source": "1" })).await;
     assert_eq!(missing_uri, 400);
 
-    let (missing_source, _) = post_eval(json!({ "uri": uri, "source": "   " })).await;
+    let (missing_source, _) = post_eval(json!({ "script": uri, "source": "   " })).await;
     assert_eq!(
         missing_source, 400,
         "a blank snippet is a missing parameter, not an empty program"
     );
 
-    let (not_found, _) = post_eval(json!({ "uri": "test://eval/http-nope", "source": "1" })).await;
+    let (not_found, _) =
+        post_eval(json!({ "script": "test://eval/http-nope", "source": "1" })).await;
     assert_eq!(not_found, 404);
 
     let anonymous = aiwebengine::engine_http::call_operation(
@@ -596,7 +597,7 @@ async fn the_endpoint_reports_its_missing_parameters_and_refusals() {
         axum::http::Method::POST,
         None,
         None,
-        axum::body::Bytes::from(json!({ "uri": uri, "source": "1" }).to_string()),
+        axum::body::Bytes::from(json!({ "script": uri, "source": "1" }).to_string()),
     )
     .await;
     assert_eq!(anonymous.status(), 403);
@@ -613,7 +614,7 @@ async fn the_eval_tool_is_advertised_and_dispatches_over_mcp() {
         .expect("eval_script should be a native MCP tool");
     assert_eq!(
         advertised.input_schema["required"],
-        json!(["uri", "source"])
+        json!(["script", "source"])
     );
 
     let uri = "test://eval/mcp";
@@ -621,7 +622,7 @@ async fn the_eval_tool_is_advertised_and_dispatches_over_mcp() {
 
     let result = execute_native_mcp_tool(
         "eval_script",
-        &json!({ "uri": uri, "source": "answer()" }),
+        &json!({ "script": uri, "source": "answer()" }),
         &UserContext::admin("evaluator".to_string()),
     )
     .expect("eval_script should dispatch");

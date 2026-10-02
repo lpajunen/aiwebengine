@@ -174,9 +174,12 @@ async fn the_operation_is_offered_over_the_tool_table() {
     let to = name("tool-to");
     store(&from);
 
-    let result =
-        execute_native_mcp_tool("rename_script", &json!({ "uri": from, "to": to }), &admin())
-            .expect("rename_script is an operation");
+    let result = execute_native_mcp_tool(
+        "rename_script",
+        &json!({ "script": from, "to": to }),
+        &admin(),
+    )
+    .expect("rename_script is an operation");
     assert_eq!(result["success"], json!(true), "{result}");
     assert_eq!(result["uri"], json!(to));
     assert_eq!(result["renamedFrom"], json!(from));

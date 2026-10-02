@@ -9,25 +9,26 @@ test file, deploy it, run the suite, decode the answer out of an assertion
 message, delete the file again:
 
 ```bash
-curl -X POST "https://your-engine/engine/eval_script?uri=myapp" \
-     --data-binary 'database.query("players", "{\"world_id\":3}", 20)'
+curl -X POST "https://your-engine/engine/eval_script" \
+     -H "Content-Type: application/json" \
+     -d '{"script": "myapp", "source": "database.query(\"players\", \"{\\\"world_id\\\":3}\", 20)"}'
 ```
 
 ## Running one
 
-| Parameter    | Default           | Meaning                                         |
-| ------------ | ----------------- | ----------------------------------------------- |
-| `uri`        | —                 | The script whose sandbox to run in (required)   |
-| `rollback`   | `true`            | Roll back the database writes the snippet makes |
-| `timeout_ms` | execution timeout | Budget, clamped to the engine's own ceiling     |
+| Parameter   | Default           | Meaning                                         |
+| ----------- | ----------------- | ----------------------------------------------- |
+| `script`    | —                 | The script whose sandbox to run in (required)   |
+| `source`    | —                 | The snippet (required)                          |
+| `rollback`  | `true`            | Roll back the database writes the snippet makes |
+| `timeoutMs` | execution timeout | Budget, clamped to the engine's own ceiling     |
 
-The snippet itself is the request body. Send it raw under any content type but
-`application/json`, or use a JSON envelope carrying everything at once:
+The body is a JSON object carrying all of it:
 
 ```bash
 curl -X POST "https://your-engine/engine/eval_script" \
      -H "Content-Type: application/json" \
-     -d '{"uri": "myapp", "source": "totalCents(basket)", "rollback": false}'
+     -d '{"script": "myapp", "source": "totalCents(basket)", "rollback": false}'
 ```
 
 Evaluating runs the script's code with your capabilities, so it takes the same
@@ -44,7 +45,7 @@ imported.
 It can also `import`, exactly as the script does:
 
 ```bash
-curl -X POST "https://your-engine/engine/eval_script?uri=myapp" \
+curl -X POST "https://your-engine/engine/eval_script?script=myapp" \
      --data-binary 'import { totalCents } from "./server/basket.ts"; totalCents(items)'
 ```
 
@@ -173,13 +174,13 @@ hanging until the budget runs out.
 
 ## Over MCP
 
-The same evaluation is the `eval_script` tool, taking `uri`, `source`,
+The same evaluation is the `eval_script` tool, taking `script`, `source`,
 `rollback` and `timeoutMs` and returning the same report:
 
 ```json
 {
   "name": "eval_script",
-  "arguments": { "uri": "myapp", "source": "Object.keys(globalThis).length" }
+  "arguments": { "script": "myapp", "source": "Object.keys(globalThis).length" }
 }
 ```
 
