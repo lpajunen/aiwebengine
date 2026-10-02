@@ -1,522 +1,101 @@
-# Where the simplification stands
+# What the simplification did
 
-Working notes for picking `docs/SIMPLIFICATION.md` back up after a break.
-The plan document says what to do and why; this says how far it got, what is
-true of the tree right now, and what the next person needs in their head
-before touching the next thing.
+A short record. `docs/SIMPLIFICATION.md` is the argument and stays as it was
+written, with each section marked as it was settled; this says what is true of
+the tree now, where it differs from the plan, and what was left on purpose. The
+working notes it replaces — phase-by-phase progress, the cutover procedure, the
+lists of call sites — are in the git history of this file.
 
-The first stretch was done on `simplify-one-tree` (nine commits, +4.5k/−1.8k
-across 45 files) and is **merged into `main`**.
+## Done
 
-## What is done
+| §     | Thing                                       | State                                                          |
+| ----- | ------------------------------------------- | -------------------------------------------------------------- |
+| §1    | Script and assets are one tree              | Done — storage, MCP surface, `files` for scripts               |
+| §2    | `.md` / `.txt` as string modules            | Done                                                           |
+| §2    | Exposure by directory                       | Done and enforced                                              |
+| §2.1  | Deny shape; asset-route authorization hook  | Done (`resource_access.rs`)                                    |
+| §2/§7 | `asset_registry`, stream routing            | Folded into `route_index`; `stream_registry` keeps connections |
+| §3    | One operation table, HTTP generated from it | Done (`engine_http.rs`)                                        |
+| §4    | A collision on one host is refused          | Done                                                           |
+| §4    | Slug and stable identity                    | Done — flat slugs, `rename_script`, `scripts.id`               |
+| §5    | Prelude every global; one `registerRoute`   | Done                                                           |
+| §6    | `database` trimmed                          | Done — ten methods                                             |
+| §7    | `mcp_elicitation.rs`                        | Decided: stays (reasoning in §7, and the cost it names)        |
+| §8    | "What narrows what"                         | Done — `docs/WHAT_NARROWS_WHAT.md`                             |
 
-| §     | Thing                                       | State                                                |
-| ----- | ------------------------------------------- | ---------------------------------------------------- |
-| §1    | Script and assets are one tree              | **Done** — storage and MCP surface                   |
-| §1    | `assetStorage`'s four methods               | **Done** — `files` (1b)                              |
-| §2    | `.md` / `.txt` as string modules            | **Done**                                             |
-| §2    | Exposure by directory                       | **Done and enforced**                                |
-| §2.1  | Deny shape for per-resource authorization   | **Done** (`resource_access.rs`)                      |
-| §2.1  | Asset-route authorization hook              | **Done**                                             |
-| §2/§7 | `asset_registry` → `route_index`            | **Done**; the module is deleted                      |
-| §2/§7 | Stream routing → `route_index`              | **Done**; `stream_registry` keeps connections        |
-| §3    | One operation table, HTTP generated from it | **Done** (Phase 2), engine and all four repositories |
-| §4    | Collision refusal (no mounts)               | Not started (Phase 3)                                |
-| §4    | Slug + stable identity                      | Not started (Phase 4)                                |
-| §5    | Prelude every global                        | **Done** (Phase 1, unmerged)                         |
-| §6    | Trim `database` to ~10 methods              | **Done** — ten                                       |
+Every breaking change was made in the engine and in the four script
+repositories (`aiwebengine-examples`, `aiwebengine-dev`, `aiwebengine-agent`,
+`aiwebengine-private`) together, and the seven live scripts were moved to slug
+names.
 
-## What is true of the tree now
-
-Things a returning reader would otherwise have to rediscover.
-
-**A script is one tree.** `scripts` holds identity, name, ownership and init
-status — no content. The entrypoint is the `assets` row named
-`main.{ts,js,tsx,jsx}`, resolved from the tree (`SourceView::root_path`) and
-falling back, only for a script with no files, to the URI's extension.
-`script_revisions.root_sha256` is gone; a revision's manifest is the whole of
-it.
-
-**Writing or deleting a `main.*` takes `WriteScripts` / `DeleteScripts` and
-ownership**, wherever it is reached — the batch, the single write, the patch,
-the delete. Merging the storage must not make `WriteAssets` a way to replace
-a script's program. `assetStorage` refuses a root name outright, because it
-could not reach one before the merge.
-
-**A registration is one kind of thing.** `RouteMetadata` carries a
-`RouteKind` — `Handler`, `File` or `Stream` — and all three `routeRegistry`
-calls record into the same sink, land in the script's registrations, and are
-indexed by `route_index`. Consequences worth knowing: patterns work for all
-three; a registration the script stops making actually disappears on
-re-`init()`; precedence is stated in `route_index::resolve` (file, then
-stream, then handler).
-
-**Exposure is the directory.** `public/` is served, `resources/` is an MCP
-resource, everything else is reachable only to the linker and the script.
-A registration naming a file outside its directory is **refused** — and
-refusals are recorded per script and cleared on each `init()`, which is what
-`GET /engine/exposure` reports.
-
-**Public by default is correct, not a gap.** A stream's callback and a file
-route's `authorize` are the hook a route's handler is; a handler that checks
-nothing is public too. `docs/SIMPLIFICATION.md` §2.1 used to list this as a
-defect and no longer does.
-
-## Decisions taken since the plan was written
+## Where the tree differs from the plan
 
 These override `docs/SIMPLIFICATION.md` where the two disagree.
 
-- **No path-prefix mounts.** §4's `script_mounts` table (host plus path
-  prefix) is not being built. Every script keeps publishing at `/` of
-  the host(s) it is bound to, and **binding a script to a host stays an API
-  call** — today's `/engine/script_hosts` / `set_script_hosts`. That is what
-  lets two scripts register the same path: they are set to different hosts.
-  What changes is that a collision _on one host_ stops being silent (Phase 3).
-  Because there is no prefix, `public/**` is **not** served automatically —
-  every script would claim `/app.js` at the same root. A served file keeps an
-  explicit file route.
-- **Flat HTTP URLs.** The generated HTTP surface is `POST /engine/{tool_name}`
-  with the tool's arguments as the JSON body (`GET` with query arguments for
-  read-only operations). No REST-shaped paths are kept through hints.
-- **`registerRoute(path, spec)` lands with §5**, not before it. `routeRegistry`
-  is one of the raw globals §5 wraps, and both changes rewrite the same
-  `init()` call sites — doing them apart breaks every script twice.
-- **§3 before §4.** §4 renames the `uri` argument of nearly every operation;
-  after §3 that is one table rather than HTTP, MCP and OpenAPI separately.
+- **No path-prefix mounts.** Every script publishes at `/` of the hosts it is
+  bound to, and binding a script to a host stays an API call
+  (`set_script_hosts`). What changed is that a collision on one host stopped
+  being silent. `public/**` is therefore not served automatically — a served
+  file keeps an explicit file route.
+- **Flat HTTP URLs.** `POST /engine/{operation}` with a JSON body, `GET` with
+  query arguments for the read-only ones. No REST-shaped paths and no per-route
+  hints; a file read is JSON, with the digest in the body rather than an `ETag`.
+- **Collisions are derived, not recorded.** The older script (by
+  `scripts.created_at`, read from the database) keeps a `(host, path, method)`;
+  the rest are listed as `collisions` in `exposure_report`, computed from the
+  stored registrations, so nothing needs clearing on `init()`.
+- **Slugs are checked where a script is created, not where it is stored.** Every
+  script that existed kept the identifier it had, so there was no
+  rewrite-every-identifier migration; renaming is something an operator does to
+  one script at a time. Physical table names did not need renaming either — the
+  name is stored in `script_tables` and read back — only _new_ tables hash
+  `scripts.id`.
+- **`git_sync` records the directory.** A pulled script is found by the
+  repository directory on its sync row, not by composing its name again, so a
+  rename is followed and a push no longer inverts a URL.
+- **`scripts.id` had been dropped** when `uri` became the primary key, so §4's
+  "has existed since 2024 and nothing references it" had stopped being true; the
+  migration put it back.
 
-## The scripts that have to move with the engine
+## Left on purpose, in the order they matter
 
-Every breaking change below is paid for in four repositories, and nothing
-else is in scope — not the live database's copies, which are refreshed by
-pulling these after each cutover.
-
-| repository                | what is in it                                        | register\* sites | `JSON.parse(` |
-| ------------------------- | ---------------------------------------------------- | ---------------- | ------------- |
-| `../aiwebengine-agent`    | the agent script (heavy `database`, `secretStorage`) | ~30              | ~23           |
-| `../aiwebengine-dev`      | `admin`, `docs`, `editor` + deploy tooling           | ~43              | ~38           |
-| `../aiwebengine-examples` | ~27 example scripts + the same deploy tooling        | ~82              | ~132          |
-| `../aiwebengine-private`  | one private solution (heavy `schedulerService`)      | ~16              | ~32           |
-
-Counts are greps and include each repo's vendored `types/aiwebengine.d.ts`;
-they are for sizing, not a checklist. Three things in them are coupled to the
-engine beyond the JS API:
-
-- **Deploy tooling.** `aiwebengine-dev/scripts/` and
-  `aiwebengine-examples/scripts/` are identical copies (`upload-script.js`,
-  `deploy-assets.js`, `check-script.js`, `run-tests.js`, `revisions.js`,
-  `git-sync.js`, `set-script-hosts.js`, …) calling about thirty `/engine/*`
-  paths. Phase 2 breaks all of them. `aiwebengine-examples` is already the
-  source: fix it there and `make sync-tooling` in `aiwebengine-dev`
-  (`make check-tooling` fails on drift).
-- **Browser UIs calling the engine.** `aiwebengine-dev`'s `admin` and `editor`
-  call `/engine/*` from the page (`script_logs`, `assets`, `users`,
-  `script_hosts`, …). Also Phase 2.
-- **`aiwebengine.config.json`** composes script URIs from `uriOrigin` +
-  directory (`https://example.com/editor`). Phase 4 replaces that with slugs.
-
-**The cutover procedure, per breaking phase:**
-
-1. On an engine branch, make the change and rewrite the fixtures in `tests/`
-   and `scripts/test_scripts/`.
-2. In each of the four repos, on a branch of the same name: `make fetch-types`
-   (or copy `assets/aiwebengine.d.ts`) from the local engine, rewrite, and
-   `make typecheck` until clean — the typecheck is what finds the call sites
-   the greps missed.
-3. Against a local engine running a **clone of real data**
-   (`CREATE DATABASE x TEMPLATE aiwebengine`): pull each repo in, run
-   `check_script` and `run_tests` over every script, and read
-   `/engine/exposure` and the collision report for anything refused.
-4. Merge the engine, deploy, then pull the four repos straight away. Scripts
-   fail `init()` in the gap; with one operator that is acceptable, and it is
-   shorter than any compatibility shim would be to write and remove.
-
-## Next, in order
-
-### Phase 0 — housekeeping
-
-- Refresh the stale local database. The repository side is done
-  (`aiwebengine-agent` `e6395e9` moved the two files under `public/`); what is
-  left is the database, whose `agent.ts` is far older than the repository — a
-  single `main.ts` beside root-level `app.js` / `ui.html` — and which also
-  holds ~40 fixture scripts from before tests had databases of their own.
-  Worth doing before Phase 1, because "a clone of real data" in the cutover
-  procedure means this database.
-  **Rebuilt 2026-09-30** from `aiwebengine_test_template` (an empty database
-  cannot even compile the engine, since `sqlx::query!` checks against it) and
-  loaded from the four repositories with a scratchpad copy of the tooling, so
-  no repository's production token was touched. 30 of 32 scripts initialise;
-  the two that do not are `github_mcp_issues`, which has no `init()`, and
-  `auth_roles_demo` (below). What it turned up:
-  - ~~**Executing a script writes it.**~~ **Fixed:**
-    `execute_script_secure` no longer stores what it runs; tests that used it
-    as their deploy step store the script first. `js_engine::execute_script_secure`
-    calls `repository::upsert_script(uri, content)` on every execution, which
-    before the tree merge rewrote a column and now writes an entry _file_,
-    named from the URI's extension. So every boot rewrites every script's
-    entrypoint; a script with no entrypoint gets an empty `main.js`; and a
-    TypeScript script whose URI has no `.ts` gets its source written into a
-    second entry, `main.js`.
-  - ~~**Writing `main.ts` stores `main.js`.**~~ **Fixed:** a write that
-    names the entrypoint (`upsert_root_authorized`, reached by every
-    single-file write of a `main.*`) writes that file and removes any other
-    entrypoint in the same transaction, so naming the file is how its
-    language changes. A write that names none (`upsert_script`, a batch's
-    `content`) keeps writing whichever entrypoint the tree has. The single-file write of an entry
-    delegates to `upsert_script_authorized`, which names the file from the
-    URI and drops the name the caller gave. Same root cause: the URI extension
-    is still load-bearing on the write path, which §1 says it no longer is.
-    The four TypeScript/JSX examples (`typescript`, `tsx`, `jsx`,
-    `import-example`) are loaded with it.
-  - **The tooling uploads every entry through `/engine/upsert_script`**, which
-    carries no file name — the same bug from the client side. Goes away in
-    Phase 2 with `upsert_script`, but the tooling should write the entry as
-    the file it is.
-  - **A capability refusal on `/engine/upsert_script` answers 500**, not 403.
-    Phase 2's single error mapping fixes this class.
-  - **`upload-script.js` collects `.git/` and ignores the repository's
-    `.aiwebengineignore` when `--assets-dir` is the repository root** (it
-    reads the ignore file from the tooling's own root), and it chunks batches
-    by bytes but not by the engine's 256-file ceiling.
-  - `aiwebengine-examples/auth_roles_demo` registers `/auth/demo`, which is a
-    reserved prefix. A script bug, not an engine one.
-  - ~~**The connection pool ran dry after about an hour.**~~ The development
-    Mac was sleeping. `pmset -g log` shows Maintenance Sleep every ~15
-    minutes with brief DarkWakes, and a sleep freezes the engine and the
-    Postgres VM mid-request: the "hang" lasted as long as the machine slept,
-    including past a 20-second curl timeout. Kept awake (`caffeinate -i`),
-    the same runs answer in well under a second. What remains is a weaker
-    question — whether the engine recovers by itself after the database
-    vanishes under it for a while — which matters for a laptop and not for a
-    server. Anything long-running locally belongs under `caffeinate -i`.
-- ~~Fix or quarantine `desktop::tests::generated_config_loads_and_validates`~~
-  — it passes now; a full `cargo nextest run --all-features` on `47fb7b0` is
-  1705 passed, 0 failed.
-- ~~In `docs/SIMPLIFICATION.md`: close the settled deny-shape open question and
-  point §4 at the decisions above.~~
-
-### Phase 1 — one JavaScript convention (§5, §6, rest of §1)
-
-**Progress. Phase 1 is complete** on `simplify-js-convention`, in the engine
-and in each of the four repositories — unpushed and undeployed. The engine
-and the four repositories have to be merged and deployed together: every
-script on the branch assumes the new globals and every script on `main`
-assumes the old ones.
-
-- **1a done** (engine `d5c7dea`). `registerRoute(path, spec)` with the three
-  old names deleted, `routeRegistry` preluded over `__hostRouteRegistry`,
-  sends answering `{ delivered, connections, failed }` with the filter as an
-  object. Two choices the plan above left open: `authorize` is refused on a
-  handler spec, since a handler decides for itself; and a reserved path
-  throws rather than being refused, since no script can ever hold one. The
-  four repositories were rewritten by codemod (`register-route.js` and
-  `filter-object.js` in the session scratchpad — mechanical, then by hand
-  for prose and for the three places that parsed the old sentences). Loaded
-  into the local engine, the same 30 of 32 scripts initialise as before, with
-  165 routes.
-- `git_push files_the_script_does_not_own_survive` timed out once under the
-  full suite (180s) and passes alone in 0.3s — very likely the same sleep.
-- **1b done** (engine `9f282c0`). `files.list/read/write/delete` replaced
-  `assetStorage`: a read is text or `null`, binary is asked for with
-  `{ encoding: "base64" }`, failures throw, the listing is sorted and keyed
-  by `path`. `files` is configurable and writable so a script's own
-  top-level `const files` shadows it. The agent's skill code, the dev
-  repository's docs script and editor, and the dev reference and assets
-  guide moved with it. Verified locally with the Mac kept awake: the same 30
-  of 32 scripts initialise, the docs script serves Markdown through
-  `files.read`, and the agent's 86 and the private script's 313 in-engine
-  tests pass.
-- **1c done** (engine `3326e09`, `6cd770c`). `database` is preluded and ten
-  methods: `ensureTable` describes a table (with a new `reference` column
-  type standing in for `addReferenceColumn`), `query` takes an options
-  object, `transaction(fn)` replaced the six transaction and savepoint calls,
-  and the lease calls went with their repository code — a row read
-  `forUpdate` in a transaction does the same, which is what virtual-world now
-  does. Three things it surfaced: a handler returning an array or plain
-  object as its body got `"[object Object]"` (now JSON); an async-semantics
-  rollback test ran anonymously and passed without ever writing; and a
-  failed commit or rollback stranded the transaction state on its pooled
-  thread, so that thread could never start a transaction again and schema
-  setup run on it failed silently — the cause of virtual-world's migration
-  "not running" locally. All four repositories pass their in-engine tests
-  (agent 86, private 313, virtual-world 339) with the Mac kept awake.
-- **1d done** (engine `991d2a9`). `secretStorage`, `schedulerService` and
-  `mcpRegistry` are preluded: writes return nothing and throw, registrations
-  answer `{ ok, ... }` or `{ ok: false, reason }` outside `init()` and throw
-  on misuse (arguments now validated before the phase is checked, as
-  `registerRoute`'s are), and `mcpRegistry` takes `(name, spec)` with schemas
-  and prompt arguments as objects. `removeSecret` throws on a refusal where it
-  used to answer `false`. Locally the same 30 of 32 scripts initialise, the
-  in-engine tests pass, and the 14 MCP tools the repositories register are
-  all registered.
-- **1e done** (engine `bc250ab`). `convert` and `McpClient` are preluded.
-  `convert`'s four functions answer their result and throw, and
-  `render_handlebars_template` takes its data as an object (JSON text still
-  accepted). `McpClient` is a class — `new McpClient(url, secret)`,
-  `listTools()`, `callTool(name, args)` — throwing on a JSON-RPC error with
-  the server's `code` on the error; the descriptor-passing `constructor` /
-  `_listTools` / `_callTool` statics are gone, and so are the wrapper classes
-  `github` and `github_mcp_issues` carried. `fetch`'s response lost the
-  `toString()` that yielded the old JSON envelope, so `JSON.parse(fetch(…))`
-  no longer works; options have been an object since before this phase, and
-  the dev reference and the editor's prompt stopped saying they must be a
-  string. The `__writeLog` host returns nothing. The grep the plan set as
-  1e's bar is clean: what remains of `"Error: "` in `secure_globals.rs` is
-  comments, and the one test matching it reads a thrown error's text.
-  Verified locally under `caffeinate -i`: the same 30 of 32 scripts
-  initialise (`auth_roles_demo` registers a reserved path, `github_mcp_issues`
-  has no `init()`), `/docs` and `/blog` render through `convert`, and the
-  agent's 86, the private script's 313 and virtual-world's 339 in-engine
-  tests pass. Repository commits: examples `c2608c4`, dev `3aa283e`, agent
-  `3daa009`; private needed nothing.
-
-Breaking for every script; do it as one release with one cutover. One commit
-per global, each with its `aiwebengine.d.ts` change:
-
-- **1a `routeRegistry`.** Prelude, and the one call:
-
-  ```js
-  routeRegistry.registerRoute("/things/:id", {
-    handler: "getThing",
-    method: "GET",
-  });
-  routeRegistry.registerRoute("/things/:id/events", {
-    stream: true,
-    authorize: "mayWatch",
-  });
-  routeRegistry.registerRoute("/thing.css", { file: "public/thing.css" });
-  ```
-
-  Exactly one of `handler`, `stream`, `file`. Shared: `summary`,
-  `description`, `tags`, `authorize`; handlers add `method`, `parameters`,
-  `requestBody`. `registerStreamRoute` and `registerAssetRoute` are deleted,
-  not aliased. Misuse (no target, two targets, unknown key) **throws**; a
-  _refusal_ — a file outside `public/`, and from Phase 3 a path another
-  script holds on this host — **returns** `{ ok: false, reason }`, so one bad
-  registration does not cost the script its others. That keeps what exposure
-  enforcement already does and states it as the rule.
-
-- **1b `assetStorage` → a file API on the script's own tree.** Same four
-  operations, preluded, returning values and throwing errors; keeps refusing
-  `main.*`. Name to decide at the time (`files` is the obvious one). Document
-  it as "content that changes without a redeploy"; anything static becomes an
-  import.
-- **1c `database`.** Prelude first (real objects, thrown errors), then trim:
-  the seven `add*Column` go (`ensureTable` covers them), the six transaction
-  and savepoint calls become one `transaction(fn)` over the nesting
-  `Database::begin_transaction` already does, `acquireLease` /
-  `createLeaseTable` go (`scriptTasks` lanes). ~28 → ~10. The agent and the
-  examples' `dbtest` are the heaviest users; the lease users move to a laned
-  `scriptTasks` queue.
-- **1d** `secretStorage`, `schedulerService`, `mcpRegistry` preludes.
-- **1e** Delete the `"Error: ..."` value formats from `secure_globals.rs` and
-  the bare `: string` returns from `aiwebengine.d.ts`; a grep for either
-  should come back empty.
-- **Scripts:** every `JSON.parse(<global>.…)` and `startsWith("Error")` check
-  goes, every registration is rewritten. Mechanical but wide — examples is
-  most of it.
-
-### Phase 2 — one operation table (§3)
-
-**Progress. Phase 2 is complete** — the engine (`engine_http.rs`), and the
-deploy tooling, UIs and docs of `aiwebengine-examples`, `aiwebengine-dev`,
-`aiwebengine-agent` and `aiwebengine-private`. `engine_api.rs` went from 11,637
-to about 7,500 lines, and 1,701 tests pass. Verified against a deployed engine
-with the read-only tooling commands, `check_script` on the editor and admin
-sources, and a scratch script exercised through upload, deploy, pin, label,
-revert and host binding (then deleted).
-
-- **The inventory** found that all but six of the 58 routes already had a tool
-  (the six are the ones below that stay hand-written): `upsert_script` / `assets` are `write_file`, `read_script` is
-  `read_file`, `assets/batch` is `write_files`, `undeploy` is
-  `deploy_script` with `follow`, clearing limits is `set_script_limits` with no
-  fields, and so on. The routes and tools were two implementations of the same
-  cores (`tool_read_logs` is a copy of `script_logs_route`), which is the
-  argument of §3 made literal.
-- **Generated**: `POST /engine/{name}` for each of the 52 operations, and `GET`
-  with query arguments for the 20 in `engine_http::READ_ONLY`. Registered by
-  name rather than as a `/engine/{operation}` wildcard, which would have
-  swallowed `/engine/script_updates`. The three file-writing operations carry
-  the larger body ceilings the old asset routes had; the rest inherit
-  `security.max_request_body_bytes`.
-- **Deleted**: 52 route functions, their `#[utoipa::path]` annotations, and
-  every parameter struct and helper that only they used. `utoipa` stays — the
-  non-engine routes (`/health`, `/mcp`, `/auth/*`) still use it.
-- **Stays hand-written** because it is not an operation: the two SSE streams,
-  `/engine/health/cluster` (a probe whose 503 is its answer; an
-  `http_status` hint on the table entry would let it move, if wanted),
-  `/engine/installed`, `/engine/openapi.json`, `/engine/engine.css`,
-  `/auth/unauthorized`, `/favicon.ico`.
-- **Tests** call operations through `engine_http::call_operation(name, method,
-session, query, body)` where they used to call a route function, so they
-  still exercise the dispatcher, the error mapping and the session without a
-  server. Where an old test pinned the route's shape — raw JavaScript with an
-  `ETag`, form-encoded bodies, `Script not found` as the whole error — it was
-  rewritten to the operation's shape.
-
-What this changed for callers, which the cutover has to absorb:
-
-- Every path is `/engine/{tool_name}`; the old names are gone (`/engine/scripts`
-  is `list_scripts`, `/engine/script_logs` is `read_logs`, `DELETE
-/engine/script_logs` is `POST /engine/clear_logs`, `/engine/user_roles` is
-  `add_user_role` / `remove_user_role`, and so on). Bodies are JSON; form
-  bodies and raw-source bodies (`/engine/eval`, `/engine/check`) are no longer
-  accepted — pass `content` / `source`.
-- Arguments follow the tool schema, so the file operations name a file
-  `{ script, path }` where the assets routes said `{ script, asset }`, and
-  `/engine/upsert_script`'s `uri` + form `content` is
-  `write_file { script, path: "main.ts", text }`. That also fixes Phase 0's
-  "the tooling uploads every entry through `upsert_script`, which carries no
-  file name": the client now has to name the file.
-- A read of a file is JSON (`content`, `sha256`, `bytes`, `encoding`), not the
-  bytes with `Content-Type` and `ETag`. No `HttpHint` was built; nothing needed
-  one once the decision was flat JSON.
-- A `create` is `create_file`, not an `If-None-Match: *` header.
-
-Known gaps, in the order they matter:
-
-1. **Status codes come from the error text.** `status_for_error` classifies
-   `{ "error": "..." }` by substring because that is all an operation returns.
-   It is one place and it is tested, but it is a classifier over prose: a new
-   message that happens to contain `not found` becomes a 404. The fix is a
-   typed refusal on the operation's side (`AppError`, or an optional `status`
-   in the result) — touching the ~100 `json!({ "error": ... })` sites — and it
-   is what the plan meant by "`AppError` maps to 400/403/404 in one place".
-2. **No `capability` column on the table.** Each operation still authorizes
-   itself inside its core function, as it did for MCP. Listing the capability
-   in the entry would let the router refuse before running and would document
-   it in OpenAPI; it was not needed to delete the routes.
-3. **Item 6 (generate `engine.call` argument types in `aiwebengine.d.ts`)** is
-   not done.
-4. **Prose docs got a path rename, not a rewrite.** `docs/*.md` and the
-   `assets/*.d.ts` comments were mechanically moved to the new names, and the
-   `DELETE` / `PATCH` examples fixed by hand, but a curl example that sends
-   query parameters to a `POST` operation (`secrets`, `limits`, `tasks`,
-   `deploy`, `git/*`) still needs reading.
-
-**Scripts — done.** The tooling moved in `aiwebengine-examples` and was
-synced into `aiwebengine-dev` (`make check-tooling` is clean). The `admin`
-and `editor` pages post to `/engine/{operation}`; the editor finds a script's
-entrypoint through `list_files` and hides it from the asset list; clearing
-logs is per script. The agent and private repositories only needed prose
-(`run_tests` takes a JSON body; the file tools' current names). Two engine
-changes came out of the cutover: `list_scripts` returns `name`, `updatedAt`,
-`createdAt`, `initialized` and `initError`, and `list_routes` takes `host`.
-
-Not verified in a browser: the editor's and admin's own flows. `git-sync`
-was changed (paths only) but not run.
-
-### Phase 3 — a collision on one host is refused (§4, the part that survives)
-
-**Progress. Done in the engine**; nothing in the script repositories needed to
-change. Not yet checked against the live deployment's registrations — that is
-the one step the plan asked for that has to wait for a deploy
-(`exposure_report`, below).
-
-- **Who holds a path is a rule about the scripts, not about timing.**
-  `route_index::build_index` ranks scripts by `scripts.created_at` (then URI)
-  and the first claimant of a `(host, path, method)` keeps it; the rest are not
-  indexed. Registered pattern strings are compared, so `/t/:id` and `/t/:name`
-  do not collide with each other. File routes and streams collide through
-  their `ASSET` / `STREAM` pseudo-methods like anything else. `*` counts as
-  every host because the index already expands it.
-- **That needed a real age.** `ScriptMetadata::new` stamps the moment the
-  metadata was _loaded_, so after a restart every script had the same
-  `created_at` and "the older script" meant nothing. `get_all_script_metadata`
-  now reads `scripts.created_at` and overwrites the cached value with it.
-- **Told at registration.** `registerRoute` asks `route_index::refusal_for`
-  first and answers `{ ok: false, reason }` naming the holder, for handlers,
-  files and streams. It is feedback, not the rule: a lower-ranked script that
-  initialises before the holder is not told, and is shadowed by the index
-  afterwards. In a dry run it is skipped, so `check_script` still reports its
-  `route-conflict` diagnostic (reworded: the older script keeps the path).
-- **The report is `exposure_report`.** It gained `collided` and `collisions`
-  (`{ script_uri, host, path, method, held_by }`) beside the exposure
-  refusals. They are derived from the stored registrations on each call, so
-  there is nothing recorded to clear on `init()` — the "recorded per script"
-  design in the plan would have needed a second place to go stale.
-- **Moving a script is where it is refused up front.** `set_script_hosts`
-  lists the paths (up to ten) the script holds that another script already
-  holds on a host it would newly arrive on, and stores nothing. Hosts it
-  already shares are not counted, so re-saving a binding still works.
-- **Startup is in name order** (`execute_startup_scripts`, `initialize_all_scripts`).
-  The ranking does not depend on it; it makes two boots comparable.
-
-Before relying on it, read what a real deployment would refuse: after the next
-deploy, `exposure_report` against `manage.softagen.com` — `collisions` should be
-empty unless two scripts really share a host and a path. If it is not, those are
-paths that were already being decided by whichever `init()` ran last.
-
-### Phase 4 — name and stable identity (§4)
-
-**Progress. Done in the engine and in the four repositories' tooling**, flat
-slugs (`shop`, not `acme/shop`) as decided. The live deployment's scripts still
-have their URL-shaped names; moving them is `rename_script` per script, and is
-left to be done on purpose (below).
-
-- **4a identity.** One migration (`20261003090000`): `scripts.id` returns (it was
-  dropped when `uri` became the primary key, so the plan's "has existed since
-  2024 and nothing references it" had stopped being true); every table that
-  names a script now references `scripts(uri)` with `ON UPDATE CASCADE` — the
-  seven that already did were re-created, eleven gained the key they lacked
-  (orphan rows, which belong to a script that is gone, are deleted first); and
-  `logs` stays unconstrained because the engine files its own lines under
-  `server`. **Physical table names did not need renaming:** the name is stored in
-  `script_tables` and read back, never recomputed, so a renamed script keeps its
-  tables. What the id changes is _new_ tables, hashed from `scripts.id`, so a
-  name a renamed script left can be taken by a new script.
-- **`rename_script`** is an operation like the rest (`POST /engine/rename_script`
-  `{uri, to}`): write-and-ownership or an administrator, no `DeleteScripts`
-  because nothing is lost. The cache entry is re-keyed rather than evicted so
-  its routes keep answering while it initialises again; pins, limits and
-  revision state follow; peers get a `deleted` for the old name and an
-  `upserted` for the new one.
-- **4b slugs** (`slug.rs`). Checked where a script is created — a write that
-  creates, a pull, a rename's target — and **not** where it is stored, so every
-  existing script keeps working under the name it has. That is why there was no
-  rewrite-every-identifier migration: renaming is something an operator does to
-  a script, one at a time, with `slug::suggest` for a proposal. Reserved:
-  `core`, `server`, `engine`, `native`, `system`.
-- **`git_sync`** (third `MAPPING_VERSION`): a name is the directory,
-  `{prefix}-{directory}` with a prefix, or the repository's name for a
-  repository that is one script. The directory goes on the sync row
-  (`repo_dir`), so later pulls and pushes find the script by it and a rename is
-  followed. The migration derives `repo_dir` for existing rows from their
-  recorded base, checked against the three live bindings.
-- **Scripts.** `uriOrigin` and `scriptUriOverrides` are gone from
-  `aiwebengine.config.json` (`scriptNames` is directory → name); the shared
-  tooling, the editor (which now reads a script's language from its entrypoint
-  file, since the name no longer carries an extension) and the docs moved. The
-  `--script-uri` flags keep their spelling: the engine's argument is still
-  `uri`, and unifying `uri`/`script` is a separate change.
-
-**Left to do on the live deployment, deliberately.** Renaming is irreversible
-in the sense that anything outside the engine that holds a script's URL (a
-bookmark, an MCP client's configured name for a tool's script, a repository
-binding made under the old rules) is not updated. Suggested names for the
-seven live scripts, from `slug::suggest`: `admin`, `docs`, `editor`,
-`virtual-world`, `agent`, `feedback`, `aiwebengine-private`.
-
-### Phase 5 — wrap-up
-
-- The "what narrows what" document (§8).
-- Decide `mcp_elicitation.rs` (§7).
-- CLAUDE.md, README and `docs/` brought in line; this file collapses to a
-  short record of what was done.
-- Each of the four repos' README / CLAUDE.md updated for the API it now uses.
+1. **Status codes come from the error text.** `engine_http::status_for_error`
+   classifies an operation's `{ "error": "..." }` by substring, because that is
+   all an operation returns. It is one tested place, but it is a classifier over
+   prose: a new message containing `not found` becomes a 404. The fix is a typed
+   refusal on the operation's side (`AppError`, or an optional `status` in the
+   result), touching the ~100 `json!({ "error": ... })` sites.
+2. **No capability column on the operation table.** Each operation still
+   authorizes itself inside its core function. Listing the capability in the
+   entry would let the router refuse before running and would document it in
+   OpenAPI.
+3. **`engine.call`'s argument types are not generated** into
+   `aiwebengine.d.ts` from the table.
+4. **`uri` and `script` are both argument names.** The operations take `uri` for
+   the script's name in some places and `script` in others, and the tooling's
+   `--script-uri` flag keeps the older spelling. Unifying them is one table edit
+   now, and a breaking change for every caller.
+5. **Prose docs got a path rename, not a rewrite**, for the `POST` examples that
+   send arguments in a query string (`secrets`, `limits`, `tasks`, `deploy`,
+   `git/*`). They want reading, not searching.
+6. **`mcp.ask` has no user.** See §7. Reconsider after the next MCP revision.
+7. **Not verified in a browser:** the editor's and admin's own flows after the
+   operations and slug changes, and `git-sync` run against a real repository
+   (its paths and bindings are covered by tests).
 
 ## Things to be careful of
 
-- **`make test-simple` (`cargo test`) does not pass and is not a gate.** Use
-  `cargo nextest`. See CLAUDE.md for why.
-- **The local `aiwebengine` database is stale** relative to the live engine —
-  see Phase 0. Its `agent.ts` still has `app.js` and `ui.html` at the tree
-  root, so those two registrations will be refused on next boot. The live deployment is
-  clean (all 32 asset registrations name a `public/...` file, no script
-  registers MCP resources).
-- **Verify migrations against a clone of real data**, not just the test
-  template, which is empty: `CREATE DATABASE x TEMPLATE aiwebengine`, point
-  `APP_REPOSITORY__DATABASE_URL` at it, boot, then drop it. The tree-merge
-  migration was checked that way and it is the only thing that would have
-  caught a bad `INSERT ... SELECT`.
-- **Registrations are in-memory only** (the metadata cache), so extending
+- **`cargo nextest`, not `cargo test`.** `make test-simple` does not pass and is
+  not a gate. See CLAUDE.md for why.
+- **Verify a migration against a clone of real data**, not only the test
+  template, which is empty: `CREATE DATABASE x TEMPLATE aiwebengine`, run it,
+  drop it. The tree merge and the identity migration were checked that way. A
+  test template is fingerprinted by migration _names_, so editing a migration
+  that has already run needs `DROP DATABASE aiwebengine_test_template`.
+- **Registrations are in memory only** (the metadata cache), so extending
   `RouteMetadata` needs no migration.
+- **Anything long-running locally belongs under `caffeinate -i`.** A sleeping
+  Mac freezes the engine and the Postgres VM mid-request and looks like a hang.
+- **Renaming a script does not update what holds its old name outside the
+  engine**: a bookmark, an MCP client's configured script, a binding made under
+  the old rules.

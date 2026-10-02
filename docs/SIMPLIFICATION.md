@@ -600,10 +600,20 @@ The per-stream JavaScript customization callback is **not** part of this and is
 not a candidate for removal. See §2.1: it is the only surface that gets
 per-resource authorization right, and capabilities cannot replace it.
 
-**Worth questioning, not an obvious cut:** `mcp_elicitation.rs` (782 lines).
-`mcp.ask` is a third way to end an execution beside `mcp.task` and a normal
-return, and it works only for clients implementing elicitation. If `mcp.task`
-plus a stream covers it, that is one fewer terminal path.
+**Decided: `mcp_elicitation.rs` (782 lines) stays.** The question was whether
+`mcp.task` plus a stream covers `mcp.ask`, which would make it one fewer way to
+end an execution. It does not, and for a reason that is in the protocol rather
+than in the code: an `ask` puts a question to the person _driving the client_,
+and the answer comes back as a new `tools/call` carrying it (Multi Round-Trip
+Requests, stateless by construction). A stream can tell a page something; it
+cannot carry an answer back into a tool call, and `mcp.task`'s `input_required`
+is representable and unreachable on purpose. The cost is real and is stated
+here instead of being left to be discovered: **no script in the four
+repositories calls `mcp.ask`**, so what it buys today is conformance and the
+tests that hold it (`tests/mcp_elicitation.rs`), not a user. It is a candidate
+again if that is still true after the next spec revision, and removing it is
+cheap — it is one module with one terminal path and one prelude, with no
+storage and no migration.
 
 ## 8. Not a drop: document the four narrowings as one
 
@@ -614,11 +624,19 @@ vocabularies a solution developer must hold at once, across four documents. Not
 a deletion — one "what narrows what" document, and ideally one shared name for
 the operation.
 
+**Done:** `docs/WHAT_NARROWS_WHAT.md`. It covers seven layers, not four — role,
+realm and token audience turned out to belong in the same table — and states
+what they share (the one operation, and its four consequences). The "shared
+name" was already there: the operation is `attenuated`, and the vocabularies
+that differ (capabilities, scopes, grades) differ because they answer different
+questions for different people at different times, not because nobody
+unified them.
+
 ## Where this stands
 
-`docs/SIMPLIFICATION-STATUS.md` tracks how far this has got, what is true of
-the tree right now, and what the next step needs in mind. This document stays
-the argument; that one is the state.
+**Complete.** `docs/SIMPLIFICATION-STATUS.md` is the short record of what was
+done, where the tree differs from what is written here, and what was left on
+purpose. This document stays the argument.
 
 ## Order of work
 
