@@ -82,7 +82,11 @@ pub fn status_for_error(message: &str) -> StatusCode {
         || has("insufficient permissions")
     {
         StatusCode::FORBIDDEN
-    } else if has("already exists") || has("cannot remove the last") || has("has changed since") {
+    } else if has("already exists")
+        || has("cannot remove the last")
+        || has("has changed since")
+        || has("are already held")
+    {
         StatusCode::CONFLICT
     } else if has("old_string")
         || has("edits[")

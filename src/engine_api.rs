@@ -4631,6 +4631,44 @@ pub fn set_script_hosts_authorized(
     }
 
     let hosts = validate_hosts(requested)?;
+
+    // Moving a script is where an operator learns that it would take a path
+    // another script already serves there, rather than from a path that stops
+    // answering after the move.
+    if let Ok(metadata) = repository::get_all_script_metadata() {
+        let conflicts = crate::route_index::conflicts_if_bound(&metadata, uri, &hosts);
+        if !conflicts.is_empty() {
+            let listed: Vec<String> = conflicts
+                .iter()
+                .take(10)
+                .map(|c| {
+                    format!(
+                        "{} {} on {} (held by {})",
+                        c.method,
+                        c.path,
+                        if c.host.is_empty() {
+                            "this engine"
+                        } else {
+                            &c.host
+                        },
+                        c.held_by
+                    )
+                })
+                .collect();
+            return Err(ScriptHostError::Validation(format!(
+                "Not bound: {} registration(s) of {} are already held on those hosts: {}{}",
+                conflicts.len(),
+                uri,
+                listed.join("; "),
+                if conflicts.len() > listed.len() {
+                    "; …"
+                } else {
+                    ""
+                },
+            )));
+        }
+    }
+
     repository::set_script_hosts(uri, &hosts)
         .map_err(|e| ScriptHostError::Storage(format!("Failed to store script hosts: {}", e)))?;
 
@@ -5208,7 +5246,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "exposure_report",
-            "List every registration that publishes one of a script's files from outside the directory that would expose it. A file under 'public/' is served to the world, one under 'resources/' is an MCP resource, and everything else is reachable only to the linker and the script itself. The convention is not enforced yet, so this reports what enforcing it would stop serving; 'unclassified' counts scripts whose init() has not run cleanly and which therefore have registered nothing to report on.",
+            "List the registrations the engine refused to publish. 'scripts' are registrations that name a file outside the directory that would expose it: a file under 'public/' is served to the world, one under 'resources/' is an MCP resource, and everything else is reachable only to the linker and the script itself. 'collisions' are registrations that lost their host, path and method to another script — the older script keeps a path, and the other is told so when it registers. 'unclassified' counts scripts whose init() has not run cleanly and which therefore have registered nothing to report on.",
             || {
                 json!({
                     "type": "object",
@@ -6842,6 +6880,8 @@ fn tool_exposure_report(_args: &Value, user: &UserContext) -> Value {
             "refused": report.refused,
             "unclassified": report.unclassified,
             "scripts": report.scripts,
+            "collided": report.collisions.len(),
+            "collisions": report.collisions,
             "timestamp": iso_timestamp(),
         }),
         Err(e) => json!({ "error": format!("Failed to build the exposure report: {}", e) }),

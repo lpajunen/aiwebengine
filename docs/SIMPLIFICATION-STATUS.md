@@ -407,23 +407,44 @@ was changed (paths only) but not run.
 
 ### Phase 3 — a collision on one host is refused (§4, the part that survives)
 
-- A script's hosts are still set by API: `/engine/script_hosts` /
-  `set_script_hosts` (from Phase 2, `POST /engine/set_script_hosts`). Two
-  scripts on different hosts may register the same path, as today.
-- Two scripts claiming the same `(host, path, method)` — `*` counting as
-  every host — is no longer settled by whichever `init()` ran last
-  (`route_index.rs:190`). The holder keeps it; the second registration gets
-  `{ ok: false, reason: "… held by <script>" }`, is recorded per script and
-  cleared on `init()` exactly like exposure refusals, and shows in the same
-  report (widen `GET /engine/exposure` into a general "refused registrations"
-  report rather than adding a second one).
-- Startup order must be deterministic for "the holder" to mean anything:
-  execute startup scripts sorted by name, so a restart does not hand a path to
-  the other script.
-- `set_script_hosts` that would create a collision on the target host is
-  refused at the call with the conflicting paths listed — the "move this
-  script to that host" operation is where the operator learns it.
-- **Scripts:** none, unless the report shows a collision that exists today.
+**Progress. Done in the engine**; nothing in the script repositories needed to
+change. Not yet checked against the live deployment's registrations — that is
+the one step the plan asked for that has to wait for a deploy
+(`exposure_report`, below).
+
+- **Who holds a path is a rule about the scripts, not about timing.**
+  `route_index::build_index` ranks scripts by `scripts.created_at` (then URI)
+  and the first claimant of a `(host, path, method)` keeps it; the rest are not
+  indexed. Registered pattern strings are compared, so `/t/:id` and `/t/:name`
+  do not collide with each other. File routes and streams collide through
+  their `ASSET` / `STREAM` pseudo-methods like anything else. `*` counts as
+  every host because the index already expands it.
+- **That needed a real age.** `ScriptMetadata::new` stamps the moment the
+  metadata was _loaded_, so after a restart every script had the same
+  `created_at` and "the older script" meant nothing. `get_all_script_metadata`
+  now reads `scripts.created_at` and overwrites the cached value with it.
+- **Told at registration.** `registerRoute` asks `route_index::refusal_for`
+  first and answers `{ ok: false, reason }` naming the holder, for handlers,
+  files and streams. It is feedback, not the rule: a lower-ranked script that
+  initialises before the holder is not told, and is shadowed by the index
+  afterwards. In a dry run it is skipped, so `check_script` still reports its
+  `route-conflict` diagnostic (reworded: the older script keeps the path).
+- **The report is `exposure_report`.** It gained `collided` and `collisions`
+  (`{ script_uri, host, path, method, held_by }`) beside the exposure
+  refusals. They are derived from the stored registrations on each call, so
+  there is nothing recorded to clear on `init()` — the "recorded per script"
+  design in the plan would have needed a second place to go stale.
+- **Moving a script is where it is refused up front.** `set_script_hosts`
+  lists the paths (up to ten) the script holds that another script already
+  holds on a host it would newly arrive on, and stores nothing. Hosts it
+  already shares are not counted, so re-saving a binding still works.
+- **Startup is in name order** (`execute_startup_scripts`, `initialize_all_scripts`).
+  The ranking does not depend on it; it makes two boots comparable.
+
+Before relying on it, read what a real deployment would refuse: after the next
+deploy, `exposure_report` against `manage.softagen.com` — `collisions` should be
+empty unless two scripts really share a host and a path. If it is not, those are
+paths that were already being decided by whichever `init()` ran last.
 
 ### Phase 4 — name and stable identity (§4)
 

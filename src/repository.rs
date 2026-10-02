@@ -1518,6 +1518,45 @@ where
 }
 
 /// Database-backed get all script host bindings (uri -> hosts)
+/// When each script was first stored, by URI.
+///
+/// The route index ranks scripts by this: the one that was here first keeps a
+/// contested path. `ScriptMetadata::new` stamps the moment the metadata was
+/// *loaded*, which on every restart is the same instant for every script and
+/// says nothing about their order.
+async fn db_get_all_script_created<'e, E>(
+    executor: E,
+) -> AppResult<HashMap<String, std::time::SystemTime>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let rows = sqlx::query("SELECT uri, created_at FROM scripts")
+        .fetch_all(executor)
+        .await
+        .map_err(|e| {
+            error!("Database error getting script creation times: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+
+    let mut created = HashMap::new();
+    for row in rows {
+        let uri: String = row.try_get("uri").map_err(|e| AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        })?;
+        let at: chrono::DateTime<chrono::Utc> =
+            row.try_get("created_at").map_err(|e| AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            })?;
+        created.insert(uri, at.into());
+    }
+    Ok(created)
+}
+
 async fn db_get_all_script_hosts<'e, E>(executor: E) -> AppResult<HashMap<String, Vec<String>>>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
@@ -7070,14 +7109,28 @@ impl Repository for PostgresRepository {
             }
         };
 
+        let all_created = match crate::database::get_current_executor(&self.pool) {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_get_all_script_created(&mut **tx).await?
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_get_all_script_created(pool).await?
+            }
+        };
+
         let mut metadata_list = Vec::new();
 
         // Scope for mutex lock
         {
             let mut guard = safe_lock_scripts()?;
             for (uri, content) in db_scripts {
-                if let Some(cached) = guard.get(&uri) {
-                    // Use cached version to preserve runtime state
+                if let Some(cached) = guard.get_mut(&uri) {
+                    // Use cached version to preserve runtime state, with the
+                    // age the database has rather than the one this process
+                    // happened to stamp when it first loaded it.
+                    if let Some(created) = all_created.get(&uri) {
+                        cached.created_at = *created;
+                    }
                     metadata_list.push(cached.clone());
                 } else {
                     // Create new metadata and cache it
@@ -7089,6 +7142,9 @@ impl Repository for PostgresRepository {
                     // Set host bindings from bulk query
                     if let Some(script_hosts) = all_hosts.get(&uri) {
                         metadata.hosts = script_hosts.clone();
+                    }
+                    if let Some(created) = all_created.get(&uri) {
+                        metadata.created_at = *created;
                     }
                     guard.insert(uri.clone(), metadata.clone());
                     metadata_list.push(metadata);

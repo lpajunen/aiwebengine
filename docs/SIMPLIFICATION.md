@@ -635,7 +635,7 @@ the argument; that one is the state.
 6. ~~**Collapse routes and tools into one operation table** (§3); generate HTTP
    and OpenAPI from it.~~ _(done in the engine; see the status document for
    the typed-error follow-up.)_
-7. **Refuse a route collision on one host** (§4, without mounts).
+7. ~~**Refuse a route collision on one host** (§4, without mounts).~~ _(done.)_
 8. **Name and stable identity** (§4): slugs, and `scripts.id` for physical
    table names.
 

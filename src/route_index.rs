@@ -101,6 +101,62 @@ struct IndexInner {
     /// here so it is rebuilt and invalidated together with the routes above.
     /// Covers every script, including ones with no routes of their own.
     script_hosts: HashMap<String, Vec<String>>,
+    /// (host, registered path, method) -> the script that holds it.
+    ///
+    /// One holder per key. Where several scripts claim the same key the
+    /// highest-ranked one (see [`rank`]) holds it and the others are listed in
+    /// [`Self::collisions`] instead of being indexed.
+    holders: HashMap<(String, String, String), String>,
+    /// script URI -> rank, for deciding who outranks whom at registration time.
+    ranks: HashMap<String, Rank>,
+    /// Registrations that lost their key to another script.
+    collisions: Vec<Collision>,
+}
+
+/// Which of two scripts claiming the same path keeps it: the older one, then
+/// the one whose URI sorts first.
+///
+/// A rule about the scripts rather than about when their `init()`s happened to
+/// run, so a restart, a re-deploy or a different startup concurrency cannot
+/// hand a path to the other script. "The holder keeps it" has to be true of
+/// the script that was serving the path yesterday, and the one that has been
+/// here longest is the one that was.
+type Rank = (std::time::SystemTime, String);
+
+fn rank(script: &repository::ScriptMetadata) -> Rank {
+    (script.created_at, script.uri.clone())
+}
+
+/// One registration that was not indexed because another script holds its
+/// `(host, path, method)`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Collision {
+    /// The script whose registration was refused.
+    pub script_uri: String,
+    /// The host the two scripts share.
+    pub host: String,
+    pub path: String,
+    pub method: String,
+    /// The script that holds it.
+    pub held_by: String,
+}
+
+impl Collision {
+    /// What a script is told when it asks for something already held.
+    pub fn reason(&self) -> String {
+        format!(
+            "'{} {}' on {} is held by script '{}'. Register a different path, or bind \
+             this script to a different host.",
+            self.method,
+            self.path,
+            if self.host.is_empty() {
+                "this engine"
+            } else {
+                &self.host
+            },
+            self.held_by
+        )
+    }
 }
 
 static INDEX: RwLock<Option<Arc<IndexInner>>> = RwLock::new(None);
@@ -143,7 +199,12 @@ async fn current_index() -> Result<Arc<IndexInner>, String> {
 
 fn build_index(metadata: &[repository::ScriptMetadata]) -> IndexInner {
     let mut inner = IndexInner::default();
-    for script in metadata {
+    // Highest rank first, so the first claimant of a key is the one that
+    // keeps it.
+    let mut ordered: Vec<&repository::ScriptMetadata> = metadata.iter().collect();
+    ordered.sort_by_key(|script| rank(script));
+    for script in ordered {
+        inner.ranks.insert(script.uri.clone(), rank(script));
         // A script is published on the hosts it is bound to: the default host
         // when unbound, every configured host for a `*` binding. Before hosts
         // are configured at all there is nothing to key on, so the script is
@@ -170,8 +231,23 @@ fn build_index(metadata: &[repository::ScriptMetadata]) -> IndexInner {
             continue;
         }
 
-        for ((pattern, method), route_meta) in &script.registrations {
+        // Sorted so the collisions come out in a stable order.
+        let mut registrations: Vec<_> = script.registrations.iter().collect();
+        registrations.sort_by(|a, b| a.0.cmp(b.0));
+        for ((pattern, method), route_meta) in registrations {
             for host in &script_hosts {
+                let key = (host.clone(), pattern.clone(), method.clone());
+                if let Some(holder) = inner.holders.get(&key) {
+                    inner.collisions.push(Collision {
+                        script_uri: script.uri.clone(),
+                        host: host.clone(),
+                        path: pattern.clone(),
+                        method: method.clone(),
+                        held_by: holder.clone(),
+                    });
+                    continue;
+                }
+                inner.holders.insert(key, script.uri.clone());
                 let target = RouteTarget {
                     script_uri: script.uri.clone(),
                     handler_name: route_meta.handler_name.clone(),
@@ -209,6 +285,132 @@ fn build_index(metadata: &[repository::ScriptMetadata]) -> IndexInner {
     }
 
     inner
+}
+
+/// Every registration that lost its key to another script, in a stable order.
+///
+/// Derived from the scripts' stored registrations rather than recorded as
+/// refusals happen, so it describes the deployment as it now stands and needs
+/// no clearing when a script is initialised again.
+pub fn collisions_in(metadata: &[repository::ScriptMetadata]) -> Vec<Collision> {
+    let mut collisions = build_index(metadata).collisions;
+    collisions.sort_by(|a, b| {
+        (&a.script_uri, &a.host, &a.path, &a.method).cmp(&(
+            &b.script_uri,
+            &b.host,
+            &b.path,
+            &b.method,
+        ))
+    });
+    collisions
+}
+
+/// The index, from the cache or built now, for callers that are not async.
+///
+/// Registration runs on a blocking thread in the middle of an `init()`, where
+/// the awaiting form is not available. The cache is the point: a script's own
+/// registrations reach the stored metadata only when its `init()` finishes, so
+/// the index does not change under it while it registers.
+fn current_index_blocking() -> Option<Arc<IndexInner>> {
+    if let Ok(guard) = INDEX.read()
+        && let Some(index) = guard.as_ref()
+    {
+        return Some(Arc::clone(index));
+    }
+    let metadata = repository::get_all_script_metadata().ok()?;
+    let index = Arc::new(build_index(&metadata));
+    if let Ok(mut guard) = INDEX.write() {
+        *guard = Some(Arc::clone(&index));
+    }
+    Some(index)
+}
+
+/// Whether another script that outranks `script_uri` already holds `path` for
+/// `method` on a host `script_uri` is published on — and so would refuse it.
+///
+/// What a script's `registerRoute` asks before it records anything. It is
+/// feedback, not the rule: [`build_index`] decides who holds a key from the
+/// scripts' ranks alone, so a script that registers before the holder has
+/// initialised is still outranked afterwards, and the two answers agree about
+/// who ends up serving the path.
+pub fn refusal_for(script_uri: &str, path: &str, method: &str) -> Option<Collision> {
+    let index = current_index_blocking()?;
+    let mine = index.ranks.get(script_uri);
+    let hosts = index.script_hosts.get(script_uri)?;
+    for host in hosts {
+        let key = (host.clone(), path.to_string(), method.to_string());
+        let Some(holder) = index.holders.get(&key) else {
+            continue;
+        };
+        if holder == script_uri {
+            continue;
+        }
+        // A script not yet in the index (a first deploy) is newer than
+        // everything that is.
+        let outranked = match (mine, index.ranks.get(holder)) {
+            (Some(mine), Some(theirs)) => theirs < mine,
+            _ => true,
+        };
+        if outranked {
+            return Some(Collision {
+                script_uri: script_uri.to_string(),
+                host: host.clone(),
+                path: path.to_string(),
+                method: method.to_string(),
+                held_by: holder.clone(),
+            });
+        }
+    }
+    None
+}
+
+/// What binding `script_uri` to `hosts` would put in conflict, whoever ranks
+/// higher: the registrations it holds now that another script already holds on
+/// a host it would move onto.
+///
+/// For the "move this script to that host" call, which is where an operator
+/// should learn about it rather than from a path that stopped answering.
+pub fn conflicts_if_bound(
+    metadata: &[repository::ScriptMetadata],
+    script_uri: &str,
+    hosts: &[String],
+) -> Vec<Collision> {
+    let Some(script) = metadata.iter().find(|m| m.uri == script_uri) else {
+        return Vec::new();
+    };
+    // Only the hosts it would arrive on. What it already shares today is the
+    // collision report's business, and refusing to re-save an unchanged
+    // binding would make the one tool for moving it away unusable.
+    let current = crate::hosts::effective_hosts(&script.hosts);
+    let new_hosts: Vec<String> = crate::hosts::effective_hosts(hosts)
+        .into_iter()
+        .filter(|host| !current.contains(host))
+        .collect();
+    let mut found = Vec::new();
+    for other in metadata {
+        if other.uri == script_uri || !other.initialized {
+            continue;
+        }
+        let theirs = crate::hosts::effective_hosts(&other.hosts);
+        for host in new_hosts.iter().filter(|h| theirs.contains(h)) {
+            for (path, method) in script.registrations.keys() {
+                if other
+                    .registrations
+                    .contains_key(&(path.clone(), method.clone()))
+                {
+                    found.push(Collision {
+                        script_uri: script_uri.to_string(),
+                        host: host.clone(),
+                        path: path.clone(),
+                        method: method.clone(),
+                        held_by: other.uri.clone(),
+                    });
+                }
+            }
+        }
+    }
+    found.sort_by(|a, b| (&a.host, &a.path, &a.method).cmp(&(&b.host, &b.path, &b.method)));
+    found
 }
 
 /// Finds the handler for a path and method. Exact matches win; param and
@@ -848,5 +1050,77 @@ mod tests {
             "/a".to_string(),
             "GET".to_string()
         )));
+    }
+
+    fn older(mut script: ScriptMetadata, seconds: u64) -> ScriptMetadata {
+        script.created_at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds);
+        script
+    }
+
+    #[test]
+    fn the_older_script_keeps_a_contested_path() {
+        let first = older(
+            script_with_routes("zzz-first", &[("/shop", "GET", "first_handler")]),
+            100,
+        );
+        let second = older(
+            script_with_routes("aaa-second", &[("/shop", "GET", "second_handler")]),
+            200,
+        );
+
+        // Whatever order the scripts are listed in, and whatever their names
+        // sort as, the one that was here first serves it.
+        for metadata in [
+            vec![first.clone(), second.clone()],
+            vec![second.clone(), first.clone()],
+        ] {
+            let index = build_index(&metadata);
+            let (handler, _) = handler_of(match_index(&index, DEFAULT_TEST_HOST, "/shop", "GET"));
+            assert_eq!(handler, "first_handler");
+            assert_eq!(
+                index.collisions,
+                vec![Collision {
+                    script_uri: "aaa-second".to_string(),
+                    host: String::new(),
+                    path: "/shop".to_string(),
+                    method: "GET".to_string(),
+                    held_by: "zzz-first".to_string(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn equal_ages_are_settled_by_name() {
+        let a = script_with_routes("a", &[("/x", "GET", "ha")]);
+        let b = script_with_routes("b", &[("/x", "GET", "hb")]);
+        let index = build_index(&[b.clone(), a.clone()]);
+        let (handler, _) = handler_of(match_index(&index, DEFAULT_TEST_HOST, "/x", "GET"));
+        assert_eq!(handler, "ha");
+    }
+
+    #[test]
+    fn different_methods_and_paths_do_not_collide() {
+        let a = script_with_routes("a", &[("/x", "GET", "ha"), ("/y", "GET", "ha")]);
+        let b = script_with_routes("b", &[("/x", "POST", "hb"), ("/z", "GET", "hb")]);
+        assert!(build_index(&[a, b]).collisions.is_empty());
+    }
+
+    #[test]
+    fn patterns_collide_on_the_registered_string() {
+        let a = older(script_with_routes("a", &[("/t/:id", "GET", "ha")]), 1);
+        let b = older(script_with_routes("b", &[("/t/:id", "GET", "hb")]), 2);
+        let index = build_index(&[a, b]);
+        assert_eq!(index.collisions.len(), 1);
+        assert_eq!(index.collisions[0].held_by, "a");
+    }
+
+    #[test]
+    fn binding_onto_a_host_that_holds_the_path_is_a_conflict() {
+        let mine = script_with_routes("mine", &[("/shop", "GET", "h")]);
+        let theirs = script_with_routes("theirs", &[("/shop", "GET", "h")]);
+        // With no host configuration both publish everywhere already, so
+        // moving changes nothing and is not what is being refused.
+        assert!(conflicts_if_bound(&[mine, theirs], "mine", &[]).is_empty());
     }
 }

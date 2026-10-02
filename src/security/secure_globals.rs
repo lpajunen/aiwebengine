@@ -1125,6 +1125,14 @@ impl RouteRegistrar {
                         path,
                     )));
                 };
+                // A dry run reports a collision as its own diagnostic, which
+                // needs the registration to get that far.
+                if !self.config.is_dry_run()
+                    && let Some(collision) =
+                        crate::route_index::refusal_for(&self.script_uri, path, &method)
+                {
+                    return Ok(Registered::Refused(collision.reason()));
+                }
                 let mut meta = repository::RouteMetadata::simple(name);
                 meta.summary = summary;
                 meta.description = description;
@@ -1150,6 +1158,15 @@ impl RouteRegistrar {
                 };
                 if self.config.collect(registration).is_some() {
                     return Ok(Registered::Done);
+                }
+                if !self.config.is_dry_run()
+                    && let Some(collision) = crate::route_index::refusal_for(
+                        &self.script_uri,
+                        path,
+                        repository::STREAM_METHOD,
+                    )
+                {
+                    return Ok(Registered::Refused(collision.reason()));
                 }
                 (
                     repository::RouteMetadata::stream(authorize),
@@ -1215,6 +1232,15 @@ impl RouteRegistrar {
                     .is_some()
                 {
                     return Ok(Registered::Done);
+                }
+                if !self.config.is_dry_run()
+                    && let Some(collision) = crate::route_index::refusal_for(
+                        &self.script_uri,
+                        path,
+                        repository::ASSET_METHOD,
+                    )
+                {
+                    return Ok(Registered::Refused(collision.reason()));
                 }
                 (
                     repository::RouteMetadata::file(file, authorize),

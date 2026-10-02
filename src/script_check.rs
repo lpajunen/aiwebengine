@@ -698,8 +698,10 @@ fn route_conflicts(script_uri: &str, registrations: &[CollectedRegistration]) ->
                 script_uri,
                 "route-conflict",
                 format!(
-                    "'{} {}' is already registered by script '{}' on {}. Both cannot answer it; \
-                     one of the two will stop serving that path.",
+                    "'{} {}' is already registered by script '{}' on {}. Only one script can \
+                     answer it, and the older one keeps it: if this script is the newer, its \
+                     registration is refused (registerRoute answers `{{ ok: false, reason }}`) \
+                     and the path stays with the other.",
                     method, path, other.uri, shared
                 ),
             ));

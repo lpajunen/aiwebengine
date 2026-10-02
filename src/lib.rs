@@ -1213,7 +1213,11 @@ async fn execute_startup_scripts() -> AppResult<()> {
         }
     }
 
-    for (uri, content) in scripts.iter() {
+    // In name order: a map iterates in whatever order it was built, and "the
+    // script that was here first keeps the path" should not depend on it.
+    let mut scripts: Vec<(&String, &String)> = scripts.iter().collect();
+    scripts.sort();
+    for (uri, content) in scripts {
         info!("Executing script: {}", uri);
         // Use secure execution with admin user context for startup script execution
         let result = js_engine::execute_script_secure(

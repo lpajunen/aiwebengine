@@ -411,7 +411,12 @@ impl ScriptInitializer {
 
         // Get all script metadata
         let all_metadata = match repository::get_repository().get_all_script_metadata().await {
-            Ok(metadata) => metadata,
+            Ok(mut metadata) => {
+                // In name order, so a restart starts the scripts in the order
+                // the last one did and the logs of two boots can be compared.
+                metadata.sort_by(|a, b| a.uri.cmp(&b.uri));
+                metadata
+            }
             Err(e) => {
                 error!("Failed to get script metadata: {}", e);
                 return Err(e);

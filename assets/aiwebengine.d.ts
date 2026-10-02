@@ -523,8 +523,11 @@ interface RouteRegistry {
    * a spec naming no target or two, an unknown key, a reserved path, a
    * capability you do not hold — throws. A **refusal** is returned:
    * `{ ok: false, reason }` for a file outside `public/` or not in the tree,
-   * and for any call made outside startup and `init()`, where there is
-   * nothing to register into.
+   * for a path (same method, on a host this script is published on) that
+   * another script already holds — the older script keeps it, and the reason
+   * names it — and for any call made outside startup and `init()`, where
+   * there is nothing to register into. The same path on a host the other
+   * script is not published on is not a collision.
    */
   registerRoute(path: string, spec: RouteSpec): RegisterRouteResult;
 

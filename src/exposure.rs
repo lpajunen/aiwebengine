@@ -151,6 +151,12 @@ pub struct ExposureReport {
     /// How many scripts could not be classified because their `init()` has
     /// not run cleanly.
     pub unclassified: usize,
+    /// Registrations that lost their `(host, path, method)` to another script.
+    ///
+    /// Reported beside the exposure refusals because it is the same kind of
+    /// thing — a registration the engine declined to publish, and a reason —
+    /// and a second report would be a second place to forget to look.
+    pub collisions: Vec<crate::route_index::Collision>,
 }
 
 /// Registrations this instance refused, per script.
@@ -277,6 +283,7 @@ pub fn report(metadata: &[crate::repository::ScriptMetadata]) -> ExposureReport 
             .sum(),
         unclassified: scripts.iter().filter(|script| script.unclassified).count(),
         scripts,
+        collisions: crate::route_index::collisions_in(metadata),
     }
 }
 

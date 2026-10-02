@@ -375,3 +375,102 @@ async fn mcp_host_tools_enforce_admin() {
 
     repository::delete_script(&uri);
 }
+
+/// Records `routes` as what `uri`'s `init()` registered.
+async fn register(uri: &str, routes: &[(&str, &str)]) {
+    use aiwebengine::repository::{Repository as _, RouteMetadata};
+    let registrations = routes
+        .iter()
+        .map(|(path, method)| {
+            (
+                (path.to_string(), method.to_string()),
+                RouteMetadata::simple("handler".to_string()),
+            )
+        })
+        .collect();
+    repository::get_repository()
+        .update_script_init_status(uri, true, None, Some(registrations))
+        .await
+        .expect("registrations should be stored");
+}
+
+/// Two scripts on different hosts may register the same path. Moving one onto
+/// the other's host is where the operator learns they would collide.
+#[tokio::test(flavor = "multi_thread")]
+async fn moving_a_script_onto_a_host_that_holds_its_path_is_refused() {
+    setup_hosts().await;
+    let holder = create_script("holder");
+    let mover = create_script("mover");
+    let path = format!("/collide-{}", uuid::Uuid::new_v4());
+
+    set_script_hosts_authorized(&admin(), &holder, &["world.softagen.com".to_string()])
+        .expect("admin may set bindings");
+    register(&holder, &[(path.as_str(), "GET")]).await;
+    register(&mover, &[(path.as_str(), "GET"), ("/only-mine", "GET")]).await;
+
+    let error = set_script_hosts_authorized(&admin(), &mover, &["world.softagen.com".to_string()])
+        .expect_err("the move would collide");
+    let ScriptHostError::Validation(message) = error else {
+        panic!("expected the conflict to be reported as a validation error");
+    };
+    assert!(
+        message.contains(&path) && message.contains(&holder),
+        "the refusal names the path and who holds it: {message}"
+    );
+    assert!(
+        !message.contains("/only-mine"),
+        "only the contested paths are listed: {message}"
+    );
+
+    let (stored, _) = get_script_hosts_authorized(&admin(), &mover).expect("admin may read");
+    assert!(stored.is_empty(), "a refused move changes nothing");
+
+    // A host the path is free on is fine.
+    set_script_hosts_authorized(&admin(), &mover, &["manage.softagen.com".to_string()])
+        .expect("a different host has no conflict");
+
+    repository::delete_script(&holder);
+    repository::delete_script(&mover);
+}
+
+/// The collision report names the script that lost and the one that holds.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_collision_on_one_host_is_reported_and_the_older_script_holds_it() {
+    setup_hosts().await;
+    let holder = create_script("older");
+    // Stored a moment apart: the rule is that the script that was here first
+    // keeps the path.
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let latecomer = create_script("newer");
+    let path = format!("/contested-{}", uuid::Uuid::new_v4());
+
+    // Both on the same host: the same path on two hosts is not a collision.
+    for uri in [&holder, &latecomer] {
+        set_script_hosts_authorized(&admin(), uri, &["world.softagen.com".to_string()])
+            .expect("admin may set bindings");
+    }
+    register(&holder, &[(path.as_str(), "GET")]).await;
+    register(&latecomer, &[(path.as_str(), "GET")]).await;
+
+    let report = aiwebengine::engine_api::exposure_report_authorized(&admin())
+        .expect("an administrator may read the report");
+    let found: Vec<_> = report
+        .collisions
+        .iter()
+        .filter(|collision| collision.path == path)
+        .collect();
+    assert_eq!(found.len(), 1, "{:?}", report.collisions);
+    assert_eq!(found[0].script_uri, latecomer);
+    assert_eq!(found[0].held_by, holder);
+
+    let refusal = aiwebengine::route_index::refusal_for(&latecomer, &path, "GET")
+        .expect("the newer script is told when it registers");
+    assert_eq!(refusal.held_by, holder);
+    assert!(
+        aiwebengine::route_index::refusal_for(&holder, &path, "GET").is_none(),
+        "the holder is not refused its own path"
+    );
+
+    repository::delete_script(&holder);
+    repository::delete_script(&latecomer);
+}
