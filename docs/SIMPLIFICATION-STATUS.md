@@ -10,21 +10,21 @@ across 45 files) and is **merged into `main`**.
 
 ## What is done
 
-| §     | Thing                                       | State                                               |
-| ----- | ------------------------------------------- | --------------------------------------------------- |
-| §1    | Script and assets are one tree              | **Done** — storage and MCP surface                  |
-| §1    | `assetStorage`'s four methods               | Not started; waits for §5's prelude                 |
-| §2    | `.md` / `.txt` as string modules            | **Done**                                            |
-| §2    | Exposure by directory                       | **Done and enforced**                               |
-| §2.1  | Deny shape for per-resource authorization   | **Done** (`resource_access.rs`)                     |
-| §2.1  | Asset-route authorization hook              | **Done**                                            |
-| §2/§7 | `asset_registry` → `route_index`            | **Done**; the module is deleted                     |
-| §2/§7 | Stream routing → `route_index`              | **Done**; `stream_registry` keeps connections       |
-| §3    | One operation table, HTTP generated from it | Not started (Phase 2)                               |
-| §4    | Collision refusal (no mounts)               | Not started (Phase 3)                               |
-| §4    | Slug + stable identity                      | Not started (Phase 4)                               |
-| §5    | Prelude every global                        | In progress: all but `convert` and `McpClient` (1e) |
-| §6    | Trim `database` to ~10 methods              | **Done** — ten                                      |
+| §     | Thing                                       | State                                         |
+| ----- | ------------------------------------------- | --------------------------------------------- |
+| §1    | Script and assets are one tree              | **Done** — storage and MCP surface            |
+| §1    | `assetStorage`'s four methods               | **Done** — `files` (1b)                       |
+| §2    | `.md` / `.txt` as string modules            | **Done**                                      |
+| §2    | Exposure by directory                       | **Done and enforced**                         |
+| §2.1  | Deny shape for per-resource authorization   | **Done** (`resource_access.rs`)               |
+| §2.1  | Asset-route authorization hook              | **Done**                                      |
+| §2/§7 | `asset_registry` → `route_index`            | **Done**; the module is deleted               |
+| §2/§7 | Stream routing → `route_index`              | **Done**; `stream_registry` keeps connections |
+| §3    | One operation table, HTTP generated from it | Not started (Phase 2)                         |
+| §4    | Collision refusal (no mounts)               | Not started (Phase 3)                         |
+| §4    | Slug + stable identity                      | Not started (Phase 4)                         |
+| §5    | Prelude every global                        | **Done** (Phase 1, unmerged)                  |
+| §6    | Trim `database` to ~10 methods              | **Done** — ten                                |
 
 ## What is true of the tree now
 
@@ -196,8 +196,11 @@ engine beyond the JS API:
 
 ### Phase 1 — one JavaScript convention (§5, §6, rest of §1)
 
-**Progress.** Work is on `simplify-js-convention`, in the engine and in each
-of the four repositories, unpushed and undeployed until the phase is whole.
+**Progress. Phase 1 is complete** on `simplify-js-convention`, in the engine
+and in each of the four repositories — unpushed and undeployed. The engine
+and the four repositories have to be merged and deployed together: every
+script on the branch assumes the new globals and every script on `main`
+assumes the old ones.
 
 - **1a done** (engine `d5c7dea`). `registerRoute(path, spec)` with the three
   old names deleted, `routeRegistry` preluded over `__hostRouteRegistry`,
@@ -245,12 +248,26 @@ of the four repositories, unpushed and undeployed until the phase is whole.
   used to answer `false`. Locally the same 30 of 32 scripts initialise, the
   in-engine tests pass, and the 14 MCP tools the repositories register are
   all registered.
-- **1e is wider than the plan said.** Still answering in strings: `convert`
-  (`markdown_to_html` and `render_handlebars_template` return `"Error: ..."`,
-  `atob` an `"Invalid base64..."` sentence — `markdown_blog` checks
-  `startsWith("Error:")` a dozen times), `McpClient` (`constructor`,
-  `_listTools`, `_callTool` exchange JSON strings; used only by
-  `github_mcp_issues`), and one `"Error: "` in the logging host.
+- **1e done** (engine `bc250ab`). `convert` and `McpClient` are preluded.
+  `convert`'s four functions answer their result and throw, and
+  `render_handlebars_template` takes its data as an object (JSON text still
+  accepted). `McpClient` is a class — `new McpClient(url, secret)`,
+  `listTools()`, `callTool(name, args)` — throwing on a JSON-RPC error with
+  the server's `code` on the error; the descriptor-passing `constructor` /
+  `_listTools` / `_callTool` statics are gone, and so are the wrapper classes
+  `github` and `github_mcp_issues` carried. `fetch`'s response lost the
+  `toString()` that yielded the old JSON envelope, so `JSON.parse(fetch(…))`
+  no longer works; options have been an object since before this phase, and
+  the dev reference and the editor's prompt stopped saying they must be a
+  string. The `__writeLog` host returns nothing. The grep the plan set as
+  1e's bar is clean: what remains of `"Error: "` in `secure_globals.rs` is
+  comments, and the one test matching it reads a thrown error's text.
+  Verified locally under `caffeinate -i`: the same 30 of 32 scripts
+  initialise (`auth_roles_demo` registers a reserved path, `github_mcp_issues`
+  has no `init()`), `/docs` and `/blog` render through `convert`, and the
+  agent's 86, the private script's 313 and virtual-world's 339 in-engine
+  tests pass. Repository commits: examples `c2608c4`, dev `3aa283e`, agent
+  `3daa009`; private needed nothing.
 
 Breaking for every script; do it as one release with one cutover. One commit
 per global, each with its `aiwebengine.d.ts` change:
