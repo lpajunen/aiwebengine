@@ -182,16 +182,8 @@ fn request(prefix: &str) -> PullRequest {
 /// The URI a pull composes for `suffix`, against whatever origin this test
 /// server came up on. The mapping decides the suffix; the engine decides the
 /// origin, and a test that hard-coded either would be testing the wrong one.
-fn script_uri(suffix: &str) -> String {
-    if aiwebengine::hosts::is_configured() {
-        format!(
-            "{}/{}",
-            aiwebengine::hosts::origin(&aiwebengine::hosts::default_host()),
-            suffix
-        )
-    } else {
-        suffix.to_string()
-    }
+fn script_uri(name: &str) -> String {
+    name.to_string()
 }
 
 fn asset_text(script_uri: &str, asset_uri: &str) -> Option<String> {
@@ -232,7 +224,7 @@ async fn a_repository_with_a_root_entry_becomes_one_script() {
     .await
     .expect("fixture should start");
 
-    let uri = &script_uri("git-one.ts");
+    let uri = &script_uri("git-one");
     clear(uri);
 
     let report = pull_with(github.client(), &puller(), request("git-one"))
@@ -297,8 +289,8 @@ async fn each_top_level_directory_becomes_its_own_script() {
     .await
     .expect("fixture should start");
 
-    clear(&script_uri("git-many/shop.ts"));
-    clear(&script_uri("git-many/admin.ts"));
+    clear(&script_uri("git-many-shop"));
+    clear(&script_uri("git-many-admin"));
 
     let report = pull_with(github.client(), &puller(), request("git-many"))
         .await
@@ -312,14 +304,11 @@ async fn each_top_level_directory_becomes_its_own_script() {
     uris.sort();
     assert_eq!(
         uris,
-        vec![
-            script_uri("git-many/admin.ts"),
-            script_uri("git-many/shop.ts")
-        ]
+        vec![script_uri("git-many-admin"), script_uri("git-many-shop")]
     );
 
     assert_eq!(
-        asset_text(&script_uri("git-many/shop.ts"), "lib/cart.ts").as_deref(),
+        asset_text(&script_uri("git-many-shop"), "lib/cart.ts").as_deref(),
         Some("export const cart = [];"),
         "asset paths are relative to their own script, not to the repository"
     );
@@ -334,7 +323,7 @@ async fn pulling_an_unchanged_commit_does_no_work() {
         .await
         .expect("fixture should start");
 
-    clear(&script_uri("git-idempotent.ts"));
+    clear(&script_uri("git-idempotent"));
 
     let first = pull_with(github.client(), &puller(), request("git-idempotent"))
         .await
@@ -364,7 +353,7 @@ async fn a_file_removed_upstream_is_removed_here() {
     .await
     .expect("fixture should start");
 
-    let uri = &script_uri("git-sync.ts");
+    let uri = &script_uri("git-sync");
     clear(uri);
 
     pull_with(github.client(), &puller(), request("git-sync"))
@@ -413,7 +402,7 @@ async fn a_pull_records_one_revision_for_the_whole_script() {
     .await
     .expect("fixture should start");
 
-    let uri = &script_uri("git-revision.ts");
+    let uri = &script_uri("git-revision");
     clear(uri);
 
     let before = aiwebengine::revisions::current(uri).unwrap_or(0);
@@ -500,7 +489,7 @@ async fn a_pull_completes_when_driven_from_a_blocking_context() {
     .await
     .expect("fixture should start");
 
-    let uri = &script_uri("git-blocking.ts");
+    let uri = &script_uri("git-blocking");
     clear(uri);
 
     let client = github.client();
@@ -553,7 +542,7 @@ async fn the_repository_says_what_not_to_take() {
     .await
     .expect("fixture should start");
 
-    let uri = &script_uri("git-ignore.ts");
+    let uri = &script_uri("git-ignore");
     clear(uri);
 
     pull_with(github.client(), &puller(), request("git-ignore"))
@@ -594,7 +583,7 @@ async fn force_re_applies_a_repository_that_has_not_moved() {
         .await
         .expect("fixture should start");
 
-    let uri = &script_uri("git-force.ts");
+    let uri = &script_uri("git-force");
     clear(uri);
 
     pull_with(github.client(), &puller(), request("git-force"))
@@ -651,7 +640,7 @@ async fn a_pull_that_writes_nothing_still_moves_the_watermark() {
         .await
         .expect("fixture should start");
 
-    let uri = &script_uri("git-watermark.ts");
+    let uri = &script_uri("git-watermark");
     clear(uri);
 
     pull_with(github.client(), &puller(), request("git-watermark"))
@@ -755,8 +744,8 @@ async fn the_same_commit_landing_elsewhere_is_not_up_to_date() {
         .await
         .expect("fixture should start");
 
-    clear(&script_uri("git-base-a.ts"));
-    clear(&script_uri("git-base-b.ts"));
+    clear(&script_uri("git-base-a"));
+    clear(&script_uri("git-base-b"));
 
     pull_with(github.client(), &puller(), request("git-base-a"))
         .await
@@ -770,7 +759,10 @@ async fn the_same_commit_landing_elsewhere_is_not_up_to_date() {
         !elsewhere.up_to_date,
         "the same commit landing somewhere else is work, not a no-op"
     );
-    assert_eq!(elsewhere.scripts[0].script_uri, script_uri("git-base-b.ts"));
+    // The repository is already bound to the script the first pull wrote, so
+    // a different prefix does not make a second one: the script is found by
+    // the directory its row records, which is also what lets it be renamed.
+    assert_eq!(elsewhere.scripts[0].script_uri, script_uri("git-base-a"));
 }
 
 /// A pulled script is named after where it came from, not after its entry file.
@@ -788,8 +780,8 @@ async fn a_script_is_named_after_its_source() {
     .await
     .expect("fixture should start");
 
-    clear(&script_uri("git-named/shop.ts"));
-    clear(&script_uri("git-named/admin.js"));
+    clear(&script_uri("git-named-shop"));
+    clear(&script_uri("git-named-admin"));
 
     let report = pull_with(github.client(), &puller(), request("git-named"))
         .await
@@ -807,8 +799,8 @@ async fn a_script_is_named_after_its_source() {
         vec![
             // The extension follows the entry, because the transpiler reads it
             // and nothing else about the name.
-            script_uri("git-named/admin.js"),
-            script_uri("git-named/shop.ts"),
+            script_uri("git-named-admin"),
+            script_uri("git-named-shop"),
         ]
     );
 }
@@ -824,7 +816,7 @@ async fn a_single_script_repository_is_named_after_the_repository() {
         .await
         .expect("fixture should start");
 
-    let uri = &script_uri("git-solo.js");
+    let uri = &script_uri("git-solo");
     clear(uri);
 
     let report = pull_with(github.client(), &puller(), request("git-solo"))
@@ -848,7 +840,7 @@ async fn a_pull_will_not_overwrite_a_script_it_did_not_write() {
         .await
         .expect("fixture should start");
 
-    let uri = &script_uri("git-occupied.js");
+    let uri = &script_uri("git-occupied");
     clear(uri);
     aiwebengine::engine_api::upsert_script_authorized(
         &puller(),
@@ -898,7 +890,7 @@ async fn a_repeat_pull_is_not_treated_as_an_overwrite() {
         .await
         .expect("fixture should start");
 
-    let uri = &script_uri("git-repeat.js");
+    let uri = &script_uri("git-repeat");
     clear(uri);
 
     pull_with(github.client(), &puller(), request("git-repeat"))
@@ -931,7 +923,7 @@ async fn clearing_a_binding_leaves_the_script_and_restores_its_protection() {
         .await
         .expect("fixture should start");
 
-    let uri = &script_uri("git-unbind.js");
+    let uri = &script_uri("git-unbind");
     clear(uri);
 
     pull_with(github.client(), &puller(), request("git-unbind"))
@@ -966,4 +958,48 @@ async fn clearing_a_binding_leaves_the_script_and_restores_its_protection() {
         .await
         .expect_err("unbound, so no longer theirs to replace");
     assert!(error.to_string().contains("would overwrite"), "{}", error);
+}
+
+/// A pulled script is found again by the directory its row records, not by
+/// composing its name a second time — so renaming it is not a way to make the
+/// next pull write another one beside it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_renamed_script_is_still_the_one_the_repository_writes() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[("shop/main.ts", "function init() {}")])
+        .await
+        .expect("fixture should start");
+
+    let original = script_uri("git-renamed-shop");
+    let renamed = script_uri("git-renamed-storefront");
+    clear(&original);
+    clear(&renamed);
+
+    pull_with(github.client(), &puller(), request("git-renamed"))
+        .await
+        .expect("first pull should succeed");
+    assert!(repository::fetch_script(&original).is_some());
+
+    aiwebengine::engine_api::rename_script_authorized(&puller(), &original, &renamed)
+        .expect("the owner may rename it");
+
+    let mut again = request("git-renamed");
+    again.force = true;
+    let report = pull_with(github.client(), &puller(), again)
+        .await
+        .expect("a pull after a rename should succeed");
+
+    assert_eq!(report.scripts.len(), 1);
+    assert_eq!(
+        report.scripts[0].script_uri, renamed,
+        "the pull wrote the script it already had"
+    );
+    assert!(
+        repository::fetch_script(&original).is_none(),
+        "and did not make a second one under the name it would have composed"
+    );
+
+    clear(&renamed);
 }

@@ -20,7 +20,7 @@ mod script_error_detection_tests {
         // Test 1: Try to update a script that should fail (if permissions are correctly enforced)
         // We'll create a script, then try to update it with an invalid scenario
 
-        let test_script_uri = "https://example.com/error-detection-test";
+        let test_script_uri = "error-detection-test";
         let test_content = r#"
 function test_handler(context) {
     return { status: 200, body: 'Test' };

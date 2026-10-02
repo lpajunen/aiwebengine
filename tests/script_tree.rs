@@ -258,7 +258,7 @@ async fn executing_a_script_leaves_its_tree_alone() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
-    let uri = "test://tree/execute-is-read-only";
+    let uri = "tree-execute-is-read-only";
     let stored = "function init() { /* stored */ }\n";
     let owner = UserContext::admin("tree-exec-owner".to_string());
     aiwebengine::engine_api::upsert_root_authorized(&owner, uri, Some("main.ts"), stored, None)
@@ -285,7 +285,7 @@ async fn writing_an_entrypoint_by_name_is_how_its_language_changes() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
-    let uri = "test://tree/rename-entrypoint";
+    let uri = "tree-rename-entrypoint";
     let owner = UserContext::admin("tree-rename-owner".to_string());
     let js = "function init() {}\n";
     aiwebengine::engine_api::write_file_bytes_authorized(

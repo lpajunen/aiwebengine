@@ -354,6 +354,7 @@ async fn granting_again_replaces_what_was_granted_before() {
     setup_env().await;
     let user_id = a_user("replace").await;
     let script_uri = "test://delegation/replace";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     delegation::grant(&user_id, script_uri, &Scope::all(), Duration::days(30))
         .await
@@ -801,6 +802,7 @@ async fn an_unlinked_sender_resolves_to_nobody() {
     setup_env().await;
     let user_id = a_user("unlinked").await;
     let script_uri = "test://delegation/unlinked";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     // A live grant, and no link. A grant alone must not be enough — it says
     // the app may act while they are away, not that anyone who can reach the
@@ -825,7 +827,9 @@ async fn a_link_does_not_carry_to_another_script() {
     setup_env().await;
     let user_id = a_user("per-script").await;
     let linked = "test://delegation/link-here";
+    repository::upsert_script(linked, "function work() {}").expect("script should store");
     let other = "test://delegation/link-elsewhere";
+    repository::upsert_script(other, "function work() {}").expect("script should store");
 
     delegation::bind_channel(&user_id, linked, "telegram", "12345")
         .await
@@ -849,6 +853,7 @@ async fn a_sender_belongs_to_at_most_one_account_per_script() {
     let first = a_user("claimant-one").await;
     let second = a_user("claimant-two").await;
     let script_uri = "test://delegation/contested";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     assert!(
         delegation::bind_channel(&first, script_uri, "telegram", "12345")
@@ -880,6 +885,7 @@ async fn linking_your_own_sender_again_is_not_an_error() {
     setup_env().await;
     let user_id = a_user("relink").await;
     let script_uri = "test://delegation/relink";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     assert!(
         delegation::bind_channel(&user_id, script_uri, "telegram", "12345")
@@ -902,6 +908,7 @@ async fn a_link_is_found_by_a_folded_channel_and_an_exact_sender() {
     setup_env().await;
     let user_id = a_user("folding").await;
     let script_uri = "test://delegation/folding";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     delegation::bind_channel(&user_id, script_uri, "Telegram", "U123aBc")
         .await
@@ -934,6 +941,7 @@ async fn withdrawing_a_grant_unlinks_its_senders() {
     setup_env().await;
     let user_id = a_user("withdraw-links").await;
     let script_uri = "test://delegation/withdraw-links";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     delegation::grant(&user_id, script_uri, &Scope::all(), Duration::days(1))
         .await
@@ -971,6 +979,7 @@ async fn revoking_everything_unlinks_every_sender() {
     let user_id = a_user("revoke-all-links").await;
 
     for script_uri in ["test://delegation/all-a", "test://delegation/all-b"] {
+        repository::upsert_script(script_uri, "function work() {}").expect("script should store");
         delegation::grant(&user_id, script_uri, &Scope::all(), Duration::days(1))
             .await
             .expect("granted");
@@ -997,6 +1006,7 @@ async fn unlinking_a_sender_leaves_the_grant_standing() {
     setup_env().await;
     let user_id = a_user("unlink-one").await;
     let script_uri = "test://delegation/unlink-one";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     delegation::grant(&user_id, script_uri, &Scope::all(), Duration::days(1))
         .await
@@ -1046,6 +1056,7 @@ async fn unlinking_is_scoped_to_your_own_links() {
     let owner = a_user("link-owner").await;
     let outsider = a_user("link-outsider").await;
     let script_uri = "test://delegation/link-scoped";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     delegation::bind_channel(&owner, script_uri, "telegram", "12345")
         .await
@@ -1230,6 +1241,7 @@ async fn a_webhook_with_no_session_reaches_the_person_a_message_came_from() {
 async fn an_invitation_is_needed_and_is_spent_once() {
     setup_env().await;
     let script_uri = "test://delegation/invitation";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     let url = delegation::invite_link(script_uri, "telegram", "12345")
         .await
@@ -1283,6 +1295,7 @@ async fn an_invented_invitation_names_nothing() {
 async fn minting_again_replaces_the_link_already_outstanding() {
     setup_env().await;
     let script_uri = "test://delegation/remint";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     let first = delegation::invite_link(script_uri, "telegram", "12345")
         .await
@@ -1313,6 +1326,7 @@ async fn minting_again_replaces_the_link_already_outstanding() {
 async fn an_invitation_is_bound_to_the_script_that_minted_it() {
     setup_env().await;
     let minted_by = "test://delegation/invite-mine";
+    repository::upsert_script(minted_by, "function work() {}").expect("script should store");
 
     let url = delegation::invite_link(minted_by, "telegram", "12345")
         .await
@@ -1413,6 +1427,7 @@ async fn an_administrator_can_delegate_administering_and_nobody_else_can() {
     setup_env().await;
 
     let script_uri = "test://delegation/administer";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
     let administrator = a_user("administers").await;
     let ordinary = a_user("ordinary").await;
 
@@ -1466,6 +1481,7 @@ async fn losing_the_role_ends_the_delegated_authority() {
     setup_env().await;
 
     let script_uri = "test://delegation/demoted";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
     let user = a_user("demoted").await;
 
     aiwebengine::user_repository::update_user_roles(
@@ -1506,6 +1522,7 @@ async fn delegated_authoring_stops_short_of_administering() {
     setup_env().await;
 
     let script_uri = "test://delegation/authors";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
     let user = a_user("authors").await;
 
     aiwebengine::user_repository::update_user_roles(

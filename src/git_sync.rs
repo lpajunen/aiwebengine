@@ -63,7 +63,11 @@ const ENTRY_NAMES: [&str; 4] = ["main.ts", "main.js", "main.tsx", "main.jsx"];
 /// 1. `{base}/{entry file name}` — every script called `main.js`.
 /// 2. `{base}/{directory}{ext}`, or `{base}{ext}` for a repository that is one
 ///    script, so a script is named after where it came from.
-pub const MAPPING_VERSION: i32 = 2;
+/// 3. A slug: the directory (`{prefix}-{directory}` when a prefix is given),
+///    or the repository's name (or the prefix) for a repository that is one
+///    script. No origin and no extension; a script that was pulled and then
+///    renamed is found again by the directory recorded on its row.
+pub const MAPPING_VERSION: i32 = 3;
 
 /// Files skipped at a script's top level.
 ///
@@ -872,15 +876,28 @@ fn fetch_and_write(
     };
     let resolved = client.resolve_branch(repo, &branch)?;
 
-    let prefix = request.prefix.clone().unwrap_or_else(|| repo.repo.clone());
-    let prefix = prefix.trim_matches('/').to_string();
-    if prefix.is_empty() || prefix.contains("..") || prefix.contains('\\') {
+    // What the caller gave, and nothing invented: with no prefix a script is
+    // named after its directory alone, and two repositories that both hold a
+    // `shop` meet at the "did not put it there" guard below rather than being
+    // told apart by a prefix nobody asked for.
+    let prefix = request
+        .prefix
+        .as_deref()
+        .map(|prefix| prefix.trim().trim_matches('/'))
+        .filter(|prefix| !prefix.is_empty())
+        .map(str::to_string);
+    if let Some(prefix) = &prefix
+        && (prefix.contains("://") || prefix.contains('/') || prefix.contains('\\'))
+    {
         return Err(SyncError::Layout(format!(
-            "'{}' is not a usable URI prefix",
+            "'{}' is not a usable prefix: scripts are named with a slug now, so a prefix is a \
+             name such as 'acme', not a URL or a path",
             prefix
         )));
     }
-    let uri_base = resolve_uri_base(&prefix);
+    // What a row records, so the pull that wrote it can tell whether it is
+    // about to apply the same rules.
+    let recorded_prefix = prefix.clone().unwrap_or_default();
 
     // Ask before downloading: a repository that has not moved since the last
     // pull costs two small API calls rather than an archive.
@@ -898,7 +915,7 @@ fn fetch_and_write(
         let settled = !known.is_empty()
             && known.iter().all(|row| {
                 row.commit == resolved.commit
-                    && row.uri_base.as_deref() == Some(uri_base.as_str())
+                    && row.uri_base.as_deref() == Some(recorded_prefix.as_str())
                     && row.mapping_version == Some(MAPPING_VERSION)
             });
         if settled {
@@ -918,10 +935,25 @@ fn fetch_and_write(
     // Compose every URI and check every one of them before writing any, so a
     // repository whose fourth script belongs to somebody else is refused whole
     // rather than applied in part.
-    let planned: Vec<(String, ScriptLayout)> = layouts
-        .into_iter()
-        .map(|layout| (compose_script_uri(&uri_base, &layout), layout))
-        .collect();
+    //
+    // A script this repository already wrote is found by the directory its row
+    // records, not by composing its name again: it may have been renamed since,
+    // and a pull that composed `shop` for a script now called `storefront`
+    // would write a second one beside it.
+    let known =
+        crate::database::run_blocking(last_synced(&repo.to_string(), &branch)).unwrap_or_default();
+    let mut planned: Vec<(String, ScriptLayout)> = Vec::with_capacity(layouts.len());
+    for layout in layouts {
+        let directory = layout.name.clone().unwrap_or_default();
+        let name = match known
+            .iter()
+            .find(|row| row.repo_dir.as_deref() == Some(directory.as_str()))
+        {
+            Some(row) => row.script_uri.clone(),
+            None => compose_script_name(prefix.as_deref(), &repo.repo, &layout)?,
+        };
+        planned.push((name, layout));
+    }
 
     let refused: Vec<&str> = planned
         .iter()
@@ -973,7 +1005,7 @@ fn fetch_and_write(
             repo,
             &branch,
             &resolved.commit,
-            &uri_base,
+            &recorded_prefix,
             &script_uri,
             &layout,
         )?);
@@ -989,63 +1021,36 @@ fn fetch_and_write(
 
 /// Write one inferred script: its root, then its assets, then whatever the
 /// repository no longer holds.
-/// The local URI a pulled script lands on.
-///
-/// Absolute, against this engine's own origin. A script URI in this engine is
-/// an absolute URL — every script written through the editor or the MCP tools
-/// has one — and things that consume a URI resolve it as such: the editor
-/// builds its `read_script` link straight from it, so a relative URI silently
-/// resolves against whatever origin the browser happens to be on and 404s.
-///
-/// That the URI is machine-specific is the point rather than a cost. It is
-/// exactly why a repository cannot carry one: the engine composes its own at
-/// pull time, and the same repository lands correctly on every install.
-///
-/// A `prefix` that is already absolute is left alone, which is how a caller
-/// aims a pull at one host of a multi-host deployment.
-fn resolve_uri_base(prefix: &str) -> String {
-    if is_absolute(prefix) {
-        prefix.to_string()
-    } else if crate::hosts::is_configured() {
-        format!(
-            "{}/{}",
-            crate::hosts::origin(&crate::hosts::default_host()),
-            prefix
-        )
-    } else {
-        // Nothing has told this process what it is serving — a unit test, or a
-        // deployment with no usable base URL. A relative URI is the honest
-        // answer there; inventing a host would be worse than not having one.
-        prefix.to_string()
-    }
-}
-
-fn is_absolute(prefix: &str) -> bool {
-    prefix.starts_with("http://") || prefix.starts_with("https://")
-}
-
-/// Put the pieces together, given a resolved base.
+/// The name a pulled script is given the first time it lands.
 ///
 /// A script is named after where it came from — the directory that held it, or
-/// the repository when the repository is itself one script. Naming every script
-/// `main.js` after its entry file is accurate and useless: a list of them in an
-/// editor is a column of identical names, and the one thing a person needs to
-/// read off a script URI is which script it is.
+/// the repository's name when the repository is itself one script. Naming every
+/// script `main.js` after its entry file is accurate and useless: a list of
+/// them in an editor is a column of identical names, and the one thing a person
+/// needs to read off a script's name is which script it is.
 ///
-/// The extension is carried over from the entry and is the part that is *not*
-/// free. [`crate::transpiler`] decides whether to transpile from the extension
-/// alone — the stem is never read — so a `.ts` entry under a URI ending `.js`
-/// would reach the runtime as TypeScript nobody transpiled.
-fn compose_script_uri(base: &str, layout: &ScriptLayout) -> String {
-    let base = base.trim_end_matches('/');
-    let extension = layout.entry_extension();
-    match &layout.name {
-        Some(name) => format!("{}/{}{}", base, name, extension),
-        // The base already ends with the repository's own name, so appending it
-        // again would read `.../shop/shop.js` for a repository holding one
-        // script.
-        None => format!("{}{}", base, extension),
-    }
+/// With a `prefix` the directory is joined to it (`acme-shop`), which is how
+/// two people pulling the same public repository onto one engine avoid meeting
+/// at one name. Not an origin and not an extension: the entry's file name
+/// (`main.ts`) is what says what language it is in.
+///
+/// Used once. After that the script is found by the directory recorded on its
+/// row, so renaming it does not make the next pull write another.
+fn compose_script_name(
+    prefix: Option<&str>,
+    repository: &str,
+    layout: &ScriptLayout,
+) -> Result<String, SyncError> {
+    let raw = match (&layout.name, prefix) {
+        (None, Some(prefix)) => prefix.to_string(),
+        (None, None) => repository.to_string(),
+        (Some(name), Some(prefix)) => format!("{}-{}", prefix, name),
+        (Some(name), None) => name.clone(),
+    };
+    let slug = crate::slug::suggest(&raw);
+    crate::slug::validate(&slug)
+        .map_err(|e| SyncError::Layout(format!("{} (composed from '{}')", e, raw)))?;
+    Ok(slug)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1054,7 +1059,7 @@ fn write_script(
     repo: &crate::git_github::RepoRef,
     branch: &str,
     commit: &str,
-    uri_base: &str,
+    prefix: &str,
     script_uri: &str,
     layout: &ScriptLayout,
 ) -> Result<PulledScript, SyncError> {
@@ -1176,7 +1181,8 @@ fn write_script(
         &repo.to_string(),
         branch,
         commit,
-        uri_base,
+        prefix,
+        layout.name.as_deref().unwrap_or_default(),
         watermark,
         user.user_id.as_deref(),
     ))
@@ -1480,15 +1486,16 @@ fn gather_and_push(
 
     // The script now agrees with the commit that carries it.
     let revision = crate::revisions::current(&request.script_uri);
-    let uri_base = known
+    let recorded_prefix = known
         .and_then(|row| row.uri_base.clone())
-        .unwrap_or_else(|| default_base_for(&request.script_uri));
+        .unwrap_or_default();
     crate::database::run_blocking(record_sync(
         &request.script_uri,
         &repo.to_string(),
         &branch,
         &commit,
-        &uri_base,
+        &recorded_prefix,
+        entry_prefix.as_deref().unwrap_or_default(),
         revision,
         user.user_id.as_deref(),
     ))
@@ -1589,18 +1596,19 @@ fn engine_files(
     Ok(files)
 }
 
-/// The repository directory a script came from, or `None` when the repository
-/// is itself that one script.
+/// The repository directory a script is, or `None` when the repository is
+/// itself that one script.
 ///
-/// The mapping a pull applies is invertible, which is why nothing has to be
-/// stored for this: a URI is the base plus either `/{directory}{ext}` or just
-/// `{ext}`, so what follows the base says which shape it is.
+/// Read from the row a pull recorded, so a script that has been renamed is
+/// still the directory it was pulled from. A script that has never been synced
+/// goes into a directory named after it — which is also what pulling it back
+/// would name it.
 fn script_prefix(script_uri: &str, known: Option<&SyncRow>) -> Option<String> {
-    let base = known.and_then(|row| row.uri_base.clone())?;
-    let rest = script_uri.strip_prefix(&base)?;
-    let rest = rest.strip_prefix('/')?;
-    let stem = rest.rfind('.').map(|dot| &rest[..dot]).unwrap_or(rest);
-    (!stem.is_empty()).then(|| stem.to_string())
+    match known.and_then(|row| row.repo_dir.as_deref()) {
+        Some("") => None,
+        Some(directory) => Some(directory.to_string()),
+        None => Some(crate::slug::suggest(script_uri)).filter(|name| !name.is_empty()),
+    }
 }
 
 /// Whether `path` is one this script is responsible for.
@@ -1632,15 +1640,6 @@ fn ignore_rules_from(
     Some(IgnoreRules::parse(&String::from_utf8_lossy(&content)))
 }
 
-/// A base for a script that has never been synced, so a first push can record
-/// one.
-fn default_base_for(script_uri: &str) -> String {
-    match script_uri.rfind('/') {
-        Some(slash) => script_uri[..slash].to_string(),
-        None => script_uri.to_string(),
-    }
-}
-
 /// Git's own object id for a blob: `sha1("blob {len}\0" + content)`.
 ///
 /// Computed here so a file whose content the repository already holds is
@@ -1662,6 +1661,8 @@ pub struct SyncRow {
     pub branch: String,
     pub last_commit: String,
     pub uri_base: Option<String>,
+    /// The directory of the repository this script is; empty for the root.
+    pub repo_dir: Option<String>,
     pub revision_at_sync: Option<i32>,
 }
 
@@ -1729,7 +1730,7 @@ pub async fn unbind(script_uri: &str) -> crate::error::AppResult<bool> {
 pub async fn sync_row(script_uri: &str) -> crate::error::AppResult<Option<SyncRow>> {
     use sqlx::Row;
     let row = sqlx::query(
-        "SELECT remote, branch, last_commit, uri_base, revision_at_sync \
+        "SELECT remote, branch, last_commit, uri_base, revision_at_sync, repo_dir \
          FROM script_git_sync WHERE script_uri = $1",
     )
     .bind(script_uri)
@@ -1746,6 +1747,7 @@ pub async fn sync_row(script_uri: &str) -> crate::error::AppResult<Option<SyncRo
         last_commit: row.get::<String, _>(2),
         uri_base: row.get::<Option<String>, _>(3),
         revision_at_sync: row.get::<Option<i32>, _>(4),
+        repo_dir: row.get::<Option<String>, _>(5),
     }))
 }
 
@@ -1936,6 +1938,8 @@ pub struct SyncedScript {
     /// The base the pull composed this script's URI against, or `None` for a
     /// row written before that was recorded.
     pub uri_base: Option<String>,
+    /// The repository directory it is, or `None` for a row not yet resolved.
+    pub repo_dir: Option<String>,
     /// Which composition rules wrote it, or `None` for a row predating them.
     pub mapping_version: Option<i32>,
 }
@@ -1948,7 +1952,7 @@ pub struct SyncedScript {
 pub async fn last_synced(remote: &str, branch: &str) -> crate::error::AppResult<Vec<SyncedScript>> {
     use sqlx::Row;
     let rows = sqlx::query(
-        "SELECT script_uri, last_commit, uri_base, mapping_version FROM script_git_sync \
+        "SELECT script_uri, last_commit, uri_base, mapping_version, repo_dir FROM script_git_sync \
          WHERE remote = $1 AND branch = $2",
     )
     .bind(remote)
@@ -1967,6 +1971,7 @@ pub async fn last_synced(remote: &str, branch: &str) -> crate::error::AppResult<
             commit: row.get::<String, _>(1),
             uri_base: row.get::<Option<String>, _>(2),
             mapping_version: row.get::<Option<i32>, _>(3),
+            repo_dir: row.get::<Option<String>, _>(4),
         })
         .collect())
 }
@@ -1979,6 +1984,7 @@ pub async fn record_sync(
     branch: &str,
     commit: &str,
     uri_base: &str,
+    repo_dir: &str,
     revision: Option<i32>,
     user_id: Option<&str>,
 ) -> crate::error::AppResult<()> {
@@ -1986,13 +1992,14 @@ pub async fn record_sync(
         r#"
         INSERT INTO script_git_sync
             (script_uri, remote, branch, last_commit, uri_base, mapping_version,
-             revision_at_sync, synced_at, synced_by)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)
+             revision_at_sync, synced_at, synced_by, repo_dir)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9)
         ON CONFLICT (script_uri) DO UPDATE SET
             remote = EXCLUDED.remote,
             branch = EXCLUDED.branch,
             last_commit = EXCLUDED.last_commit,
             uri_base = EXCLUDED.uri_base,
+            repo_dir = EXCLUDED.repo_dir,
             mapping_version = EXCLUDED.mapping_version,
             revision_at_sync = COALESCE(EXCLUDED.revision_at_sync, script_git_sync.revision_at_sync),
             synced_at = EXCLUDED.synced_at,
@@ -2007,6 +2014,7 @@ pub async fn record_sync(
     .bind(MAPPING_VERSION)
     .bind(revision)
     .bind(user_id)
+    .bind(repo_dir)
     .execute(&pool()?)
     .await
     .map_err(|e| crate::error::AppError::Database {
@@ -2244,27 +2252,52 @@ mod tests {
     }
 
     #[test]
-    fn a_uri_is_named_after_its_source_and_keeps_the_entry_extension() {
-        // A repository that is one script takes the repository's name, which
-        // the base already ends with — appending it again would read
-        // `.../examples/examples.ts`.
-        let single = layout(None, "main.ts");
+    fn a_script_is_named_after_its_source() {
+        // A repository that is one script takes the repository's name.
         assert_eq!(
-            compose_script_uri("https://engine.example/examples", &single),
-            "https://engine.example/examples.ts"
+            compose_script_name(None, "examples", &layout(None, "main.ts")).unwrap(),
+            "examples"
         );
-
-        // One inside a directory takes the directory's name.
-        let named = layout(Some("shop"), "shop/main.js");
+        // One inside a directory takes the directory's name, with no repository
+        // name in front of it and no extension after it.
         assert_eq!(
-            compose_script_uri("https://engine.example/examples", &named),
-            "https://engine.example/examples/shop.js"
+            compose_script_name(None, "examples", &layout(Some("shop"), "shop/main.js")).unwrap(),
+            "shop"
         );
     }
 
-    /// The extension is the part of the entry's name a URI has to keep:
-    /// `transpiler::needs_transpilation` reads it and never reads the stem, so
-    /// a `.ts` entry under a `.js` URI would reach the runtime untranspiled.
+    #[test]
+    fn a_prefix_is_joined_to_the_directory() {
+        assert_eq!(
+            compose_script_name(
+                Some("acme"),
+                "examples",
+                &layout(Some("shop"), "shop/main.ts")
+            )
+            .unwrap(),
+            "acme-shop"
+        );
+        // A repository that is one script takes the prefix as its whole name.
+        assert_eq!(
+            compose_script_name(Some("acme"), "examples", &layout(None, "main.ts")).unwrap(),
+            "acme"
+        );
+    }
+
+    #[test]
+    fn a_name_the_engine_cannot_use_is_refused_with_where_it_came_from() {
+        let error = compose_script_name(None, "core", &layout(None, "main.ts"))
+            .expect_err("a reserved name is not a script's");
+        assert!(error.to_string().contains("reserved"), "{error}");
+        // A directory with characters a slug cannot hold is made into one.
+        assert_eq!(
+            compose_script_name(None, "r", &layout(Some("Chat App"), "Chat App/main.ts")).unwrap(),
+            "chat-app"
+        );
+    }
+
+    /// The entry's extension is no longer part of a script's name, but it is
+    /// still how the entry file is written back.
     #[test]
     fn the_extension_follows_the_entry() {
         assert_eq!(layout(Some("a"), "a/main.ts").entry_extension(), ".ts");
@@ -2274,28 +2307,24 @@ mod tests {
     }
 
     #[test]
-    fn a_trailing_slash_on_the_base_does_not_double_up() {
+    fn a_recorded_directory_says_where_a_script_goes() {
+        let row = |dir: Option<&str>| SyncRow {
+            remote: "o/r".to_string(),
+            branch: "main".to_string(),
+            last_commit: "c".to_string(),
+            uri_base: None,
+            repo_dir: dir.map(str::to_string),
+            revision_at_sync: None,
+        };
+        // Renamed since it was pulled: still the directory it came from.
         assert_eq!(
-            compose_script_uri(
-                "https://engine.example/examples/",
-                &layout(Some("shop"), "shop/main.ts")
-            ),
-            "https://engine.example/examples/shop.ts"
+            script_prefix("storefront", Some(&row(Some("shop")))).as_deref(),
+            Some("shop")
         );
-        assert_eq!(
-            compose_script_uri("https://engine.example/examples/", &layout(None, "main.ts")),
-            "https://engine.example/examples.ts"
-        );
-    }
-
-    /// A prefix that already names an origin is left alone, which is how a
-    /// caller aims a pull at one host of a multi-host deployment.
-    #[test]
-    fn an_absolute_prefix_is_taken_as_given() {
-        assert!(is_absolute("https://shop.example.com/solutions"));
-        assert!(is_absolute("http://localhost:3000/x"));
-        assert!(!is_absolute("examples"));
-        assert!(!is_absolute("/examples"));
+        // The repository is the script.
+        assert_eq!(script_prefix("shop", Some(&row(Some("")))), None);
+        // Never synced: a directory named after it.
+        assert_eq!(script_prefix("shop", None).as_deref(), Some("shop"));
     }
 
     #[test]

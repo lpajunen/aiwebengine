@@ -1268,6 +1268,13 @@ mod tests {
             let job_id = Uuid::new_v4();
             let script_uri = format!("test://scheduler-retries/{}", key);
 
+            // A job belongs to a script, and the database says so.
+            sqlx::query("INSERT INTO scripts (uri, name) VALUES ($1, $1) ON CONFLICT DO NOTHING")
+                .bind(&script_uri)
+                .execute(pool)
+                .await
+                .expect("the script row should insert");
+
             sqlx::query(
                 r#"
                 INSERT INTO scheduler_jobs

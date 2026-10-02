@@ -358,13 +358,20 @@ pub fn validate_identifier(name: &str) -> Result<(), SchemaError> {
     Ok(())
 }
 
-/// Generates a physical table name from script URI and logical table name
+/// Generates a physical table name from a script's id and a logical table name
 /// Format: script_{hash}_{table_name}
-/// The hash is the first 8 characters of SHA256(script_uri)
-pub fn generate_physical_table_name(script_uri: &str, logical_name: &str) -> String {
-    // Generate hash from script URI
+/// The hash is the first 8 characters of SHA256(scripts.id)
+///
+/// From the id and not the URI because the URI is a name that can change: two
+/// scripts that held the same name one after the other (a rename, then a new
+/// script taking the old name) would otherwise hash to the same prefix and
+/// collide on their first table of the same name. Tables created before this
+/// keep the names they were given — the name is stored and read back, never
+/// recomputed.
+pub fn generate_physical_table_name(script_id: &str, logical_name: &str) -> String {
+    // Generate hash from the script's id
     let mut hasher = Sha256::new();
-    hasher.update(script_uri.as_bytes());
+    hasher.update(script_id.as_bytes());
     let hash_result = hasher.finalize();
     let hash_hex = hex::encode(hash_result);
     let hash_prefix = &hash_hex[..8]; // First 8 characters
@@ -419,10 +426,10 @@ mod tests {
 
     #[test]
     fn test_generate_physical_table_name() {
-        let script_uri = "https://example.com/myscript";
+        let script_id = "3f1c0c36-3d52-4d0e-9a1f-5a6a8f0f2b11";
         let logical_name = "users";
 
-        let physical = generate_physical_table_name(script_uri, logical_name);
+        let physical = generate_physical_table_name(script_id, logical_name);
 
         // Should start with script_
         assert!(physical.starts_with("script_"));
@@ -431,11 +438,12 @@ mod tests {
         assert!(physical.ends_with("_users"));
 
         // Should be deterministic
-        let physical2 = generate_physical_table_name(script_uri, logical_name);
+        let physical2 = generate_physical_table_name(script_id, logical_name);
         assert_eq!(physical, physical2);
 
-        // Different script URIs should generate different names
-        let physical3 = generate_physical_table_name("https://example.com/other", logical_name);
+        // Different scripts should generate different names
+        let physical3 =
+            generate_physical_table_name("9a7e5d52-0000-4c1b-8d3e-0a1b2c3d4e5f", logical_name);
         assert_ne!(physical, physical3);
     }
 

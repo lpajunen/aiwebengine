@@ -21,6 +21,7 @@
 
 mod common;
 
+use aiwebengine::repository;
 use aiwebengine::tasks::{self, NewTask};
 use chrono::Utc;
 use common::setup_env;
@@ -87,6 +88,7 @@ async fn claimed(script_uri: &str) -> usize {
 async fn two_tasks_in_one_lane_are_not_claimed_together() {
     setup_env().await;
     let script_uri = "test://lanes/one-batch";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     for _ in 0..2 {
         tasks::enqueue(task(script_uri, "work", Some("person:a")))
@@ -108,6 +110,7 @@ async fn two_tasks_in_one_lane_are_not_claimed_together() {
 async fn tasks_in_different_lanes_run_together() {
     setup_env().await;
     let script_uri = "test://lanes/separate";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     for lane in ["person:a", "person:b", "person:c"] {
         tasks::enqueue(task(script_uri, "work", Some(lane)))
@@ -128,6 +131,7 @@ async fn tasks_in_different_lanes_run_together() {
 async fn tasks_without_a_lane_are_unconstrained() {
     setup_env().await;
     let script_uri = "test://lanes/none";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     for _ in 0..3 {
         tasks::enqueue(task(script_uri, "work", None))
@@ -149,6 +153,7 @@ async fn tasks_without_a_lane_are_unconstrained() {
 async fn a_busy_lane_is_not_claimed_from_again() {
     setup_env().await;
     let script_uri = "test://lanes/busy";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     tasks::enqueue(task(script_uri, "work", Some("person:a")))
         .await
@@ -186,6 +191,7 @@ async fn a_busy_lane_is_not_claimed_from_again() {
 async fn workers_claiming_at_once_still_hold_the_lane() {
     setup_env().await;
     let script_uri = "test://lanes/racing";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     // More than one claim batch, and enough to stay that way for every round.
     // With fewer, `FOR UPDATE` locks the whole candidate set and the other
@@ -243,6 +249,7 @@ async fn workers_claiming_at_once_still_hold_the_lane() {
 async fn a_lane_another_worker_is_claiming_from_is_left_alone() {
     setup_env().await;
     let script_uri = "test://lanes/boundary";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     tasks::enqueue(task(script_uri, "work", Some("person:a")))
         .await
@@ -290,7 +297,9 @@ async fn a_lane_another_worker_is_claiming_from_is_left_alone() {
 async fn a_lane_does_not_reach_across_scripts() {
     setup_env().await;
     let first = "test://lanes/script-one";
+    repository::upsert_script(first, "function work() {}").expect("script should store");
     let second = "test://lanes/script-two";
+    repository::upsert_script(second, "function work() {}").expect("script should store");
 
     tasks::enqueue(task(first, "work", Some("inbox")))
         .await
@@ -311,6 +320,7 @@ async fn a_lane_does_not_reach_across_scripts() {
 async fn a_lane_held_by_a_dead_worker_comes_back() {
     setup_env().await;
     let script_uri = "test://lanes/lapsed";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     tasks::enqueue(task(script_uri, "work", Some("person:a")))
         .await
@@ -342,6 +352,7 @@ async fn a_lane_held_by_a_dead_worker_comes_back() {
 async fn a_lane_is_visible_on_the_task() {
     setup_env().await;
     let script_uri = "test://lanes/visible";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
 
     let stored = tasks::enqueue(task(script_uri, "work", Some("  person:a  ")))
         .await

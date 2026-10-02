@@ -94,6 +94,7 @@ async fn setting_an_override_takes_effect_without_a_restart() {
     setup_env().await;
 
     let script_uri = "test://limits/live";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
     let engine = js_engine::current_execution_limits();
 
     script_limits::set(
@@ -130,7 +131,9 @@ async fn an_override_reaches_only_the_script_it_names() {
     setup_env().await;
 
     let overridden = "test://limits/one";
+    repository::upsert_script(overridden, "function work() {}").expect("script should store");
     let neighbour = "test://limits/another";
+    repository::upsert_script(neighbour, "function work() {}").expect("script should store");
     let engine = js_engine::current_execution_limits();
 
     script_limits::set(
@@ -162,6 +165,7 @@ async fn a_request_budget_and_a_job_budget_stay_separate() {
     setup_env().await;
 
     let script_uri = "test://limits/both";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
     script_limits::set(
         script_uri,
         Overrides {
@@ -194,6 +198,7 @@ async fn a_stored_override_is_clamped_into_range() {
     setup_env().await;
 
     let script_uri = "test://limits/clamped";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
     let stored = script_limits::set(
         script_uri,
         Overrides {
@@ -230,6 +235,7 @@ async fn setting_again_replaces_rather_than_merging() {
     setup_env().await;
 
     let script_uri = "test://limits/replaced";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
     script_limits::set(
         script_uri,
         Overrides {

@@ -3522,8 +3522,25 @@ async fn db_create_script_table(
         });
     }
 
-    // Generate physical table name
-    let physical_table_name = generate_physical_table_name(script_uri, logical_table_name);
+    // Generate physical table name, from the script's id: the URI is a name
+    // and can change, the id cannot.
+    let script_id: Option<String> =
+        sqlx::query_scalar("SELECT id::text FROM scripts WHERE uri = $1")
+            .bind(script_uri)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| {
+                error!("Database error reading script id: {}", e);
+                AppError::Database {
+                    message: format!("Database error: {}", e),
+                    source: None,
+                }
+            })?;
+    let script_id = script_id.ok_or_else(|| AppError::Validation {
+        field: "script".to_string(),
+        reason: format!("Script not found: {}", script_uri),
+    })?;
+    let physical_table_name = generate_physical_table_name(&script_id, logical_table_name);
 
     // Check if table already exists for this script
     let exists: bool = sqlx::query_scalar(
@@ -5864,6 +5881,49 @@ pub fn delete_script(uri: &str) -> bool {
     }
 }
 
+/// Why a rename did not happen.
+#[derive(Debug)]
+pub enum RenameError {
+    NotFound,
+    /// The new name belongs to another script.
+    Taken,
+    Storage(String),
+}
+
+/// Rename a script and bring this instance's view of it along.
+///
+/// The database part is one statement's worth of work because every table that
+/// names a script follows a change to `scripts.uri`. What is left is what the
+/// database cannot reach: the in-memory state keyed by the old name. A script
+/// that was pinned stays pinned, keeps its limits and its queued work, and is
+/// initialised again under the new name by the caller so its registrations,
+/// scheduled jobs and MCP tools are the new name's.
+pub fn rename_script(from: &str, to: &str) -> Result<(), RenameError> {
+    let repo = get_repository();
+    let result = run_bounded(async { repo.rename_script(from, to).await });
+    match result {
+        Ok(()) => {}
+        Err(AppError::Validation { .. }) => return Err(RenameError::Taken),
+        Err(AppError::ScriptNotFound { .. }) => return Err(RenameError::NotFound),
+        Err(e) => return Err(RenameError::Storage(e.to_string())),
+    }
+
+    scheduler::clear_script_jobs(from);
+    crate::mcp::clear_script_mcp_registrations(from);
+    crate::revisions::forget_current(from);
+    crate::deployments::forget_pin(from);
+    crate::script_limits::forget(from);
+    crate::exposure::clear_for_script(from);
+    let target = to.to_string();
+    let _ = run_bounded(async move {
+        crate::revisions::refresh_current(&target).await;
+        crate::deployments::refresh(&target).await;
+        crate::script_limits::refresh(&target).await;
+        Ok(())
+    });
+    Ok(())
+}
+
 /// Add an owner to a script
 pub fn add_script_owner(uri: &str, user_id: &str) -> AppResult<()> {
     let repo = get_repository();
@@ -6691,6 +6751,9 @@ pub trait Repository: Send + Sync {
     async fn list_scripts(&self) -> AppResult<HashMap<String, String>>;
     async fn upsert_script(&self, uri: &str, content: &str, root: Option<&str>) -> AppResult<()>;
     async fn delete_script(&self, uri: &str) -> AppResult<bool>;
+    /// Give a script a new name. Everything that names it follows in the same
+    /// transaction (the foreign keys cascade; `logs` is moved explicitly).
+    async fn rename_script(&self, from: &str, to: &str) -> AppResult<()>;
     async fn get_script_metadata(&self, uri: &str) -> AppResult<ScriptMetadata>;
     async fn get_all_script_metadata(&self) -> AppResult<Vec<ScriptMetadata>>;
     async fn update_script_init_status(
@@ -7029,6 +7092,86 @@ impl Repository for PostgresRepository {
             crate::module_loader::invalidate(uri);
         }
         Ok(result)
+    }
+
+    async fn rename_script(&self, from: &str, to: &str) -> AppResult<()> {
+        let db_err = |e: sqlx::Error| {
+            error!("Database error renaming script: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        };
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+
+        let taken: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM scripts WHERE uri = $1)")
+            .bind(to)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        if taken {
+            return Err(AppError::Validation {
+                field: "to".to_string(),
+                reason: format!("Script already exists: {}", to),
+            });
+        }
+
+        // The display name follows the identifier unless somebody chose
+        // another, which is what `name` is for.
+        let derived = |uri: &str| uri.rsplit('/').next().unwrap_or(uri).to_string();
+        let renamed = sqlx::query(
+            r#"
+            UPDATE scripts
+               SET uri = $2,
+                   name = CASE WHEN name IS NULL OR name = $3 THEN $4 ELSE name END,
+                   updated_at = NOW()
+             WHERE uri = $1
+            "#,
+        )
+        .bind(from)
+        .bind(to)
+        .bind(derived(from))
+        .bind(derived(to))
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        if renamed.rows_affected() == 0 {
+            return Err(RepositoryError::ScriptNotFound(from.to_string()).into());
+        }
+
+        // Not a script's own table: the engine logs under `server`, so there
+        // is no foreign key to follow.
+        sqlx::query("UPDATE logs SET script_uri = $2 WHERE script_uri = $1")
+            .bind(from)
+            .bind(to)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+
+        tx.commit().await.map_err(db_err)?;
+        note_script_write();
+
+        send_script_notification(&self.pool, from, "deleted", &self.server_id).await?;
+        send_script_notification(&self.pool, to, "upserted", &self.server_id).await?;
+
+        // Re-keyed in place rather than evicted, so the script keeps answering
+        // its routes while it is initialised again under its new name:
+        // eviction drops the registrations with the entry.
+        if let Ok(mut guard) = safe_lock_scripts()
+            && let Some(mut metadata) = guard.remove(from)
+        {
+            if metadata.name.as_deref() == Some(derived(from).as_str()) {
+                metadata.name = Some(derived(to));
+            }
+            metadata.uri = to.to_string();
+            guard.insert(to.to_string(), metadata);
+        }
+        for uri in [from, to] {
+            crate::bytecode::invalidate(uri);
+            crate::module_loader::invalidate(uri);
+        }
+        crate::route_index::invalidate();
+        Ok(())
     }
 
     async fn get_script_metadata(&self, uri: &str) -> AppResult<ScriptMetadata> {
@@ -8288,6 +8431,7 @@ mod tests {
         let _guard = rt.enter();
         setup_db();
         let script_uri = "test://storage-script";
+        upsert_script(script_uri, "// test").expect("script should store");
         let key = "test_key";
         let value = "test_value";
 
@@ -8344,6 +8488,7 @@ mod tests {
         let _guard = rt.enter();
         setup_db();
         let script_uri = "test://personal-storage-script";
+        upsert_script(script_uri, "// test").expect("script should store");
         let user_id_1 = "user123";
         let user_id_2 = "user456";
         let key = "test_key";
@@ -8431,6 +8576,7 @@ mod tests {
         let _guard = rt.enter();
         setup_db();
         let script_uri = "test://isolation-test";
+        upsert_script(script_uri, "// test").expect("script should store");
         let user1 = "alice";
         let user2 = "bob";
 
@@ -8471,6 +8617,7 @@ mod tests {
         let _guard = rt.enter();
         setup_db();
         let script_uri = "test://secrets-script";
+        upsert_script(script_uri, "// test").expect("script should store");
         let key = "api_key";
         let value = "super_secret_value";
 
@@ -8527,6 +8674,8 @@ mod tests {
         // Test secrets are scoped per script_uri
         let script_a = "test://secrets-scope-a";
         let script_b = "test://secrets-scope-b";
+        upsert_script(script_a, "// test").expect("script should store");
+        upsert_script(script_b, "// test").expect("script should store");
         assert!(set_script_secret_item(script_a, "scope_key", "value_a").is_ok());
         assert_eq!(
             get_script_secret_item(script_b, "scope_key"),
@@ -8544,6 +8693,7 @@ mod tests {
         let _guard = rt.enter();
         setup_db();
         let script_uri = "test://user-secrets-script";
+        upsert_script(script_uri, "// test").expect("script should store");
         let user_id_1 = "user_secrets_123";
         let user_id_2 = "user_secrets_456";
         let key = "token";
@@ -8633,6 +8783,7 @@ mod tests {
         let _guard = rt.enter();
         setup_db();
         let script_uri = "test://user-secrets-isolation";
+        upsert_script(script_uri, "// test").expect("script should store");
         let alice = "alice_secrets";
         let bob = "bob_secrets";
 

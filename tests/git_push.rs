@@ -369,16 +369,8 @@ fn push_request(script_uri: &str) -> PushRequest {
     }
 }
 
-fn script_uri(suffix: &str) -> String {
-    if aiwebengine::hosts::is_configured() {
-        format!(
-            "{}/{}",
-            aiwebengine::hosts::origin(&aiwebengine::hosts::default_host()),
-            suffix
-        )
-    } else {
-        suffix.to_string()
-    }
+fn script_uri(name: &str) -> String {
+    name.to_string()
 }
 
 /// Edit a script the way a caller does, through the authorized write.
@@ -421,7 +413,7 @@ async fn a_local_change_lands_in_the_repository() {
     .await
     .expect("fixture should start");
 
-    let uri = &script_uri("push-round/shop.js");
+    let uri = &script_uri("push-round-shop");
     clear(uri);
 
     pull_with(github.client(), &pusher(), pull_request("push-round"))
@@ -469,7 +461,7 @@ async fn files_the_script_does_not_own_survive() {
     .await
     .expect("fixture should start");
 
-    let uri = &script_uri("push-keep/shop.js");
+    let uri = &script_uri("push-keep-shop");
     clear(uri);
 
     pull_with(github.client(), &pusher(), pull_request("push-keep"))
@@ -512,7 +504,7 @@ async fn a_module_deleted_here_is_deleted_there() {
     .await
     .expect("fixture should start");
 
-    let uri = &script_uri("push-delete/shop.js");
+    let uri = &script_uri("push-delete-shop");
     clear(uri);
 
     pull_with(github.client(), &pusher(), pull_request("push-delete"))
@@ -540,7 +532,7 @@ async fn pushing_an_unchanged_script_writes_no_commit() {
         .await
         .expect("fixture should start");
 
-    let uri = &script_uri("push-noop/shop.js");
+    let uri = &script_uri("push-noop-shop");
     clear(uri);
 
     pull_with(github.client(), &pusher(), pull_request("push-noop"))
@@ -568,7 +560,7 @@ async fn both_sides_moving_is_refused_rather_than_merged() {
         .await
         .expect("fixture should start");
 
-    let uri = &script_uri("push-diverge/shop.js");
+    let uri = &script_uri("push-diverge-shop");
     clear(uri);
 
     pull_with(github.client(), &pusher(), pull_request("push-diverge"))
@@ -614,7 +606,7 @@ async fn a_moved_remote_alone_asks_for_a_pull() {
         .await
         .expect("fixture should start");
 
-    let uri = &script_uri("push-behind/shop.js");
+    let uri = &script_uri("push-behind-shop");
     clear(uri);
 
     pull_with(github.client(), &pusher(), pull_request("push-behind"))
@@ -645,7 +637,7 @@ async fn force_publishes_over_a_divergence() {
         .await
         .expect("fixture should start");
 
-    let uri = &script_uri("push-force/shop.js");
+    let uri = &script_uri("push-force-shop");
     clear(uri);
 
     pull_with(github.client(), &pusher(), pull_request("push-force"))
@@ -680,7 +672,7 @@ async fn a_script_with_no_repository_is_refused() {
         .await
         .expect("fixture should start");
 
-    let uri = "push-unbound/loose.js";
+    let uri = "push-unbound-loose";
     edit(uri, "function init() {}");
 
     let error = push_with(github.client(), &pusher(), push_request(uri))
@@ -711,7 +703,7 @@ async fn status_reports_which_cell_a_script_is_in() {
         .await
         .expect("fixture should start");
 
-    let uri = &script_uri("status-matrix/shop.js");
+    let uri = &script_uri("status-matrix-shop");
     clear(uri);
 
     pull_with(github.client(), &pusher(), pull_request("status-matrix"))
@@ -759,7 +751,7 @@ async fn status_reports_behind_when_only_the_remote_moved() {
         .await
         .expect("fixture should start");
 
-    let uri = &script_uri("status-behind/shop.js");
+    let uri = &script_uri("status-behind-shop");
     clear(uri);
 
     pull_with(github.client(), &pusher(), pull_request("status-behind"))
@@ -786,7 +778,7 @@ async fn status_reports_a_script_that_came_from_nowhere() {
         .await
         .expect("fixture should start");
 
-    let uri = "status-unbound/loose.js";
+    let uri = "status-unbound-loose";
     edit(uri, "function init() {}");
 
     let status = status_with(github.client(), uri)
@@ -808,7 +800,7 @@ async fn status_still_answers_when_the_host_cannot_be_reached() {
         .await
         .expect("fixture should start");
 
-    let uri = &script_uri("status-offline/shop.js");
+    let uri = &script_uri("status-offline-shop");
     clear(uri);
 
     pull_with(github.client(), &pusher(), pull_request("status-offline"))
@@ -841,7 +833,7 @@ async fn status_reports_a_deployment_pin() {
         .await
         .expect("fixture should start");
 
-    let uri = &script_uri("status-pinned/shop.js");
+    let uri = &script_uri("status-pinned-shop");
     clear(uri);
 
     pull_with(github.client(), &pusher(), pull_request("status-pinned"))

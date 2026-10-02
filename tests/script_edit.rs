@@ -352,14 +352,14 @@ async fn editing_a_script_that_is_not_there_is_not_a_way_to_create_one() {
     setup_env().await;
 
     let (status, body) = edit(json!({
-        "uri": "test://script-edit/absent",
+        "uri": "script-edit-absent",
         "edits": [{ "old_string": "a", "new_string": "b" }]
     }))
     .await;
 
     assert_eq!(status, 404, "{}", body);
     assert!(
-        repository::fetch_script("test://script-edit/absent").is_none(),
+        repository::fetch_script("script-edit-absent").is_none(),
         "a patch of nothing must not have written anything"
     );
 }

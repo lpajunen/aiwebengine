@@ -61,6 +61,7 @@ pub mod script_init;
 pub mod script_limits;
 pub mod script_test;
 pub mod security;
+pub mod slug;
 pub mod source_view;
 pub mod sql_dialect;
 pub mod stream_registry;

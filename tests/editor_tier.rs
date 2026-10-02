@@ -18,7 +18,7 @@ use aiwebengine::security::UserContext;
 use common::setup_env;
 
 fn unique_uri(label: &str) -> String {
-    format!("test://editor-tier/{}-{}", label, uuid::Uuid::new_v4())
+    format!("editor-tier-{}-{}", label, uuid::Uuid::new_v4())
 }
 
 /// The regression this whole change exists for: a signed-in user of a solution

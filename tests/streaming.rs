@@ -70,7 +70,7 @@ async fn test_native_script_update_streaming() {
     let user = aiwebengine::security::UserContext::admin("streaming-test-admin".to_string());
     let upsert_result = aiwebengine::engine_api::upsert_script_authorized(
         &user,
-        "test_streaming.js",
+        "test-streaming",
         "console.log('test streaming script');",
         None,
     );
@@ -89,7 +89,7 @@ async fn test_native_script_update_streaming() {
                 serde_json::from_str(&message).expect("Failed to parse message as JSON");
 
             assert_eq!(parsed["type"], "script_update");
-            assert_eq!(parsed["uri"], "test_streaming.js");
+            assert_eq!(parsed["uri"], "test-streaming");
             assert!(
                 parsed["action"].as_str().unwrap() == "inserted"
                     || parsed["action"].as_str().unwrap() == "updated"
@@ -116,8 +116,7 @@ async fn test_native_script_update_streaming() {
     // Test deletion as well
     info!("Testing script deletion through the native engine API...");
 
-    let deleted =
-        aiwebengine::engine_api::delete_script_authorized(&user, "test_streaming.js", None);
+    let deleted = aiwebengine::engine_api::delete_script_authorized(&user, "test-streaming", None);
     assert!(deleted, "Script delete failed");
 
     // Wait for the deletion message
@@ -128,7 +127,7 @@ async fn test_native_script_update_streaming() {
                 serde_json::from_str(&message).expect("Failed to parse deletion message as JSON");
 
             assert_eq!(parsed["type"], "script_update");
-            assert_eq!(parsed["uri"], "test_streaming.js");
+            assert_eq!(parsed["uri"], "test-streaming");
             assert_eq!(parsed["action"], "removed");
             assert!(parsed["timestamp"].as_str().is_some());
         }
@@ -432,7 +431,7 @@ async fn test_script_update_streaming_integration() {
     // Test 1: Insert a new script via HTTP (this should trigger broadcast)
     let insert_request = client
         .post(format!("http://127.0.0.1:{}/engine/write_file", port))
-        .json(&serde_json::json!({ "script": "https://example.com/test_script", "path": "main.js", "text": "console.log('test');" }))
+        .json(&serde_json::json!({ "script": "test-script", "path": "main.js", "text": "console.log('test');" }))
         .send();
 
     let insert_response = match timeout(Duration::from_secs(5), insert_request).await {
@@ -446,7 +445,7 @@ async fn test_script_update_streaming_integration() {
     // Test 2: Update the script
     let update_request = client
         .post(format!("http://127.0.0.1:{}/engine/write_file", port))
-        .json(&serde_json::json!({ "script": "https://example.com/test_script", "path": "main.js", "text": "console.log('updated');" }))
+        .json(&serde_json::json!({ "script": "test-script", "path": "main.js", "text": "console.log('updated');" }))
         .send();
 
     let update_response = match timeout(Duration::from_secs(5), update_request).await {

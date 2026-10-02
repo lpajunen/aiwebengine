@@ -396,6 +396,11 @@ fn authorize_script_write(user: &UserContext, uri: &str) -> Result<bool, String>
     }
 
     let exists = repository::fetch_script(uri).is_some();
+    // A name is checked where a script comes into being. Every script that
+    // already exists keeps the identifier it has, whatever its shape.
+    if !exists {
+        crate::slug::validate(uri).map_err(|e| format!("Error: {}", e))?;
+    }
     if exists {
         let is_admin = user.has_capability(&Capability::AdministerEngine);
         if !is_admin && !user_owns_script(user, uri) {
@@ -704,6 +709,41 @@ pub fn patch_file_authorized(
 /// one the caller owns unless they hold `AdministerEngine`. Returns false when
 /// the capability is missing, the caller is neither admin nor owner, or the
 /// script does not exist. Broadcasts the removal on success.
+/// Give a script a new name.
+///
+/// Takes what writing the script takes — `WriteScripts`, and ownership or
+/// administration — and not `DeleteScripts`, because nothing is lost: the
+/// files, history, secrets, tables, queue and settings are the same script's
+/// under another name. The new name has to be a slug even when the old one was
+/// not, which is the point of renaming.
+pub fn rename_script_authorized(user: &UserContext, uri: &str, to: &str) -> Result<(), String> {
+    let exists = authorize_script_write(user, uri)?;
+    if !exists {
+        return Err(format!("Script not found: {}", uri));
+    }
+    crate::slug::validate(to).map_err(|e| format!("Error: {}", e))?;
+    if uri == to {
+        return Err("Error: the script already has that name".to_string());
+    }
+    match repository::rename_script(uri, to) {
+        Ok(()) => {}
+        Err(repository::RenameError::NotFound) => {
+            return Err(format!("Script not found: {}", uri));
+        }
+        Err(repository::RenameError::Taken) => {
+            return Err(format!("Script already exists: {}", to));
+        }
+        Err(repository::RenameError::Storage(e)) => {
+            return Err(format!("Failed to rename: {}", e));
+        }
+    }
+    info!(user_id = ?user.user_id, from = %uri, to = %to, "Script renamed");
+    broadcast_script_update(uri, "deleted", &[("renamedTo", json!(to))]);
+    broadcast_script_update(to, "renamed", &[("renamedFrom", json!(uri))]);
+    spawn_script_init(to.to_string());
+    Ok(())
+}
+
 pub fn delete_script_authorized(user: &UserContext, uri: &str, via: Option<&str>) -> bool {
     if let Err(e) = user.require_capability(&Capability::DeleteScripts) {
         let auditor = auditor();
@@ -5165,6 +5205,21 @@ fn native_tools() -> &'static [NativeToolEntry] {
             tool_list_scripts,
         ),
         (
+            "rename_script",
+            "Give a script a new name. Its files, history, secrets, tables, queued work and settings go with it; its routes are registered again under the new name. The new name is a slug: lower-case letters, digits, '-' and '_', no URL, path or extension (for example 'shop'). Takes what writing the script takes: ownership or an administrator.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "uri": { "type": "string", "description": "Current name of the script" },
+                        "to": { "type": "string", "description": "The new name, a slug" }
+                    },
+                    "required": ["uri", "to"]
+                })
+            },
+            tool_rename_script,
+        ),
+        (
             "delete_script",
             "Delete a script and everything that belongs to it: its files, its revisions, its tables and its queued work. To remove one file of a script, use delete_file.",
             || {
@@ -6774,6 +6829,24 @@ fn tool_list_scripts(args: &Value, user: &UserContext) -> Value {
         "pattern": pattern,
         "timestamp": iso_timestamp(),
     })
+}
+
+fn tool_rename_script(args: &Value, user: &UserContext) -> Value {
+    let Some(uri) = arg_str(args, "uri") else {
+        return missing_arg("uri");
+    };
+    let Some(to) = arg_str(args, "to") else {
+        return missing_arg("to");
+    };
+    match rename_script_authorized(user, uri, to) {
+        Ok(()) => json!({
+            "success": true,
+            "uri": to,
+            "renamedFrom": uri,
+            "timestamp": iso_timestamp(),
+        }),
+        Err(message) => json!({ "error": message }),
+    }
 }
 
 fn tool_delete_script(args: &Value, user: &UserContext) -> Value {

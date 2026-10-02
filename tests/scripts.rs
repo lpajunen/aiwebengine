@@ -88,7 +88,7 @@ async fn js_write_log() {
     setup_env().await;
     // upsert the js_log_test script so it registers its routes
     let _ = repository::upsert_script(
-        "https://example.com/js-log-test",
+        "js-log-test",
         include_str!("../scripts/test_scripts/js_log_test.js"),
     );
 
@@ -121,7 +121,7 @@ async fn js_write_log() {
     );
 
     // Verify the log message was written via Rust API
-    let msgs = repository::fetch_log_messages("https://example.com/js-log-test");
+    let msgs = repository::fetch_log_messages("js-log-test");
     assert!(
         msgs.iter().any(|m| m.message == "js-log-test-called"),
         "Expected log entry 'js-log-test-called' not found in logs: {:?}",
@@ -164,7 +164,7 @@ function init(context) {
 
     let upsert_request = client
         .post(format!("http://127.0.0.1:{}/engine/write_file", port))
-        .json(&serde_json::json!({ "script": "https://example.com/test-endpoint-script", "path": "main.js", "text": test_script_content }))
+        .json(&serde_json::json!({ "script": "test-endpoint-script", "path": "main.js", "text": test_script_content }))
         .send();
 
     let response = match timeout(Duration::from_secs(5), upsert_request).await {
@@ -187,7 +187,7 @@ function init(context) {
 
     assert_eq!(body["success"], true, "Expected success=true in response");
     assert_eq!(
-        body["script"], "https://example.com/test-endpoint-script",
+        body["script"], "test-endpoint-script",
         "Expected correct script in response"
     );
     assert_eq!(body["path"], "main.js", "Expected the entrypoint's path");
@@ -245,7 +245,7 @@ function init(context) {
 
     let upsert_request = client
         .post(format!("http://127.0.0.1:{}/engine/write_file", port))
-        .json(&serde_json::json!({ "script": "https://example.com/delete-test-script", "path": "main.js", "text": test_script_content }))
+        .json(&serde_json::json!({ "script": "delete-test-script", "path": "main.js", "text": test_script_content }))
         .send();
 
     let upsert_response = match timeout(Duration::from_secs(5), upsert_request).await {
@@ -272,7 +272,7 @@ function init(context) {
     // Now test the delete_script endpoint
     let delete_request = client
         .post(format!("http://127.0.0.1:{}/engine/delete_script", port))
-        .json(&serde_json::json!({ "uri": "https://example.com/delete-test-script" }))
+        .json(&serde_json::json!({ "uri": "delete-test-script" }))
         .send();
 
     let delete_response = match timeout(Duration::from_secs(5), delete_request).await {
@@ -299,7 +299,7 @@ function init(context) {
         "Expected success=true in delete response"
     );
     assert_eq!(
-        delete_body["uri"], "https://example.com/delete-test-script",
+        delete_body["uri"], "delete-test-script",
         "Expected correct URI in delete response"
     );
 
@@ -314,7 +314,7 @@ function init(context) {
     // Test deleting a non-existent script
     let nonexistent_delete_request = client
         .post(format!("http://127.0.0.1:{}/engine/delete_script", port))
-        .json(&serde_json::json!({ "uri": "https://example.com/nonexistent-script" }))
+        .json(&serde_json::json!({ "uri": "nonexistent-script" }))
         .send();
 
     let nonexistent_delete_response =
@@ -382,7 +382,7 @@ function init(context) {
     // 1. Create script via HTTP API
     let create_request = client
         .post(format!("http://127.0.0.1:{}/engine/write_file", port))
-        .json(&serde_json::json!({ "script": "https://example.com/lifecycle-test-script", "path": "main.js", "text": script_content }))
+        .json(&serde_json::json!({ "script": "lifecycle-test-script", "path": "main.js", "text": script_content }))
         .send();
 
     let create_response = match timeout(Duration::from_secs(5), create_request).await {
@@ -419,7 +419,7 @@ function init(context) {
     // 3. Delete script via HTTP API
     let delete_request = client
         .post(format!("http://127.0.0.1:{}/engine/delete_script", port))
-        .json(&serde_json::json!({ "uri": "https://example.com/lifecycle-test-script" }))
+        .json(&serde_json::json!({ "uri": "lifecycle-test-script" }))
         .send();
 
     let delete_response = match timeout(Duration::from_secs(5), delete_request).await {
@@ -474,7 +474,7 @@ function init(context) {
 
     let upsert_request = client
         .post(format!("http://127.0.0.1:{}/engine/write_file", port))
-        .json(&serde_json::json!({ "script": "https://example.com/read-test-script", "path": "main.js", "text": test_script_content }))
+        .json(&serde_json::json!({ "script": "read-test-script", "path": "main.js", "text": test_script_content }))
         .send();
 
     let upsert_response = match timeout(Duration::from_secs(5), upsert_request).await {
@@ -492,7 +492,7 @@ function init(context) {
     // Now test the read_script endpoint
     let read_request = client
         .get(format!(
-            "http://127.0.0.1:{}/engine/read_file?script=https://example.com/read-test-script&path=main.js",
+            "http://127.0.0.1:{}/engine/read_file?script=read-test-script&path=main.js",
             port
         ))
         .send();
@@ -533,7 +533,7 @@ function init(context) {
     // Test reading a non-existent script
     let nonexistent_read_request = client
         .get(format!(
-            "http://127.0.0.1:{}/engine/read_file?script=https://example.com/nonexistent-script&path=main.js",
+            "http://127.0.0.1:{}/engine/read_file?script=nonexistent-script&path=main.js",
             port
         ))
         .send();

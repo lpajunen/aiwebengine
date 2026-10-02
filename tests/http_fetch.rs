@@ -522,6 +522,7 @@ async fn test_fetch_secret_template_syntax() {
 
     // Store the secret in the script_secrets table
     let script_uri = "test://http-fetch";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
     let _ = repository::set_script_secret_item(script_uri, "test_api_key", "secret-key-12345");
 
     let url_clone = url.clone();
@@ -581,6 +582,7 @@ async fn test_fetch_secret_inside_a_header_value() {
     setup_env().await;
 
     let script_uri = "test://http-fetch-inline";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
     let _ = repository::set_script_secret_item(script_uri, "inline_token", "secret-key-12345");
 
     let result = tokio::task::spawn_blocking(move || {
@@ -643,6 +645,7 @@ async fn test_fetch_secret_inside_a_url_path() {
     setup_env().await;
 
     let script_uri = "test://http-fetch-url-secret";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
     let _ = repository::set_script_secret_item(script_uri, "bot_token", "12345:AAbbCC");
 
     // Shaped like Telegram's: the token sits between two fixed segments.

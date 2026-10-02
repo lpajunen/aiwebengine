@@ -14,6 +14,7 @@
 
 mod common;
 
+use aiwebengine::repository;
 use common::AdminServer;
 
 const PASSWORD: &str = "a-perfectly-fine-password";
@@ -82,6 +83,7 @@ async fn opening_an_invitation_and_consenting_links_the_sender() {
     let (_, cookie) = register(&engine, &http).await.expect("registration");
 
     let script = "test://consent/telegram-bot";
+    repository::upsert_script(script, "function work() {}").expect("script should store");
     let invitation = aiwebengine::delegation::invite_link(script, "telegram", "12345")
         .await
         .expect("a script mints this in reply to a message");
@@ -150,6 +152,7 @@ async fn a_signed_out_visitor_keeps_the_invitation_through_signing_in() {
     let http = engine.anonymous().clone();
 
     let script = "test://consent/signed-out";
+    repository::upsert_script(script, "function work() {}").expect("script should store");
     let invitation = aiwebengine::delegation::invite_link(script, "telegram", "12345")
         .await
         .expect("minted");
@@ -193,7 +196,9 @@ async fn an_invitation_cannot_be_redeemed_against_another_script() {
     let (_, cookie) = register(&engine, &http).await.expect("registration");
 
     let minted_by = "test://consent/mine";
+    repository::upsert_script(minted_by, "function work() {}").expect("script should store");
     let target = "test://consent/theirs";
+    repository::upsert_script(target, "function work() {}").expect("script should store");
     let invitation = aiwebengine::delegation::invite_link(minted_by, "telegram", "12345")
         .await
         .expect("minted");
@@ -255,6 +260,7 @@ async fn the_page_offers_no_way_to_name_a_sender_by_hand() {
     let (_, cookie) = register(&engine, &http).await.expect("registration");
 
     let script = "test://consent/no-invitation";
+    repository::upsert_script(script, "function work() {}").expect("script should store");
 
     // The shape somebody would try: the sender straight in the query string.
     let html = http
