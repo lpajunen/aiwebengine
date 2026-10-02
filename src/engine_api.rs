@@ -2929,6 +2929,35 @@ pub fn routes_introspection_authorized(user: &UserContext) -> AppResult<Vec<Valu
     Ok(all_routes)
 }
 
+/// Keep only entries whose owning script publishes on `host`.
+///
+/// Registrations are published per host, so an unfiltered listing shows routes
+/// that are not live on the host the caller is looking at. Each distinct script
+/// is checked once.
+async fn filter_routes_by_host(routes: Vec<Value>, host: &str) -> Vec<Value> {
+    let mut verdicts: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut filtered = Vec::with_capacity(routes.len());
+    for route in routes {
+        let script_uri = route
+            .get("script_uri")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let serves = match verdicts.get(&script_uri) {
+            Some(serves) => *serves,
+            None => {
+                let serves = crate::route_index::script_serves_host(&script_uri, host).await;
+                verdicts.insert(script_uri, serves);
+                serves
+            }
+        };
+        if serves {
+            filtered.push(route);
+        }
+    }
+    filtered
+}
+
 /// Generate the full OpenAPI spec: the Rust (utoipa) spec merged with
 /// script-registered routes, asset routes, and SSE stream routes. Returns
 /// the same `{"error": ...}` JSON strings as the former JS implementation
@@ -5166,11 +5195,13 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "list_routes",
-            "List every registration in the engine: script HTTP routes, SSE streams (method STREAM) and asset routes (method ASSET).",
+            "List every registration in the engine: script HTTP routes, SSE streams (method STREAM) and asset routes (method ASSET). Pass 'host' to see only what is live on that host.",
             || {
                 json!({
                     "type": "object",
-                    "properties": {}
+                    "properties": {
+                        "host": { "type": "string", "description": "Only registrations published on this host" }
+                    }
                 })
             },
             tool_list_routes,
@@ -6681,10 +6712,20 @@ fn tool_list_scripts(args: &Value, user: &UserContext) -> Value {
         .iter()
         .filter(|meta| regex.as_ref().is_none_or(|r| r.is_match(&meta.uri)))
         .map(|meta| {
+            let millis = |t: std::time::SystemTime| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|d| d.as_millis() as f64)
+            };
             json!({
                 "uri": meta.uri,
+                "name": meta.name,
                 "size": meta.content.len(),
                 "type": "script",
+                "updatedAt": millis(meta.updated_at),
+                "createdAt": millis(meta.created_at),
+                "initialized": meta.initialized,
+                "initError": meta.init_error.as_deref(),
             })
         })
         .collect();
@@ -6807,13 +6848,24 @@ fn tool_exposure_report(_args: &Value, user: &UserContext) -> Value {
     }
 }
 
-fn tool_list_routes(_args: &Value, user: &UserContext) -> Value {
+fn tool_list_routes(args: &Value, user: &UserContext) -> Value {
+    let host = arg_str(args, "host");
     match routes_introspection_authorized(user) {
-        Ok(routes) => json!({
+        Ok(routes) => {
+            let routes = match host {
+                Some(host) => crate::database::run_blocking(filter_routes_by_host(
+                    routes,
+                    &crate::hosts::canonical_host(Some(host)),
+                )),
+                None => routes,
+            };
+            json!({
+            "host": host,
             "routes": routes,
             "count": routes.len(),
             "timestamp": iso_timestamp(),
-        }),
+            })
+        }
         Err(e) => json!({ "error": format!("Failed to list routes: {}", e) }),
     }
 }
