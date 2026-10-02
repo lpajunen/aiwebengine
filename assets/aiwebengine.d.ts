@@ -2560,6 +2560,16 @@ interface HmacVerifyOptions {
  * // → list_revisions, diff_revisions, label_revision, revert_script
  * ```
  */
+/**
+ * What each operation takes, rendered from the engine's own operation table
+ * when these declarations are served — so it describes the engine that served
+ * them, and an operation this deployment does not have is not here. Empty in
+ * the file as stored.
+ */
+interface EngineOperations {
+  // {{engine.operations}}
+}
+
 interface EngineApi {
   /**
    * The tools this engine serves, optionally narrowed to those whose name or
@@ -2580,8 +2590,17 @@ interface EngineApi {
    * Throws an `Error` named `EngineError` when the tool refuses — which is
    * what a missing capability, a script you do not own, or a bad argument all
    * look like. Throws a plain `Error` when no tool has that name.
+   *
+   * A name this engine serves has its arguments checked by the compiler; any
+   * other string is accepted untyped, because what a deployment serves is a
+   * property of the deployment.
    */
-  call(name: string, args?: Record<string, unknown>): any;
+  call<N extends string>(
+    name: N,
+    ...args: N extends keyof EngineOperations
+      ? [args: EngineOperations[N]]
+      : [args?: Record<string, unknown>]
+  ): any;
 
   /**
    * The same call, returning the tool's envelope instead of throwing.

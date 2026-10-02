@@ -27,6 +27,7 @@ pub mod embedded_db;
 pub mod engine_api;
 pub mod engine_http;
 pub mod engine_page;
+pub mod engine_types;
 pub mod error;
 pub mod execution_slots;
 pub mod exposure;
@@ -3124,7 +3125,8 @@ async fn setup_routes(
             repository::fetch_asset_async("https://example.com/core", asset_name).await
         {
             let content = match String::from_utf8(asset.content) {
-                Ok(text) => crate::limits::render_placeholders(&text).into_bytes(),
+                Ok(text) => crate::engine_types::render(&crate::limits::render_placeholders(&text))
+                    .into_bytes(),
                 // Not reachable for a `.d.ts`, and not worth failing over if it
                 // ever were: the declarations are more use unrendered than
                 // missing.
