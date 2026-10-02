@@ -6899,6 +6899,7 @@ fn tool_write_file(args: &Value, user: &UserContext) -> Value {
 /// path is an error. That was the whole of `create_asset`'s body, repeated.
 fn write_one_file(args: &Value, user: &UserContext, if_absent: bool) -> Value {
     let verb = if if_absent { "create" } else { "write" };
+    let done = if if_absent { "created" } else { "written" };
     let Some(script) = arg_str(args, "script") else {
         return missing_arg("script");
     };
@@ -6923,7 +6924,7 @@ fn write_one_file(args: &Value, user: &UserContext, if_absent: bool) -> Value {
     match write_file_bytes_authorized(user, script, path, &mimetype, content, if_absent) {
         Ok(revision) => json!({
             "success": true,
-            "message": format!("File '{}' {}d successfully", path, verb),
+            "message": format!("File '{}' {} successfully", path, done),
             "script": script,
             "path": path,
             "revision": revision,
