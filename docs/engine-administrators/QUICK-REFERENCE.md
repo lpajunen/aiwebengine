@@ -143,9 +143,9 @@ for pair in \
   "stripe_api_key:sk_live_..." \
   "sendgrid_api_key:SG..."
 do
-  curl -X POST "https://your-engine.com/engine/list_secrets?script=$SCRIPT" \
+  curl -X POST "https://your-engine.com/engine/write_secret" \
     -H "Content-Type: application/json" \
-    -d "{\"key\": \"${pair%%:*}\", \"value\": \"${pair#*:}\"}"
+    -d "{\"script\": \"$SCRIPT\", \"key\": \"${pair%%:*}\", \"value\": \"${pair#*:}\"}"
 done
 ```
 

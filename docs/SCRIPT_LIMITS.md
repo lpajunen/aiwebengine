@@ -2,11 +2,11 @@
 
 ```bash
 # Raise it for a script that waits on a slow API
-curl -X POST "https://your-engine/engine/get_script_limits" -H 'Content-Type: application/json' \
+curl -X POST "https://your-engine/engine/set_script_limits" -H 'Content-Type: application/json' \
   -d '{"script":"myagent","timeoutMs":60000,"note":"calls a model API"}'
 
 # Contain one that has started holding execution slots
-curl -X POST "https://your-engine/engine/get_script_limits" -H 'Content-Type: application/json' \
+curl -X POST "https://your-engine/engine/set_script_limits" -H 'Content-Type: application/json' \
   -d '{"script":"noisy","timeoutMs":1000,"note":"runaway loop, see incident 412"}'
 
 # What is overridden anywhere in this engine

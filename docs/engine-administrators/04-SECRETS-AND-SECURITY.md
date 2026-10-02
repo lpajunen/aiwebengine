@@ -534,23 +534,23 @@ These secrets are used by JavaScript scripts but never exposed to JavaScript cod
 
 #### Database-Backed Secrets
 
-Secrets are stored in the database. Administrators and script owners set script-level secrets over the engine API (`POST /engine/list_secrets`, or the `write_secret` MCP tool); users set their own personal secrets from JavaScript with `secretStorage.setSecret`.
+Secrets are stored in the database. Administrators and script owners set script-level secrets over the engine API (`POST /engine/write_secret`, the same operation as the MCP tool); users set their own personal secrets from JavaScript with `secretStorage.setSecret`.
 
 ```bash
 # Admin or script owner: set a secret available to a specific script
-curl -X POST "https://your-engine.com/engine/list_secrets?script=my-script" \
+curl -X POST "https://your-engine.com/engine/write_secret" \
   -H "Content-Type: application/json" \
-  -d '{"key": "anthropic_api_key", "value": "sk-ant-api03-..."}'
+  -d '{"script": "my-script", "key": "anthropic_api_key", "value": "sk-ant-api03-..."}'
 #   → available as identifier: "anthropic_api_key"
 
-curl -X POST "https://your-engine.com/engine/list_secrets?script=my-script" \
+curl -X POST "https://your-engine.com/engine/write_secret" \
   -H "Content-Type: application/json" \
-  -d '{"key": "openai_api_key", "value": "sk-..."}'
+  -d '{"script": "my-script", "key": "openai_api_key", "value": "sk-..."}'
 #   → available as identifier: "openai_api_key"
 
-curl -X POST "https://your-engine.com/engine/list_secrets?script=my-script" \
+curl -X POST "https://your-engine.com/engine/write_secret" \
   -H "Content-Type: application/json" \
-  -d '{"key": "stripe_api_key", "value": "sk_live_..."}'
+  -d '{"script": "my-script", "key": "stripe_api_key", "value": "sk_live_..."}'
 #   → available as identifier: "stripe_api_key"
 ```
 
@@ -636,14 +636,14 @@ routeRegistry.registerRoute('/api/chat', { handler: 'aiChatHandler', method: 'PO
 
 #### Common Application Secrets
 
-Set AI and service secrets with `POST /engine/list_secrets?script=<uri>` (or the `write_secret` MCP tool) as an administrator or an owner of the target script. Each call takes one `key`/`value` pair:
+Set AI and service secrets with `POST /engine/write_secret` (JSON `{script, key, value}`, or the `write_secret` MCP tool) as an administrator or an owner of the target script. Each call takes one `key`/`value` pair:
 
 ```bash
 SCRIPT="https://example.com/my-script"
 post_secret() {
-  curl -X POST "https://your-engine.com/engine/list_secrets?script=$SCRIPT" \
+  curl -X POST "https://your-engine.com/engine/write_secret" \
     -H "Content-Type: application/json" \
-    -d "{\"key\": \"$1\", \"value\": \"$2\"}"
+    -d "{\"script\": \"$SCRIPT\", \"key\": \"$1\", \"value\": \"$2\"}"
 }
 
 # AI Services

@@ -341,13 +341,13 @@ reaches production because there is nowhere else for it to go.
 
 ```bash
 # Serve revision 41, whatever gets written next
-curl -X POST "…/engine/get_deployment?script=myapp&revision=41"
+curl -X POST "…/engine/deploy_script" -d '{"script":"myapp","revision":"41"}'
 
 # What is served, what is newest, and how far apart they are
 curl "…/engine/get_deployment?script=myapp"
 
 # Take the accumulated writes
-curl -X POST "…/engine/get_deployment?script=myapp&revision=head"
+curl -X POST "…/engine/deploy_script" -d '{"script":"myapp","revision":"head"}'
 
 # Go back to following head automatically
 curl -X POST "…/engine/deploy_script" -d '{"script":"myapp","follow":true}'

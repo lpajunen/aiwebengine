@@ -5,10 +5,10 @@
 pull_from_git(repo: "owner/solution")
 
 # Publish a script's files back
-push_to_git(script: "https://example.com/solution.js")
+push_to_git(script: "solution")
 
 # Ask which of those two you want
-get_git_status(script: "https://example.com/solution.js")
+get_git_status(script: "solution")
 ```
 
 A solution lives in this engine's database, which is the right place for it
@@ -59,18 +59,22 @@ specifier is rewritten in either direction.
 
 Two things would go in one, and neither can travel:
 
-- **The script's URI.** One engine composes
-  `https://her-host/shop/main.ts`; somebody pulling the same repository
-  elsewhere has a different host entirely. A repository recording the full URI
-  records a value correct on exactly one machine.
+- **The script's name.** One engine already has a `shop`; somebody pulling the
+  same repository elsewhere calls it something else, or has renamed it since. A
+  repository recording the name records a value correct on exactly one machine.
 - **Ownership and host bindings.** If those arrived from a repository, push
   access to it would confer ownership inside somebody's engine.
 
 Strip both out and there is nothing left to declare. The pulling engine
-composes its own URI, and a script is named after where it came from — `shop`
-becomes `.../solution/shop.ts`, and a single-script repository becomes
-`.../solution.ts`. The extension follows the entry, because that is what
-decides whether the file is transpiled.
+composes its own name, and a script is named after where it came from — the
+directory `shop` becomes the script `shop`, and a single-script repository
+takes the repository's name (`solution`). A name is a slug: no origin and no
+extension, because the entry file's own name (`main.ts`) is what says whether it
+is transpiled.
+
+The name is composed **once**. The directory a script is goes on its sync row,
+and every later pull and push finds the script by that, so renaming it
+(`rename_script`) does not make the next pull write a second one beside it.
 
 ## Telling it what not to take
 
@@ -118,9 +122,10 @@ pull_from_git(repo: "owner/solution", prefix: "examples")
 ```
 
 `repo` takes `owner/repo`, a browser URL, or a clone URL. `branch` defaults to
-the repository's own default. `prefix` is where the scripts land, defaulted
-from the repository name — set it when two repositories would otherwise
-collide, or to put a solution somewhere specific.
+the repository's own default. `prefix` is a name put in front of each
+directory's (`examples-shop`) — set it when two repositories would otherwise
+both want `shop`. With no prefix a directory is simply its own name, and a
+repository that is one script takes the repository's name.
 
 A pull is a **sync, not an append**: a module deleted upstream is deleted here,
 because a script that kept building against a file its source of truth no
@@ -162,7 +167,7 @@ a token rather than writing it in the clear.
 ## Pushing
 
 ```
-push_to_git(script: "https://example.com/solution.js",
+push_to_git(script: "solution",
             message: "Fix the cart total")
 ```
 
@@ -184,7 +189,7 @@ credential with write access.
 ## Knowing which of the two you want
 
 ```
-get_git_status(script: "https://example.com/solution.js")
+get_git_status(script: "solution")
 ```
 
 | State         | Meaning                   | Do                           |
@@ -211,16 +216,16 @@ refuses a non-fast-forward, so it cannot overwrite work the engine has not seen.
 
 **The target is already occupied.** A pull will not overwrite a script that
 this repository did not write. Owning a script is not the same as having agreed
-that a repository may replace it, and since the prefix defaults to the
-repository's name, a repository named like an existing prefix would otherwise be
-enough. Pull under a different prefix, or `force` if you meant it. A second pull
+that a repository may replace it, and a repository with a `shop` directory
+would otherwise be enough to replace somebody's `shop`. Pull under a different
+prefix, or `force` if you meant it. A second pull
 of the _same_ repository is unaffected — replacing what it wrote is the point.
 
 ## Where a script came from
 
 ```
 list_git_bindings()                                    # what tracks what
-clear_git_remote(script: "https://example.com/x.js")   # stop tracking
+clear_git_remote(script: "x")   # stop tracking
 ```
 
 Clearing a binding leaves the script and its files exactly as they are; what
