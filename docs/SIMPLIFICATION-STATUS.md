@@ -10,21 +10,21 @@ across 45 files) and is **merged into `main`**.
 
 ## What is done
 
-| §     | Thing                                       | State                                         |
-| ----- | ------------------------------------------- | --------------------------------------------- |
-| §1    | Script and assets are one tree              | **Done** — storage and MCP surface            |
-| §1    | `assetStorage`'s four methods               | **Done** — `files` (1b)                       |
-| §2    | `.md` / `.txt` as string modules            | **Done**                                      |
-| §2    | Exposure by directory                       | **Done and enforced**                         |
-| §2.1  | Deny shape for per-resource authorization   | **Done** (`resource_access.rs`)               |
-| §2.1  | Asset-route authorization hook              | **Done**                                      |
-| §2/§7 | `asset_registry` → `route_index`            | **Done**; the module is deleted               |
-| §2/§7 | Stream routing → `route_index`              | **Done**; `stream_registry` keeps connections |
-| §3    | One operation table, HTTP generated from it | Not started (Phase 2)                         |
-| §4    | Collision refusal (no mounts)               | Not started (Phase 3)                         |
-| §4    | Slug + stable identity                      | Not started (Phase 4)                         |
-| §5    | Prelude every global                        | **Done** (Phase 1, unmerged)                  |
-| §6    | Trim `database` to ~10 methods              | **Done** — ten                                |
+| §     | Thing                                       | State                                                                         |
+| ----- | ------------------------------------------- | ----------------------------------------------------------------------------- |
+| §1    | Script and assets are one tree              | **Done** — storage and MCP surface                                            |
+| §1    | `assetStorage`'s four methods               | **Done** — `files` (1b)                                                       |
+| §2    | `.md` / `.txt` as string modules            | **Done**                                                                      |
+| §2    | Exposure by directory                       | **Done and enforced**                                                         |
+| §2.1  | Deny shape for per-resource authorization   | **Done** (`resource_access.rs`)                                               |
+| §2.1  | Asset-route authorization hook              | **Done**                                                                      |
+| §2/§7 | `asset_registry` → `route_index`            | **Done**; the module is deleted                                               |
+| §2/§7 | Stream routing → `route_index`              | **Done**; `stream_registry` keeps connections                                 |
+| §3    | One operation table, HTTP generated from it | **Done in the engine** (Phase 2, unmerged); script repositories not yet moved |
+| §4    | Collision refusal (no mounts)               | Not started (Phase 3)                                                         |
+| §4    | Slug + stable identity                      | Not started (Phase 4)                                                         |
+| §5    | Prelude every global                        | **Done** (Phase 1, unmerged)                                                  |
+| §6    | Trim `database` to ~10 methods              | **Done** — ten                                                                |
 
 ## What is true of the tree now
 
@@ -317,27 +317,84 @@ per global, each with its `aiwebengine.d.ts` change:
 
 ### Phase 2 — one operation table (§3)
 
-1. **Inventory** the 58 `_route` functions against the 49 tools. Each route
-   either has a tool, gets one, or is one of the few that stay hand-written:
-   `/engine/script_updates` and `/engine/script_logs/stream` (SSE),
-   `/engine/installed`, `/engine/openapi.json`, `/engine/types/...`,
-   `/engine/engine.css`, `/favicon.ico`.
-2. **Grow the entry** to name, description, schema, capability,
-   `http: Option<HttpHint>` and fn. `HttpHint` is for the handful whose answer is
-   not JSON — the raw file read's content type and `ETag` — not for paths.
-3. **Generate HTTP** as `POST /engine/{name}`. `AppError` maps to 400/403/404
-   in one place, which recovers most of what the hand-written routes did.
-   `management_hosts` enforcement moves to the one generated router.
-4. **Generate `/engine/openapi.json`** from the schemas; delete the 58
-   `#[utoipa::path]` annotations and the dependency if nothing else needs it.
-5. **Delete the `_route` functions.** Tests call operations through one helper
-   by name. Expected: −4–5k lines of `engine_api.rs`.
-6. Optionally generate the `engine.call` argument types in `aiwebengine.d.ts`
-   from the table — the fifth description of the same operations.
+**Progress. The engine side is done** (`engine_http.rs`, two commits on
+`main`, undeployed); the four script repositories have **not** been moved, so
+their deploy tooling and the `admin` / `editor` UIs call paths that no longer
+exist. `engine_api.rs` went from 11,637 to about 7,500 lines, and 1,701 tests
+pass.
 
-**Scripts:** the deploy tooling in `aiwebengine-dev` / `aiwebengine-examples`
-and the `admin` / `editor` UIs, which are the only callers of `/engine/*` in
-scope. Scripts themselves call `engine.call`, which does not change.
+- **The inventory** found that all but six of the 58 routes already had a tool
+  (the six are the ones below that stay hand-written): `upsert_script` / `assets` are `write_file`, `read_script` is
+  `read_file`, `assets/batch` is `write_files`, `undeploy` is
+  `deploy_script` with `follow`, clearing limits is `set_script_limits` with no
+  fields, and so on. The routes and tools were two implementations of the same
+  cores (`tool_read_logs` is a copy of `script_logs_route`), which is the
+  argument of §3 made literal.
+- **Generated**: `POST /engine/{name}` for each of the 52 operations, and `GET`
+  with query arguments for the 20 in `engine_http::READ_ONLY`. Registered by
+  name rather than as a `/engine/{operation}` wildcard, which would have
+  swallowed `/engine/script_updates`. The three file-writing operations carry
+  the larger body ceilings the old asset routes had; the rest inherit
+  `security.max_request_body_bytes`.
+- **Deleted**: 52 route functions, their `#[utoipa::path]` annotations, and
+  every parameter struct and helper that only they used. `utoipa` stays — the
+  non-engine routes (`/health`, `/mcp`, `/auth/*`) still use it.
+- **Stays hand-written** because it is not an operation: the two SSE streams,
+  `/engine/health/cluster` (a probe whose 503 is its answer; an
+  `http_status` hint on the table entry would let it move, if wanted),
+  `/engine/installed`, `/engine/openapi.json`, `/engine/engine.css`,
+  `/auth/unauthorized`, `/favicon.ico`.
+- **Tests** call operations through `engine_http::call_operation(name, method,
+session, query, body)` where they used to call a route function, so they
+  still exercise the dispatcher, the error mapping and the session without a
+  server. Where an old test pinned the route's shape — raw JavaScript with an
+  `ETag`, form-encoded bodies, `Script not found` as the whole error — it was
+  rewritten to the operation's shape.
+
+What this changed for callers, which the cutover has to absorb:
+
+- Every path is `/engine/{tool_name}`; the old names are gone (`/engine/scripts`
+  is `list_scripts`, `/engine/script_logs` is `read_logs`, `DELETE
+/engine/script_logs` is `POST /engine/clear_logs`, `/engine/user_roles` is
+  `add_user_role` / `remove_user_role`, and so on). Bodies are JSON; form
+  bodies and raw-source bodies (`/engine/eval`, `/engine/check`) are no longer
+  accepted — pass `content` / `source`.
+- Arguments follow the tool schema, so the file operations name a file
+  `{ script, path }` where the assets routes said `{ script, asset }`, and
+  `/engine/upsert_script`'s `uri` + form `content` is
+  `write_file { script, path: "main.ts", text }`. That also fixes Phase 0's
+  "the tooling uploads every entry through `upsert_script`, which carries no
+  file name": the client now has to name the file.
+- A read of a file is JSON (`content`, `sha256`, `bytes`, `encoding`), not the
+  bytes with `Content-Type` and `ETag`. No `HttpHint` was built; nothing needed
+  one once the decision was flat JSON.
+- A `create` is `create_file`, not an `If-None-Match: *` header.
+
+Known gaps, in the order they matter:
+
+1. **Status codes come from the error text.** `status_for_error` classifies
+   `{ "error": "..." }` by substring because that is all an operation returns.
+   It is one place and it is tested, but it is a classifier over prose: a new
+   message that happens to contain `not found` becomes a 404. The fix is a
+   typed refusal on the operation's side (`AppError`, or an optional `status`
+   in the result) — touching the ~100 `json!({ "error": ... })` sites — and it
+   is what the plan meant by "`AppError` maps to 400/403/404 in one place".
+2. **No `capability` column on the table.** Each operation still authorizes
+   itself inside its core function, as it did for MCP. Listing the capability
+   in the entry would let the router refuse before running and would document
+   it in OpenAPI; it was not needed to delete the routes.
+3. **Item 6 (generate `engine.call` argument types in `aiwebengine.d.ts`)** is
+   not done.
+4. **Prose docs got a path rename, not a rewrite.** `docs/*.md` and the
+   `assets/*.d.ts` comments were mechanically moved to the new names, and the
+   `DELETE` / `PATCH` examples fixed by hand, but a curl example that sends
+   query parameters to a `POST` operation (`secrets`, `limits`, `tasks`,
+   `deploy`, `git/*`) still needs reading.
+
+**Scripts — not started.** The tooling in `aiwebengine-examples/scripts/`
+(then `make sync-tooling` into `aiwebengine-dev`), and the `admin` and
+`editor` UIs, call about thirty of the removed paths. The cutover procedure
+above applies unchanged.
 
 ### Phase 3 — a collision on one host is refused (§4, the part that survives)
 
