@@ -25,6 +25,7 @@ pub mod deployments;
 pub mod desktop;
 pub mod embedded_db;
 pub mod engine_api;
+pub mod engine_http;
 pub mod engine_page;
 pub mod error;
 pub mod execution_slots;
@@ -104,7 +105,6 @@ What a script may spend is worth knowing before writing one: each invocation get
         health_handler,
         engine_api::cluster_health_route,
         engine_api::upsert_script_route,
-        engine_api::delete_script_route,
         engine_api::read_script_route,
         engine_api::edit_script_route,
         engine_api::search_route,
@@ -133,7 +133,6 @@ What a script may spend is worth knowing before writing one: each invocation get
         engine_api::git_credentials_get_route,
         engine_api::git_credentials_post_route,
         engine_api::git_credentials_delete_route,
-        engine_api::run_tests_route,
         engine_api::check_route,
         engine_api::eval_route,
         engine_api::assets_get_route,
@@ -3101,13 +3100,10 @@ async fn setup_routes(
     // These paths live under the reserved /engine prefix, and are served only
     // on the hosts in `server.management_hosts` (see `management_host_guard`).
     let management_router = Router::new()
+        .merge(engine_http::router())
         .route(
             "/engine/upsert_script",
             axum::routing::post(engine_api::upsert_script_route),
-        )
-        .route(
-            "/engine/delete_script",
-            axum::routing::post(engine_api::delete_script_route),
         )
         .route(
             "/engine/read_script",
@@ -3195,10 +3191,6 @@ async fn setup_routes(
         .route(
             "/engine/revisions/diff",
             axum::routing::get(engine_api::revision_diff_route),
-        )
-        .route(
-            "/engine/run_tests",
-            axum::routing::post(engine_api::run_tests_route),
         )
         .route(
             "/engine/check",

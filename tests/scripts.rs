@@ -281,7 +281,7 @@ function init(context) {
     // Now test the delete_script endpoint
     let delete_request = client
         .post(format!("http://127.0.0.1:{}/engine/delete_script", port))
-        .form(&[("uri", "https://example.com/delete-test-script")])
+        .json(&serde_json::json!({ "uri": "https://example.com/delete-test-script" }))
         .send();
 
     let delete_response = match timeout(Duration::from_secs(5), delete_request).await {
@@ -323,7 +323,7 @@ function init(context) {
     // Test deleting a non-existent script
     let nonexistent_delete_request = client
         .post(format!("http://127.0.0.1:{}/engine/delete_script", port))
-        .form(&[("uri", "https://example.com/nonexistent-script")])
+        .json(&serde_json::json!({ "uri": "https://example.com/nonexistent-script" }))
         .send();
 
     let nonexistent_delete_response =
@@ -351,9 +351,11 @@ function init(context) {
             Err(_) => panic!("Reading JSON response timed out"),
         };
 
-    assert_eq!(
-        nonexistent_body["error"], "Script not found",
-        "Expected 'Script not found' error"
+    assert!(
+        nonexistent_body["error"]
+            .as_str()
+            .is_some_and(|e| e.starts_with("Script not found")),
+        "Expected a 'Script not found' error, got {nonexistent_body}"
     );
 
     // Proper cleanup
@@ -429,7 +431,7 @@ function init(context) {
     // 3. Delete script via HTTP API
     let delete_request = client
         .post(format!("http://127.0.0.1:{}/engine/delete_script", port))
-        .form(&[("uri", "https://example.com/lifecycle-test-script")])
+        .json(&serde_json::json!({ "uri": "https://example.com/lifecycle-test-script" }))
         .send();
 
     let delete_response = match timeout(Duration::from_secs(5), delete_request).await {

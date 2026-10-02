@@ -3186,6 +3186,10 @@ pub fn generate_merged_openapi_spec() -> String {
 
     // Merge collected paths into the Rust spec
     if let Some(rust_paths) = rust_spec["paths"].as_object_mut() {
+        // The engine's own operations, from the table `/mcp` reads.
+        for (path, operations) in crate::engine_http::openapi_paths() {
+            rust_paths.insert(path, operations);
+        }
         for (path, operations) in js_paths {
             if let Some(existing) = rust_paths.get_mut(&path) {
                 if let (Some(existing_obj), Some(new_ops)) =
@@ -3319,59 +3323,6 @@ pub async fn upsert_script_route(
                 "timestamp": iso_timestamp(),
             }),
         ),
-    }
-}
-
-/// Delete a script.
-#[utoipa::path(
-    post,
-    path = "/engine/delete_script",
-    tags = ["Scripts"],
-    request_body(content_type = "application/x-www-form-urlencoded",
-        description = "Form fields: uri (required)"),
-    responses(
-        (status = 200, description = "Script deleted successfully"),
-        (status = 400, description = "Missing required parameter"),
-        (status = 404, description = "Script not found"),
-    )
-)]
-pub async fn delete_script_route(
-    auth_user: Option<Extension<AuthUser>>,
-    Query(query): Query<ScriptParams>,
-    body: axum::body::Bytes,
-) -> Response {
-    let user = user_context_from(auth_user.as_deref());
-    let form: ScriptParams = serde_urlencoded::from_bytes(&body).unwrap_or_default();
-    let Some(uri) = form.uri.or(query.uri) else {
-        return missing_param_response("uri");
-    };
-
-    let uri_for_task = uri.clone();
-    let deleted =
-        tokio::task::spawn_blocking(move || delete_script_authorized(&user, &uri_for_task, None))
-            .await
-            .unwrap_or(false);
-
-    if deleted {
-        json_response(
-            StatusCode::OK,
-            json!({
-                "success": true,
-                "message": "Script deleted successfully",
-                "uri": uri,
-                "timestamp": iso_timestamp(),
-            }),
-        )
-    } else {
-        json_response(
-            StatusCode::NOT_FOUND,
-            json!({
-                "error": "Script not found",
-                "message": "No script with the specified URI was found",
-                "uri": uri,
-                "timestamp": iso_timestamp(),
-            }),
-        )
     }
 }
 
@@ -3732,131 +3683,6 @@ pub fn authorize_test_run(user: &UserContext, uri: &str) -> Result<(), TestRunRe
         return Err(TestRunRefusal::AccessDenied);
     }
     Ok(())
-}
-
-#[derive(Deserialize, Default)]
-pub struct TestRunParams {
-    uri: Option<String>,
-    filter: Option<String>,
-    rollback: Option<bool>,
-    /// Which version to run: a revision number, `head`, `last-good`, or a
-    /// label. Absent runs what is deployed.
-    revision: Option<String>,
-}
-
-/// Run a script's test modules and report the verdicts.
-///
-/// Two budgets bound a run: one per test module and one for the whole run
-/// (`javascript.test_timeout_ms` and `test_run_timeout_ms`, 30 s and 300 s by
-/// default). Either reached, the report comes back with `timedOut: true` and
-/// the verdicts gathered so far rather than nothing.
-#[utoipa::path(
-    post,
-    path = "/engine/run_tests",
-    tags = ["Scripts"],
-    params(
-        ("uri" = String, Query, description = "URI of the script whose tests to run"),
-        ("filter" = Option<String>, Query, description = "Run only cases whose name contains this text"),
-        ("rollback" = Option<bool>, Query, description = "Roll back database writes the tests make (default true)"),
-        ("revision" = Option<String>, Query, description = "Which version to run: a revision number, `head`, `last-good`, or a label. Omit for what is deployed."),
-    ),
-    responses(
-        (status = 200, description = "Test report; `success` is false when any case failed"),
-        (status = 400, description = "Missing required parameter"),
-        (status = 403, description = "Not an administrator or owner of the script"),
-        (status = 404, description = "Script not found"),
-        (status = 500, description = "The run could not produce verdicts"),
-    )
-)]
-pub async fn run_tests_route(
-    auth_user: Option<Extension<AuthUser>>,
-    Query(query): Query<TestRunParams>,
-    body: axum::body::Bytes,
-) -> Response {
-    let user = user_context_from(auth_user.as_deref());
-    let form: TestRunParams = serde_urlencoded::from_bytes(&body).unwrap_or_default();
-    let Some(uri) = form.uri.or(query.uri) else {
-        return missing_param_response("uri");
-    };
-    let filter = form.filter.or(query.filter);
-    // Isolation is the default: a test that writes should not leave rows behind
-    // unless the caller says so.
-    let rollback = form.rollback.or(query.rollback).unwrap_or(true);
-    let revision = form.revision.or(query.revision);
-
-    let user_for_auth = user.clone();
-    let uri_for_auth = uri.clone();
-    let authorized =
-        tokio::task::spawn_blocking(move || authorize_test_run(&user_for_auth, &uri_for_auth))
-            .await;
-
-    match authorized {
-        Ok(Ok(())) => {}
-        Ok(Err(TestRunRefusal::NotFound)) => {
-            return json_response(
-                StatusCode::NOT_FOUND,
-                json!({
-                    "error": "Script not found",
-                    "uri": uri,
-                    "timestamp": iso_timestamp(),
-                }),
-            );
-        }
-        Ok(Err(TestRunRefusal::AccessDenied)) => {
-            return error_response(
-                StatusCode::FORBIDDEN,
-                format!(
-                    "Error: Permission denied. You must be an administrator or owner to run tests for script '{}'",
-                    uri
-                ),
-            );
-        }
-        Err(e) => {
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to authorize test run: join error: {}", e),
-            );
-        }
-    }
-
-    let view = match resolve_view(&uri, revision.as_deref()).await {
-        Ok(view) => view,
-        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
-    };
-
-    let result = crate::script_test::TestRunner::with_configured_timeouts()
-        .run(crate::script_test::TestRunRequest {
-            script_uri: uri,
-            user_context: user,
-            filter,
-            rollback,
-            view,
-        })
-        .await;
-
-    let status = if result.error().is_some() {
-        StatusCode::INTERNAL_SERVER_ERROR
-    } else {
-        // A failing test is a report, not a failed request.
-        StatusCode::OK
-    };
-
-    let mut report = result.to_json();
-    if let Some(object) = report.as_object_mut() {
-        object.insert("timestamp".to_string(), json!(iso_timestamp()));
-        if result.is_empty() && result.error().is_none() {
-            // Distinguish "nothing to run" from "everything passed": both
-            // report zero failures, and only one of them is good news.
-            object.insert(
-                "message".to_string(),
-                json!(
-                    "No test modules found. Tests are assets named '*.test.ts' (or .js/.jsx/.tsx)."
-                ),
-            );
-        }
-    }
-
-    json_response(status, report)
 }
 
 /// Why a check was refused before it started.
