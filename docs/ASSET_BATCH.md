@@ -1,12 +1,12 @@
 # Writing a Script's Files as One Change
 
-A script's files are one unit of change. `POST /engine/assets/batch` writes
+A script's files are one unit of change. `/engine/write_files` writes
 them that way: one request, one transaction, one revision, one `init()` at the
 end — the modules, the root source that imports them, and whatever the change
 removes.
 
 ```bash
-curl -X POST "https://your-engine/engine/assets/batch?script=myapp" \
+curl -X POST "https://your-engine/engine/write_files?script=myapp" \
      -H "Content-Type: application/json" \
      -d '{
            "content": "import { handle } from \"./server/handlers.ts\"; …",
@@ -18,7 +18,7 @@ curl -X POST "https://your-engine/engine/assets/batch?script=myapp" \
          }'
 ```
 
-## Why not a loop over `/engine/assets`
+## Why not a loop over `/engine/write_file`
 
 Every single-asset write is a deploy in miniature. It invalidates the script's
 prepared program, and it notifies the rest of the cluster, where each instance
@@ -35,7 +35,7 @@ landed.
 A batch could carry a script's assets and not the file that imports them, so a
 change touching the root and its modules was two writes — two revisions, two
 cluster notifications, two `init()` runs, and a window in which the deployment
-is half-changed. `/engine/check` would check exactly that change in one
+is half-changed. `/engine/check_script` would check exactly that change in one
 request, which is the shape this now matches: the request that _describes_ a
 change is the request that _applies_ it, `content` for the root and `files` for
 the modules in both.
@@ -92,7 +92,7 @@ One batch may carry 10MB of content in total.
 
 A batch used to require base64 for every file, including the modules. That made
 the request that _applies_ a change disagree with the one that _describes_ it:
-`/engine/check` has always taken candidate modules as plain source, and says
+`/engine/check_script` has always taken candidate modules as plain source, and says
 why — "a module the bundler can read has to be UTF-8 anyway". So a caller
 checked a change in one encoding and deployed the identical bytes in another.
 
@@ -108,7 +108,7 @@ already has, without sending the file back, see
 
 ## Writing one file
 
-`POST /engine/assets` writes a single asset and overwrites whatever is there.
+`/engine/write_file` writes a single asset and overwrites whatever is there.
 `If-None-Match: *` makes it a create instead: the write is refused with `409`
 if the asset already exists. It is a precondition on the write rather than a
 check before it, because a caller that reads first and writes second has a
@@ -118,7 +118,7 @@ overwrites — and infers the MIME type from the extension the way a batch does.
 
 The `write_file` and `create_file` tools take `text` or `content`, the same
 choice a batch's files get and for the same reason: the file is the unit that
-differs, not the encoding. `POST /engine/assets` itself is unchanged — it takes
+differs, not the encoding. `/engine/write_file` itself is unchanged — it takes
 the whole file base64 in `content`, as it always has.
 
 Writing assets takes the same rights as writing one at a time: the

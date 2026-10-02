@@ -554,7 +554,7 @@ pub async fn wait_for_server(port: u16, max_attempts: u32) -> anyhow::Result<()>
 /// Wait for a URL to answer with `expected`, and return the response that did.
 ///
 /// Writing a script and its route answering requests are not the same moment:
-/// `/engine/upsert_script` records the script and *spawns* its `init()`
+/// `/engine/write_file` records the script and *spawns* its `init()`
 /// ([`engine_api::upsert_script_authorized`]), so the response comes back
 /// before the route the script registers exists. Deletion is the mirror image
 /// on the way out. Tests used to bridge that with a fixed sleep — 100ms in
@@ -710,7 +710,7 @@ impl AdminServer {
     /// source and nothing else, so no route, resolver, stream or listener the
     /// script registers exists until something calls its `init()` — the engine
     /// does that for every script at startup, and for one script on each write
-    /// through `/engine/upsert_script`. A test that wrote the row directly
+    /// through `/engine/write_file`. A test that wrote the row directly
     /// *after* starting its server did neither, and passed only because an
     /// earlier run had left the same script in the shared database for this
     /// run's startup to execute. On a database of its own, that test finds

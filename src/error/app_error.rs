@@ -560,7 +560,7 @@ mod tests {
         let response = AppError::InsufficientCapabilities {
             required: vec![Capability::ViewLogs, Capability::DeleteLogs],
         }
-        .to_error_response("/engine/script_logs", "DELETE", "req-2");
+        .to_error_response("/engine/read_logs", "DELETE", "req-2");
 
         assert_eq!(
             response.error.context.get("required_capabilities"),

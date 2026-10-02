@@ -91,7 +91,7 @@ async fn test_secrets_cannot_access_values_directly() {
 // ============================================================================
 // Cross-script secret management
 //
-// Secrets for another script are managed over `/engine/secrets` and the
+// Secrets for another script are managed over `/engine/list_secrets` and the
 // equivalent MCP tools, both of which authorize through the functions below:
 // administrators and owners of the *target* script may manage its secrets.
 // ============================================================================

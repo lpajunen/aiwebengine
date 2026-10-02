@@ -1,4 +1,4 @@
-//! `PATCH /engine/assets` and the scoped reads that feed it.
+//! `/engine/edit_file` and the scoped reads that feed it.
 //!
 //! The endpoint's reason to exist is what its requests do *not* carry. A
 //! caller changing three lines of a module sends three lines, and a caller
@@ -13,13 +13,10 @@ mod common;
 use common::{setup_env, test_mutex};
 
 use aiwebengine::auth::AuthUser;
-use aiwebengine::engine_api::{
-    AssetQuery, assets_get_route, assets_patch_route, execute_native_mcp_tool,
-};
+use aiwebengine::engine_api::execute_native_mcp_tool;
 use aiwebengine::repository;
 use aiwebengine::security::{Capability, UserContext};
 use axum::Extension;
-use axum::extract::Query;
 use axum::response::Response;
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -83,11 +80,23 @@ async fn body_json(response: Response) -> Value {
     serde_json::from_slice(&bytes).expect("body should be JSON")
 }
 
+/// The old endpoints named a file `asset` in the query; the operations name it
+/// `path`, and take everything in one body.
+fn renamed(query: &str) -> String {
+    query.replace("asset=", "path=")
+}
+
 async fn patch(query: &str, body: Value) -> (axum::http::StatusCode, Value) {
-    let response = assets_patch_route(
+    let mut args = body;
+    for (key, value) in url::form_urlencoded::parse(renamed(query).as_bytes()) {
+        args[key.as_ref()] = Value::String(value.to_string());
+    }
+    let response = aiwebengine::engine_http::call_operation(
+        "edit_file",
+        axum::http::Method::POST,
         admin_extension(),
-        Query(serde_urlencoded::from_str::<AssetQuery>(query).expect("query should parse")),
-        axum::body::Bytes::from(body.to_string()),
+        None,
+        axum::body::Bytes::from(args.to_string()),
     )
     .await;
 
@@ -96,9 +105,12 @@ async fn patch(query: &str, body: Value) -> (axum::http::StatusCode, Value) {
 }
 
 async fn get(query: &str) -> (axum::http::StatusCode, Value) {
-    let response = assets_get_route(
+    let response = aiwebengine::engine_http::call_operation(
+        "read_file",
+        axum::http::Method::GET,
         admin_extension(),
-        Query(serde_urlencoded::from_str::<AssetQuery>(query).expect("query should parse")),
+        Some(renamed(query)),
+        axum::body::Bytes::new(),
     )
     .await;
 
@@ -450,7 +462,7 @@ async fn read_access_alone_cannot_patch_an_asset() {
     assert_eq!(stored_text(uri, "assets_patch_authz/util.ts"), source);
 }
 
-/// Reported from testing: `GET /engine/assets` answered `200` with no token at
+/// Reported from testing: `/engine/read_file` answered `200` with no token at
 /// all. An anonymous caller holds `ReadAssets` so that a script serving a
 /// public request can read its own files through the sandbox — but that is not
 /// the same permission as reading the tree through `/engine/*`, and `grep=`

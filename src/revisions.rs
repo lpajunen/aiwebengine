@@ -21,12 +21,12 @@ use crate::repository;
 /// acts rather than of anonymous content changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
-    /// A whole-file write through `POST /engine/assets`.
+    /// A whole-file write through `/engine/write_file`.
     Post,
-    /// An atomic multi-file write through `/engine/assets/batch`.
+    /// An atomic multi-file write through `/engine/write_files`.
     Batch,
-    /// A string patch: `PATCH /engine/assets` for one of a script's assets,
-    /// `POST /engine/edit_script` for its root source. One origin for both,
+    /// A string patch: `/engine/edit_file` for one of a script's assets,
+    /// `/engine/edit_file` for its root source. One origin for both,
     /// because what a history records is the act — a few lines changed in
     /// place — and which file it landed in the manifest already says.
     Patch,
@@ -1309,7 +1309,7 @@ pub async fn revert_content(
 ///
 /// Recording a revision on every write is what makes the history worth having,
 /// and it is also what makes it grow without bound: an agent editing a script
-/// through `PATCH /engine/assets` writes far more often than a person does.
+/// through `/engine/edit_file` writes far more often than a person does.
 /// The policy is the answer to "which of these will nobody want", and every
 /// clause is a way of being wrong about that.
 #[derive(Debug, Clone, Copy)]

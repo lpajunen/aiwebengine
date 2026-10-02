@@ -143,7 +143,7 @@ for pair in \
   "stripe_api_key:sk_live_..." \
   "sendgrid_api_key:SG..."
 do
-  curl -X POST "https://your-engine.com/engine/secrets?script=$SCRIPT" \
+  curl -X POST "https://your-engine.com/engine/list_secrets?script=$SCRIPT" \
     -H "Content-Type: application/json" \
     -d "{\"key\": \"${pair%%:*}\", \"value\": \"${pair#*:}\"}"
 done
@@ -473,7 +473,7 @@ docker-compose logs --tail=50 aiwebengine | grep -i error
 /auth/login                 # OAuth login page
 /auth/callback/google       # Google OAuth callback
 /engine/users               # List users (administrators only)
-/engine/user_roles          # Grant/revoke roles (administrators only)
+/engine/add_user_role          # Grant/revoke roles (administrators only)
 /engine/scripts             # List installed scripts
 ```
 

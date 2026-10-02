@@ -1259,7 +1259,7 @@ pub struct PreparedSnippet {
 
 /// Rewrite an ad hoc snippet's imports the way the linker rewrites a module's.
 ///
-/// `/engine/eval` runs a snippet against a script's already-evaluated program.
+/// `/engine/eval_script` runs a snippet against a script's already-evaluated program.
 /// The program was bundled, so its modules live in a factory table rather than
 /// in the module system, and `import` in a snippet is a syntax error — the
 /// snippet is evaluated as a script. Passing it through the same rewrite every

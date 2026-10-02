@@ -63,7 +63,7 @@
         hosts: options.hosts === undefined ? null : options.hosts,
         input: options.input === undefined ? null : options.input,
         timeoutMs: options.timeoutMs,
-        // Off by default, unlike `/engine/eval`. A turn that may not write
+        // Off by default, unlike `/engine/eval_script`. A turn that may not write
         // holds no write capability, which is a stronger guarantee than a
         // transaction that undoes what it did — and a turn that *may* write
         // is usually being run because its writes are wanted.

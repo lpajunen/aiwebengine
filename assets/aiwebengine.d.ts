@@ -359,7 +359,7 @@ interface HandlerContext {
 
   /**
    * Identifies this invocation. Every log line the handler writes is filed
-   * under it, so `GET /engine/script_logs?request_id=<id>` returns exactly the
+   * under it, so `GET /engine/read_logs?request_id=<id>` returns exactly the
    * lines this run produced. For an HTTP route it is the request's
    * `x-request-id`, which the response carries back to the caller.
    */
@@ -1847,7 +1847,7 @@ interface Database {
 /**
  * Console logging interface
  * Note: reading and pruning stored log entries is engine administration, not a
- * script API — use `GET|DELETE /engine/script_logs` or the equivalent MCP tools.
+ * script API — use `/engine/read_logs` and `/engine/clear_logs` or the equivalent MCP tools.
  *
  * A log is a diagnostic rather than a store: a line survives only while it is
  * within both the newest 10,000 of this script and 168 hours of now, and either
@@ -1991,7 +1991,7 @@ interface Console {
   /**
    * Does nothing. Present so the call is not a `ReferenceError`, but stored log
    * lines are pruned through the engine's administration surface
-   * (`DELETE /engine/script_logs`), which is not reachable from a script.
+   * (`/engine/clear_logs`), which is not reachable from a script.
    */
   clear(): void;
 }
@@ -2150,7 +2150,7 @@ interface SandboxRunOptions {
   timeoutMs?: number;
   /**
    * Roll the sub-execution's database writes back. Off by default, unlike
-   * `/engine/eval`: a turn that may not write holds no write capability,
+   * `/engine/eval_script`: a turn that may not write holds no write capability,
    * which is stronger than a transaction that undoes what it did.
    */
   rollback?: boolean;
@@ -2539,7 +2539,7 @@ interface HmacVerifyOptions {
  * **It is not always there.** `engine` is `undefined` outside the two
  * executions whose authority came from a credential — a script serving a
  * request, and a delegated task where somebody consented to `author` or
- * `administer`. A scheduled job, `init()`, a test run, `/engine/eval` and
+ * `administer`. A scheduled job, `init()`, a test run, `/engine/eval_script` and
  * `sandbox.run` do not get it, because those run as the
  * engine's own synthetic administrator or with a capability subset that cannot
  * express the difference between reading your own `console` and reading every
@@ -2643,7 +2643,7 @@ declare function expect(actual: unknown): Matchers;
 /**
  * Register a test case. Available only while the engine is running a script's
  * test modules — assets named `*.test.ts` (or `.js`, `.jsx`, `.tsx`) — which it
- * does on request via `POST /engine/run_tests?uri=<script>`.
+ * does on request via `POST /engine/run_tests` with `{ "uri": <script> }`.
  *
  * The body may be `async`: each case is settled before the next one starts, so
  * the verdict reflects the assertions it reached. `await` does not make

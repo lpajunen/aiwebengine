@@ -2,7 +2,7 @@
 //! the deployed one.
 //!
 //! Two things are under test here and they are halves of one idea. Every write
-//! records what the script became, so a change made through `/engine/assets` —
+//! records what the script became, so a change made through `/engine/write_file` —
 //! increasingly a change made by an agent with no checkout — has something
 //! behind it. And a build can name which of those recorded states it reads
 //! from, so a revision can be inspected without being published and a broken

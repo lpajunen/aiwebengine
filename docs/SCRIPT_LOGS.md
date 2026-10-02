@@ -11,7 +11,7 @@ written**.
 
 ```bash
 # What did this one request do?
-curl "https://your-engine/engine/script_logs?uri=myapp&request_id=$REQUEST_ID"
+curl "https://your-engine/engine/read_logs?uri=myapp&request_id=$REQUEST_ID"
 
 # Watch a live session, one route only
 curl -N "https://your-engine/engine/script_logs/stream?uri=myapp&route=/world/:id/move"
@@ -76,7 +76,7 @@ transpiler diagnostics — carry no context, and their `requestId`, `kind` and
 
 - **`route=` takes the registered pattern**, not the path you called.
   A route registered as `/world/:id/move` is stored under that, so
-  `route=/world/17/move` matches nothing. `GET /engine/routes` (or the
+  `route=/world/17/move` matches nothing. `/engine/list_routes` (or the
   `list_routes` MCP tool) lists the patterns as registered.
 - **Entries written before the engine gained these columns** have `null` for all
   three, so any filter on them skips those rows. Only lines written since carry
@@ -90,7 +90,7 @@ transpiler diagnostics — carry no context, and their `requestId`, `kind` and
 ## Listing
 
 ```text
-GET /engine/script_logs
+GET /engine/read_logs
 ```
 
 | Parameter    | Meaning                                                     |
@@ -118,7 +118,7 @@ keeps the next page after the cursor instead.
 after it:
 
 ```bash
-curl "https://your-engine/engine/script_logs?uri=myapp&after_seq=91423&limit=200"
+curl "https://your-engine/engine/read_logs?uri=myapp&after_seq=91423&limit=200"
 ```
 
 Unlike `since`, this can neither repeat nor skip entries that share a timestamp,
@@ -162,7 +162,7 @@ nothing is missed in between.
 The tail polls the database rather than being pushed to from the write path.
 Two consequences worth knowing: in a cluster it sees every instance's output,
 not just the one it is connected to; and it shows what was actually committed,
-so lines from a transaction that rolled back — an `/engine/eval` snippet, a
+so lines from a transaction that rolled back — an `/engine/eval_script` snippet, a
 handler that threw — never appear.
 
 ## Over MCP
@@ -172,7 +172,7 @@ The `read_logs` tool takes the same filters as the listing, including
 equivalent — MCP is request/response — but polling `read_logs` with `after_seq`
 returns only what is new, which is the same loop a tail runs.
 
-`clear_logs` clears one script's logs, and `DELETE /engine/script_logs?uri=…`
+`clear_logs` clears one script's logs, and `POST /engine/clear_logs`
 does the same over HTTP. Both require `DeleteLogs` and ownership of the script,
 or an administrator.
 

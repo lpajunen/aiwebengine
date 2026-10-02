@@ -1,4 +1,4 @@
-//! `POST /engine/edit_script` and the `edit_file` MCP tool.
+//! `/engine/edit_file` and the `edit_file` MCP tool.
 //!
 //! A script's modules could already be changed a few lines at a time; its root
 //! source — the file that registers every route the modules serve — could only
@@ -13,14 +13,10 @@ mod common;
 use common::{setup_env, test_mutex};
 
 use aiwebengine::auth::AuthUser;
-use aiwebengine::engine_api::{
-    ScriptParams, ScriptReadQuery, StringEdit, edit_script_route, execute_native_mcp_tool,
-    patch_script_authorized, read_script_route,
-};
+use aiwebengine::engine_api::{StringEdit, execute_native_mcp_tool, patch_script_authorized};
 use aiwebengine::repository;
 use aiwebengine::security::{Capability, UserContext};
 use axum::Extension;
-use axum::extract::Query;
 use axum::response::Response;
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -56,19 +52,31 @@ async fn body_json(response: Response) -> Value {
     serde_json::from_slice(&bytes).expect("body should be JSON")
 }
 
-fn query(raw: &str) -> Query<ScriptParams> {
-    Query(serde_urlencoded::from_str::<ScriptParams>(raw).expect("query should parse"))
-}
-
-fn read_query(raw: &str) -> Query<ScriptReadQuery> {
-    Query(serde_urlencoded::from_str::<ScriptReadQuery>(raw).expect("query should parse"))
+/// A script's program, read the way the old `/engine/read_file` was asked:
+/// by `uri`, with `lines` and `grep` in the query. The operation names the file.
+async fn read_script(raw: &str) -> Response {
+    aiwebengine::engine_http::call_operation(
+        "read_file",
+        axum::http::Method::GET,
+        admin_extension(),
+        Some(raw.replacen("uri=", "path=main.js&script=", 1)),
+        axum::body::Bytes::new(),
+    )
+    .await
 }
 
 async fn edit(body: Value) -> (axum::http::StatusCode, Value) {
-    let response = edit_script_route(
+    let mut args = body;
+    if let Some(uri) = args.get("uri").cloned() {
+        args["script"] = uri;
+        args["path"] = json!("main.js");
+    }
+    let response = aiwebengine::engine_http::call_operation(
+        "edit_file",
+        axum::http::Method::POST,
         admin_extension(),
-        query(""),
-        axum::body::Bytes::from(body.to_string()),
+        None,
+        axum::body::Bytes::from(args.to_string()),
     )
     .await;
 
@@ -422,17 +430,11 @@ async fn a_read_reports_the_digest_an_edit_takes() {
     deploy(uri, source);
     let digest = sha256_hex(source.as_bytes());
 
-    let response = read_script_route(admin_extension(), read_query(&format!("uri={}", uri))).await;
+    let response = read_script(&format!("uri={}", uri)).await;
 
     assert_eq!(response.status(), 200);
-    assert_eq!(
-        response
-            .headers()
-            .get("etag")
-            .and_then(|value| value.to_str().ok()),
-        Some(format!("\"{}\"", digest).as_str()),
-        "the body is the script itself, so the digest travels as an ETag"
-    );
+    let over_http = body_json(response).await;
+    assert_eq!(over_http["sha256"], json!(digest), "{}", over_http);
 
     let read = execute_native_mcp_tool(
         "read_file",
@@ -531,11 +533,7 @@ async fn a_line_range_reads_part_of_the_root_and_reports_the_whole_of_it() {
         .join("\n");
     deploy(uri, &source);
 
-    let response = read_script_route(
-        admin_extension(),
-        read_query(&format!("uri={}&lines=3-5", uri)),
-    )
-    .await;
+    let response = read_script(&format!("uri={}&lines=3-5", uri)).await;
     assert_eq!(response.status(), 200);
     let body = body_json(response).await;
 
@@ -556,11 +554,7 @@ async fn a_line_range_reads_part_of_the_root_and_reports_the_whole_of_it() {
     // A range starting past the end is a range computed against a version that
     // has since shrunk, and an empty 200 would leave the caller to work that
     // out for itself.
-    let response = read_script_route(
-        admin_extension(),
-        read_query(&format!("uri={}&lines=40-50", uri)),
-    )
-    .await;
+    let response = read_script(&format!("uri={}&lines=40-50", uri)).await;
     assert_eq!(response.status(), 400);
     let body = body_json(response).await;
     assert!(
@@ -579,11 +573,7 @@ async fn grep_locates_a_line_of_the_root_without_returning_it() {
     let source = "const a = 1;\nfunction handler(context) {}\nfunction init() {}\n";
     deploy(uri, source);
 
-    let response = read_script_route(
-        admin_extension(),
-        read_query(&format!("uri={}&grep=^function", uri)),
-    )
-    .await;
+    let response = read_script(&format!("uri={}&grep=^function", uri)).await;
     assert_eq!(response.status(), 200);
     let body = body_json(response).await;
 
@@ -602,11 +592,7 @@ async fn grep_locates_a_line_of_the_root_without_returning_it() {
     );
 
     // The two filters compose: a grep inside a range searches only that range.
-    let response = read_script_route(
-        admin_extension(),
-        read_query(&format!("uri={}&lines=3-&grep=^function", uri)),
-    )
-    .await;
+    let response = read_script(&format!("uri={}&lines=3-&grep=^function", uri)).await;
     let body = body_json(response).await;
     assert_eq!(body["match_count"], json!(1), "{}", body);
     assert_eq!(body["matches"][0]["line"], json!(3), "{}", body);
@@ -632,19 +618,10 @@ async fn an_unscoped_read_is_unchanged() {
     let source = "const n = 1;\nfunction init() {}\n";
     deploy(uri, source);
 
-    let response = read_script_route(admin_extension(), read_query(&format!("uri={}", uri))).await;
+    let response = read_script(&format!("uri={}", uri)).await;
     assert_eq!(response.status(), 200);
-    assert_eq!(
-        response
-            .headers()
-            .get("content-type")
-            .and_then(|value| value.to_str().ok()),
-        Some("application/javascript")
-    );
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body should read");
-    assert_eq!(String::from_utf8_lossy(&bytes), source);
+    let over_http = body_json(response).await;
+    assert_eq!(over_http["content"], json!(source), "{}", over_http);
 
     let read = execute_native_mcp_tool(
         "read_file",

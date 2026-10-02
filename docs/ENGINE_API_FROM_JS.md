@@ -48,7 +48,7 @@ is **two** executions:
 | `init()`                   | no     | runs as `admin("script-init")`                   |
 | Startup                    | no     | runs every script as a synthetic administrator   |
 | A test run                 | no     | executes a script's cases, not somebody's intent |
-| `/engine/eval`             | no     | shares its path with `sandbox.run`               |
+| `/engine/eval_script`      | no     | shares its path with `sandbox.run`               |
 | `sandbox.run`              | no     | see below                                        |
 
 **The capability check is not enough on its own**, which is the whole reason

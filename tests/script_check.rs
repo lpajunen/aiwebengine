@@ -1,4 +1,4 @@
-//! `/engine/check`: findings about a script that only the engine can produce,
+//! `/engine/check_script`: findings about a script that only the engine can produce,
 //! and the isolation that makes producing them safe.
 
 mod common;
@@ -7,14 +7,12 @@ use common::{setup_env, test_mutex};
 
 use aiwebengine::auth::AuthUser;
 use aiwebengine::engine_api::{
-    CheckRefusal, authorize_check, check_route, execute_native_mcp_tool,
-    native_mcp_tool_descriptors,
+    CheckRefusal, authorize_check, execute_native_mcp_tool, native_mcp_tool_descriptors,
 };
 use aiwebengine::repository;
 use aiwebengine::script_check::{CheckReport, CheckRequest, check_blocking};
 use aiwebengine::security::UserContext;
 use axum::Extension;
-use axum::extract::Query;
 use axum::response::Response;
 use serde_json::{Value, json};
 use std::sync::OnceLock;
@@ -590,24 +588,49 @@ async fn body_json(response: Response) -> Value {
     serde_json::from_slice(&bytes).expect("body should be JSON")
 }
 
+/// Posts a check the way the old endpoint took one: the script in the query,
+/// and the candidate as a raw body or as JSON. Both end up as the operation's
+/// arguments.
 async fn post_check(
     query: &str,
     content_type: Option<&str>,
     body: &str,
 ) -> (axum::http::StatusCode, Value) {
-    let mut headers = axum::http::HeaderMap::new();
-    if let Some(content_type) = content_type {
-        headers.insert(
-            axum::http::header::CONTENT_TYPE,
-            content_type.parse().expect("content type should parse"),
-        );
+    let mut args = serde_json::Map::new();
+    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        let value = value
+            .parse::<i64>()
+            .map(Value::from)
+            .unwrap_or_else(|_| Value::String(value.to_string()));
+        let key = if key == "timeout_ms" {
+            "timeoutMs"
+        } else {
+            &key
+        };
+        args.insert(key.to_string(), value);
     }
+    let payload = if content_type == Some("application/json") {
+        match serde_json::from_str::<Value>(body) {
+            Ok(Value::Object(fields)) => {
+                args.extend(fields);
+                Value::Object(args).to_string()
+            }
+            // Not an object: send it as it is, for the dispatcher to refuse.
+            _ => body.to_string(),
+        }
+    } else {
+        if !body.is_empty() {
+            args.insert("content".to_string(), Value::String(body.to_string()));
+        }
+        Value::Object(args).to_string()
+    };
 
-    let response = check_route(
+    let response = aiwebengine::engine_http::call_operation(
+        "check_script",
+        axum::http::Method::POST,
         admin_extension(),
-        headers,
-        Query(serde_urlencoded::from_str(query).expect("query should parse")),
-        axum::body::Bytes::from(body.to_string()),
+        None,
+        axum::body::Bytes::from(payload),
     )
     .await;
 
@@ -709,16 +732,17 @@ async fn the_endpoint_reports_its_missing_parameters_and_refusals() {
     assert!(
         body["message"]
             .as_str()
-            .is_some_and(|message| message.contains("candidate source")),
+            .is_some_and(|message| message.contains("'content'")),
         "a 404 should point at the way to check undeployed code: {}",
         body
     );
 
-    let anonymous = check_route(
+    let anonymous = aiwebengine::engine_http::call_operation(
+        "check_script",
+        axum::http::Method::POST,
         None,
-        axum::http::HeaderMap::new(),
-        Query(serde_urlencoded::from_str(&format!("uri={}", uri)).expect("query should parse")),
-        axum::body::Bytes::new(),
+        None,
+        axum::body::Bytes::from(json!({ "uri": uri }).to_string()),
     )
     .await;
     assert_eq!(

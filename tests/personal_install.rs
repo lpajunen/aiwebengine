@@ -1,7 +1,7 @@
 //! Giving an install an owner, and taking one away.
 //!
 //! Reaching the administrator tier used to require an administrator: roles are
-//! granted through `/engine/user_roles`, which is guarded by `AdministerEngine`,
+//! granted through `/engine/add_user_role`, which is guarded by `AdministerEngine`,
 //! and `auth.bootstrap_admins` matches an email address that only a provider can
 //! verify. On a laptop with no OAuth client that is a circle with no way in, and
 //! the only workaround was a development mode that granted engine

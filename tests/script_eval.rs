@@ -1,4 +1,4 @@
-//! `/engine/eval`: running a snippet against a deployed script's sandbox.
+//! `/engine/eval_script`: running a snippet against a deployed script's sandbox.
 
 mod common;
 
@@ -6,13 +6,12 @@ use common::{setup_env, test_mutex};
 
 use aiwebengine::auth::AuthUser;
 use aiwebengine::engine_api::{
-    CheckRefusal, authorize_eval, eval_route, execute_native_mcp_tool, native_mcp_tool_descriptors,
+    CheckRefusal, authorize_eval, execute_native_mcp_tool, native_mcp_tool_descriptors,
 };
 use aiwebengine::repository;
 use aiwebengine::script_eval::{EvalReport, EvalRequest, eval_blocking};
 use aiwebengine::security::UserContext;
 use axum::Extension;
-use axum::extract::Query;
 use axum::response::Response;
 use serde_json::{Value, json};
 
@@ -506,24 +505,13 @@ async fn body_json(response: Response) -> Value {
     serde_json::from_slice(&bytes).expect("body should be JSON")
 }
 
-async fn post_eval(
-    query: &str,
-    content_type: Option<&str>,
-    body: &str,
-) -> (axum::http::StatusCode, Value) {
-    let mut headers = axum::http::HeaderMap::new();
-    if let Some(content_type) = content_type {
-        headers.insert(
-            axum::http::header::CONTENT_TYPE,
-            content_type.parse().expect("content type should parse"),
-        );
-    }
-
-    let response = eval_route(
+async fn post_eval(request: Value) -> (axum::http::StatusCode, Value) {
+    let response = aiwebengine::engine_http::call_operation(
+        "eval_script",
+        axum::http::Method::POST,
         admin_extension(),
-        headers,
-        Query(serde_urlencoded::from_str(query).expect("query should parse")),
-        axum::body::Bytes::from(body.to_string()),
+        None,
+        axum::body::Bytes::from(request.to_string()),
     )
     .await;
 
@@ -532,7 +520,7 @@ async fn post_eval(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_endpoint_takes_a_raw_snippet_body() {
+async fn the_endpoint_takes_a_snippet() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -542,7 +530,7 @@ async fn the_endpoint_takes_a_raw_snippet_body() {
         "function double(n) { return n * 2; } function init() {}",
     );
 
-    let (status, body) = post_eval(&format!("uri={}", uri), None, "double(21)").await;
+    let (status, body) = post_eval(json!({ "uri": uri, "source": "double(21)" })).await;
 
     assert_eq!(status, 200);
     assert_eq!(body["ok"], json!(true), "{}", body);
@@ -559,7 +547,7 @@ async fn the_endpoint_takes_a_json_envelope() {
     deploy(uri, "function init() {}");
 
     let request = json!({ "uri": uri, "source": r#"console.log("hi"); 7;"# });
-    let (status, body) = post_eval("", Some("application/json"), &request.to_string()).await;
+    let (status, body) = post_eval(request).await;
 
     assert_eq!(status, 200);
     assert_eq!(body["value"], json!(7));
@@ -575,7 +563,7 @@ async fn a_snippet_that_throws_still_answers_200() {
     let uri = "test://eval/http-throws";
     deploy(uri, "function init() {}");
 
-    let (status, body) = post_eval(&format!("uri={}", uri), None, "nope()").await;
+    let (status, body) = post_eval(json!({ "uri": uri, "source": "nope()" })).await;
 
     // The request succeeded; the snippet did not. Callers read `ok`.
     assert_eq!(status, 200);
@@ -591,23 +579,24 @@ async fn the_endpoint_reports_its_missing_parameters_and_refusals() {
     let uri = "test://eval/http-authz";
     deploy(uri, "function init() {}");
 
-    let (missing_uri, _) = post_eval("", None, "1").await;
+    let (missing_uri, _) = post_eval(json!({ "source": "1" })).await;
     assert_eq!(missing_uri, 400);
 
-    let (missing_source, _) = post_eval(&format!("uri={}", uri), None, "   ").await;
+    let (missing_source, _) = post_eval(json!({ "uri": uri, "source": "   " })).await;
     assert_eq!(
         missing_source, 400,
         "a blank snippet is a missing parameter, not an empty program"
     );
 
-    let (not_found, _) = post_eval("uri=test://eval/http-nope", None, "1").await;
+    let (not_found, _) = post_eval(json!({ "uri": "test://eval/http-nope", "source": "1" })).await;
     assert_eq!(not_found, 404);
 
-    let anonymous = eval_route(
+    let anonymous = aiwebengine::engine_http::call_operation(
+        "eval_script",
+        axum::http::Method::POST,
         None,
-        axum::http::HeaderMap::new(),
-        Query(serde_urlencoded::from_str(&format!("uri={}", uri)).expect("query should parse")),
-        axum::body::Bytes::from("1"),
+        None,
+        axum::body::Bytes::from(json!({ "uri": uri, "source": "1" }).to_string()),
     )
     .await;
     assert_eq!(anonymous.status(), 403);

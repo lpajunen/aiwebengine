@@ -12,7 +12,7 @@
 // rows in Postgres rather than entries in a devtools pane:
 //
 //   - `clear()` does nothing. Pruning stored log lines is engine
-//     administration — `DELETE /engine/script_logs` — and deliberately not a
+//     administration — `DELETE /engine/read_logs` — and deliberately not a
 //     script capability. Mapping it here would open that door from JavaScript.
 //   - inspection is capped, by depth, by entries per level, and by the length
 //     of the finished line. A browser renders lazily and can afford an

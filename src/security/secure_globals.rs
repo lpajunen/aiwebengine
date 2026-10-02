@@ -542,7 +542,7 @@ pub struct GlobalSecurityConfig {
     /// When set, registration calls are validated as usual and then *recorded
     /// here* instead of reaching the engine's live registries.
     ///
-    /// This is what makes `/engine/check` safe to run against a deployed
+    /// This is what makes `/engine/check_script` safe to run against a deployed
     /// script. Only `registerRoute` collects by design — every other registry
     /// (streams, asset routes, MCP, scheduler) is a process-wide
     /// singleton written to directly, so a candidate's `init()` would
@@ -558,7 +558,7 @@ pub struct GlobalSecurityConfig {
     /// When set, `console` output is captured here as well as written to the
     /// script's log.
     ///
-    /// Capture is what makes `/engine/eval` usable, not a convenience on top of
+    /// Capture is what makes `/engine/eval_script` usable, not a convenience on top of
     /// it: `console` writes go through the repository, so they join whatever
     /// transaction is open — and an evaluation that rolls back would otherwise
     /// roll back its own output, losing exactly what the caller asked for.
@@ -1199,7 +1199,7 @@ impl RouteRegistrar {
                     return Ok(Registered::Refused(format!(
                         "'{}' is not under '{}', so it is not a file the world may read. \
                          Move it to '{}{}' and register that. A file's directory is what \
-                         says whether it is public; see GET /engine/exposure.",
+                         says whether it is public; see /engine/exposure_report.",
                         file,
                         crate::exposure::PUBLIC_DIR,
                         crate::exposure::PUBLIC_DIR,
@@ -1437,7 +1437,7 @@ impl SecureGlobalContext {
                 // Capture before the capability check, not after it. The two
                 // are different channels: `ViewLogs` gates writing to the
                 // script's stored log, while capture hands the output back to
-                // whoever asked for this run — an `/engine/eval` caller, or a
+                // whoever asked for this run — an `/engine/eval_script` caller, or a
                 // script that started a narrowed sub-execution. A planning
                 // turn holding no `view_logs` should still be able to show its
                 // caller what it printed; losing the output as well as the log
@@ -2331,7 +2331,7 @@ impl SecureGlobalContext {
                     return Ok(refusal_answer(format!(
                         "Refused: '{}' is not under '{}', so it is not a file an MCP client \
                          may read. Move it to '{}{}' and register that. See \
-                         GET /engine/exposure.",
+                         /engine/exposure_report.",
                         asset_name,
                         crate::exposure::RESOURCE_DIR,
                         crate::exposure::RESOURCE_DIR,
@@ -5659,7 +5659,7 @@ impl SecureGlobalContext {
 
                 let report = crate::script_eval::eval_blocking(crate::script_eval::EvalRequest {
                     timeout_ms: options.get("timeoutMs").and_then(|value| value.as_u64()),
-                    // Off by default here, on by default at `/engine/eval`.
+                    // Off by default here, on by default at `/engine/eval_script`.
                     // There a caller is inspecting a deployment and should
                     // leave no trace; here a turn that may write is being run
                     // because its writes are wanted, and one that may not is

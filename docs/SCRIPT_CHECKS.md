@@ -13,7 +13,7 @@ here.
 ## Running a check
 
 ```bash
-curl -X POST "https://your-engine/engine/check?uri=myapp"
+curl -X POST "https://your-engine/engine/check_script?uri=myapp"
 ```
 
 | Parameter    | Default          | Meaning                                      |
@@ -27,11 +27,11 @@ editing loop — send it as the request body:
 
 ```bash
 # Raw source, any content type but application/json
-curl -X POST "https://your-engine/engine/check?uri=myapp" \
+curl -X POST "https://your-engine/engine/check_script?uri=myapp" \
      --data-binary @myapp.ts
 
 # Or as JSON, which also carries uri and rollback
-curl -X POST "https://your-engine/engine/check" \
+curl -X POST "https://your-engine/engine/check_script" \
      -H "Content-Type: application/json" \
      -d '{"uri": "myapp", "content": "function init() {}"}'
 ```

@@ -426,16 +426,13 @@ async fn test_script_update_streaming_integration() {
     let client = engine.client();
 
     // Note: consuming the SSE stream would require a more complex setup.
-    // For now, we verify that upserts via /engine/upsert_script succeed and
+    // For now, we verify that upserts via /engine/write_file succeed and
     // drive the engine's broadcast path.
 
     // Test 1: Insert a new script via HTTP (this should trigger broadcast)
     let insert_request = client
-        .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
-        .form(&[
-            ("uri", "https://example.com/test_script"),
-            ("content", "console.log('test');"),
-        ])
+        .post(format!("http://127.0.0.1:{}/engine/write_file", port))
+        .json(&serde_json::json!({ "script": "https://example.com/test_script", "path": "main.js", "text": "console.log('test');" }))
         .send();
 
     let insert_response = match timeout(Duration::from_secs(5), insert_request).await {
@@ -448,11 +445,8 @@ async fn test_script_update_streaming_integration() {
 
     // Test 2: Update the script
     let update_request = client
-        .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
-        .form(&[
-            ("uri", "https://example.com/test_script"),
-            ("content", "console.log('updated');"),
-        ])
+        .post(format!("http://127.0.0.1:{}/engine/write_file", port))
+        .json(&serde_json::json!({ "script": "https://example.com/test_script", "path": "main.js", "text": "console.log('updated');" }))
         .send();
 
     let update_response = match timeout(Duration::from_secs(5), update_request).await {

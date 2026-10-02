@@ -227,7 +227,7 @@ Configure log forwarding via filebeat or similar.
 ## User Management
 
 The engine lets administrators list users and manage their roles over HTTP
-(`/engine/users`, `/engine/user_roles`) and over MCP (`list_users`,
+(`/engine/users`, `/engine/add_user_role`) and over MCP (`list_users`,
 `add_user_role`, `remove_user_role`). See [API Endpoints](#api-endpoints) below.
 
 The engine ships no user-management web UI of its own — the `/engine` prefix is
@@ -268,15 +268,16 @@ Find the user's id with `GET /engine/users`, then grant or revoke:
 
 ```bash
 # Grant the Editor role
-curl -X POST https://yourdomain.com/engine/user_roles \
+curl -X POST https://yourdomain.com/engine/add_user_role \
   -H "Content-Type: application/json" \
   -b cookies.txt \
   -d '{"user_id": "uuid-here", "role": "Editor"}'
 
 # Revoke it again
-curl -X DELETE \
-  "https://yourdomain.com/engine/user_roles?user_id=uuid-here&role=Editor" \
-  -b cookies.txt
+curl -X POST https://yourdomain.com/engine/remove_user_role \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"user_id": "uuid-here", "role": "Editor"}'
 ```
 
 Both calls return the user's resulting role set, so no follow-up read is needed
@@ -314,7 +315,7 @@ Administrator role; anything else is rejected with 403.
 
 #### Grant a Role
 
-**Endpoint:** `POST /engine/user_roles`
+**Endpoint:** `POST /engine/add_user_role`
 
 **Request Body** (JSON or form-encoded):
 
@@ -342,7 +343,7 @@ the user already holds is a no-op rather than an error.
 
 #### Revoke a Role
 
-**Endpoint:** `DELETE /engine/user_roles?user_id=<id>&role=<role>`
+**Endpoint:** `POST /engine/remove_user_role` with `{"user_id": <id>, "role": <role>}`
 
 Responds with the same body as the grant endpoint. Two revocations are refused:
 the `Authenticated` role (400), because it is the base role every user holds,
@@ -369,7 +370,7 @@ curl -X POST https://yourdomain.com/mcp \
 
 ### Troubleshooting
 
-**Problem:** 403 Forbidden from `/engine/users` or `/engine/user_roles`
+**Problem:** 403 Forbidden from `/engine/users` or `/engine/add_user_role`
 
 **Solution:** Ensure you're calling as an administrator. Check:
 

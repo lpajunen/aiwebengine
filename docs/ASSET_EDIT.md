@@ -1,13 +1,13 @@
 # Editing a Script's Files Without Resending Them
 
-A change to three lines of a module is three lines. `PATCH /engine/assets`
+A change to three lines of a module is three lines. `/engine/edit_file`
 sends that much: the text to find and the text to put in its place, against an
-asset the engine already has. `POST /engine/edit_script` does the same aimed at
+asset the engine already has. `/engine/edit_file` does the same aimed at
 a script's entrypoint, under what writing a script takes rather than what
 writing a file inside one takes.
 
 ```bash
-curl -X PATCH "https://your-engine/engine/assets?script=myapp&asset=server/move-player.ts" \
+curl -X POST "https://your-engine/engine/edit_file" \
      -H "Content-Type: application/json" \
      -d '{
            "edits": [
@@ -17,7 +17,7 @@ curl -X PATCH "https://your-engine/engine/assets?script=myapp&asset=server/move-
          }'
 ```
 
-`POST /engine/assets` and `/engine/assets/batch` remain the way to write a file
+`/engine/write_file` and `/engine/write_files` remain the way to write a file
 whose content the caller has in hand. A patch is for the other case — where the
 caller has the file only because it read it, and resending it is transfer spent
 to say nothing changed.
@@ -109,10 +109,10 @@ A script's root source is the file named `main.*` in its tree — one file among
 its modules, stored and versioned exactly as they are. What is still its own
 is the _permission_: it is the file that registers every route the modules
 serve, so changing it is changing the script rather than changing something
-the script uses, and `/engine/edit_script` is the patch that asks for that.
+the script uses, and `/engine/edit_file` is the patch that asks for that.
 
 ```bash
-curl -X POST "https://your-engine/engine/edit_script" \
+curl -X POST "https://your-engine/engine/edit_file" \
      -H "Content-Type: application/json" \
      -d '{
            "uri": "https://your-engine/myapp.ts",
@@ -135,25 +135,25 @@ script rather than a file inside one:
 - **It takes what writing a script takes** — the `WriteScripts` capability, plus
   ownership of the script or administrator. `WriteAssets` is not the question
   here: a patch is a write, and this is the script. That line holds wherever
-  the entrypoint is reached, including through `/engine/assets` and the batch
+  the entrypoint is reached, including through `/engine/write_file` and the batch
   write, which refuse a caller holding only `WriteAssets` a `main.*` and
   refuse a caller holding only `DeleteAssets` its removal.
 - **It cannot create one.** A patch of a URI nothing is stored under is `404`,
-  not a script with a first line in it. `POST /engine/upsert_script` creates.
+  not a script with a first line in it. `/engine/write_file` creates.
 - **It cannot empty one.** Edits that would delete the whole source are refused
   rather than storing a script with nothing in it — `POST /engine/delete_script`
   is what deleting looks like.
 
-`POST /engine/upsert_script` remains the way to write a root source the caller
-has in hand. It takes a form, as it always has; `/engine/edit_script` takes
+`/engine/write_file` remains the way to write a root source the caller
+has in hand. It takes a form, as it always has; `/engine/edit_file` takes
 JSON, because a list of edits is not something form encoding expresses.
 
-The digest to aim a patch with comes from the read. `GET /engine/read_script`
+The digest to aim a patch with comes from the read. `/engine/read_file`
 answers with the script itself, so there is nowhere in the body to put one: it
 travels as an `ETag`, and `read_file` over MCP reports it as `sha256`.
 
 ```bash
-curl -i "https://your-engine/engine/read_script?uri=https://your-engine/myapp.ts"
+curl -i "https://your-engine/engine/read_file?uri=https://your-engine/myapp.ts"
 # HTTP/1.1 200 OK
 # content-type: application/javascript
 # etag: "4b1…"
@@ -165,10 +165,10 @@ finding the place to edit without receiving it.
 
 ```bash
 # where a pattern matches, without the script
-curl "…/engine/read_script?uri=https://your-engine/myapp.ts&grep=registerRoute"
+curl "…/engine/read_file?uri=https://your-engine/myapp.ts&grep=registerRoute"
 
 # lines 40 to 60, as text
-curl "…/engine/read_script?uri=https://your-engine/myapp.ts&lines=40-60"
+curl "…/engine/read_file?uri=https://your-engine/myapp.ts&lines=40-60"
 ```
 
 A scoped read is a view of the file and cannot be the file, so it answers in
@@ -180,15 +180,15 @@ its digest in the `ETag`.
 ## Reading part of a file
 
 The counterpart to editing without sending the file is reading without
-receiving it. `GET /engine/assets` takes two optional filters on a single
+receiving it. `/engine/read_file` takes two optional filters on a single
 asset:
 
 ```bash
 # lines 120 to 180, as text
-curl "…/engine/assets?script=myapp&asset=server/move-player.ts&lines=120-180"
+curl "…/engine/write_file?script=myapp&asset=server/move-player.ts&lines=120-180"
 
 # where a pattern matches, without the file
-curl "…/engine/assets?script=myapp&asset=server/move-player.ts&grep=^export%20function"
+curl "…/engine/write_file?script=myapp&asset=server/move-player.ts&grep=^export%20function"
 ```
 
 `lines` accepts `120-180`, `120-` (to the end of the file), or `120` (that line
@@ -227,7 +227,7 @@ line is cut at 512 characters, with `truncated` on the match itself.
 
 Both filters require the asset to be UTF-8 text. A read with neither is
 unchanged from what it always was — the whole file, base64 in `content` — so
-existing callers are unaffected. `GET /engine/read_script` and `read_file` take
+existing callers are unaffected. `/engine/read_file` and `read_file` take
 the same two filters over a script's root source, which is text by
 construction.
 
@@ -253,7 +253,7 @@ twenty lines can still edit them safely.
 
 Reads and edits act on a script's **stored** files — head — not on whatever it
 is currently serving. For almost every script those are the same thing. They
-are not the same for a script pinned with `POST /engine/deploy`: it serves the
+are not the same for a script pinned with `/engine/deploy_script`: it serves the
 revision it is pinned to, while writes go on recording revisions and advancing
 head, which is the separation pinning exists to create.
 
@@ -281,7 +281,7 @@ stop being the same sentence:
 }
 ```
 
-`GET /engine/deploy?uri=…` reports the pin, and `DELETE /engine/deploy` removes
+`/engine/get_deployment?uri=…` reports the pin, and `/engine/deploy_script (follow=true)` removes
 it so the script follows head again. See
 [Deploying a Revision](SCRIPT_REVISIONS.md).
 
@@ -315,13 +315,13 @@ written for.
 
 ## Finding the file in the first place
 
-`grep` searches a file the caller can already name. `GET /engine/search` and
+`grep` searches a file the caller can already name. `/engine/search_files` and
 the `search_files` tool are for the step before that — which file mentions
 this — and read every file of every script, entrypoints included:
 
 ```bash
-curl "…/engine/search?query=movePlayer"
-curl "…/engine/search?query=movePlayer&script=myapp&scope=assets"
+curl "…/engine/search_files?query=movePlayer"
+curl "…/engine/search_files?query=movePlayer&script=myapp&scope=assets"
 ```
 
 Each result names the script, and the asset within it when the match was in a

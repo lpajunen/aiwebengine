@@ -158,13 +158,13 @@ async fn test_openapi_contains_rust_endpoints() {
         // The file-editing surface. Each of these is half of a pair — read and
         // edit, check and write, locate and read — and a client that cannot
         // find one of them in the document cannot run the loop they form.
-        "/engine/read_script",
-        "/engine/edit_script",
-        "/engine/search",
-        "/engine/assets",
-        "/engine/assets/batch",
+        "/engine/read_file",
+        "/engine/edit_file",
+        "/engine/search_files",
+        "/engine/write_file",
+        "/engine/write_files",
         "/engine/run_tests",
-        "/engine/script_logs",
+        "/engine/read_logs",
         "/engine/script_logs/stream",
         "/mcp",
         // Every way in, federated or internal. These are handlers a client
@@ -230,75 +230,62 @@ async fn test_openapi_documents_the_file_editing_parameters() {
             .unwrap_or_default()
     };
 
-    for parameter in ["uri", "lines", "grep"] {
+    for parameter in ["script", "path", "lines", "grep"] {
         assert!(
-            names("/engine/read_script", "get").contains(&parameter.to_string()),
-            "a scoped read of a script's root source needs '{}' documented, got {:?}",
+            names("/engine/read_file", "get").contains(&parameter.to_string()),
+            "a scoped read of a file needs '{}' documented, got {:?}",
             parameter,
-            names("/engine/read_script", "get")
+            names("/engine/read_file", "get")
         );
     }
 
     for parameter in ["query", "scope", "script"] {
         assert!(
-            names("/engine/search", "get").contains(&parameter.to_string()),
+            names("/engine/search_files", "get").contains(&parameter.to_string()),
             "searching needs '{}' documented, got {:?}",
             parameter,
-            names("/engine/search", "get")
+            names("/engine/search_files", "get")
         );
     }
 
-    // The precondition that turns an asset write into a create.
-    assert!(
-        names("/engine/assets", "post").contains(&"If-None-Match".to_string()),
-        "creating rather than overwriting needs its header documented, got {:?}",
-        names("/engine/assets", "post")
-    );
-
     // A body a caller has to guess at is a body they will get wrong: the batch
-    // takes three fields that are not `files`, and the edit endpoints take
-    // their preconditions in the body rather than the query.
-    let body_description = |path: &str, method: &str| -> String {
-        spec["paths"][path][method]["requestBody"]["description"]
-            .as_str()
+    // takes fields that are not `files`, and the edit takes its preconditions
+    // in the body.
+    let body_fields = |path: &str| -> Vec<String> {
+        spec["paths"][path]["post"]["requestBody"]["content"]["application/json"]["schema"]
+            ["properties"]
+            .as_object()
+            .map(|properties| properties.keys().cloned().collect())
             .unwrap_or_default()
-            .to_string()
     };
 
     for field in ["content", "remove", "reinit"] {
         assert!(
-            body_description("/engine/assets/batch", "post").contains(field),
+            body_fields("/engine/write_files").contains(&field.to_string()),
             "the batch body needs '{}' described, got {:?}",
             field,
-            body_description("/engine/assets/batch", "post")
+            body_fields("/engine/write_files")
         );
     }
     for field in ["edits", "base_sha256", "reinit"] {
         assert!(
-            body_description("/engine/edit_script", "post").contains(field),
-            "the script edit body needs '{}' described, got {:?}",
+            body_fields("/engine/edit_file").contains(&field.to_string()),
+            "the edit body needs '{}' described, got {:?}",
             field,
-            body_description("/engine/edit_script", "post")
-        );
-        assert!(
-            body_description("/engine/assets", "patch").contains(field),
-            "the asset edit body needs '{}' described, got {:?}",
-            field,
-            body_description("/engine/assets", "patch")
+            body_fields("/engine/edit_file")
         );
     }
 
     // And the refusals a caller has to handle: a conflict is the one that means
     // "re-read and try again" rather than "stop".
-    for (path, method) in [
-        ("/engine/edit_script", "post"),
-        ("/engine/assets", "patch"),
-        ("/engine/assets", "post"),
+    for path in [
+        "/engine/edit_file",
+        "/engine/write_file",
+        "/engine/create_file",
     ] {
         assert!(
-            spec["paths"][path][method]["responses"]["409"].is_object(),
-            "{} {} should document its 409",
-            method,
+            spec["paths"][path]["post"]["responses"]["409"].is_object(),
+            "POST {} should document its 409",
             path
         );
     }

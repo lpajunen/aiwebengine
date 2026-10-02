@@ -1,4 +1,4 @@
-//! `POST /engine/assets/batch`: a script's files written as one unit.
+//! `/engine/write_files`: a script's files written as one unit.
 //!
 //! What these tests are really about is the *unit*. A script's modules are one
 //! change, and the engine acts on every write — invalidating the prepared
@@ -8,11 +8,10 @@
 mod common;
 
 use aiwebengine::auth::AuthUser;
-use aiwebengine::engine_api::{AssetQuery, assets_batch_route, execute_native_mcp_tool};
+use aiwebengine::engine_api::execute_native_mcp_tool;
 use aiwebengine::repository;
 use aiwebengine::security::{Capability, UserContext};
 use axum::Extension;
-use axum::extract::Query;
 use axum::response::Response;
 use base64::Engine as _;
 use common::{AdminServer, setup_env, test_mutex};
@@ -68,10 +67,16 @@ async fn body_json(response: Response) -> Value {
 }
 
 async fn post_batch(query: &str, body: Value) -> (axum::http::StatusCode, Value) {
-    let response = assets_batch_route(
+    let mut args = body;
+    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        args[key.as_ref()] = Value::String(value.to_string());
+    }
+    let response = aiwebengine::engine_http::call_operation(
+        "write_files",
+        axum::http::Method::POST,
         admin_extension(),
-        Query(serde_urlencoded::from_str::<AssetQuery>(query).expect("query should parse")),
-        axum::body::Bytes::from(body.to_string()),
+        None,
+        axum::body::Bytes::from(args.to_string()),
     )
     .await;
 
@@ -114,7 +119,7 @@ fn registered_paths(script_uri: &str) -> HashSet<String> {
 /// A module goes in as text, which is what a module is.
 ///
 /// Requiring base64 for every file made the request that *applies* a change
-/// disagree with the one that *describes* it — `/engine/check` has always taken
+/// disagree with the one that *describes* it — `/engine/check_script` has always taken
 /// candidate modules as plain source — and cost a third of the bytes plus an
 /// encoding step, which is what sent callers back to writing one file per
 /// request and to the partial deployments a batch exists to prevent.
@@ -876,11 +881,9 @@ async fn a_batch_over_the_management_body_limit_is_still_accepted() {
 
     let response = engine
         .client()
-        .post(format!(
-            "http://127.0.0.1:{}/engine/assets/batch?script={}",
-            port, uri
-        ))
+        .post(format!("http://127.0.0.1:{}/engine/write_files", port))
         .json(&json!({
+            "script": uri,
             "reinit": "never",
             "files": [
                 { "name": "assets_batch_large/filler.ts", "content_base64": b64(&source) }
@@ -968,7 +971,7 @@ async fn a_sync_writes_and_removes_as_one_act() {
 
 /// The whole of a change, not the assets of one. A change touching the root
 /// and the modules it imports used to be two writes — two revisions, two
-/// notifications, two init() runs — even though `/engine/check` would check
+/// notifications, two init() runs — even though `/engine/check_script` would check
 /// exactly that change in one request.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_root_source_travels_with_the_modules_as_one_change() {
@@ -1313,37 +1316,33 @@ async fn creating_an_asset_refuses_to_overwrite_one() {
 
 /// Over HTTP the same precondition is the one HTTP already has a name for.
 #[tokio::test(flavor = "multi_thread")]
-async fn if_none_match_makes_the_asset_write_a_create() {
+async fn create_file_refuses_what_is_already_there() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
     let uri = "test://assets-batch/if-none-match";
     deploy(uri, "function init() {}");
 
-    let post = |headers: axum::http::HeaderMap, content: &str| {
+    let call = |operation: &'static str, content: &str| {
         let body = json!({
-            "asset": "assets_batch_inm/util.ts",
+            "script": uri,
+            "path": "assets_batch_inm/util.ts",
             "mimetype": "text/typescript",
             "content": b64(content),
         });
-        aiwebengine::engine_api::assets_post_route(
+        aiwebengine::engine_http::call_operation(
+            operation,
+            axum::http::Method::POST,
             admin_extension(),
-            Query(
-                serde_urlencoded::from_str::<AssetQuery>(&format!("script={}", uri))
-                    .expect("query should parse"),
-            ),
-            headers,
+            None,
             axum::body::Bytes::from(body.to_string()),
         )
     };
 
-    let mut create = axum::http::HeaderMap::new();
-    create.insert("if-none-match", "*".parse().expect("header should parse"));
+    let response = call("create_file", "export const n = 1;\n").await;
+    assert_eq!(response.status(), 200);
 
-    let response = post(create.clone(), "export const n = 1;\n").await;
-    assert_eq!(response.status(), 201);
-
-    let response = post(create, "export const n = 2;\n").await;
+    let response = call("create_file", "export const n = 2;\n").await;
     assert_eq!(
         response.status(),
         409,
@@ -1354,9 +1353,9 @@ async fn if_none_match_makes_the_asset_write_a_create() {
         "export const n = 1;\n"
     );
 
-    // Without the header it is the upsert it always was.
-    let response = post(axum::http::HeaderMap::new(), "export const n = 3;\n").await;
-    assert_eq!(response.status(), 201);
+    // write_file is the upsert.
+    let response = call("write_file", "export const n = 3;\n").await;
+    assert_eq!(response.status(), 200);
     assert_eq!(
         stored_text(uri, "assets_batch_inm/util.ts"),
         "export const n = 3;\n"

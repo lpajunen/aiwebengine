@@ -9,7 +9,7 @@ test file, deploy it, run the suite, decode the answer out of an assertion
 message, delete the file again:
 
 ```bash
-curl -X POST "https://your-engine/engine/eval?uri=myapp" \
+curl -X POST "https://your-engine/engine/eval_script?uri=myapp" \
      --data-binary 'database.query("players", "{\"world_id\":3}", 20)'
 ```
 
@@ -25,7 +25,7 @@ The snippet itself is the request body. Send it raw under any content type but
 `application/json`, or use a JSON envelope carrying everything at once:
 
 ```bash
-curl -X POST "https://your-engine/engine/eval" \
+curl -X POST "https://your-engine/engine/eval_script" \
      -H "Content-Type: application/json" \
      -d '{"uri": "myapp", "source": "totalCents(basket)", "rollback": false}'
 ```
@@ -44,7 +44,7 @@ imported.
 It can also `import`, exactly as the script does:
 
 ```bash
-curl -X POST "https://your-engine/engine/eval?uri=myapp" \
+curl -X POST "https://your-engine/engine/eval_script?uri=myapp" \
      --data-binary 'import { totalCents } from "./server/basket.ts"; totalCents(items)'
 ```
 

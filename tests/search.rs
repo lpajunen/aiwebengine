@@ -1,4 +1,4 @@
-//! `GET /engine/search` and the `search_files` MCP tool.
+//! `/engine/search_files` and the `search_files` MCP tool.
 //!
 //! The counterpart of the `grep` on a single-file read, for the caller that
 //! does not yet know which file to name. What these tests are mostly about is
@@ -11,11 +11,10 @@ mod common;
 use common::{setup_env, test_mutex};
 
 use aiwebengine::auth::AuthUser;
-use aiwebengine::engine_api::{SearchQuery, execute_native_mcp_tool, search_route};
+use aiwebengine::engine_api::execute_native_mcp_tool;
 use aiwebengine::repository;
 use aiwebengine::security::{Capability, UserContext};
 use axum::Extension;
-use axum::extract::Query;
 use serde_json::{Value, json};
 
 fn deploy(script_uri: &str, content: &str) {
@@ -58,9 +57,12 @@ fn admin_extension() -> Option<Extension<AuthUser>> {
 }
 
 async fn search(raw: &str) -> (axum::http::StatusCode, Value) {
-    let response = search_route(
+    let response = aiwebengine::engine_http::call_operation(
+        "search_files",
+        axum::http::Method::GET,
         admin_extension(),
-        Query(serde_urlencoded::from_str::<SearchQuery>(raw).expect("query should parse")),
+        Some(raw.to_string()),
+        axum::body::Bytes::new(),
     )
     .await;
     let status = response.status();

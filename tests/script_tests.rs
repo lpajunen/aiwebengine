@@ -7,7 +7,6 @@ use common::{setup_env, test_mutex};
 use aiwebengine::auth::AuthUser;
 use aiwebengine::engine_api::{
     TestRunRefusal, authorize_test_run, execute_native_mcp_tool, native_mcp_tool_descriptors,
-    run_tests_route,
 };
 use aiwebengine::js_engine::{TestRunParams, execute_test_run};
 use aiwebengine::module_loader;
@@ -15,7 +14,6 @@ use aiwebengine::repository;
 use aiwebengine::script_test::{RunOutcome, TestRunRequest, TestRunResult, TestRunner};
 use aiwebengine::security::UserContext;
 use axum::Extension;
-use axum::extract::Query;
 
 /// Store a script with the given test modules as its assets, replacing whatever
 /// was there before so a rerun of the suite starts clean.
@@ -679,30 +677,34 @@ async fn the_endpoint_maps_refusals_to_status_codes() {
     let script_uri = "test://script-tests-endpoint";
     repository::upsert_script(script_uri, "function init() {}").expect("script should be stored");
 
-    let missing_uri = run_tests_route(
+    let missing_uri = aiwebengine::engine_http::call_operation(
+        "run_tests",
+        axum::http::Method::POST,
         None,
-        Query(serde_urlencoded::from_str("").expect("empty query should parse")),
-        axum::body::Bytes::new(),
+        None,
+        axum::body::Bytes::from(serde_json::json!({}).to_string()),
     )
     .await;
     assert_eq!(missing_uri.status(), 400);
 
-    let unknown_script = run_tests_route(
+    let unknown_script = aiwebengine::engine_http::call_operation(
+        "run_tests",
+        axum::http::Method::POST,
+        Some(admin_session()),
         None,
-        Query(
-            serde_urlencoded::from_str("uri=test://script-tests-nope").expect("query should parse"),
+        axum::body::Bytes::from(
+            serde_json::json!({ "uri": "test://script-tests-nope" }).to_string(),
         ),
-        axum::body::Bytes::new(),
     )
     .await;
     assert_eq!(unknown_script.status(), 404);
 
-    let anonymous = run_tests_route(
+    let anonymous = aiwebengine::engine_http::call_operation(
+        "run_tests",
+        axum::http::Method::POST,
         None,
-        Query(
-            serde_urlencoded::from_str(&format!("uri={}", script_uri)).expect("query should parse"),
-        ),
-        axum::body::Bytes::new(),
+        None,
+        axum::body::Bytes::from(serde_json::json!({ "uri": script_uri }).to_string()),
     )
     .await;
     assert_eq!(
@@ -768,15 +770,13 @@ fn admin_session() -> Extension<AuthUser> {
     ))
 }
 
-fn query_of(raw: &str) -> Query<aiwebengine::engine_api::TestRunParams> {
-    Query(serde_urlencoded::from_str(raw).expect("query should parse"))
-}
-
 async fn endpoint_report(uri: &str) -> (u16, serde_json::Value) {
-    let response = run_tests_route(
+    let response = aiwebengine::engine_http::call_operation(
+        "run_tests",
+        axum::http::Method::POST,
         Some(admin_session()),
-        query_of(&format!("uri={}", uri)),
-        axum::body::Bytes::new(),
+        None,
+        axum::body::Bytes::from(serde_json::json!({ "uri": uri }).to_string()),
     )
     .await;
 

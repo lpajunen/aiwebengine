@@ -16,7 +16,7 @@ use common::{AdminServer, setup_env, test_mutex};
 use serde_json::Value;
 
 /// `script_eval` deliberately withholds the engine API — it is shared by
-/// `/engine/eval` and `sandbox.run`, and the second must not have it. So these
+/// `/engine/eval_script` and `sandbox.run`, and the second must not have it. So these
 /// reach a *request* execution, which is where it lives.
 async fn in_a_request(uri: &str, source: &str, user: UserContext) -> EvalReport {
     repository::upsert_script(uri, "function init() {}").expect("script should store");

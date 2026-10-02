@@ -158,7 +158,7 @@ docs/
 ### Scenario 1: First-Time Local Development
 
 1. Read [Getting Started](engine-administrators/01-GETTING-STARTED.md) to set up aiwebengine
-2. Install a script with `POST /engine/upsert_script` (see [Script Management](engine-administrators/QUICK-REFERENCE.md))
+2. Install a script with `/engine/write_file` (see [Script Management](engine-administrators/QUICK-REFERENCE.md))
 3. Review the documentation for available JavaScript APIs
 
 ### Scenario 2: Production Deployment

@@ -3,7 +3,7 @@
 //! A script publishes on the default host unless an administrator binds it
 //! elsewhere, so an admin-only script can be confined to the management host
 //! while a shared page answers on all of them. These cover the authorization
-//! layer both entry points (`/engine/script_hosts` and the `get_script_hosts` /
+//! layer both entry points (`/engine/set_script_hosts` and the `get_script_hosts` /
 //! `set_script_hosts` MCP tools) call into, plus the storage round trip.
 
 mod common;

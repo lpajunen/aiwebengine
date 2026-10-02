@@ -1,7 +1,7 @@
 //! Tests for the native user-administration surface.
 //!
 //! Listing users and changing their roles is engine functionality, exposed over
-//! HTTP (`/engine/users`, `/engine/user_roles`) and MCP (`list_users`,
+//! HTTP (`/engine/list_users`, `/engine/add_user_role`) and MCP (`list_users`,
 //! `add_user_role`, `remove_user_role`); these tests cover the shared
 //! authorization layer both entry points call into.
 
@@ -290,7 +290,7 @@ async fn user_endpoints_reject_unauthenticated_callers() {
     let base = format!("http://127.0.0.1:{}", port);
 
     let response = client
-        .get(format!("{}/engine/users", base))
+        .get(format!("{}/engine/list_users", base))
         .send()
         .await
         .expect("users request failed");
@@ -301,7 +301,7 @@ async fn user_endpoints_reject_unauthenticated_callers() {
     );
 
     let response = client
-        .post(format!("{}/engine/user_roles", base))
+        .post(format!("{}/engine/add_user_role", base))
         .json(&json!({ "user_id": "someone", "role": "Administrator" }))
         .send()
         .await
@@ -309,10 +309,8 @@ async fn user_endpoints_reject_unauthenticated_callers() {
     assert_eq!(response.status(), 403);
 
     let response = client
-        .delete(format!(
-            "{}/engine/user_roles?user_id=someone&role=Administrator",
-            base
-        ))
+        .post(format!("{}/engine/remove_user_role", base))
+        .json(&json!({ "user_id": "someone", "role": "Administrator" }))
         .send()
         .await
         .expect("user_roles delete failed");
@@ -332,7 +330,7 @@ async fn user_role_endpoint_reports_missing_parameters() {
     // Parameter validation precedes the authorization check, same as the
     // script_owners and secrets endpoints.
     let response = client
-        .post(format!("{}/engine/user_roles", base))
+        .post(format!("{}/engine/add_user_role", base))
         .json(&json!({ "role": "Editor" }))
         .send()
         .await
@@ -347,7 +345,8 @@ async fn user_role_endpoint_reports_missing_parameters() {
     );
 
     let response = client
-        .delete(format!("{}/engine/user_roles?user_id=someone", base))
+        .post(format!("{}/engine/remove_user_role", base))
+        .json(&json!({ "user_id": "someone" }))
         .send()
         .await
         .expect("user_roles delete failed");
@@ -370,9 +369,9 @@ async fn user_endpoints_are_documented_in_openapi() {
             .expect("openapi spec not JSON");
 
     let paths = spec["paths"].as_object().expect("spec should have paths");
-    assert!(paths["/engine/users"].get("get").is_some());
-    assert!(paths["/engine/user_roles"].get("post").is_some());
-    assert!(paths["/engine/user_roles"].get("delete").is_some());
+    assert!(paths["/engine/list_users"].get("get").is_some());
+    assert!(paths["/engine/add_user_role"].get("post").is_some());
+    assert!(paths["/engine/remove_user_role"].get("post").is_some());
 
     engine.shutdown().await;
 }

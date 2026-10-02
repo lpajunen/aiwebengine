@@ -1,4 +1,4 @@
-/// Test to verify that failures reported by `POST /engine/upsert_script` are
+/// Test to verify that failures reported by `POST /engine/write_file` are
 /// surfaced as errors rather than being reported as a successful write.
 mod common;
 
@@ -33,8 +33,8 @@ function init(context) {
 
         // First, create the script successfully
         let create_response = client
-            .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
-            .form(&[("uri", test_script_uri), ("content", test_content)])
+            .post(format!("http://127.0.0.1:{}/engine/write_file", port))
+            .json(&serde_json::json!({ "script": test_script_uri, "path": "main.js", "text": test_content }))
             .send()
             .await
             .expect("Failed to send create request");

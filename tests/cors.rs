@@ -123,7 +123,10 @@ async fn a_preflight_is_answered_without_credentials() {
     let (context, base) = engine().await;
 
     let response = client()
-        .request(reqwest::Method::OPTIONS, format!("{}/engine/scripts", base))
+        .request(
+            reqwest::Method::OPTIONS,
+            format!("{}/engine/list_scripts", base),
+        )
         .header("Origin", ALLOWED)
         .header("Access-Control-Request-Method", "POST")
         .header("Access-Control-Request-Headers", "content-type")
@@ -161,7 +164,10 @@ async fn a_preflight_from_an_unlisted_origin_allows_nothing() {
     let (context, base) = engine().await;
 
     let response = client()
-        .request(reqwest::Method::OPTIONS, format!("{}/engine/scripts", base))
+        .request(
+            reqwest::Method::OPTIONS,
+            format!("{}/engine/list_scripts", base),
+        )
         .header("Origin", DENIED)
         .header("Access-Control-Request-Method", "POST")
         .send()

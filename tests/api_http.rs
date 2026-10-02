@@ -95,7 +95,7 @@ async fn test_script_logs_endpoint() {
     // Test script_logs endpoint with a valid URI parameter
     let logs_response = client
         .get(format!(
-            "http://127.0.0.1:{}/engine/script_logs?uri=https://example.com/core",
+            "http://127.0.0.1:{}/engine/read_logs?uri=https://example.com/core",
             port
         ))
         .send()
@@ -128,7 +128,7 @@ async fn test_script_logs_all_scripts_and_filters() {
     // Omitting uri spans every script, and each entry names the script that
     // logged it.
     let body: serde_json::Value = client
-        .get(format!("{}/engine/script_logs", base))
+        .get(format!("{}/engine/read_logs", base))
         .send()
         .await
         .expect("all-scripts logs request failed")
@@ -147,7 +147,7 @@ async fn test_script_logs_all_scripts_and_filters() {
     // level filters, case-insensitively
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/script_logs?uri={}&level=error",
+            "{}/engine/read_logs?uri={}&level=error",
             base, first
         ))
         .send()
@@ -162,7 +162,7 @@ async fn test_script_logs_all_scripts_and_filters() {
 
     // limit keeps the newest entries
     let body: serde_json::Value = client
-        .get(format!("{}/engine/script_logs?uri={}&limit=1", base, first))
+        .get(format!("{}/engine/read_logs?uri={}&limit=1", base, first))
         .send()
         .await
         .expect("limited logs request failed")
@@ -176,7 +176,7 @@ async fn test_script_logs_all_scripts_and_filters() {
     // contains matches a substring of the message, case-insensitively
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/script_logs?uri={}&contains=ERR",
+            "{}/engine/read_logs?uri={}&contains=ERR",
             base, first
         ))
         .send()
@@ -191,7 +191,7 @@ async fn test_script_logs_all_scripts_and_filters() {
 
     // a substring nothing contains matches nothing, rather than everything
     let body: serde_json::Value = client
-        .get(format!("{}/engine/script_logs?contains=no-such-text", base))
+        .get(format!("{}/engine/read_logs?contains=no-such-text", base))
         .send()
         .await
         .expect("contains-miss logs request failed")
@@ -202,7 +202,7 @@ async fn test_script_logs_all_scripts_and_filters() {
 
     // after_seq reads forward from an entry the caller already has
     let body: serde_json::Value = client
-        .get(format!("{}/engine/script_logs?uri={}", base, first))
+        .get(format!("{}/engine/read_logs?uri={}", base, first))
         .send()
         .await
         .expect("seq logs request failed")
@@ -213,7 +213,7 @@ async fn test_script_logs_all_scripts_and_filters() {
     let first_seq = logs[0]["seq"].as_i64().expect("entry has no seq");
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/script_logs?uri={}&after_seq={}",
+            "{}/engine/read_logs?uri={}&after_seq={}",
             base, first, first_seq
         ))
         .send()
@@ -230,7 +230,7 @@ async fn test_script_logs_all_scripts_and_filters() {
     // entries — otherwise reading forward would skip what falls between pages.
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/script_logs?uri={}&after_seq={}&limit=1",
+            "{}/engine/read_logs?uri={}&after_seq={}&limit=1",
             base,
             first,
             first_seq - 1
@@ -251,10 +251,7 @@ async fn test_script_logs_all_scripts_and_filters() {
     // since excludes everything logged before it
     let future_millis = chrono::Utc::now().timestamp_millis() + 60_000;
     let body: serde_json::Value = client
-        .get(format!(
-            "{}/engine/script_logs?since={}",
-            base, future_millis
-        ))
+        .get(format!("{}/engine/read_logs?since={}", base, future_millis))
         .send()
         .await
         .expect("since-filtered logs request failed")
@@ -265,14 +262,14 @@ async fn test_script_logs_all_scripts_and_filters() {
 
     // invalid filters are refused rather than silently ignored
     let response = client
-        .get(format!("{}/engine/script_logs?since=not-a-time", base))
+        .get(format!("{}/engine/read_logs?since=not-a-time", base))
         .send()
         .await
         .expect("bad since request failed");
     assert_eq!(response.status(), 400);
 
     let response = client
-        .get(format!("{}/engine/script_logs?limit=0", base))
+        .get(format!("{}/engine/read_logs?limit=0", base))
         .send()
         .await
         .expect("bad limit request failed");
@@ -301,7 +298,8 @@ async fn test_script_logs_delete_clears_one_named_script() {
 
     // A uri clears that script's logs and leaves every other script alone.
     let response = client
-        .delete(format!("{}/engine/script_logs?uri={}", base, cleared))
+        .post(format!("{}/engine/clear_logs", base))
+        .json(&serde_json::json!({ "uri": cleared }))
         .send()
         .await
         .expect("clear logs request failed");
@@ -315,7 +313,7 @@ async fn test_script_logs_delete_clears_one_named_script() {
     // the background pruner's job, not a request anyone makes.
     repository::insert_log_message(kept, "still-here", "INFO");
     let response = client
-        .delete(format!("{}/engine/script_logs", base))
+        .post(format!("{}/engine/clear_logs", base))
         .send()
         .await
         .expect("unscoped delete request failed");
@@ -340,7 +338,7 @@ async fn test_routes_endpoint() {
     let base = format!("http://127.0.0.1:{}", port);
 
     let body: serde_json::Value = client
-        .get(format!("{}/engine/routes", base))
+        .get(format!("{}/engine/list_routes", base))
         .send()
         .await
         .expect("routes request failed")
@@ -384,10 +382,10 @@ async fn test_engine_management_endpoints() {
     let client = engine.client();
     let base = format!("http://127.0.0.1:{}", port);
 
-    // /engine/script_logs is the canonical alias of /script_logs
+    // /engine/read_logs is the canonical alias of /script_logs
     let response = client
         .get(format!(
-            "{}/engine/script_logs?uri=https://example.com/core",
+            "{}/engine/read_logs?uri=https://example.com/core",
             base
         ))
         .send()
@@ -395,9 +393,9 @@ async fn test_engine_management_endpoints() {
         .expect("engine script_logs request failed");
     assert_eq!(response.status(), 200);
 
-    // /engine/scripts lists script metadata
+    // /engine/list_scripts lists script metadata
     let response = client
-        .get(format!("{}/engine/scripts", base))
+        .get(format!("{}/engine/list_scripts", base))
         .send()
         .await
         .expect("engine scripts request failed");
@@ -406,9 +404,9 @@ async fn test_engine_management_endpoints() {
     assert!(body["scripts"].is_array());
     assert!(body["count"].is_number());
 
-    // /engine/script_init_status without uri returns all statuses
+    // /engine/read_init_status without uri returns all statuses
     let response = client
-        .get(format!("{}/engine/script_init_status", base))
+        .get(format!("{}/engine/read_init_status", base))
         .send()
         .await
         .expect("engine script_init_status request failed");
@@ -416,11 +414,14 @@ async fn test_engine_management_endpoints() {
     let body: serde_json::Value = response.json().await.expect("status response not JSON");
     assert!(body["statuses"].is_array());
 
-    // /engine/script_owners lists owners for anyone
+    // /engine/list_script_owners lists owners for anyone
     let script_uri = "https://example.com/owners-endpoint-test";
     engine.deploy_script(script_uri, "function init() {}").await;
     let response = client
-        .get(format!("{}/engine/script_owners?uri={}", base, script_uri))
+        .get(format!(
+            "{}/engine/list_script_owners?uri={}",
+            base, script_uri
+        ))
         .send()
         .await
         .expect("engine script_owners request failed");
@@ -429,7 +430,7 @@ async fn test_engine_management_endpoints() {
     assert!(body["owners"].is_array());
 
     // Missing required parameters are rejected
-    for path in ["/engine/secrets", "/engine/script_owners"] {
+    for path in ["/engine/list_secrets", "/engine/list_script_owners"] {
         let response = client
             .get(format!("{}{}", base, path))
             .send()
@@ -957,9 +958,9 @@ async fn test_oversized_request_body_is_rejected() {
     // Default security.max_request_body_bytes is 1 MB; send a larger body
     let oversized = "x".repeat(1024 * 1024 + 100 * 1024);
 
-    // Dynamic script route with a non-form content type must reject with 413
+    // An operation with no body allowance of its own inherits the limit
     let response = client
-        .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
+        .post(format!("http://127.0.0.1:{}/engine/list_scripts", port))
         .header("content-type", "application/json")
         .body(oversized)
         .send()
@@ -973,7 +974,7 @@ async fn test_oversized_request_body_is_rejected() {
 /// The asset the write endpoint accepts has to be the asset the engine says it
 /// accepts. Content travels base64-encoded, so inheriting the router's
 /// `max_request_body_bytes` bounded three quarters of an asset: the largest one
-/// `POST /engine/assets` could write was 786 KB against the 1 MB default, while
+/// `/engine/write_file` could write was 786 KB against the 1 MB default, while
 /// the sandbox, the repository and the published `x-aiwebengine-limits` all
 /// named 10,000,000 bytes. A limit a document promises and an endpoint refuses
 /// is worse than a smaller limit honestly stated.
@@ -997,12 +998,10 @@ async fn test_an_asset_at_the_documented_ceiling_can_be_written() {
 
     let response = engine
         .client()
-        .post(format!(
-            "http://127.0.0.1:{}/engine/assets?script={}",
-            port, script_uri
-        ))
+        .post(format!("http://127.0.0.1:{}/engine/write_file", port))
         .json(&serde_json::json!({
-            "asset": "big.bin",
+            "script": script_uri,
+            "path": "big.bin",
             "mimetype": "application/octet-stream",
             "content": encoded,
         }))
@@ -1012,7 +1011,7 @@ async fn test_an_asset_at_the_documented_ceiling_can_be_written() {
 
     assert_eq!(
         response.status(),
-        201,
+        200,
         "an asset within the engine's own ceiling should be writable through \
          the endpoint whose job is writing one, got {}",
         response.text().await.unwrap_or_default()
@@ -1084,7 +1083,7 @@ async fn test_script_logs_correlate_with_the_request_that_emitted_them() {
     // Filtering by request id returns that call's lines and nothing else.
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/script_logs?uri={}&request_id={}",
+            "{}/engine/read_logs?uri={}&request_id={}",
             base, script_uri, first_request_id
         ))
         .send()
@@ -1108,7 +1107,7 @@ async fn test_script_logs_correlate_with_the_request_that_emitted_them() {
     // Filtering by route collects both calls, parameter values and all.
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/script_logs?uri={}&route=/vw/:id/move",
+            "{}/engine/read_logs?uri={}&route=/vw/:id/move",
             base, script_uri
         ))
         .send()
@@ -1124,7 +1123,7 @@ async fn test_script_logs_correlate_with_the_request_that_emitted_them() {
     // and its output must not come back under httpRoute.
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/script_logs?uri={}&kind=httproute&contains=failed",
+            "{}/engine/read_logs?uri={}&kind=httproute&contains=failed",
             base, script_uri
         ))
         .send()
@@ -1449,7 +1448,7 @@ async fn test_script_logs_correlate_what_the_engine_reports_about_a_request() {
 
     let body: serde_json::Value = client
         .get(format!(
-            "{}/engine/script_logs?uri={}&request_id={}",
+            "{}/engine/read_logs?uri={}&request_id={}",
             base, script_uri, request_id
         ))
         .send()

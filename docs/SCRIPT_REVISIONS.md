@@ -6,13 +6,13 @@ recorded by the same call that stored the files.
 
 ```bash
 # What has happened to this script
-curl "https://your-engine/engine/revisions?script=myapp"
+curl "https://your-engine/engine/list_revisions?script=myapp"
 
 # What has happened to one of its files
-curl "https://your-engine/engine/revisions?script=myapp&asset=server/move-player.ts"
+curl "https://your-engine/engine/list_revisions?script=myapp&asset=server/move-player.ts"
 
 # Check revision 41 without deploying it
-curl -X POST "https://your-engine/engine/check?uri=myapp&revision=41"
+curl -X POST "https://your-engine/engine/check_script?uri=myapp&revision=41"
 
 # Run the tests revision 41 had, against the modules revision 41 had
 curl -X POST "https://your-engine/engine/run_tests?uri=myapp&revision=41"
@@ -26,7 +26,7 @@ the snapshot, restore it if the risk lands badly.
 That design has a precondition the failure removes. Taking the snapshot
 requires knowing beforehand that the change is dangerous, and the changes that
 turn out to be dangerous are mostly the ones that did not look it. An agent
-editing a module through `PATCH /engine/assets` has no checkout to fall back
+editing a module through `/engine/edit_file` has no checkout to fall back
 on, and no reliable sense of which of its edits is the one worth marking.
 
 So the recording is unconditional and naming is retrospective. Every write
@@ -125,7 +125,7 @@ other people are using — before anything could say whether it bundled.
 `files` describes the whole change, none of it stored:
 
 ```bash
-curl -X POST "…/engine/check?uri=myapp" -H "Content-Type: application/json" -d '{
+curl -X POST "…/engine/check_script?uri=myapp" -H "Content-Type: application/json" -d '{
   "content": "import { LIMIT } from \'./server/limits.ts\'; function init() { … }",
   "files": {
     "server/limits.ts": { "content": "export const LIMIT = 5;" },
@@ -156,10 +156,10 @@ would be reporting on a program that exists nowhere.
 
 ```bash
 # What would change, without changing it
-curl -X POST "…/engine/revisions/revert?script=myapp&revision=41&dry_run=true"
+curl -X POST "…/engine/revert_script?script=myapp&revision=41&dry_run=true"
 
 # Do it
-curl -X POST "…/engine/revisions/revert?script=myapp&revision=last-good"
+curl -X POST "…/engine/revert_script?script=myapp&revision=last-good"
 ```
 
 A revert is a **forward write**. The restored content becomes a new revision
@@ -208,7 +208,7 @@ prune_interval_secs = 3600
 ```
 
 Recording a revision on every write is what makes the history worth having and
-also what makes it grow — an agent editing through `PATCH /engine/assets`
+also what makes it grow — an agent editing through `/engine/edit_file`
 writes far more often than a person does. A pass runs on the interval above,
 on one instance at a time.
 
@@ -237,15 +237,15 @@ it.
 
 ```bash
 # The newest change
-curl "…/engine/revisions/diff?script=myapp"
+curl "…/engine/diff_revisions?script=myapp"
 
 # Between two revisions, or two names
-curl "…/engine/revisions/diff?script=myapp&from=41&to=48"
-curl "…/engine/revisions/diff?script=myapp&from=before-the-refactor&to=head"
+curl "…/engine/diff_revisions?script=myapp&from=41&to=48"
+curl "…/engine/diff_revisions?script=myapp&from=before-the-refactor&to=head"
 ```
 
 A unified diff per file that moved, plus its status — `added`, `removed`, or
-`modified`. This is the read counterpart to `PATCH /engine/assets`: an agent
+`modified`. This is the read counterpart to `/engine/edit_file`: an agent
 that has just rewritten four modules can ask what it changed instead of reading
 all four back, and someone deciding whether to revert can see what they would
 undo rather than inferring it from a list of digests.
@@ -268,7 +268,7 @@ are still listed by name, so nothing goes missing silently.
 ## Naming a revision
 
 ```bash
-curl -X POST "…/engine/revisions/label?script=myapp&revision=41&label=before-the-refactor"
+curl -X POST "…/engine/label_revision?script=myapp&revision=41&label=before-the-refactor"
 ```
 
 A label makes a revision addressable by name everywhere a revision is named —
@@ -283,7 +283,7 @@ A name belongs to one revision per script, so reusing it moves it. Omitting
 ## Reading a file's history
 
 ```bash
-curl "…/engine/revisions?script=myapp&asset=server/move-player.ts"
+curl "…/engine/list_revisions?script=myapp&asset=server/move-player.ts"
 ```
 
 Only the revisions in which that file actually changed. Consecutive revisions
@@ -297,7 +297,7 @@ alongside the invocation attribution it already carried:
 
 ```bash
 # Everything revision 41 produced
-curl "…/engine/script_logs?uri=myapp&revision=41"
+curl "…/engine/read_logs?uri=myapp&revision=41"
 ```
 
 This is what makes rollback _decidable_ rather than merely possible. Without
@@ -341,26 +341,26 @@ reaches production because there is nowhere else for it to go.
 
 ```bash
 # Serve revision 41, whatever gets written next
-curl -X POST "…/engine/deploy?script=myapp&revision=41"
+curl -X POST "…/engine/get_deployment?script=myapp&revision=41"
 
 # What is served, what is newest, and how far apart they are
-curl "…/engine/deploy?script=myapp"
+curl "…/engine/get_deployment?script=myapp"
 
 # Take the accumulated writes
-curl -X POST "…/engine/deploy?script=myapp&revision=head"
+curl -X POST "…/engine/get_deployment?script=myapp&revision=head"
 
 # Go back to following head automatically
-curl -X DELETE "…/engine/deploy?script=myapp"
+curl -X POST "…/engine/deploy_script" -d '{"script":"myapp","follow":true}'
 ```
 
 Once a script is pinned, writing its files records revisions and advances head
-without changing what answers requests. `POST /engine/assets` reports
+without changing what answers requests. `/engine/write_file` reports
 `"init": {"ran": false, "reason": "pinned"}` — not because the write failed,
 but because it changed nothing that is running. Re-initialising a working
 deployment on the strength of an edit it is not serving is the disturbance
 pinning exists to prevent.
 
-`GET /engine/deploy` reports `behind`, the number of revisions written since
+`/engine/get_deployment` reports `behind`, the number of revisions written since
 the deployment — what you are deciding whether to take.
 
 A deployment is a **whole version**: the revision's root and the modules that

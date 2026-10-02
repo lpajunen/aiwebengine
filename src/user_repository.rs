@@ -65,7 +65,7 @@ fn is_bootstrap_admin_username(username: &str) -> bool {
 /// Realm value meaning "a principal on every host this engine serves".
 ///
 /// Only ever set deliberately, and only from a place that already carries the
-/// authority: an administrator calling `/engine/user_realm`, or an address the
+/// authority: an administrator calling `/engine/set_user_realm`, or an address the
 /// operator wrote into `auth.bootstrap_admins`. No sign-in *earns* it — an
 /// account anyone can create must not reach every host by existing — which is
 /// why [`upsert_internal_user`] never sets it and guests and local accounts
@@ -685,7 +685,7 @@ pub async fn upsert_user_with_bootstrap(
     // administer the engine gets stamped with whichever host it first touched,
     // every later request on the management host is refused as
     // [`realm_authorizes_host`] fails, and the sign-in loops. The way back —
-    // `/engine/user_realm` — is served only on the management host that can no
+    // `/engine/set_user_realm` — is served only on the management host that can no
     // longer be reached, so the only remaining recovery is editing the database
     // by hand.
     //
@@ -773,7 +773,7 @@ async fn apply_configured_administrator(pool: &PgPool, user_id: &str) -> AppResu
 ///
 /// The way a personal install gets an owner. Every other road to the
 /// administrator tier needs an administrator to already exist —
-/// `/engine/user_roles` is guarded by `AdministerEngine`, and
+/// `/engine/add_user_role` is guarded by `AdministerEngine`, and
 /// [`upsert_internal_user`] deliberately grants nothing — which on a laptop
 /// with no OAuth provider is a circle with no way in. The remaining workaround
 /// was a development mode that handed those capabilities to *anonymous*
@@ -1638,7 +1638,7 @@ mod tests {
 
     /// The lockout this closes. An administrator signs in on the main host,
     /// their account is stamped with it, and every later request on the
-    /// management host is refused — while `/engine/user_realm`, the way to
+    /// management host is refused — while `/engine/set_user_realm`, the way to
     /// widen it, is served only on the host they can no longer reach.
     #[test]
     fn a_bootstrap_admin_is_a_principal_on_every_host() {

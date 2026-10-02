@@ -16,7 +16,7 @@
 //! comes free and the tool list stops growing. Every other project adopting
 //! that pattern has to build a sandbox first, and this engine already is one.
 //! What was missing was evaluating model-authored code holding *less* than the
-//! script that asked for it — `/engine/eval` could already evaluate a snippet,
+//! script that asked for it — `/engine/eval_script` could already evaluate a snippet,
 //! but as an administrator's endpoint rather than as something a script calls
 //! on itself.
 //!

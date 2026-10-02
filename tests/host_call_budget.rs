@@ -4,7 +4,7 @@
 //! operations, so it stops a runaway loop and is blind to a call waiting on
 //! Postgres — the one kind of work most likely to exceed the budget. The
 //! timeout around the request is no help either: it abandons the blocking
-//! thread while the work continues on it, which is why `/engine/eval` could be
+//! thread while the work continues on it, which is why `/engine/eval_script` could be
 //! given a timeout and still never answer.
 //!
 //! The budget now follows the execution across that boundary.

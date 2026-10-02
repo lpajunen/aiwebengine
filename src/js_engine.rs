@@ -440,7 +440,7 @@ pub enum HandlerInvocationKind {
     /// handler context object, but its output is still attributable.
     McpPrompt,
     Test,
-    /// An ad hoc snippet run against a script's sandbox by `/engine/eval`.
+    /// An ad hoc snippet run against a script's sandbox by `/engine/eval_script`.
     Eval,
 }
 
@@ -695,7 +695,7 @@ impl JsHandlerContextBuilder {
         let context_obj = rquickjs::Object::new(ctx.clone())?;
         context_obj.set("kind", kind.as_str())?;
 
-        // The id this invocation's log lines are filed under; `/engine/script_logs`
+        // The id this invocation's log lines are filed under; `/engine/read_logs`
         // takes it as `request_id`.
         if let Some(invocation_id) = invocation_id {
             context_obj.set("invocationId", invocation_id)?;
@@ -3124,7 +3124,7 @@ pub struct EvalParams {
     pub input: Option<JsonValue>,
     /// Who the snippet runs as, as JavaScript sees it.
     ///
-    /// `None` builds the anonymous context an `/engine/eval` gets. A
+    /// `None` builds the anonymous context an `/engine/eval_script` gets. A
     /// sub-execution passes its parent's, because `personalStorage` and
     /// `secretStorage` resolve against `context.request.auth.userId` rather
     /// than against the [`UserContext`] — so a narrowed turn that dropped this
@@ -3133,7 +3133,7 @@ pub struct EvalParams {
     pub auth_context: Option<crate::auth::JsAuthContext>,
     /// Which of the script's files the program is built from.
     ///
-    /// [`crate::source_view::SourceView::Live`] for an `/engine/eval`, which
+    /// [`crate::source_view::SourceView::Live`] for an `/engine/eval_script`, which
     /// evaluates against head. A sub-execution passes
     /// [`crate::deployments::serving_view`], so the code it runs beside is the
     /// code its caller is running rather than a newer head the caller has
@@ -3319,7 +3319,7 @@ fn run_snippet(
             ),
             // Not acting for anybody: nothing to narrow.
             delegated_scopes: None,
-            // Shared by `/engine/eval` and `sandbox.run`, so it fails
+            // Shared by `/engine/eval_script` and `sandbox.run`, so it fails
             // closed for the second: model-authored code must not reach the
             // management tools, and the capability subset cannot say so —
             // `read_logs` is gated on `view_logs`, which an agent grants for
@@ -3810,7 +3810,7 @@ pub struct RegistrationPassOutcome {
 /// and every registration is recorded in the sink instead — see
 /// [`GlobalSecurityConfig::dry_run_sink`]. That mode also resolves each
 /// registration's delegate against the program's globals, which is the check
-/// `/engine/check` exists for and which costs nothing here because the context
+/// `/engine/check_script` exists for and which costs nothing here because the context
 /// that would answer the question is still alive.
 fn run_registration_pass(
     script_uri: &str,

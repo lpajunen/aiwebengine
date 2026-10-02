@@ -2,18 +2,18 @@
 
 ```bash
 # Raise it for a script that waits on a slow API
-curl -X POST "https://your-engine/engine/limits" -H 'Content-Type: application/json' \
+curl -X POST "https://your-engine/engine/get_script_limits" -H 'Content-Type: application/json' \
   -d '{"script":"myagent","timeoutMs":60000,"note":"calls a model API"}'
 
 # Contain one that has started holding execution slots
-curl -X POST "https://your-engine/engine/limits" -H 'Content-Type: application/json' \
+curl -X POST "https://your-engine/engine/get_script_limits" -H 'Content-Type: application/json' \
   -d '{"script":"noisy","timeoutMs":1000,"note":"runaway loop, see incident 412"}'
 
 # What is overridden anywhere in this engine
-curl "https://your-engine/engine/limits"
+curl "https://your-engine/engine/get_script_limits"
 
 # Put one back on the engine's own limits
-curl -X DELETE "https://your-engine/engine/limits?script=noisy"
+curl -X POST "https://your-engine/engine/set_script_limits" -d '{"script":"noisy"}'
 ```
 
 `javascript.execution_timeout_ms` and its neighbours are process-wide. That is

@@ -205,7 +205,7 @@ knowing at the point you are deciding.
 
 **Both sides moved.** The engine does not merge. Reconciling two versions of a
 module is a judgement about code, which is what the agent asking for the push is
-for — and `/engine/revisions/diff` shows what changed here. The refusal names
+for — and `/engine/diff_revisions` shows what changed here. The refusal names
 both sides. `force` publishes your copy over the repository's; GitHub still
 refuses a non-fast-forward, so it cannot overwrite work the engine has not seen.
 

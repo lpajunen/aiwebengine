@@ -1005,7 +1005,7 @@ async fn db_upsert_script(
 ///   otherwise keep whichever sorts first.
 /// - **Unnamed**: whichever entrypoint the tree already holds, and the name
 ///   derived from the URI when it holds none. This is what a caller that
-///   sends only source (`/engine/upsert_script`, a batch's `content`) means.
+///   sends only source (`/engine/write_file`, a batch's `content`) means.
 async fn upsert_script_rows(
     conn: &mut sqlx::PgConnection,
     uri: &str,
@@ -2657,7 +2657,7 @@ where
     sqlx::query(
         // `clock_timestamp()`, not `NOW()`: `NOW()` is the *transaction's*
         // start time, so every line a script wrote inside one transaction —
-        // which is how `/engine/eval` and the test runner execute — would carry
+        // which is how `/engine/eval_script` and the test runner execute — would carry
         // the same timestamp and lose its order.
         r#"
         INSERT INTO logs (script_uri, message, log_level, created_at, request_id, kind, route, revision)

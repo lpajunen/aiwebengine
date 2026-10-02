@@ -145,7 +145,7 @@ Three things worth knowing:
   its lane once the lease lapses. Without that, one crash would shut a
   person's agent for good.
 
-The lane is on the row, so `list_tasks` and `/engine/tasks` answer "why has
+The lane is on the row, so `list_tasks` and `/engine/list_tasks` answer "why has
 this not run" with "it is behind another task in its lane" rather than
 leaving you to guess.
 
@@ -153,13 +153,13 @@ leaving you to guess.
 
 ```bash
 # What is waiting, what is running, what failed and why
-curl "https://your-engine/engine/tasks?script=myapp"
+curl "https://your-engine/engine/list_tasks?script=myapp"
 
 # Stop one that has not started
-curl -X DELETE "https://your-engine/engine/tasks?script=myapp&task=<id>"
+curl -X POST "https://your-engine/engine/cancel_task" -d '{"script":"myapp","task":"<id>"}'
 
 # Clear out the failed and cancelled ones once you have read them
-curl -X DELETE "https://your-engine/engine/tasks?script=myapp&finished=true"
+curl -X POST "https://your-engine/engine/cancel_task" -d '{"script":"myapp","finished":true}'
 ```
 
 The same through MCP: `list_tasks` and `cancel_task`. Reading takes what

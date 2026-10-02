@@ -354,7 +354,7 @@ limit since long before there was anywhere to see it happen.
   with the host they were created on, and authenticate only there — an account
   a solution's sign-up form mints is not a principal on your management host.
   Signing in elsewhere does not move it. An administrator can widen an account
-  to every host with `/engine/user_realm` or the `set_user_realm` MCP tool. No
+  to every host with `/engine/set_user_realm` or the `set_user_realm` MCP tool. No
   internal sign-in path produces that value — the one thing that does is an
   address the operator listed in `auth.bootstrap_admins`, which these accounts
   cannot match because they carry no address at all.

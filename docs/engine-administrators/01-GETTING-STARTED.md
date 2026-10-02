@@ -263,7 +263,7 @@ The engine exposes administration over HTTP rather than a built-in UI. As an
 administrator you can:
 
 - View all users (`GET /engine/users`)
-- Manage user roles (`POST`/`DELETE /engine/user_roles`)
+- Manage user roles (`POST /engine/add_user_role`, `POST /engine/remove_user_role`)
 - View system status (`GET /engine/health/cluster`)
 
 ---
@@ -417,7 +417,7 @@ When using Docker:
 Now that your instance is running:
 
 1. **Explore the management API:** `http://localhost:3000/engine/openapi.json`
-2. **Write JavaScript scripts:** Install them with `POST /engine/upsert_script`
+2. **Write JavaScript scripts:** Install them with `/engine/write_file`
 3. **Try example scripts:** See the [aiwebengine-examples](https://github.com/lpajunen/aiwebengine-examples) repository
 
 ### Configure for Your Needs

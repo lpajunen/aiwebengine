@@ -505,7 +505,7 @@ async fn test_route_introspection_includes_stream_and_asset_routes() {
     .expect("registrations should store");
 
     // The registrations surface through the introspection view behind
-    // `GET /engine/routes`.
+    // `/engine/list_routes`.
     let routes = aiwebengine::engine_api::routes_introspection_authorized(&admin)
         .expect("Admin should be allowed to introspect routes");
 

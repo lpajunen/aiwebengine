@@ -82,18 +82,23 @@ pub fn status_for_error(message: &str) -> StatusCode {
         || has("insufficient permissions")
     {
         StatusCode::FORBIDDEN
-    } else if has("already exists") || has("cannot remove the last") {
+    } else if has("already exists") || has("cannot remove the last") || has("has changed since") {
         StatusCode::CONFLICT
-    } else if has("not found") || has("no such") || has("no revision") {
-        StatusCode::NOT_FOUND
-    } else if has("missing required")
+    } else if has("old_string")
+        || has("edits[")
+        || has("would leave")
+        || has("missing required")
         || has("is required")
         || has("must be")
         || has("invalid")
         || has("is not")
         || has("not a ")
+        || has("escapes")
+        || has("does not match")
     {
         StatusCode::BAD_REQUEST
+    } else if has("not found") || has("no such") || has("no revision") {
+        StatusCode::NOT_FOUND
     } else if has("timed out") {
         StatusCode::GATEWAY_TIMEOUT
     } else if has("failed to") {
@@ -129,8 +134,9 @@ fn args_from_query(query: &str, schema: &Value) -> Value {
                 "false" | "0" => Value::Bool(false),
                 _ => Value::String(raw.to_string()),
             },
-            Some("array") | Some("object") => serde_json::from_str(&raw)
-                .unwrap_or_else(|_| Value::String(raw.to_string())),
+            Some("array") | Some("object") => {
+                serde_json::from_str(&raw).unwrap_or_else(|_| Value::String(raw.to_string()))
+            }
             _ => Value::String(raw.to_string()),
         };
         args.insert(key.into_owned(), value);
@@ -152,15 +158,22 @@ fn error_body(message: &str) -> Value {
 }
 
 /// Run one operation for one HTTP request.
-async fn call(
+///
+/// Public so a test can drive an operation the way the router does, session
+/// and all, without a server.
+pub async fn call_operation(
     name: &'static str,
     method: Method,
     auth_user: Option<Extension<AuthUser>>,
     query: Option<String>,
     body: Bytes,
 ) -> Response {
-    let user: UserContext =
-        UserContext::for_session(auth_user.as_deref().map(AuthUser::roles).unwrap_or_default());
+    let user: UserContext = UserContext::for_session(
+        auth_user
+            .as_deref()
+            .map(AuthUser::roles)
+            .unwrap_or_default(),
+    );
 
     let Some(schema) = engine_api::native_mcp_tool_descriptors()
         .into_iter()
@@ -222,8 +235,18 @@ async fn call(
         }
     };
 
-    match result.get("error").and_then(Value::as_str) {
-        Some(message) => json_response(status_for_error(message), &result_with_error(&result, message)),
+    // A report that says `ok: false` is an answer: the snippet that threw, the
+    // check that found a problem. The request itself worked.
+    let is_report = result.get("ok").is_some_and(Value::is_boolean);
+    match result
+        .get("error")
+        .and_then(Value::as_str)
+        .filter(|_| !is_report)
+    {
+        Some(message) => json_response(
+            status_for_error(message),
+            &result_with_error(&result, message),
+        ),
         None => json_response(StatusCode::OK, &result),
     }
 }
@@ -233,7 +256,8 @@ async fn call(
 fn result_with_error(result: &Value, message: &str) -> Value {
     let mut body = result.clone();
     if let Value::Object(map) = &mut body {
-        map.entry("error").or_insert_with(|| Value::String(message.to_string()));
+        map.entry("error")
+            .or_insert_with(|| Value::String(message.to_string()));
         map.entry("timestamp")
             .or_insert_with(|| Value::String(chrono::Utc::now().to_rfc3339()));
     }
@@ -264,11 +288,12 @@ pub fn router() -> Router {
     let mut router = Router::new();
     for tool in engine_api::native_mcp_tool_descriptors() {
         let name: &'static str = tool.name;
-        let handler = move |method: Method,
-                            auth_user: Option<Extension<AuthUser>>,
-                            RawQuery(query): RawQuery,
-                            body: Bytes| call(name, method, auth_user, query, body);
-        let mut method_router = axum::routing::post(handler.clone());
+        let handler =
+            move |method: Method,
+                  auth_user: Option<Extension<AuthUser>>,
+                  RawQuery(query): RawQuery,
+                  body: Bytes| call_operation(name, method, auth_user, query, body);
+        let mut method_router = axum::routing::post(handler);
         if is_read_only(name) {
             method_router = method_router.get(handler);
         }
@@ -288,7 +313,11 @@ pub fn openapi_paths() -> Map<String, Value> {
     let mut paths = Map::new();
     for tool in engine_api::native_mcp_tool_descriptors() {
         let mut item = Map::new();
-        let summary = tool.description.split(". ").next().unwrap_or(tool.description);
+        let summary = tool
+            .description
+            .split(". ")
+            .next()
+            .unwrap_or(tool.description);
         let responses = json!({
             "200": {
                 "description": "The operation's result",
@@ -296,7 +325,8 @@ pub fn openapi_paths() -> Map<String, Value> {
             },
             "400": { "description": "The arguments were missing or malformed" },
             "403": { "description": "The caller may not do this" },
-            "404": { "description": "What the arguments name does not exist" }
+            "404": { "description": "What the arguments name does not exist" },
+            "409": { "description": "What is stored conflicts: it already exists, or it has changed since it was read" }
         });
         item.insert(
             "post".into(),

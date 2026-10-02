@@ -111,7 +111,7 @@ pub struct ExecutionLimits {
     /// Budget for one test module, and for a whole `run_tests` run.
     pub test_module_timeout_ms: u64,
     pub test_run_timeout_ms: u64,
-    /// Ceiling a `/engine/check` caller's own `timeout_ms` is clamped to.
+    /// Ceiling a `/engine/check_script` caller's own `timeout_ms` is clamped to.
     pub check_max_timeout_ms: u64,
 }
 
@@ -135,17 +135,17 @@ pub struct SizeLimits {
     /// (`repository.max_upload_size_bytes`). Everything else is bounded by
     /// `max_request_body_bytes`.
     pub max_upload_bytes: usize,
-    /// Files in one `/engine/assets/batch` write, their combined size, and the
+    /// Files in one `/engine/write_files` write, their combined size, and the
     /// request body carrying them — a little above the content bound, since a
     /// file that is not text still travels base64 and costs a third more.
     pub max_batch_files: usize,
     pub max_batch_bytes: usize,
     pub max_batch_body_bytes: usize,
-    /// Edits in one `PATCH /engine/assets` or `/engine/edit_script` call.
+    /// Edits in one `/engine/edit_file` or `/engine/edit_file` call.
     pub max_patch_edits: usize,
     pub max_markdown_bytes: usize,
     pub max_template_bytes: usize,
-    /// Bytes of diff `/engine/revisions/diff` will render before truncating.
+    /// Bytes of diff `/engine/diff_revisions` will render before truncating.
     pub max_revision_diff_bytes: usize,
     /// Characters in an `import` specifier.
     pub max_module_specifier_chars: usize,
@@ -202,14 +202,14 @@ pub struct SchedulerLimits {
     pub max_job_name_chars: usize,
 }
 
-/// What one `/engine/search` answers with before it stops looking.
+/// What one `/engine/search_files` answers with before it stops looking.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchLimits {
     pub max_files: usize,
     pub max_matches_per_file: usize,
-    /// Matches one `grep` of a single file — `/engine/read_script?grep=` or
-    /// `/engine/assets?grep=` — reports before it stops looking.
+    /// Matches one `grep` of a single file — `/engine/read_file?grep=` or
+    /// `/engine/write_file?grep=` — reports before it stops looking.
     pub max_grep_matches_per_read: usize,
     pub max_pattern_chars: usize,
     /// A matching line longer than this comes back truncated, and says so.
@@ -222,8 +222,8 @@ pub struct SearchLimits {
 pub struct RetentionLimits {
     pub logs: LogRetentionLimits,
     pub revisions: RevisionRetentionLimits,
-    /// Console lines captured and returned by `/engine/eval` and
-    /// `/engine/check` before the rest are dropped and counted.
+    /// Console lines captured and returned by `/engine/eval_script` and
+    /// `/engine/check_script` before the rest are dropped and counted.
     pub max_captured_console_lines: usize,
 }
 

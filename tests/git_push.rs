@@ -591,7 +591,7 @@ async fn both_sides_moving_is_refused_rather_than_merged() {
         message
     );
     assert!(
-        message.contains("revisions/diff"),
+        message.contains("diff_revisions"),
         "the refusal should point at what reconciles them: {}",
         message
     );

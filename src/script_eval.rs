@@ -42,7 +42,7 @@ pub struct EvalRequest {
     /// What the snippet is handed as `context.args`.
     pub input: Option<Value>,
     /// Who it runs as, as JavaScript sees it. `None` for the anonymous
-    /// context `/engine/eval` builds.
+    /// context `/engine/eval_script` builds.
     pub auth_context: Option<crate::auth::JsAuthContext>,
     /// Which of the script's files to build its program from.
     pub view: crate::source_view::SourceView,
@@ -50,7 +50,7 @@ pub struct EvalRequest {
 
 impl EvalRequest {
     /// An evaluation of `source` against `script_uri` as `user_context`, with
-    /// every optional part left at what `/engine/eval` asks for.
+    /// every optional part left at what `/engine/eval_script` asks for.
     pub fn new(script_uri: String, source: String, user_context: UserContext) -> Self {
         Self {
             script_uri,

@@ -258,7 +258,7 @@ After setting up OAuth, you'll need administrator access to manage users. The bo
 
 Without bootstrap admins, you would face this dilemma:
 
-1. You need an admin to call `/engine/user_roles` to grant admin roles
+1. You need an admin to call `/engine/add_user_role` to grant admin roles
 2. But how do you make the first user an admin?
 3. Without an initial admin, no one can manage user roles
 
@@ -314,7 +314,7 @@ When a user signs in for the first time via OAuth:
 2. System calls `user_repository::upsert_user()` with their email
 3. Email is compared (case-insensitive) with bootstrap admin list
 4. If match found, user automatically receives `Administrator` role
-5. User can now call `/engine/user_roles` and grant roles to others
+5. User can now call `/engine/add_user_role` and grant roles to others
 
 ```
 2025-10-24T10:05:00.456Z DEBUG Created new user: abc-123-def (admin@example.com)
@@ -389,7 +389,7 @@ docker-compose up -d
 - Grant the role:
 
   ```bash
-  curl -b cookies.txt -X POST http://localhost:3000/engine/user_roles \
+  curl -b cookies.txt -X POST http://localhost:3000/engine/add_user_role \
     -H "Content-Type: application/json" \
     -d '{"user_id": "abc-123-def", "role": "Administrator"}'
   ```
@@ -534,21 +534,21 @@ These secrets are used by JavaScript scripts but never exposed to JavaScript cod
 
 #### Database-Backed Secrets
 
-Secrets are stored in the database. Administrators and script owners set script-level secrets over the engine API (`POST /engine/secrets`, or the `write_secret` MCP tool); users set their own personal secrets from JavaScript with `secretStorage.setSecret`.
+Secrets are stored in the database. Administrators and script owners set script-level secrets over the engine API (`POST /engine/list_secrets`, or the `write_secret` MCP tool); users set their own personal secrets from JavaScript with `secretStorage.setSecret`.
 
 ```bash
 # Admin or script owner: set a secret available to a specific script
-curl -X POST "https://your-engine.com/engine/secrets?script=https://example.com/my-script" \
+curl -X POST "https://your-engine.com/engine/list_secrets?script=https://example.com/my-script" \
   -H "Content-Type: application/json" \
   -d '{"key": "anthropic_api_key", "value": "sk-ant-api03-..."}'
 #   → available as identifier: "anthropic_api_key"
 
-curl -X POST "https://your-engine.com/engine/secrets?script=https://example.com/my-script" \
+curl -X POST "https://your-engine.com/engine/list_secrets?script=https://example.com/my-script" \
   -H "Content-Type: application/json" \
   -d '{"key": "openai_api_key", "value": "sk-..."}'
 #   → available as identifier: "openai_api_key"
 
-curl -X POST "https://your-engine.com/engine/secrets?script=https://example.com/my-script" \
+curl -X POST "https://your-engine.com/engine/list_secrets?script=https://example.com/my-script" \
   -H "Content-Type: application/json" \
   -d '{"key": "stripe_api_key", "value": "sk_live_..."}'
 #   → available as identifier: "stripe_api_key"
@@ -582,10 +582,10 @@ if (secretStorage.exists("anthropic_api_key")) {
 ```
 
 Listing which secrets a script has is administration, not a script API — use
-`GET /engine/secrets?script=<uri>` or the `list_secrets` MCP tool:
+`GET /engine/list_secrets?script=<uri>` or the `list_secrets` MCP tool:
 
 ```bash
-curl "https://your-engine.com/engine/secrets?script=https://example.com/my-script"
+curl "https://your-engine.com/engine/list_secrets?script=https://example.com/my-script"
 # {"secrets": ["anthropic_api_key", "openai_api_key", "stripe_api_key"]}
 ```
 
@@ -636,12 +636,12 @@ routeRegistry.registerRoute('/api/chat', { handler: 'aiChatHandler', method: 'PO
 
 #### Common Application Secrets
 
-Set AI and service secrets with `POST /engine/secrets?script=<uri>` (or the `write_secret` MCP tool) as an administrator or an owner of the target script. Each call takes one `key`/`value` pair:
+Set AI and service secrets with `POST /engine/list_secrets?script=<uri>` (or the `write_secret` MCP tool) as an administrator or an owner of the target script. Each call takes one `key`/`value` pair:
 
 ```bash
 SCRIPT="https://example.com/my-script"
 post_secret() {
-  curl -X POST "https://your-engine.com/engine/secrets?script=$SCRIPT" \
+  curl -X POST "https://your-engine.com/engine/list_secrets?script=$SCRIPT" \
     -H "Content-Type: application/json" \
     -d "{\"key\": \"$1\", \"value\": \"$2\"}"
 }
@@ -669,7 +669,7 @@ post_secret aws_secret_access_key "..."
 post_secret azure_storage_key "..."
 ```
 
-Remove one with `DELETE /engine/secrets?script=<uri>&key=<key>` (`delete_secret`), or all of a script's secrets by omitting `key` (`clear_secrets`).
+Remove one with `POST /engine/delete_secret` with `{"script": <uri>, "key": <key>}`, or all of a script's secrets by omitting `key` (`clear_secrets`).
 
 ---
 

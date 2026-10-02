@@ -163,17 +163,14 @@ function init(context) {
 "#;
 
     let upsert_request = client
-        .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
-        .form(&[
-            ("uri", "https://example.com/test-endpoint-script"),
-            ("content", test_script_content),
-        ])
+        .post(format!("http://127.0.0.1:{}/engine/write_file", port))
+        .json(&serde_json::json!({ "script": "https://example.com/test-endpoint-script", "path": "main.js", "text": test_script_content }))
         .send();
 
     let response = match timeout(Duration::from_secs(5), upsert_request).await {
         Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("POST request to /engine/upsert_script failed: {:?}", e),
-        Err(_) => panic!("POST request to /engine/upsert_script timed out"),
+        Ok(Err(e)) => panic!("POST request to /engine/write_file failed: {:?}", e),
+        Err(_) => panic!("POST request to /engine/write_file timed out"),
     };
 
     assert_eq!(
@@ -190,13 +187,10 @@ function init(context) {
 
     assert_eq!(body["success"], true, "Expected success=true in response");
     assert_eq!(
-        body["uri"], "https://example.com/test-endpoint-script",
-        "Expected correct URI in response"
+        body["script"], "https://example.com/test-endpoint-script",
+        "Expected correct script in response"
     );
-    assert!(
-        body["contentLength"].as_u64().unwrap() > 0,
-        "Expected contentLength > 0"
-    );
+    assert_eq!(body["path"], "main.js", "Expected the entrypoint's path");
 
     // Verify the script was actually upserted by calling the new endpoint. The
     // upsert answers before the `init()` it spawns has registered the route,
@@ -250,17 +244,14 @@ function init(context) {
 "#;
 
     let upsert_request = client
-        .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
-        .form(&[
-            ("uri", "https://example.com/delete-test-script"),
-            ("content", test_script_content),
-        ])
+        .post(format!("http://127.0.0.1:{}/engine/write_file", port))
+        .json(&serde_json::json!({ "script": "https://example.com/delete-test-script", "path": "main.js", "text": test_script_content }))
         .send();
 
     let upsert_response = match timeout(Duration::from_secs(5), upsert_request).await {
         Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("POST request to /engine/upsert_script failed: {:?}", e),
-        Err(_) => panic!("POST request to /engine/upsert_script timed out"),
+        Ok(Err(e)) => panic!("POST request to /engine/write_file failed: {:?}", e),
+        Err(_) => panic!("POST request to /engine/write_file timed out"),
     };
 
     assert_eq!(
@@ -390,11 +381,8 @@ function init(context) {
 
     // 1. Create script via HTTP API
     let create_request = client
-        .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
-        .form(&[
-            ("uri", "https://example.com/lifecycle-test-script"),
-            ("content", script_content),
-        ])
+        .post(format!("http://127.0.0.1:{}/engine/write_file", port))
+        .json(&serde_json::json!({ "script": "https://example.com/lifecycle-test-script", "path": "main.js", "text": script_content }))
         .send();
 
     let create_response = match timeout(Duration::from_secs(5), create_request).await {
@@ -485,17 +473,14 @@ function init(context) {
 "#;
 
     let upsert_request = client
-        .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
-        .form(&[
-            ("uri", "https://example.com/read-test-script"),
-            ("content", test_script_content),
-        ])
+        .post(format!("http://127.0.0.1:{}/engine/write_file", port))
+        .json(&serde_json::json!({ "script": "https://example.com/read-test-script", "path": "main.js", "text": test_script_content }))
         .send();
 
     let upsert_response = match timeout(Duration::from_secs(5), upsert_request).await {
         Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("POST request to /engine/upsert_script failed: {:?}", e),
-        Err(_) => panic!("POST request to /engine/upsert_script timed out"),
+        Ok(Err(e)) => panic!("POST request to /engine/write_file failed: {:?}", e),
+        Err(_) => panic!("POST request to /engine/write_file timed out"),
     };
 
     assert_eq!(
@@ -507,15 +492,15 @@ function init(context) {
     // Now test the read_script endpoint
     let read_request = client
         .get(format!(
-            "http://127.0.0.1:{}/engine/read_script?uri=https://example.com/read-test-script",
+            "http://127.0.0.1:{}/engine/read_file?script=https://example.com/read-test-script&path=main.js",
             port
         ))
         .send();
 
     let read_response = match timeout(Duration::from_secs(5), read_request).await {
         Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("GET request to /engine/read_script failed: {:?}", e),
-        Err(_) => panic!("GET request to /engine/read_script timed out"),
+        Ok(Err(e)) => panic!("GET request to /engine/read_file failed: {:?}", e),
+        Err(_) => panic!("GET request to /engine/read_file timed out"),
     };
 
     assert_eq!(
@@ -524,8 +509,13 @@ function init(context) {
         "Expected 200 status for read_script"
     );
 
-    let read_body = match timeout(Duration::from_secs(5), read_response.text()).await {
-        Ok(Ok(text)) => text,
+    let read_body = match timeout(
+        Duration::from_secs(5),
+        read_response.json::<serde_json::Value>(),
+    )
+    .await
+    {
+        Ok(Ok(json)) => json["content"].as_str().unwrap_or_default().to_string(),
         Ok(Err(e)) => panic!("Failed to read response body: {:?}", e),
         Err(_) => panic!("Reading response body timed out"),
     };
@@ -543,7 +533,7 @@ function init(context) {
     // Test reading a non-existent script
     let nonexistent_read_request = client
         .get(format!(
-            "http://127.0.0.1:{}/engine/read_script?uri=https://example.com/nonexistent-script",
+            "http://127.0.0.1:{}/engine/read_file?script=https://example.com/nonexistent-script&path=main.js",
             port
         ))
         .send();
@@ -552,10 +542,10 @@ function init(context) {
         match timeout(Duration::from_secs(5), nonexistent_read_request).await {
             Ok(Ok(response)) => response,
             Ok(Err(e)) => panic!(
-                "GET request to /engine/read_script for nonexistent script failed: {:?}",
+                "GET request to /engine/read_file for nonexistent script failed: {:?}",
                 e
             ),
-            Err(_) => panic!("GET request to /engine/read_script for nonexistent script timed out"),
+            Err(_) => panic!("GET request to /engine/read_file for nonexistent script timed out"),
         };
 
     assert_eq!(
@@ -571,23 +561,25 @@ function init(context) {
             Err(_) => panic!("Reading JSON response timed out"),
         };
 
-    assert_eq!(
-        nonexistent_body["error"], "Script not found",
-        "Expected 'Script not found' error"
+    assert!(
+        nonexistent_body["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("not found")),
+        "Expected a 'not found' error, got {nonexistent_body}"
     );
 
     // Test missing uri parameter
     let missing_uri_request = client
-        .get(format!("http://127.0.0.1:{}/engine/read_script", port))
+        .get(format!("http://127.0.0.1:{}/engine/read_file", port))
         .send();
 
     let missing_uri_response = match timeout(Duration::from_secs(5), missing_uri_request).await {
         Ok(Ok(response)) => response,
         Ok(Err(e)) => panic!(
-            "GET request to /engine/read_script without uri failed: {:?}",
+            "GET request to /engine/read_file without uri failed: {:?}",
             e
         ),
-        Err(_) => panic!("GET request to /engine/read_script without uri timed out"),
+        Err(_) => panic!("GET request to /engine/read_file without uri timed out"),
     };
 
     assert_eq!(
@@ -604,8 +596,8 @@ function init(context) {
         };
 
     assert_eq!(
-        missing_uri_body["error"], "Missing required parameter: uri",
-        "Expected 'Missing required parameter: uri' error"
+        missing_uri_body["error"], "Missing required parameter: script",
+        "Expected 'Missing required parameter: script' error"
     );
 
     // Proper cleanup

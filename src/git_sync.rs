@@ -1510,7 +1510,7 @@ fn gather_and_push(
 /// The engine implements no merge. When the repository has changed since this
 /// script was last synced *and* the script has changed here, reconciling the
 /// two is a judgement about code — which is what the agent asking for this push
-/// is for, and what `/engine/revisions/diff` exists to feed it.
+/// is for, and what `/engine/diff_revisions` exists to feed it.
 fn check_divergence(
     row: &SyncRow,
     head: Option<&crate::git_github::CommitTree>,
@@ -1537,7 +1537,7 @@ fn check_divergence(
 
     Err(SyncError::Diverged(format!(
         "Both sides have moved: {} is at {} rather than {}, and '{}' is at revision {} rather \
-         than {}. Nothing was pushed. Reconcile the two — /engine/revisions/diff shows what \
+         than {}. Nothing was pushed. Reconcile the two — /engine/diff_revisions shows what \
          changed here — then push again, or pass force to publish this engine's copy over the \
          repository's.",
         row.remote,
@@ -1797,7 +1797,7 @@ impl SyncState {
             SyncState::Behind => "Pull. The repository has changes this engine does not.",
             SyncState::Ahead => "Push. This engine has changes the repository does not.",
             SyncState::Diverged => {
-                "Both sides have changed. Compare them — /engine/revisions/diff shows what \
+                "Both sides have changed. Compare them — /engine/diff_revisions shows what \
                  changed here — and reconcile before pushing, or pull to take the \
                  repository's copy."
             }
