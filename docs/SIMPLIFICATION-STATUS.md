@@ -10,21 +10,21 @@ across 45 files) and is **merged into `main`**.
 
 ## What is done
 
-| §     | Thing                                       | State                                                                         |
-| ----- | ------------------------------------------- | ----------------------------------------------------------------------------- |
-| §1    | Script and assets are one tree              | **Done** — storage and MCP surface                                            |
-| §1    | `assetStorage`'s four methods               | **Done** — `files` (1b)                                                       |
-| §2    | `.md` / `.txt` as string modules            | **Done**                                                                      |
-| §2    | Exposure by directory                       | **Done and enforced**                                                         |
-| §2.1  | Deny shape for per-resource authorization   | **Done** (`resource_access.rs`)                                               |
-| §2.1  | Asset-route authorization hook              | **Done**                                                                      |
-| §2/§7 | `asset_registry` → `route_index`            | **Done**; the module is deleted                                               |
-| §2/§7 | Stream routing → `route_index`              | **Done**; `stream_registry` keeps connections                                 |
-| §3    | One operation table, HTTP generated from it | **Done in the engine** (Phase 2, unmerged); script repositories not yet moved |
-| §4    | Collision refusal (no mounts)               | Not started (Phase 3)                                                         |
-| §4    | Slug + stable identity                      | Not started (Phase 4)                                                         |
-| §5    | Prelude every global                        | **Done** (Phase 1, unmerged)                                                  |
-| §6    | Trim `database` to ~10 methods              | **Done** — ten                                                                |
+| §     | Thing                                       | State                                                |
+| ----- | ------------------------------------------- | ---------------------------------------------------- |
+| §1    | Script and assets are one tree              | **Done** — storage and MCP surface                   |
+| §1    | `assetStorage`'s four methods               | **Done** — `files` (1b)                              |
+| §2    | `.md` / `.txt` as string modules            | **Done**                                             |
+| §2    | Exposure by directory                       | **Done and enforced**                                |
+| §2.1  | Deny shape for per-resource authorization   | **Done** (`resource_access.rs`)                      |
+| §2.1  | Asset-route authorization hook              | **Done**                                             |
+| §2/§7 | `asset_registry` → `route_index`            | **Done**; the module is deleted                      |
+| §2/§7 | Stream routing → `route_index`              | **Done**; `stream_registry` keeps connections        |
+| §3    | One operation table, HTTP generated from it | **Done** (Phase 2), engine and all four repositories |
+| §4    | Collision refusal (no mounts)               | Not started (Phase 3)                                |
+| §4    | Slug + stable identity                      | Not started (Phase 4)                                |
+| §5    | Prelude every global                        | **Done** (Phase 1, unmerged)                         |
+| §6    | Trim `database` to ~10 methods              | **Done** — ten                                       |
 
 ## What is true of the tree now
 
@@ -317,11 +317,13 @@ per global, each with its `aiwebengine.d.ts` change:
 
 ### Phase 2 — one operation table (§3)
 
-**Progress. The engine side is done** (`engine_http.rs`, two commits on
-`main`, undeployed); the four script repositories have **not** been moved, so
-their deploy tooling and the `admin` / `editor` UIs call paths that no longer
-exist. `engine_api.rs` went from 11,637 to about 7,500 lines, and 1,701 tests
-pass.
+**Progress. Phase 2 is complete** — the engine (`engine_http.rs`), and the
+deploy tooling, UIs and docs of `aiwebengine-examples`, `aiwebengine-dev`,
+`aiwebengine-agent` and `aiwebengine-private`. `engine_api.rs` went from 11,637
+to about 7,500 lines, and 1,701 tests pass. Verified against a deployed engine
+with the read-only tooling commands, `check_script` on the editor and admin
+sources, and a scratch script exercised through upload, deploy, pin, label,
+revert and host binding (then deleted).
 
 - **The inventory** found that all but six of the 58 routes already had a tool
   (the six are the ones below that stay hand-written): `upsert_script` / `assets` are `write_file`, `read_script` is
@@ -391,10 +393,17 @@ Known gaps, in the order they matter:
    query parameters to a `POST` operation (`secrets`, `limits`, `tasks`,
    `deploy`, `git/*`) still needs reading.
 
-**Scripts — not started.** The tooling in `aiwebengine-examples/scripts/`
-(then `make sync-tooling` into `aiwebengine-dev`), and the `admin` and
-`editor` UIs, call about thirty of the removed paths. The cutover procedure
-above applies unchanged.
+**Scripts — done.** The tooling moved in `aiwebengine-examples` and was
+synced into `aiwebengine-dev` (`make check-tooling` is clean). The `admin`
+and `editor` pages post to `/engine/{operation}`; the editor finds a script's
+entrypoint through `list_files` and hides it from the asset list; clearing
+logs is per script. The agent and private repositories only needed prose
+(`run_tests` takes a JSON body; the file tools' current names). Two engine
+changes came out of the cutover: `list_scripts` returns `name`, `updatedAt`,
+`createdAt`, `initialized` and `initError`, and `list_routes` takes `host`.
+
+Not verified in a browser: the editor's and admin's own flows. `git-sync`
+was changed (paths only) but not run.
 
 ### Phase 3 — a collision on one host is refused (§4, the part that survives)
 
