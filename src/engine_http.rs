@@ -68,48 +68,21 @@ pub fn is_read_only(name: &str) -> bool {
 
 /// The status line for an operation that answered `{ "error": message }`.
 ///
-/// Operations report failure as text because that is what an MCP client
-/// reads; the HTTP caller needs a code as well, and this is the one place it
-/// is derived. Order matters: a refusal reads as "Failed to X: Access denied",
-/// so the permission test runs before the generic failure test.
-pub fn status_for_error(message: &str) -> StatusCode {
-    let lower = message.to_ascii_lowercase();
-    let has = |needle: &str| lower.contains(needle);
-    if has("access denied")
-        || has("permission denied")
-        || has("this takes an administrator")
-        || has("administrator privileges")
-        || has("insufficient permissions")
-    {
-        StatusCode::FORBIDDEN
-    } else if has("already exists")
-        || has("cannot remove the last")
-        || has("has changed since")
-        || has("are already held")
-    {
-        StatusCode::CONFLICT
-    } else if has("old_string")
-        || has("edits[")
-        || has("would leave")
-        || has("missing required")
-        || has("is required")
-        || has("must be")
-        || has("invalid")
-        || has("is not")
-        || has("not a ")
-        || has("escapes")
-        || has("does not match")
-    {
-        StatusCode::BAD_REQUEST
-    } else if has("not found") || has("no such") || has("no revision") {
-        StatusCode::NOT_FOUND
-    } else if has("timed out") {
-        StatusCode::GATEWAY_TIMEOUT
-    } else if has("failed to") {
-        StatusCode::INTERNAL_SERVER_ERROR
-    } else {
-        StatusCode::BAD_REQUEST
-    }
+/// A refusal says what kind it is in a `status` field, set where it is made
+/// ([`engine_api::refuse`]). A result without one — an error a layer below
+/// still reports as a string — falls back to what the text implies
+/// ([`engine_api::Refusal::from_message`]).
+pub fn status_of(result: &Value, message: &str) -> StatusCode {
+    result
+        .get("status")
+        .and_then(Value::as_u64)
+        .and_then(|code| u16::try_from(code).ok())
+        .and_then(|code| StatusCode::from_u16(code).ok())
+        .filter(|status| status.is_client_error() || status.is_server_error())
+        .unwrap_or_else(|| {
+            StatusCode::from_u16(engine_api::Refusal::from_message(message).status())
+                .unwrap_or(StatusCode::BAD_REQUEST)
+        })
 }
 
 /// Query-string arguments as the JSON object the operation expects.
@@ -248,7 +221,7 @@ pub async fn call_operation(
         .filter(|_| !is_report)
     {
         Some(message) => json_response(
-            status_for_error(message),
+            status_of(&result, message),
             &result_with_error(&result, message),
         ),
         None => json_response(StatusCode::OK, &result),
@@ -393,35 +366,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn refusals_are_forbidden_before_they_are_failures() {
-        assert_eq!(
-            status_for_error("Failed to deploy: Access denied"),
-            StatusCode::FORBIDDEN
-        );
-        assert_eq!(
-            status_for_error("Permission denied. Administrator privileges are required"),
-            StatusCode::FORBIDDEN
-        );
+    fn a_refusal_says_what_kind_it_is() {
+        use engine_api::{Refusal, refuse};
+        for (kind, status) in [
+            (Refusal::BadRequest, StatusCode::BAD_REQUEST),
+            (Refusal::Forbidden, StatusCode::FORBIDDEN),
+            (Refusal::NotFound, StatusCode::NOT_FOUND),
+            (Refusal::Conflict, StatusCode::CONFLICT),
+            (Refusal::Failed, StatusCode::INTERNAL_SERVER_ERROR),
+        ] {
+            // The text is a decoy: the kind decides, not what the message says.
+            let result = refuse(kind, "not found, access denied, already exists");
+            assert_eq!(status_of(&result, "not found"), status);
+        }
     }
 
     #[test]
-    fn missing_things_and_bad_arguments_are_told_apart() {
+    fn a_result_with_no_kind_is_read_from_its_text() {
+        let bare = |message: &str| json!({ "error": message });
         assert_eq!(
-            status_for_error("Script not found: x"),
+            status_of(
+                &bare("Failed to deploy: Access denied"),
+                "Failed to deploy: Access denied"
+            ),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status_of(&bare("Script not found: x"), "Script not found: x"),
             StatusCode::NOT_FOUND
         );
         assert_eq!(
-            status_for_error("Missing required parameter: uri"),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            status_for_error("File already exists: a.js"),
+            status_of(&bare("File already exists: a"), "File already exists: a"),
             StatusCode::CONFLICT
         );
         assert_eq!(
-            status_for_error("Failed to list scripts: db down"),
+            status_of(&bare("Failed to list: db down"), "Failed to list: db down"),
             StatusCode::INTERNAL_SERVER_ERROR
         );
+    }
+
+    /// A `status` that is not an error status is not trusted to be one.
+    #[test]
+    fn a_status_that_is_not_a_refusal_is_ignored() {
+        let result = json!({ "error": "x is required", "status": 200 });
+        assert_eq!(status_of(&result, "x is required"), StatusCode::BAD_REQUEST);
     }
 
     #[test]

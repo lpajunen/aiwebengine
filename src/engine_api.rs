@@ -3007,16 +3007,22 @@ pub fn generate_merged_openapi_spec() -> String {
     let mut rust_spec: Value = match serde_json::from_str(&rust_spec_str) {
         Ok(spec) => spec,
         Err(e) => {
-            return json!({ "error": format!("Failed to parse Rust OpenAPI spec: {}", e) })
-                .to_string();
+            return refuse(
+                Refusal::Failed,
+                format!("Failed to parse Rust OpenAPI spec: {}", e),
+            )
+            .to_string();
         }
     };
 
     let metadata_list = match repository::get_all_script_metadata() {
         Ok(list) => list,
         Err(e) => {
-            return json!({ "error": format!("Failed to fetch JavaScript routes: {}", e) })
-                .to_string();
+            return refuse(
+                Refusal::Failed,
+                format!("Failed to fetch JavaScript routes: {}", e),
+            )
+            .to_string();
         }
     };
 
@@ -3263,8 +3269,11 @@ pub fn generate_merged_openapi_spec() -> String {
 
     match serde_json::to_string_pretty(&rust_spec) {
         Ok(json) => json,
-        Err(e) => json!({ "error": format!("Failed to serialize merged OpenAPI spec: {}", e) })
-            .to_string(),
+        Err(e) => refuse(
+            Refusal::Failed,
+            format!("Failed to serialize merged OpenAPI spec: {}", e),
+        )
+        .to_string(),
     }
 }
 
@@ -4064,17 +4073,26 @@ fn tool_set_git_credential(args: &Value, user: &UserContext) -> Value {
         return missing_arg("token");
     };
     if !user.has_capability(&Capability::WriteScripts) {
-        return json!({ "error": "Access denied" });
+        return refuse(Refusal::Forbidden, "Access denied");
     }
     let Some(user_id) = user.user_id.clone() else {
-        return json!({ "error": "A git credential belongs to an account, and this request has none" });
+        return refuse(
+            Refusal::BadRequest,
+            "A git credential belongs to an account, and this request has none",
+        );
     };
     let host = arg_str(args, "host").unwrap_or(crate::git_github::HOST);
     if host != crate::git_github::HOST {
-        return json!({ "error": format!("Only {} is supported", crate::git_github::HOST) });
+        return refuse(
+            Refusal::BadRequest,
+            format!("Only {} is supported", crate::git_github::HOST),
+        );
     }
     if !crate::config::git_config().allows(host) {
-        return json!({ "error": format!("This engine is not configured to read from {}", host) });
+        return refuse(
+            Refusal::BadRequest,
+            format!("This engine is not configured to read from {}", host),
+        );
     }
 
     let account = match crate::git_github::GitHubClient::new()
@@ -4082,7 +4100,7 @@ fn tool_set_git_credential(args: &Value, user: &UserContext) -> Value {
         .and_then(|client| client.verify_token())
     {
         Ok(account) => account,
-        Err(e) => return json!({ "error": e.to_string() }),
+        Err(e) => return refuse(Refusal::Failed, e.to_string()),
     };
 
     match crate::database::run_blocking(crate::git_credentials::store(
@@ -4097,13 +4115,13 @@ fn tool_set_git_credential(args: &Value, user: &UserContext) -> Value {
             "account": account,
             "timestamp": iso_timestamp(),
         }),
-        Err(e) => json!({ "error": e.to_string() }),
+        Err(e) => refuse(Refusal::Failed, e.to_string()),
     }
 }
 
 fn tool_list_git_credentials(_args: &Value, user: &UserContext) -> Value {
     if !user.has_capability(&Capability::WriteScripts) {
-        return json!({ "error": "Access denied" });
+        return refuse(Refusal::Forbidden, "Access denied");
     }
     let Some(user_id) = user.user_id.clone() else {
         return json!({ "credentials": [] });
@@ -4113,16 +4131,19 @@ fn tool_list_git_credentials(_args: &Value, user: &UserContext) -> Value {
             "credentials": credentials.iter().map(credential_json).collect::<Vec<Value>>(),
             "timestamp": iso_timestamp(),
         }),
-        Err(e) => json!({ "error": e.to_string() }),
+        Err(e) => refuse(Refusal::Failed, e.to_string()),
     }
 }
 
 fn tool_delete_git_credential(args: &Value, user: &UserContext) -> Value {
     if !user.has_capability(&Capability::WriteScripts) {
-        return json!({ "error": "Access denied" });
+        return refuse(Refusal::Forbidden, "Access denied");
     }
     let Some(user_id) = user.user_id.clone() else {
-        return json!({ "error": "A git credential belongs to an account, and this request has none" });
+        return refuse(
+            Refusal::BadRequest,
+            "A git credential belongs to an account, and this request has none",
+        );
     };
     let host = arg_str(args, "host").unwrap_or(crate::git_github::HOST);
     match crate::database::run_blocking(crate::git_credentials::forget(&user_id, host)) {
@@ -4132,7 +4153,7 @@ fn tool_delete_git_credential(args: &Value, user: &UserContext) -> Value {
             "removed": removed,
             "timestamp": iso_timestamp(),
         }),
-        Err(e) => json!({ "error": e.to_string() }),
+        Err(e) => refuse(Refusal::Failed, e.to_string()),
     }
 }
 
@@ -4196,7 +4217,7 @@ fn tool_push_to_git(args: &Value, user: &UserContext) -> Value {
     let user = user.clone();
     match crate::database::run_blocking(crate::git_sync::push(&user, request)) {
         Ok(report) => push_report_json(&report),
-        Err(e) => json!({ "error": e.to_string() }),
+        Err(e) => refuse_sync(&e),
     }
 }
 
@@ -4228,7 +4249,7 @@ fn tool_get_git_status(args: &Value, user: &UserContext) -> Value {
         return missing_arg("script");
     };
     if !can_read_history(user, script) {
-        return json!({ "error": "Access denied" });
+        return refuse(Refusal::Forbidden, "Access denied");
     }
 
     let user = user.clone();
@@ -4237,7 +4258,7 @@ fn tool_get_git_status(args: &Value, user: &UserContext) -> Value {
         async move { crate::git_sync::status(&user, &script).await },
     ) {
         Ok(status) => status_json(&status),
-        Err(e) => json!({ "error": e.to_string() }),
+        Err(e) => refuse_sync(&e),
     }
 }
 
@@ -4262,7 +4283,7 @@ fn tool_list_git_bindings(_args: &Value, user: &UserContext) -> Value {
                 .collect::<Vec<Value>>(),
             "timestamp": iso_timestamp(),
         }),
-        Err(e) => json!({ "error": e.to_string() }),
+        Err(e) => refuse(Refusal::Failed, e.to_string()),
     }
 }
 
@@ -4271,7 +4292,7 @@ fn tool_clear_git_remote(args: &Value, user: &UserContext) -> Value {
         return missing_arg("script");
     };
     if !can_write_script(user, script) {
-        return json!({ "error": "Access denied" });
+        return refuse(Refusal::Forbidden, "Access denied");
     }
     match crate::database::run_blocking(crate::git_sync::unbind(script)) {
         Ok(removed) => json!({
@@ -4280,7 +4301,7 @@ fn tool_clear_git_remote(args: &Value, user: &UserContext) -> Value {
             "removed": removed,
             "timestamp": iso_timestamp(),
         }),
-        Err(e) => json!({ "error": e.to_string() }),
+        Err(e) => refuse(Refusal::Failed, e.to_string()),
     }
 }
 
@@ -4299,7 +4320,7 @@ fn tool_pull_from_git(args: &Value, user: &UserContext) -> Value {
     let user = user.clone();
     match crate::database::run_blocking(crate::git_sync::pull(&user, request)) {
         Ok(report) => pull_report_json(&report),
-        Err(e) => json!({ "error": e.to_string() }),
+        Err(e) => refuse_sync(&e),
     }
 }
 
@@ -5140,13 +5161,13 @@ pub async fn openapi_route(auth_user: Option<Extension<AuthUser>>) -> Response {
     if user.require_capability(&Capability::ReadScripts).is_err() {
         return json_response(
             StatusCode::FORBIDDEN,
-            json!({ "error": "Insufficient permissions" }),
+            refuse(Refusal::Forbidden, "Insufficient permissions"),
         );
     }
 
     let spec = tokio::task::spawn_blocking(generate_merged_openapi_spec)
         .await
-        .unwrap_or_else(|e| json!({ "error": format!("join error: {}", e) }).to_string());
+        .unwrap_or_else(|e| refuse(Refusal::BadRequest, format!("join error: {}", e)).to_string());
 
     (StatusCode::OK, [("content-type", "application/json")], spec).into_response()
 }
@@ -5185,8 +5206,125 @@ fn parse_tool_edits(edits: &[Value]) -> Result<Vec<StringEdit>, String> {
     prepare_edits(bodies)
 }
 
+/// Why an operation did not do what it was asked.
+///
+/// The operation table answers every caller — an MCP client, a script calling
+/// `engine.call`, an HTTP request — with the same JSON, so a refusal is a value
+/// like any other result. What HTTP needs on top is a status line, and it used
+/// to be recovered by reading the message: a text that happened to contain
+/// `not found` became a 404. A refusal now says what kind it is where it is
+/// made, in a `status` field the HTTP layer reads, and the message is only
+/// ever something for a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The arguments are missing or malformed, or ask for something that
+    /// cannot be done as stated.
+    BadRequest,
+    /// The caller may not do this.
+    Forbidden,
+    /// What the arguments name does not exist.
+    NotFound,
+    /// What is stored disagrees: it already exists, or it has moved on since
+    /// the caller read it.
+    Conflict,
+    /// The operation ran out of time.
+    TimedOut,
+    /// Something went wrong that was not the caller's doing.
+    Failed,
+}
+
+impl Refusal {
+    /// The kind a refusal's *text* implies, for the errors the layers below
+    /// still report as strings (`authorize_script_write`, the revision
+    /// resolvers). It is the one place the engine reads a message to decide a
+    /// status, kept so that the typed refusals around it can say what they are
+    /// and this can shrink as those layers do.
+    pub fn from_message(message: &str) -> Self {
+        let lower = message.to_ascii_lowercase();
+        let has = |needle: &str| lower.contains(needle);
+        if has("access denied")
+            || has("permission denied")
+            || has("this takes an administrator")
+            || has("administrator privileges")
+            || has("insufficient permissions")
+        {
+            Refusal::Forbidden
+        } else if has("already exists")
+            || has("cannot remove the last")
+            || has("has changed since")
+            || has("are already held")
+        {
+            Refusal::Conflict
+        } else if has("old_string")
+            || has("edits[")
+            || has("would leave")
+            || has("missing required")
+            || has("is required")
+            || has("must be")
+            || has("invalid")
+            || has("is not")
+            || has("not a ")
+            || has("escapes")
+            || has("does not match")
+        {
+            Refusal::BadRequest
+        } else if has("not found") || has("no such") || has("no revision") {
+            Refusal::NotFound
+        } else if has("timed out") {
+            Refusal::TimedOut
+        } else if has("failed to") {
+            Refusal::Failed
+        } else {
+            Refusal::BadRequest
+        }
+    }
+
+    pub fn status(self) -> u16 {
+        match self {
+            Refusal::BadRequest => 400,
+            Refusal::Forbidden => 403,
+            Refusal::NotFound => 404,
+            Refusal::Conflict => 409,
+            Refusal::TimedOut => 504,
+            Refusal::Failed => 500,
+        }
+    }
+}
+
+/// A refusal as an operation's result: `{ "error": message, "status": code }`.
+pub fn refuse(kind: Refusal, message: impl Into<String>) -> Value {
+    json!({ "error": message.into(), "status": kind.status() })
+}
+
+/// A refusal from an [`AppError`], whose own status says what kind it is.
+pub fn refuse_app(error: &crate::error::AppError, message: impl Into<String>) -> Value {
+    json!({ "error": message.into(), "status": error.status_code() })
+}
+
+/// A refusal whose kind is read from its text; see [`Refusal::from_message`].
+fn refuse_text(message: impl Into<String>) -> Value {
+    let message = message.into();
+    refuse(Refusal::from_message(&message), message)
+}
+
+/// A refusal from a git operation, by what kind of failure it was.
+fn refuse_sync(error: &crate::git_sync::SyncError) -> Value {
+    use crate::git_sync::SyncError;
+    let kind = match error {
+        SyncError::AccessDenied(_) => Refusal::Forbidden,
+        SyncError::Diverged(_) | SyncError::WouldOverwrite(_) => Refusal::Conflict,
+        SyncError::Layout(_) | SyncError::TooLarge(_) => Refusal::BadRequest,
+        SyncError::RateLimited(_) => Refusal::Forbidden,
+        SyncError::Archive(_) | SyncError::Remote(_) | SyncError::Storage(_) => Refusal::Failed,
+    };
+    refuse(kind, error.to_string())
+}
+
 fn missing_arg(name: &str) -> Value {
-    json!({ "error": format!("Missing required parameter: {}", name) })
+    refuse(
+        Refusal::BadRequest,
+        format!("Missing required parameter: {}", name),
+    )
 }
 
 fn native_tools() -> &'static [NativeToolEntry] {
@@ -6170,15 +6308,16 @@ fn tool_eval_script(args: &Value, user: &UserContext) -> Value {
     match authorize_eval(user, uri) {
         Ok(()) => {}
         Err(CheckRefusal::NotFound) => {
-            return json!({ "error": format!("Script not found: {}", uri) });
+            return refuse(Refusal::NotFound, format!("Script not found: {}", uri));
         }
         Err(CheckRefusal::AccessDenied) => {
-            return json!({
-                "error": format!(
+            return refuse(
+                Refusal::Forbidden,
+                format!(
                     "Permission denied. You must be an administrator or owner to evaluate against script '{}'",
                     uri
-                )
-            });
+                ),
+            );
         }
     }
 
@@ -6216,12 +6355,13 @@ fn tool_check_script(args: &Value, user: &UserContext) -> Value {
         Some(value) => match serde_json::from_value(value.clone()) {
             Ok(files) => files,
             Err(e) => {
-                return json!({
-                    "error": format!(
+                return refuse(
+                    Refusal::BadRequest,
+                    format!(
                         "Invalid 'files': expected an object of path -> {{content, mimetype?}} or null: {}",
                         e
-                    )
-                });
+                    ),
+                );
             }
         },
     };
@@ -6235,17 +6375,19 @@ fn tool_check_script(args: &Value, user: &UserContext) -> Value {
         Ok(()) => {}
         Err(CheckRefusal::NotFound) => {
             return json!({
+                "status": Refusal::NotFound.status(),
                 "error": format!("Script not found: {}", uri),
                 "message": "Pass 'content' to check a script that is not deployed yet",
             });
         }
         Err(CheckRefusal::AccessDenied) => {
-            return json!({
-                "error": format!(
+            return refuse(
+                Refusal::Forbidden,
+                format!(
                     "Permission denied. You must be an administrator or owner to check script '{}'",
                     uri
-                )
-            });
+                ),
+            );
         }
     }
 
@@ -6256,7 +6398,7 @@ fn tool_check_script(args: &Value, user: &UserContext) -> Value {
 
     let base = match crate::database::run_blocking(resolve_view(uri, arg_str(args, "revision"))) {
         Ok(view) => view,
-        Err(message) => return json!({ "error": message }),
+        Err(message) => return refuse_text(message),
     };
 
     let (view, candidate_files) = if files.is_empty() {
@@ -6264,7 +6406,7 @@ fn tool_check_script(args: &Value, user: &UserContext) -> Value {
     } else {
         match candidate_overlay(files, base) {
             Ok(built) => built,
-            Err(message) => return json!({ "error": message }),
+            Err(message) => return refuse_text(message),
         }
     };
 
@@ -6310,7 +6452,10 @@ fn tool_list_revisions(args: &Value, user: &UserContext) -> Value {
         return missing_arg("script");
     };
     if !can_read_history(user, script) {
-        return json!({ "error": "Failed to read revisions: Access denied" });
+        return refuse(
+            Refusal::Forbidden,
+            "Failed to read revisions: Access denied",
+        );
     }
     let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(50);
 
@@ -6332,7 +6477,10 @@ fn tool_list_revisions(args: &Value, user: &UserContext) -> Value {
                     .collect::<Vec<Value>>(),
                 "timestamp": iso_timestamp(),
             }),
-            Err(e) => json!({ "error": format!("Failed to read file history: {}", e) }),
+            Err(e) => refuse(
+                Refusal::Failed,
+                format!("Failed to read file history: {}", e),
+            ),
         };
     }
 
@@ -6347,7 +6495,7 @@ fn tool_list_revisions(args: &Value, user: &UserContext) -> Value {
                 .flatten(),
             "timestamp": iso_timestamp(),
         }),
-        Err(e) => json!({ "error": format!("Failed to read revisions: {}", e) }),
+        Err(e) => refuse(Refusal::Failed, format!("Failed to read revisions: {}", e)),
     }
 }
 
@@ -6356,7 +6504,10 @@ fn tool_diff_revisions(args: &Value, user: &UserContext) -> Value {
         return missing_arg("script");
     };
     if !can_read_history(user, script) {
-        return json!({ "error": "Failed to diff revisions: Access denied" });
+        return refuse(
+            Refusal::Forbidden,
+            "Failed to diff revisions: Access denied",
+        );
     }
 
     let to = match crate::database::run_blocking(resolve_revision(
@@ -6364,13 +6515,13 @@ fn tool_diff_revisions(args: &Value, user: &UserContext) -> Value {
         arg_str(args, "to").unwrap_or("head"),
     )) {
         Ok(revision) => revision,
-        Err(message) => return json!({ "error": message }),
+        Err(message) => return refuse_text(message),
     };
 
     let from = match arg_str(args, "from") {
         Some(spec) => match crate::database::run_blocking(resolve_revision(script, spec)) {
             Ok(revision) => revision,
-            Err(message) => return json!({ "error": message }),
+            Err(message) => return refuse_text(message),
         },
         None => match crate::database::run_blocking(revisions::get(script, to)) {
             Ok(Some(revision)) => match revision.parent {
@@ -6385,8 +6536,8 @@ fn tool_diff_revisions(args: &Value, user: &UserContext) -> Value {
                     });
                 }
             },
-            Ok(None) => return json!({ "error": format!("No revision {}", to) }),
-            Err(e) => return json!({ "error": format!("Failed to read revision: {}", e) }),
+            Ok(None) => return refuse(Refusal::NotFound, format!("No revision {}", to)),
+            Err(e) => return refuse(Refusal::Failed, format!("Failed to read revision: {}", e)),
         },
     };
 
@@ -6406,16 +6557,17 @@ fn tool_diff_revisions(args: &Value, user: &UserContext) -> Value {
             "truncated": diff.truncated,
             "timestamp": iso_timestamp(),
         }),
-        Ok(None) => json!({ "error": format!("No revision {} or {}", from, to) }),
-        Err(e) => json!({ "error": format!("Failed to diff revisions: {}", e) }),
+        Ok(None) => refuse(Refusal::NotFound, format!("No revision {} or {}", from, to)),
+        Err(e) => refuse(Refusal::Failed, format!("Failed to diff revisions: {}", e)),
     }
 }
 
 fn tool_set_script_limits(args: &Value, user: &UserContext) -> Value {
     if !is_user_admin(user) {
-        return json!({
-            "error": "Failed to set limits: this takes an administrator. A script's limits are a claim on the engine's execution slots, threads and memory, which are shared with every other script — owning the script is not the same question."
-        });
+        return refuse(
+            Refusal::Forbidden,
+            "Failed to set limits: this takes an administrator. A script's limits are a claim on the engine's execution slots, threads and memory, which are shared with every other script — owning the script is not the same question.",
+        );
     }
 
     let Some(script) = arg_str(args, "script") else {
@@ -6437,7 +6589,7 @@ fn tool_set_script_limits(args: &Value, user: &UserContext) -> Value {
                 "cleared": cleared,
                 "timestamp": iso_timestamp(),
             }),
-            Err(e) => json!({ "error": format!("Failed to clear limits: {}", e) }),
+            Err(e) => refuse(Refusal::Failed, format!("Failed to clear limits: {}", e)),
         };
     }
 
@@ -6453,13 +6605,16 @@ fn tool_set_script_limits(args: &Value, user: &UserContext) -> Value {
             "limits": script_limits_to_json(&limits),
             "timestamp": iso_timestamp(),
         }),
-        Err(e) => json!({ "error": format!("Failed to set limits: {}", e) }),
+        Err(e) => refuse(Refusal::Failed, format!("Failed to set limits: {}", e)),
     }
 }
 
 fn tool_get_script_limits(args: &Value, user: &UserContext) -> Value {
     if !is_user_admin(user) {
-        return json!({ "error": "Failed to read limits: this takes an administrator" });
+        return refuse(
+            Refusal::Forbidden,
+            "Failed to read limits: this takes an administrator",
+        );
     }
 
     match arg_str(args, "script") {
@@ -6475,7 +6630,7 @@ fn tool_get_script_limits(args: &Value, user: &UserContext) -> Value {
                 },
                 "timestamp": iso_timestamp(),
             }),
-            Err(e) => json!({ "error": format!("Failed to read limits: {}", e) }),
+            Err(e) => refuse(Refusal::Failed, format!("Failed to read limits: {}", e)),
         },
         None => match crate::database::run_blocking(crate::script_limits::list()) {
             Ok(all) => json!({
@@ -6483,7 +6638,7 @@ fn tool_get_script_limits(args: &Value, user: &UserContext) -> Value {
                 "limits": all.iter().map(script_limits_to_json).collect::<Vec<_>>(),
                 "timestamp": iso_timestamp(),
             }),
-            Err(e) => json!({ "error": format!("Failed to list limits: {}", e) }),
+            Err(e) => refuse(Refusal::Failed, format!("Failed to list limits: {}", e)),
         },
     }
 }
@@ -6493,7 +6648,7 @@ fn tool_list_tasks(args: &Value, user: &UserContext) -> Value {
         return missing_arg("script");
     };
     if !can_read_history(user, script) {
-        return json!({ "error": "Failed to read tasks: Access denied" });
+        return refuse(Refusal::Forbidden, "Failed to read tasks: Access denied");
     }
 
     let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(50);
@@ -6504,7 +6659,7 @@ fn tool_list_tasks(args: &Value, user: &UserContext) -> Value {
             "tasks": tasks.iter().map(crate::tasks::to_json).collect::<Vec<_>>(),
             "timestamp": iso_timestamp(),
         }),
-        Err(e) => json!({ "error": format!("Failed to read tasks: {}", e) }),
+        Err(e) => refuse(Refusal::Failed, format!("Failed to read tasks: {}", e)),
     }
 }
 
@@ -6513,7 +6668,7 @@ fn tool_cancel_task(args: &Value, user: &UserContext) -> Value {
         return missing_arg("script");
     };
     if !can_write_history(user, script) {
-        return json!({ "error": "Failed to cancel: Access denied" });
+        return refuse(Refusal::Forbidden, "Failed to cancel: Access denied");
     }
 
     if args
@@ -6528,7 +6683,7 @@ fn tool_cancel_task(args: &Value, user: &UserContext) -> Value {
                 "discarded": discarded,
                 "timestamp": iso_timestamp(),
             }),
-            Err(e) => json!({ "error": format!("Failed to discard tasks: {}", e) }),
+            Err(e) => refuse(Refusal::Failed, format!("Failed to discard tasks: {}", e)),
         };
     }
 
@@ -6536,15 +6691,23 @@ fn tool_cancel_task(args: &Value, user: &UserContext) -> Value {
         return missing_arg("task");
     };
     let Ok(task_id) = uuid::Uuid::parse_str(task.trim()) else {
-        return json!({ "error": "Failed to cancel: that is not a task id" });
+        return refuse(
+            Refusal::BadRequest,
+            "Failed to cancel: that is not a task id",
+        );
     };
 
     // Scoped to the script the caller was authorized against, so an id alone
     // is not authority over another script's queue.
     match crate::database::run_blocking(crate::tasks::get(task_id)) {
         Ok(Some(found)) if found.script_uri == script => {}
-        Ok(_) => return json!({ "error": "Failed to cancel: no such task for this script" }),
-        Err(e) => return json!({ "error": format!("Failed to read the task: {}", e) }),
+        Ok(_) => {
+            return refuse(
+                Refusal::NotFound,
+                "Failed to cancel: no such task for this script",
+            );
+        }
+        Err(e) => return refuse(Refusal::Failed, format!("Failed to read the task: {}", e)),
     }
 
     match crate::database::run_blocking(crate::tasks::cancel(task_id)) {
@@ -6555,7 +6718,7 @@ fn tool_cancel_task(args: &Value, user: &UserContext) -> Value {
             "cancelled": cancelled,
             "timestamp": iso_timestamp(),
         }),
-        Err(e) => json!({ "error": format!("Failed to cancel the task: {}", e) }),
+        Err(e) => refuse(Refusal::Failed, format!("Failed to cancel the task: {}", e)),
     }
 }
 
@@ -6564,13 +6727,18 @@ fn tool_deploy_script(args: &Value, user: &UserContext) -> Value {
         return missing_arg("script");
     };
     if !can_write_history(user, script) {
-        return json!({ "error": "Failed to deploy: Access denied" });
+        return refuse(Refusal::Forbidden, "Failed to deploy: Access denied");
     }
 
     if args.get("follow").and_then(Value::as_bool).unwrap_or(false) {
         let was_pinned = match crate::database::run_blocking(crate::deployments::unpin(script)) {
             Ok(was_pinned) => was_pinned,
-            Err(e) => return json!({ "error": format!("Failed to remove the deployment: {}", e) }),
+            Err(e) => {
+                return refuse(
+                    Refusal::Failed,
+                    format!("Failed to remove the deployment: {}", e),
+                );
+            }
         };
         let init = if was_pinned {
             crate::database::run_blocking(activate_deployment(script))
@@ -6592,7 +6760,7 @@ fn tool_deploy_script(args: &Value, user: &UserContext) -> Value {
     };
     let revision = match crate::database::run_blocking(resolve_revision(script, spec)) {
         Ok(revision) => revision,
-        Err(message) => return json!({ "error": message }),
+        Err(message) => return refuse_text(message),
     };
 
     let deployment = match crate::database::run_blocking(crate::deployments::deploy(
@@ -6601,9 +6769,11 @@ fn tool_deploy_script(args: &Value, user: &UserContext) -> Value {
         user.user_id.as_deref(),
     )) {
         Ok(deployment) => deployment,
-        Err(crate::deployments::DeployRefusal::NoSuchRevision(message))
-        | Err(crate::deployments::DeployRefusal::Storage(message)) => {
-            return json!({ "error": format!("Failed to deploy: {}", message) });
+        Err(crate::deployments::DeployRefusal::NoSuchRevision(message)) => {
+            return refuse(Refusal::NotFound, format!("Failed to deploy: {}", message));
+        }
+        Err(crate::deployments::DeployRefusal::Storage(message)) => {
+            return refuse(Refusal::Failed, format!("Failed to deploy: {}", message));
         }
     };
 
@@ -6623,7 +6793,10 @@ fn tool_get_deployment(args: &Value, user: &UserContext) -> Value {
         return missing_arg("script");
     };
     if !can_read_history(user, script) {
-        return json!({ "error": "Failed to read the deployment: Access denied" });
+        return refuse(
+            Refusal::Forbidden,
+            "Failed to read the deployment: Access denied",
+        );
     }
 
     let deployment = crate::database::run_blocking(crate::deployments::get(script))
@@ -6656,12 +6829,15 @@ fn tool_label_revision(args: &Value, user: &UserContext) -> Value {
         return missing_arg("revision");
     };
     if !can_write_history(user, script) {
-        return json!({ "error": "Failed to label revision: Access denied" });
+        return refuse(
+            Refusal::Forbidden,
+            "Failed to label revision: Access denied",
+        );
     }
 
     let revision = match crate::database::run_blocking(resolve_revision(script, spec)) {
         Ok(revision) => revision,
-        Err(message) => return json!({ "error": message }),
+        Err(message) => return refuse_text(message),
     };
     let label = arg_str(args, "label").filter(|label| !label.trim().is_empty());
 
@@ -6673,8 +6849,8 @@ fn tool_label_revision(args: &Value, user: &UserContext) -> Value {
             "label": label,
             "timestamp": iso_timestamp(),
         }),
-        Ok(false) => json!({ "error": format!("No revision {}", revision) }),
-        Err(e) => json!({ "error": format!("Failed to label revision: {}", e) }),
+        Ok(false) => refuse(Refusal::NotFound, format!("No revision {}", revision)),
+        Err(e) => refuse(Refusal::Failed, format!("Failed to label revision: {}", e)),
     }
 }
 
@@ -6689,7 +6865,7 @@ fn tool_revert_script(args: &Value, user: &UserContext) -> Value {
     let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
     let reinit = match ReinitMode::parse(arg_str(args, "reinit")) {
         Ok(reinit) => reinit,
-        Err(message) => return json!({ "error": message }),
+        Err(message) => return refuse_text(message),
     };
 
     let outcome = match crate::database::run_blocking(revert_authorized(
@@ -6697,12 +6873,19 @@ fn tool_revert_script(args: &Value, user: &UserContext) -> Value {
     )) {
         Ok(outcome) => outcome,
         Err(RevertRefusal::AccessDenied) => {
-            return json!({ "error": "Failed to revert: Access denied" });
+            return refuse(Refusal::Forbidden, "Failed to revert: Access denied");
         }
-        Err(RevertRefusal::NotFound(message))
-        | Err(RevertRefusal::WillNotBuild(message))
-        | Err(RevertRefusal::Storage(message)) => {
-            return json!({ "error": format!("Failed to revert: {}", message) });
+        Err(RevertRefusal::NotFound(message)) => {
+            return refuse(Refusal::NotFound, format!("Failed to revert: {}", message));
+        }
+        Err(RevertRefusal::WillNotBuild(message)) => {
+            return refuse(
+                Refusal::BadRequest,
+                format!("Failed to revert: {}", message),
+            );
+        }
+        Err(RevertRefusal::Storage(message)) => {
+            return refuse(Refusal::Failed, format!("Failed to revert: {}", message));
         }
     };
 
@@ -6734,15 +6917,16 @@ fn tool_run_tests(args: &Value, user: &UserContext) -> Value {
     match authorize_test_run(user, uri) {
         Ok(()) => {}
         Err(TestRunRefusal::NotFound) => {
-            return json!({ "error": format!("Script not found: {}", uri) });
+            return refuse(Refusal::NotFound, format!("Script not found: {}", uri));
         }
         Err(TestRunRefusal::AccessDenied) => {
-            return json!({
-                "error": format!(
+            return refuse(
+                Refusal::Forbidden,
+                format!(
                     "Permission denied. You must be an administrator or owner to run tests for script '{}'",
                     uri
-                )
-            });
+                ),
+            );
         }
     }
 
@@ -6756,7 +6940,7 @@ fn tool_run_tests(args: &Value, user: &UserContext) -> Value {
 
     let view = match crate::database::run_blocking(resolve_view(uri, arg_str(args, "revision"))) {
         Ok(view) => view,
-        Err(message) => return json!({ "error": message }),
+        Err(message) => return refuse_text(message),
     };
 
     let (timeout_ms, run_timeout_ms) = crate::script_test::configured_test_timeouts();
@@ -6796,7 +6980,12 @@ fn tool_list_scripts(args: &Value, user: &UserContext) -> Value {
     let regex = match pattern {
         Some(p) => match regex::RegexBuilder::new(p).case_insensitive(true).build() {
             Ok(r) => Some(r),
-            Err(e) => return json!({ "error": format!("Failed to list scripts: {}", e) }),
+            Err(e) => {
+                return refuse(
+                    Refusal::BadRequest,
+                    format!("Failed to list scripts: {}", e),
+                );
+            }
         },
         None => None,
     };
@@ -6845,7 +7034,7 @@ fn tool_rename_script(args: &Value, user: &UserContext) -> Value {
             "renamedFrom": uri,
             "timestamp": iso_timestamp(),
         }),
-        Err(message) => json!({ "error": message }),
+        Err(message) => refuse_text(message),
     }
 }
 
@@ -6860,7 +7049,7 @@ fn tool_delete_script(args: &Value, user: &UserContext) -> Value {
             "timestamp": iso_timestamp(),
         })
     } else {
-        json!({ "error": format!("Script not found: {}", uri) })
+        refuse(Refusal::NotFound, format!("Script not found: {}", uri))
     }
 }
 
@@ -6870,7 +7059,7 @@ fn tool_search_files(args: &Value, user: &UserContext) -> Value {
     };
     let scope = match SearchScope::parse(arg_str(args, "scope")) {
         Ok(scope) => scope,
-        Err(message) => return json!({ "error": message }),
+        Err(message) => return refuse_text(message),
     };
     let options = SearchOptions {
         case_insensitive: args
@@ -6883,7 +7072,10 @@ fn tool_search_files(args: &Value, user: &UserContext) -> Value {
 
     match search_files_authorized(user, query, &options) {
         Ok(body) => body,
-        Err(message) => json!({ "error": format!("Failed to search files: {}", message) }),
+        Err(message) => refuse(
+            Refusal::from_message(&message),
+            format!("Failed to search files: {}", message),
+        ),
     }
 }
 
@@ -6892,13 +7084,21 @@ fn tool_read_logs(args: &Value, user: &UserContext) -> Value {
     let since = match arg_str(args, "since") {
         Some(raw) => match parse_since(raw) {
             Some(since) => Some(since),
-            None => return json!({ "error": format!("Invalid 'since' value: {}", raw) }),
+            None => {
+                return refuse(
+                    Refusal::BadRequest,
+                    format!("Invalid 'since' value: {}", raw),
+                );
+            }
         },
         None => None,
     };
     let limit = args.get("limit").and_then(Value::as_i64);
     if limit.is_some_and(|limit| limit <= 0) {
-        return json!({ "error": "Parameter 'limit' must be greater than zero" });
+        return refuse(
+            Refusal::BadRequest,
+            "Parameter 'limit' must be greater than zero",
+        );
     }
 
     let query = repository::LogQuery {
@@ -6930,17 +7130,20 @@ fn tool_read_logs(args: &Value, user: &UserContext) -> Value {
                 "timestamp": iso_timestamp(),
             })
         }
-        Err(e) => json!({ "error": format!("Failed to fetch logs: {}", e) }),
+        Err(e) => refuse(Refusal::Failed, format!("Failed to fetch logs: {}", e)),
     }
 }
 
 fn tool_clear_logs(args: &Value, user: &UserContext) -> Value {
     let Some(uri) = arg_str(args, "uri") else {
-        return json!({ "error": "uri is required: name the script whose logs to clear" });
+        return refuse(
+            Refusal::BadRequest,
+            "uri is required: name the script whose logs to clear",
+        );
     };
     match delete_logs_authorized(user, uri) {
         Ok(body) => body,
-        Err(e) => json!({ "error": format!("Failed to delete logs: {}", e) }),
+        Err(e) => refuse(Refusal::Failed, format!("Failed to delete logs: {}", e)),
     }
 }
 
@@ -6957,7 +7160,10 @@ fn tool_exposure_report(_args: &Value, user: &UserContext) -> Value {
             "collisions": report.collisions,
             "timestamp": iso_timestamp(),
         }),
-        Err(e) => json!({ "error": format!("Failed to build the exposure report: {}", e) }),
+        Err(e) => refuse(
+            Refusal::Failed,
+            format!("Failed to build the exposure report: {}", e),
+        ),
     }
 }
 
@@ -6979,7 +7185,7 @@ fn tool_list_routes(args: &Value, user: &UserContext) -> Value {
             "timestamp": iso_timestamp(),
             })
         }
-        Err(e) => json!({ "error": format!("Failed to list routes: {}", e) }),
+        Err(e) => refuse(Refusal::Failed, format!("Failed to list routes: {}", e)),
     }
 }
 
@@ -7029,7 +7235,7 @@ fn tool_read_file(args: &Value, user: &UserContext) -> Value {
         arg_str(args, "grep").map(str::to_string),
     ) {
         Ok(options) => options,
-        Err(message) => return json!({ "error": message }),
+        Err(message) => return refuse_text(message),
     };
     match read_file_authorized(user, script, path, &options) {
         Ok(read) => {
@@ -7048,11 +7254,11 @@ fn tool_read_file(args: &Value, user: &UserContext) -> Value {
             }
             body
         }
-        Err(FileReadError::AccessDenied) => json!({ "error": "Error: Access denied" }),
+        Err(FileReadError::AccessDenied) => refuse(Refusal::Forbidden, "Error: Access denied"),
         Err(FileReadError::NotFound) => {
-            json!({ "error": format!("File not found: {}", path) })
+            refuse(Refusal::NotFound, format!("File not found: {}", path))
         }
-        Err(FileReadError::Validation(message)) => json!({ "error": message }),
+        Err(FileReadError::Validation(message)) => refuse(Refusal::BadRequest, message),
     }
 }
 
@@ -7083,7 +7289,7 @@ fn write_one_file(args: &Value, user: &UserContext, if_absent: bool) -> Value {
         arg_str(args, "content").map(str::to_string),
     ) {
         Ok(content) => content,
-        Err(message) => return json!({ "error": message }),
+        Err(message) => return refuse_text(message),
     };
 
     match write_file_bytes_authorized(user, script, path, &mimetype, content, if_absent) {
@@ -7096,13 +7302,18 @@ fn write_one_file(args: &Value, user: &UserContext, if_absent: bool) -> Value {
             "timestamp": iso_timestamp(),
         }),
         Err(AssetWriteError::Exists(path)) => {
-            json!({ "error": format!("File already exists: {}", path) })
+            refuse(Refusal::Conflict, format!("File already exists: {}", path))
         }
-        Err(AssetWriteError::AccessDenied(message)) => {
-            json!({ "error": format!("Failed to {} file: {}", verb, message) })
-        }
-        Err(AssetWriteError::Validation(msg)) | Err(AssetWriteError::Storage(msg)) => {
-            json!({ "error": format!("Failed to {} file: {}", verb, msg) })
+        Err(AssetWriteError::AccessDenied(message)) => refuse(
+            Refusal::Forbidden,
+            format!("Failed to {} file: {}", verb, message),
+        ),
+        Err(AssetWriteError::Validation(msg)) => refuse(
+            Refusal::BadRequest,
+            format!("Failed to {} file: {}", verb, msg),
+        ),
+        Err(AssetWriteError::Storage(msg)) => {
+            refuse(Refusal::Failed, format!("Failed to {} file: {}", verb, msg))
         }
     }
 }
@@ -7120,13 +7331,21 @@ fn tool_write_files(args: &Value, user: &UserContext) -> Value {
             let mut collected = Vec::with_capacity(paths.len());
             for (index, path) in paths.iter().enumerate() {
                 let Some(path) = path.as_str() else {
-                    return json!({ "error": format!("remove[{}]: expected an asset path", index) });
+                    return refuse(
+                        Refusal::BadRequest,
+                        format!("remove[{}]: expected an asset path", index),
+                    );
                 };
                 collected.push(path.to_string());
             }
             collected
         }
-        Some(_) => return json!({ "error": "'remove' must be an array of asset paths" }),
+        Some(_) => {
+            return refuse(
+                Refusal::BadRequest,
+                "'remove' must be an array of asset paths",
+            );
+        }
     };
     let empty: Vec<Value> = Vec::new();
     let files = match args.get("files") {
@@ -7136,15 +7355,16 @@ fn tool_write_files(args: &Value, user: &UserContext) -> Value {
     };
     let reinit = match ReinitMode::parse(arg_str(args, "reinit")) {
         Ok(reinit) => reinit,
-        Err(message) => return json!({ "error": message }),
+        Err(message) => return refuse_text(message),
     };
 
     let mut writes = Vec::with_capacity(files.len());
     for (index, file) in files.iter().enumerate() {
         let Some(name) = arg_str(file, "name").or_else(|| arg_str(file, "asset")) else {
-            return json!({
-                "error": format!("files[{}]: missing required field: name", index)
-            });
+            return refuse(
+                Refusal::BadRequest,
+                format!("files[{}]: missing required field: name", index),
+            );
         };
         let content = match asset_content_from_request(
             &format!("files[{}] ('{}')", index, name),
@@ -7157,7 +7377,7 @@ fn tool_write_files(args: &Value, user: &UserContext) -> Value {
                 .map(str::to_string),
         ) {
             Ok(content) => content,
-            Err(message) => return json!({ "error": message }),
+            Err(message) => return refuse_text(message),
         };
         writes.push(AssetWrite {
             name: name.to_string(),
@@ -7196,14 +7416,20 @@ fn tool_write_files(args: &Value, user: &UserContext) -> Value {
             }
             body
         }
-        Err(AssetWriteError::Exists(asset)) => {
-            json!({ "error": format!("Asset already exists: {}", asset) })
-        }
-        Err(AssetWriteError::AccessDenied(message)) => {
-            json!({ "error": format!("Failed to write assets: {}", message) })
-        }
-        Err(AssetWriteError::Validation(msg)) | Err(AssetWriteError::Storage(msg)) => {
-            json!({ "error": format!("Failed to write assets: {}", msg) })
+        Err(AssetWriteError::Exists(asset)) => refuse(
+            Refusal::Conflict,
+            format!("Asset already exists: {}", asset),
+        ),
+        Err(AssetWriteError::AccessDenied(message)) => refuse(
+            Refusal::Forbidden,
+            format!("Failed to write assets: {}", message),
+        ),
+        Err(AssetWriteError::Validation(msg)) => refuse(
+            Refusal::BadRequest,
+            format!("Failed to write assets: {}", msg),
+        ),
+        Err(AssetWriteError::Storage(msg)) => {
+            refuse(Refusal::Failed, format!("Failed to write assets: {}", msg))
         }
     }
 }
@@ -7224,12 +7450,12 @@ fn tool_edit_file(args: &Value, user: &UserContext) -> Value {
     };
     let reinit = match ReinitMode::parse(arg_str(args, "reinit")) {
         Ok(reinit) => reinit,
-        Err(message) => return json!({ "error": message }),
+        Err(message) => return refuse_text(message),
     };
 
     let prepared = match parse_tool_edits(edits) {
         Ok(prepared) => prepared,
-        Err(message) => return json!({ "error": message }),
+        Err(message) => return refuse_text(message),
     };
 
     match patch_file_authorized(
@@ -7263,13 +7489,13 @@ fn tool_edit_file(args: &Value, user: &UserContext) -> Value {
             }
             body
         }
-        Err(PatchError::AccessDenied(message)) => {
-            json!({ "error": format!("Failed to edit file: {}", message) })
-        }
-        Err(PatchError::NotFound) => {
-            json!({ "error": format!("File not found: {}", path) })
-        }
+        Err(PatchError::AccessDenied(message)) => refuse(
+            Refusal::Forbidden,
+            format!("Failed to edit file: {}", message),
+        ),
+        Err(PatchError::NotFound) => refuse(Refusal::NotFound, format!("File not found: {}", path)),
         Err(PatchError::Conflict { expected, actual }) => json!({
+            "status": Refusal::Conflict.status(),
             "error": format!(
                 "'{}' has changed since it was read (expected {}, stored {})",
                 path, expected, actual
@@ -7279,8 +7505,12 @@ fn tool_edit_file(args: &Value, user: &UserContext) -> Value {
             "expected_sha256": expected,
             "sha256": actual,
         }),
-        Err(PatchError::Validation(message)) | Err(PatchError::Storage(message)) => {
-            json!({ "error": format!("Failed to edit file: {}", message) })
+        Err(PatchError::Validation(message)) => refuse(
+            Refusal::BadRequest,
+            format!("Failed to edit file: {}", message),
+        ),
+        Err(PatchError::Storage(message)) => {
+            refuse(Refusal::Failed, format!("Failed to edit file: {}", message))
         }
     }
 }
@@ -7301,31 +7531,33 @@ fn tool_delete_file(args: &Value, user: &UserContext) -> Value {
             "revision": revision,
             "timestamp": iso_timestamp(),
         }),
-        Ok((false, _)) => json!({ "error": format!("File '{}' not found", path) }),
-        Err(_) => json!({ "error": "Failed to delete file: Access denied" }),
+        Ok((false, _)) => refuse(Refusal::NotFound, format!("File '{}' not found", path)),
+        Err(_) => refuse(Refusal::Forbidden, "Failed to delete file: Access denied"),
     }
 }
 
 fn owner_change_error_json(error: OwnerChangeError) -> Value {
     match error {
-        OwnerChangeError::AccessDenied => {
-            json!({ "error": "Permission denied. You must be an administrator or owner" })
-        }
-        OwnerChangeError::LastOwner => json!({
-            "error": "Cannot remove the last owner. Transfer ownership to another user first, or contact an administrator."
-        }),
-        OwnerChangeError::Storage(details) => json!({ "error": details }),
+        OwnerChangeError::AccessDenied => refuse(
+            Refusal::Forbidden,
+            "Permission denied. You must be an administrator or owner",
+        ),
+        OwnerChangeError::LastOwner => refuse(
+            Refusal::Conflict,
+            "Cannot remove the last owner. Transfer ownership to another user first, or contact an administrator.",
+        ),
+        OwnerChangeError::Storage(details) => refuse(Refusal::Failed, details),
     }
 }
 
 fn secret_error_json(error: SecretAccessError) -> Value {
     match error {
-        SecretAccessError::AccessDenied => json!({
-            "error": "Permission denied. You must be an administrator or owner of the script"
-        }),
-        SecretAccessError::Validation(details) | SecretAccessError::Storage(details) => {
-            json!({ "error": details })
-        }
+        SecretAccessError::AccessDenied => refuse(
+            Refusal::Forbidden,
+            "Permission denied. You must be an administrator or owner of the script",
+        ),
+        SecretAccessError::Validation(details) => refuse(Refusal::BadRequest, details),
+        SecretAccessError::Storage(details) => refuse(Refusal::Failed, details),
     }
 }
 
@@ -7340,7 +7572,7 @@ fn tool_list_script_owners(args: &Value, _user: &UserContext) -> Value {
             "count": owners.len(),
             "timestamp": iso_timestamp(),
         }),
-        Err(details) => json!({ "error": details }),
+        Err(details) => refuse(Refusal::Failed, details),
     }
 }
 
@@ -7376,9 +7608,10 @@ fn tool_remove_script_owner(args: &Value, user: &UserContext) -> Value {
             "owner": owner,
             "timestamp": iso_timestamp(),
         }),
-        Ok(false) => {
-            json!({ "error": format!("Owner '{}' was not found for script '{}'", owner, uri) })
-        }
+        Ok(false) => refuse(
+            Refusal::NotFound,
+            format!("Owner '{}' was not found for script '{}'", owner, uri),
+        ),
         Err(error) => owner_change_error_json(error),
     }
 }
@@ -7433,9 +7666,10 @@ fn tool_delete_secret(args: &Value, user: &UserContext) -> Value {
             "key": key,
             "timestamp": iso_timestamp(),
         }),
-        Ok(false) => {
-            json!({ "error": format!("Secret '{}' not found for script '{}'", key, script) })
-        }
+        Ok(false) => refuse(
+            Refusal::NotFound,
+            format!("Secret '{}' not found for script '{}'", key, script),
+        ),
         Err(error) => secret_error_json(error),
     }
 }
@@ -7457,16 +7691,19 @@ fn tool_clear_secrets(args: &Value, user: &UserContext) -> Value {
 
 fn user_admin_error_json(error: UserAdminError) -> Value {
     match error {
-        UserAdminError::AccessDenied => {
-            json!({ "error": "Permission denied. Administrator privileges are required" })
+        UserAdminError::AccessDenied => refuse(
+            Refusal::Forbidden,
+            "Permission denied. Administrator privileges are required",
+        ),
+        UserAdminError::UserNotFound(id) => {
+            refuse(Refusal::NotFound, format!("User not found: {}", id))
         }
-        UserAdminError::UserNotFound(id) => json!({ "error": format!("User not found: {}", id) }),
-        UserAdminError::LastAdministrator => json!({
-            "error": "Cannot remove the last administrator. Grant the Administrator role to another user first."
-        }),
-        UserAdminError::Validation(details) | UserAdminError::Storage(details) => {
-            json!({ "error": details })
-        }
+        UserAdminError::LastAdministrator => refuse(
+            Refusal::Conflict,
+            "Cannot remove the last administrator. Grant the Administrator role to another user first.",
+        ),
+        UserAdminError::Validation(details) => refuse(Refusal::BadRequest, details),
+        UserAdminError::Storage(details) => refuse(Refusal::Failed, details),
     }
 }
 
@@ -7482,15 +7719,22 @@ fn tool_list_users(_args: &Value, user: &UserContext) -> Value {
 }
 
 fn script_host_error_json(error: ScriptHostError) -> Value {
-    let message = match error {
-        ScriptHostError::AccessDenied => {
-            "Permission denied. Administrator privileges are required to change where a script is published".to_string()
+    let (kind, message) = match error {
+        ScriptHostError::AccessDenied => (
+            Refusal::Forbidden,
+            "Permission denied. Administrator privileges are required to change where a script is published".to_string(),
+        ),
+        ScriptHostError::ScriptNotFound(uri) => {
+            (Refusal::NotFound, format!("Script not found: {}", uri))
         }
-        ScriptHostError::ScriptNotFound(uri) => format!("Script not found: {}", uri),
-        ScriptHostError::Validation(details) => details,
-        ScriptHostError::Storage(details) => details,
+        // Includes the refusal to move a script onto a host that already
+        // holds one of its paths, which is a conflict with what is stored.
+        ScriptHostError::Validation(details) => (Refusal::from_message(&details), details),
+        ScriptHostError::Storage(details) => (Refusal::Failed, details),
     };
-    json!({ "error": message, "timestamp": iso_timestamp() })
+    let mut body = refuse(kind, message);
+    body["timestamp"] = json!(iso_timestamp());
+    body
 }
 
 fn script_hosts_json(uri: &str, stored: Vec<String>, effective: Vec<String>) -> Value {
