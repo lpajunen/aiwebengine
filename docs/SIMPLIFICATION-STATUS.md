@@ -448,21 +448,53 @@ paths that were already being decided by whichever `init()` ran last.
 
 ### Phase 4 — name and stable identity (§4)
 
-- **4a Stable identity first.** Physical table names hash `scripts.id`
-  rather than the URI (the migration renames every table in `script_tables`),
-  and every `script_uri` column gets a foreign key with `ON UPDATE CASCADE` —
-  adding one where there is none today (secrets, storage, tasks, limits,
-  logs, …). A rename is then one `UPDATE` and the 4,089 references to
-  `script_uri` stay as they are. In-memory caches keyed by URI are dropped on
-  rename via `notifications.rs`.
-- **4b Slugs.** `https://example.com/editor` → `editor`. `engine://native` and
-  `https://example.com/core` become reserved slugs. Decide whether a slug may
-  be `acme/shop` before this migration, not after. `git_sync`'s URI
-  composition mostly disappears (third `MAPPING_VERSION` bump).
-- **Scripts:** `aiwebengine.config.json` in `aiwebengine-dev` /
-  `aiwebengine-examples` drops `uriOrigin` for slugs, the tooling's URI
-  composition in `scripts/lib/repo-config.js` goes with it, and anything that
-  hard-codes a `https://example.com/...` URI (grep) is rewritten.
+**Progress. Done in the engine and in the four repositories' tooling**, flat
+slugs (`shop`, not `acme/shop`) as decided. The live deployment's scripts still
+have their URL-shaped names; moving them is `rename_script` per script, and is
+left to be done on purpose (below).
+
+- **4a identity.** One migration (`20261003090000`): `scripts.id` returns (it was
+  dropped when `uri` became the primary key, so the plan's "has existed since
+  2024 and nothing references it" had stopped being true); every table that
+  names a script now references `scripts(uri)` with `ON UPDATE CASCADE` — the
+  seven that already did were re-created, eleven gained the key they lacked
+  (orphan rows, which belong to a script that is gone, are deleted first); and
+  `logs` stays unconstrained because the engine files its own lines under
+  `server`. **Physical table names did not need renaming:** the name is stored in
+  `script_tables` and read back, never recomputed, so a renamed script keeps its
+  tables. What the id changes is _new_ tables, hashed from `scripts.id`, so a
+  name a renamed script left can be taken by a new script.
+- **`rename_script`** is an operation like the rest (`POST /engine/rename_script`
+  `{uri, to}`): write-and-ownership or an administrator, no `DeleteScripts`
+  because nothing is lost. The cache entry is re-keyed rather than evicted so
+  its routes keep answering while it initialises again; pins, limits and
+  revision state follow; peers get a `deleted` for the old name and an
+  `upserted` for the new one.
+- **4b slugs** (`slug.rs`). Checked where a script is created — a write that
+  creates, a pull, a rename's target — and **not** where it is stored, so every
+  existing script keeps working under the name it has. That is why there was no
+  rewrite-every-identifier migration: renaming is something an operator does to
+  a script, one at a time, with `slug::suggest` for a proposal. Reserved:
+  `core`, `server`, `engine`, `native`, `system`.
+- **`git_sync`** (third `MAPPING_VERSION`): a name is the directory,
+  `{prefix}-{directory}` with a prefix, or the repository's name for a
+  repository that is one script. The directory goes on the sync row
+  (`repo_dir`), so later pulls and pushes find the script by it and a rename is
+  followed. The migration derives `repo_dir` for existing rows from their
+  recorded base, checked against the three live bindings.
+- **Scripts.** `uriOrigin` and `scriptUriOverrides` are gone from
+  `aiwebengine.config.json` (`scriptNames` is directory → name); the shared
+  tooling, the editor (which now reads a script's language from its entrypoint
+  file, since the name no longer carries an extension) and the docs moved. The
+  `--script-uri` flags keep their spelling: the engine's argument is still
+  `uri`, and unifying `uri`/`script` is a separate change.
+
+**Left to do on the live deployment, deliberately.** Renaming is irreversible
+in the sense that anything outside the engine that holds a script's URL (a
+bookmark, an MCP client's configured name for a tool's script, a repository
+binding made under the old rules) is not updated. Suggested names for the
+seven live scripts, from `slug::suggest`: `admin`, `docs`, `editor`,
+`virtual-world`, `agent`, `feedback`, `aiwebengine-private`.
 
 ### Phase 5 — wrap-up
 

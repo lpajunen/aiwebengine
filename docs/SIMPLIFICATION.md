@@ -636,8 +636,8 @@ the argument; that one is the state.
    and OpenAPI from it.~~ _(done in the engine; see the status document for
    the typed-error follow-up.)_
 7. ~~**Refuse a route collision on one host** (§4, without mounts).~~ _(done.)_
-8. **Name and stable identity** (§4): slugs, and `scripts.id` for physical
-   table names.
+8. ~~**Name and stable identity** (§4): slugs, and `scripts.id` for physical
+   table names.~~ _(done; flat slugs.)_
 
 The status document numbers these as Phases 1–4 and says what each costs the
 script repositories.
@@ -660,6 +660,6 @@ script repositories.
 - ~~**What shape should a deny take** (§2.1)?~~ Settled:
   `{ deny: true | <4xx>, reason? }`, one parser in `resource_access.rs` for
   streams and asset routes alike; a throw still means the callback failed.
-- **A slug namespace is global per engine**, so two tenants both wanting `shop`
-  collide. `acme/shop` handles it, but decide whether the slug has structure
-  before the foreign keys move, because it is much cheaper now than after.
+- ~~**A slug namespace is global per engine**~~ Settled: flat. Two tenants both
+  wanting `shop` take it in turn; `acme/shop` is a path, and there are no
+  mounts to give a prefix a meaning.

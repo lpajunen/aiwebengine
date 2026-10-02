@@ -538,17 +538,17 @@ Secrets are stored in the database. Administrators and script owners set script-
 
 ```bash
 # Admin or script owner: set a secret available to a specific script
-curl -X POST "https://your-engine.com/engine/list_secrets?script=https://example.com/my-script" \
+curl -X POST "https://your-engine.com/engine/list_secrets?script=my-script" \
   -H "Content-Type: application/json" \
   -d '{"key": "anthropic_api_key", "value": "sk-ant-api03-..."}'
 #   → available as identifier: "anthropic_api_key"
 
-curl -X POST "https://your-engine.com/engine/list_secrets?script=https://example.com/my-script" \
+curl -X POST "https://your-engine.com/engine/list_secrets?script=my-script" \
   -H "Content-Type: application/json" \
   -d '{"key": "openai_api_key", "value": "sk-..."}'
 #   → available as identifier: "openai_api_key"
 
-curl -X POST "https://your-engine.com/engine/list_secrets?script=https://example.com/my-script" \
+curl -X POST "https://your-engine.com/engine/list_secrets?script=my-script" \
   -H "Content-Type: application/json" \
   -d '{"key": "stripe_api_key", "value": "sk_live_..."}'
 #   → available as identifier: "stripe_api_key"
@@ -585,7 +585,7 @@ Listing which secrets a script has is administration, not a script API — use
 `GET /engine/list_secrets?script=<uri>` or the `list_secrets` MCP tool:
 
 ```bash
-curl "https://your-engine.com/engine/list_secrets?script=https://example.com/my-script"
+curl "https://your-engine.com/engine/list_secrets?script=my-script"
 # {"secrets": ["anthropic_api_key", "openai_api_key", "stripe_api_key"]}
 ```
 

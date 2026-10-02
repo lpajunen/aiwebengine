@@ -271,7 +271,7 @@ Secrets are stored in the database and are **never** exposed to JavaScript code.
 
 ```bash
 # Admin or script owner: set a secret for a specific script
-curl -X POST "https://your-engine.com/engine/list_secrets?script=https://example.com/my-script" \
+curl -X POST "https://your-engine.com/engine/list_secrets?script=my-script" \
   -H "Content-Type: application/json" \
   -d '{"key": "github_token", "value": "ghp_abc123..."}'
 ```
