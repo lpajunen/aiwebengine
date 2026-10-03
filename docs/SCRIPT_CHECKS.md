@@ -114,6 +114,10 @@ merged into the same list without the caller guessing which layer complained.
 | `init-budget`          | error    | `init()` ran past the deploy budget outright                           |
 | `route-conflict`       | warning  | Another script already serves that path and method on a shared host    |
 
+An `init-failed` message ends with a `Hint:` line when the error is one whose
+usual cause is known: an undefined name, a missing property of `context`, a
+call on something that is not a function, `personalStorage` without a user.
+
 ## What the check catches that a local toolchain cannot
 
 **Import cycles.** `tsc` resolves a cycle happily. The engine's bundler refuses

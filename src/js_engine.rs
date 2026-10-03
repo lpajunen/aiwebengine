@@ -2293,8 +2293,12 @@ pub fn execute_test_run(params: &TestRunParams, test_modules: &[String]) -> Test
                     error
                 );
                 cases.push(
-                    TestCaseResult::failed(module_path.clone(), error, 0)
-                        .from_file(module_path.clone()),
+                    TestCaseResult::failed(
+                        module_path.clone(),
+                        crate::fix_hints::with_hint(&error),
+                        0,
+                    )
+                    .from_file(module_path.clone()),
                 );
             }
         }
@@ -2526,7 +2530,12 @@ fn run_test_module(
                     break;
                 }
                 cases.push(
-                    TestCaseResult::failed(name, details, duration_ms).from_file(module_path),
+                    TestCaseResult::failed(
+                        name,
+                        crate::fix_hints::with_hint(&details),
+                        duration_ms,
+                    )
+                    .from_file(module_path),
                 );
             }
         }

@@ -384,6 +384,41 @@ async fn a_refused_registration_is_reported_with_its_reason() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_init_that_throws_a_known_error_is_given_a_hint() {
+    let _guard = fixtures().await;
+    setup_env().await;
+
+    let report = check_candidate(
+        "test://check/init-undefined-name",
+        "function init() { registerEverything(); }",
+    );
+
+    assert!(!report.ok);
+    let message = message_for(&report, "init-failed");
+    assert!(message.contains("\nHint: "), "{message}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resource_outside_resources_is_reported_as_refused() {
+    let _guard = fixtures().await;
+    setup_env().await;
+
+    let report = check_candidate(
+        "test://check/refused-resource",
+        r#"function init() {
+            mcpRegistry.registerResource("docs://handbook", { file: "notes.md" });
+        }"#,
+    );
+
+    let message = message_for(&report, "registration-refused");
+    assert!(
+        message.contains("MCP resource 'docs://handbook'"),
+        "{message}"
+    );
+    assert!(report.registrations.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn an_init_that_throws_is_reported_with_what_it_registered_first() {
     let _guard = fixtures().await;
     setup_env().await;

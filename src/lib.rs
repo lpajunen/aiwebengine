@@ -31,6 +31,7 @@ pub mod engine_types;
 pub mod error;
 pub mod execution_slots;
 pub mod exposure;
+pub mod fix_hints;
 pub mod git_credentials;
 pub mod git_github;
 pub mod git_sync;

@@ -243,6 +243,36 @@ async fn a_module_that_cannot_load_is_reported_as_one_failed_case() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_runtime_error_in_a_case_carries_a_hint_but_an_assertion_does_not() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://script-tests-hints";
+    script_with_test_modules(
+        script_uri,
+        &[(
+            "tests/hints.test.ts",
+            r#"
+            test("calls a helper nobody defined", () => {
+              helperThatDoesNotExist();
+            });
+            test("asserts wrongly", () => {
+              expect(1).toBe(2);
+            });
+            "#,
+        )],
+    );
+
+    let result = run(script_uri);
+    let undefined_name = case(&result, "calls a helper nobody defined");
+    let error = undefined_name.error.as_deref().unwrap_or_default();
+    assert!(error.contains("\nHint: "), "{error}");
+    let assertion = case(&result, "asserts wrongly");
+    let error = assertion.error.as_deref().unwrap_or_default();
+    assert!(!error.contains("Hint:"), "{error}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_filter_runs_only_the_matching_cases() {
     let _guard = test_mutex().lock().await;
     setup_env().await;

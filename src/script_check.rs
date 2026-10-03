@@ -525,8 +525,12 @@ fn collect_diagnostics(
         ));
     } else if let Some(error) = &outcome.error {
         report.diagnostics.push(
-            Diagnostic::error(script_uri, "init-failed", error.clone())
-                .at(source_location(script_uri, error)),
+            Diagnostic::error(
+                script_uri,
+                "init-failed",
+                crate::fix_hints::with_hint(error),
+            )
+            .at(source_location(script_uri, error)),
         );
     }
 
@@ -609,6 +613,7 @@ fn refusal_diagnostic(script_uri: &str, refused: &CollectedRegistration) -> Diag
     let call = match refused.kind {
         RegistrationKind::Stream => format!("stream '{}'", refused.name),
         RegistrationKind::AssetRoute => format!("file route '{}'", refused.name),
+        RegistrationKind::McpResource => format!("MCP resource '{}'", refused.name),
         _ => match refused.method.as_deref() {
             Some(method) => format!("route '{} {}'", method, refused.name),
             None => format!("route '{}'", refused.name),

@@ -2360,10 +2360,18 @@ impl SecureGlobalContext {
                 // as a file route does. Registering a URI that answers
                 // nothing would be a resource a client lists and cannot read.
                 if repository::fetch_asset(&script_uri_resource, &asset_name).is_none() {
-                    return Ok(refusal_answer(format!(
-                        "Asset '{}' not found or not owned by script '{}'",
-                        asset_name, script_uri_resource
-                    )));
+                    let reason = format!(
+                        "Asset '{}' not found or not owned by script '{}'. Create the file \
+                         under '{}' first, then register it",
+                        asset_name,
+                        script_uri_resource,
+                        crate::exposure::RESOURCE_DIR
+                    );
+                    config_resource.note_dry_run_refusal(
+                        CollectedRegistration::new(RegistrationKind::McpResource, uri.clone())
+                            .with_refusal(reason.clone()),
+                    );
+                    return Ok(refusal_answer(reason));
                 }
 
                 if !crate::exposure::is_resource(&asset_name) {
@@ -2375,7 +2383,7 @@ impl SecureGlobalContext {
                         "Refused to publish a file from outside '{}' as an MCP resource",
                         crate::exposure::RESOURCE_DIR,
                     );
-                    return Ok(refusal_answer(format!(
+                    let reason = format!(
                         "Refused: '{}' is not under '{}', so it is not a file an MCP client \
                          may read. Move it to '{}{}' and register that. See \
                          /engine/exposure_report.",
@@ -2383,7 +2391,12 @@ impl SecureGlobalContext {
                         crate::exposure::RESOURCE_DIR,
                         crate::exposure::RESOURCE_DIR,
                         asset_name,
-                    )));
+                    );
+                    config_resource.note_dry_run_refusal(
+                        CollectedRegistration::new(RegistrationKind::McpResource, uri.clone())
+                            .with_refusal(reason.clone()),
+                    );
+                    return Ok(refusal_answer(reason));
                 }
 
                 debug!(
