@@ -5360,7 +5360,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "rename_script",
-            "Give a script a new name. Its files, history, secrets, tables, queued work and settings go with it; its routes are registered again under the new name. The new name is a slug: lower-case letters, digits, '-' and '_', no URL, path or extension (for example 'shop'). Takes what writing the script takes: ownership or an administrator.",
+            "Rename a script; files, history, secrets, tables and settings go with it and routes are registered again. The new name is a slug: lower-case letters, digits, '-' and '_'. Owner or administrator.",
             || {
                 json!({
                     "type": "object",
@@ -5389,7 +5389,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "search_files",
-            "Search a deployment's files for a pattern: script root sources and their assets alike. Use this to find which file to read when you do not know its name; read_asset's and read_file's 'grep' searches one file you can already name.",
+            "Search script sources and assets for a pattern, to find which file to read. read_file's 'grep' searches one file you can already name.",
             || {
                 json!({
                     "type": "object",
@@ -5406,21 +5406,21 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "read_logs",
-            "Read log messages (useful for debugging). Returns logs for one script when 'script' is given, otherwise across all scripts. Each entry carries the invocation that emitted it (requestId, kind, route), so the lines from one request, scheduler tick or stream connection can be read on their own.",
+            "Read log messages for one script ('script') or all. Each entry carries its invocation (requestId, kind, route), so one request's lines can be read alone.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "script": { "type": "string", "description": "Optional script URI to retrieve logs for; omit for all scripts" },
+                        "script": { "type": "string", "description": "Script URI; omit for all" },
                         "level": { "type": "string", "description": "Only entries at this level, e.g. ERROR" },
                         "since": { "type": "string", "description": "Only entries at or after this time (epoch millis or RFC 3339)" },
-                        "after_seq": { "type": "integer", "description": "Only entries written after this seq; pass the highest seq from a previous read to see only what is new" },
+                        "after_seq": { "type": "integer", "description": "Only entries after this seq; pass the highest seq of the last read for what is new" },
                         "contains": { "type": "string", "description": "Only entries whose message contains this substring" },
-                        "request_id": { "type": "string", "description": "Only the entries one invocation emitted, by x-request-id or a non-HTTP invocation's id" },
-                        "kind": { "type": "string", "description": "Only entries from invocations of this kind: httpRoute, scheduled, streamCustomization, mcpTool, mcpPrompt, init, eval, test" },
-                        "route": { "type": "string", "description": "Only entries logged while serving this registered route pattern, e.g. /things/:id" },
-                        "revision": { "type": "integer", "description": "Only entries written while this revision of the script was running. Use with list_revisions to find when a failure started." },
-                        "limit": { "type": "integer", "description": "Keep at most this many of the newest matching entries" }
+                        "request_id": { "type": "string", "description": "Only one invocation's entries, by x-request-id or invocation id" },
+                        "kind": { "type": "string", "description": "httpRoute, scheduled, streamCustomization, mcpTool, mcpPrompt, init, eval or test" },
+                        "route": { "type": "string", "description": "Only entries while serving this route pattern, e.g. /things/:id" },
+                        "revision": { "type": "integer", "description": "Only entries written while this revision was running" },
+                        "limit": { "type": "integer", "description": "At most this many of the newest matches" }
                     }
                 })
             },
@@ -5455,7 +5455,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "exposure_report",
-            "List the registrations the engine refused to publish. 'scripts' are registrations that name a file outside the directory that would expose it: a file under 'public/' is served to the world, one under 'resources/' is an MCP resource, and everything else is reachable only to the linker and the script itself. 'collisions' are registrations that lost their host, path and method to another script — the older script keeps a path, and the other is told so when it registers. 'unclassified' counts scripts whose init() has not run cleanly and which therefore have registered nothing to report on.",
+            "List registrations the engine refused to publish. 'scripts': a file outside the directory that exposes it ('public/' is served, 'resources/' is an MCP resource, the rest is private). 'collisions': a host, path and method already held by an older script. 'unclassified': scripts whose init() has not run cleanly.",
             || {
                 json!({
                     "type": "object",
@@ -5493,15 +5493,15 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "read_file",
-            "Fetch one file of a script: the whole file, or, with 'lines' or 'grep', part of it. Text comes back as 'content' and anything that is not text as 'content_base64'. Every reply carries the sha256 of the whole file, which edit_file takes as base_sha256. Reads what is stored (head), which for a pinned script is not the revision it serves; the reply then carries a 'deployment' block saying so.",
+            "Read one file of a script, or part of it with 'lines' or 'grep'. Text is 'content', anything else 'content_base64'; the reply carries the file's sha256 (edit_file's base_sha256). Reads head, which for a pinned script is not what it serves; a 'deployment' block says so.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
                         "script": { "type": "string", "description": "URI of the script that owns the file" },
                         "path": { "type": "string", "description": "Path of the file within the script, e.g. 'main.ts', 'lib/util.ts' or 'images/logo.png'" },
-                        "lines": { "type": "string", "description": "Inclusive 1-based line range of a text file, e.g. '120-180', '120-' to the end, or '120' alone" },
-                        "grep": { "type": "string", "description": "Regular expression; answers with the matching line numbers and their text instead of the file. Searches within 'lines' when both are given." }
+                        "lines": { "type": "string", "description": "1-based inclusive line range, e.g. '120-180', '120-' or '120'" },
+                        "grep": { "type": "string", "description": "Regular expression; answers with matching lines instead of the file" }
                     },
                     "required": ["script", "path"]
                 })
@@ -5510,7 +5510,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "write_file",
-            "Create or update one file of a script. Writing its entrypoint (main.ts, main.js, main.tsx or main.jsx) is writing the script itself: it creates the script if it does not exist, and takes WriteScripts and ownership rather than WriteAssets. Use write_files to change several files as one deploy.",
+            "Create or update one file. Writing the entrypoint (main.ts/.js/.tsx/.jsx) writes the script itself, creating it if needed, and takes WriteScripts and ownership instead of WriteAssets. Use write_files for several files.",
             || {
                 json!({
                     "type": "object",
@@ -5528,7 +5528,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "write_files",
-            "Write several of a script's files as one change, then run its init() once, and remove whatever 'remove' names. The answer includes a 'check' report (as check_script) for what was written: read its diagnostics before anything else. A module goes in 'text' as plain source, the way /engine/check_script takes it; 'content_base64' is for a file that is not text. One transaction, one revision, one init(), and nothing is written if any file is rejected. The entrypoint is one of the files: name it in 'files' as 'main.ts' (or .js/.tsx/.jsx), or pass it as 'content'. Writing it takes WriteScripts; the rest take WriteAssets; both take ownership of the script or administrator.",
+            "Write several of a script's files as one change, then run init() once. Modules go in 'text' as plain source ('content_base64' for non-text); 'remove' deletes paths. One revision, nothing written if any file is rejected. The entrypoint (main.ts/.js/.tsx/.jsx) is one of the files, or 'content'; writing it takes WriteScripts, the rest WriteAssets, both with ownership or administrator. The answer includes a 'check' report: read its diagnostics first.",
             || {
                 json!({
                     "type": "object",
@@ -5541,10 +5541,10 @@ fn native_tools() -> &'static [NativeToolEntry] {
                                 "type": "object",
                                 "properties": {
                                     "name": { "type": "string", "description": "URI/path of the asset (e.g., '/lib/util.ts')" },
-                                    "text": { "type": "string", "description": "The file as text — what a module is. Use this for source; exactly one of 'text' and 'content_base64' is required." },
+                                    "text": { "type": "string", "description": "The file as text; exactly one of 'text' and 'content_base64'" },
                                     "content_base64": { "type": "string", "description": "The file as base64, for content that is not text (max 10MB)" },
                                     "mimetype": { "type": "string", "description": "MIME type; inferred from the file extension when omitted" },
-                                    "sha256": { "type": "string", "description": "Expected SHA-256 of the content, lowercase hex. The batch is rejected if it does not match." }
+                                    "sha256": { "type": "string", "description": "Expected SHA-256 (hex); the batch is rejected on a mismatch" }
                                 },
                                 "required": ["name"]
                             }
@@ -5565,7 +5565,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "edit_file",
-            "Edit one of a script's files in place by replacing strings in it, without resending the file, then run the script's init() once. Each old_string must be present and unique unless replace_all is set; nothing is written unless every edit applies. Editing the entrypoint takes WriteScripts and ownership; editing any other file takes WriteAssets and ownership. Edits what is stored (head); a pinned script goes on serving its pinned revision until it is deployed or unpinned, and the answer says so.",
+            "Edit one file in place by replacing strings, without resending it, then run init() once. Each old_string must be present and unique unless replace_all is set; nothing is written unless every edit applies. Editing the entrypoint takes WriteScripts and ownership; other files WriteAssets and ownership. Edits head; a pinned script keeps serving its pinned revision. The answer includes a 'check' report.",
             || {
                 json!({
                     "type": "object",
@@ -5574,7 +5574,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
                         "path": { "type": "string", "description": "Path of the file within the script, e.g. 'main.ts' or 'lib/util.ts'" },
                         "edits": {
                             "type": "array",
-                            "description": "Edits to apply in order (max 128). Each is checked and applied in memory before anything is stored.",
+                            "description": "Edits applied in order (max 128)",
                             "items": {
                                 "type": "object",
                                 "properties": {
@@ -5585,7 +5585,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
                                 "required": ["old_string", "new_string"]
                             }
                         },
-                        "base_sha256": { "type": "string", "description": "SHA-256 the file is expected to have right now, as read_file reported it. The patch is refused if the stored content has moved on." },
+                        "base_sha256": { "type": "string", "description": "SHA-256 from read_file; refused if the file has changed since" },
                         "reinit": { "type": "string", "enum": ["after", "never"], "description": "Run the script's init() once the edits land (default 'after'), or leave it alone" },
                         "check": { "type": "boolean", "description": "Answer with the check_script report for the script as edited (default true)" }
                     },
@@ -5596,7 +5596,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "create_file",
-            "Create a new file in a script. Fails if that path is already taken, which is what distinguishes it from write_file: creating a module and overwriting somebody's are not the same request. Creating the entrypoint (main.ts, main.js, main.tsx or main.jsx) creates the script.",
+            "Create a new file; fails if the path exists, unlike write_file. Creating the entrypoint (main.ts/.js/.tsx/.jsx) creates the script.",
             || {
                 json!({
                     "type": "object",
@@ -5832,7 +5832,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "run_tests",
-            "Run a script's test modules and report a verdict per case. Tests are the script's own assets named '*.test.ts' (or .js/.jsx/.tsx). Requires the user to own the script or be an administrator.",
+            "Run a script's test modules ('*.test.ts' or .js/.jsx/.tsx assets) and report a verdict per case. Runs the stored files (head). Owner or administrator.",
             || {
                 json!({
                     "type": "object",
@@ -5846,7 +5846,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
                         },
                         "revision": {
                             "type": "string",
-                            "description": "Which version to use: a revision number, 'head', 'last-good', or a label. Omit for what is deployed."
+                            "description": "A revision number, 'head', 'last-good' or a label; omit for head"
                         }
                     },
                     "required": ["script"]
@@ -5856,7 +5856,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "list_revisions",
-            "What a script's files have been. Every write records a revision of the whole script, so this is the history behind an edit made without a checkout: what changed, when, by whom, and whether the script still initialised afterwards. 'lastGood' names the newest revision whose init() succeeded — the target for 'put it back to when it worked'. Pass 'asset' for one file's history.",
+            "A script's revision history: what changed, when, by whom, and whether init() succeeded. 'lastGood' is the newest revision whose init() succeeded. Pass 'asset' for one file's history.",
             || {
                 json!({
                     "type": "object",
@@ -5872,7 +5872,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "revert_script",
-            "Put a script's files back to what a revision held, as a new revision rather than a rewrite of history. Restores changed files, removes files the target revision did not contain, and refuses a target that does not bundle unless 'force'. Pass 'dryRun' to see what would change first. Requires the user to own the script or be an administrator.",
+            "Restore a script's files to a revision, recorded as a new revision. Removes files that revision did not contain; refuses a target that does not bundle unless 'force'. 'dryRun' previews. Owner or administrator.",
             || {
                 json!({
                     "type": "object",
@@ -5901,13 +5901,13 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "diff_revisions",
-            "What changed between two revisions of a script, as a unified diff per file. The read counterpart to edit_asset: see what you changed without reading the files back, or what a revert would undo before running it. With neither 'from' nor 'to', reports the newest change.",
+            "A unified diff per file between two revisions: see what you changed, or what a revert would undo. With neither 'from' nor 'to', the newest change.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
                         "script": { "type": "string", "description": "URI of the script to compare" },
-                        "from": { "type": "string", "description": "The older side: a revision number, 'head', 'last-good', or a label. Defaults to what 'to' was computed against." },
+                        "from": { "type": "string", "description": "The older side: a revision number, 'head', 'last-good' or a label" },
                         "to": { "type": "string", "description": "The newer side. Defaults to 'head'." },
                         "context": { "type": "integer", "description": "Lines of context around each hunk (default 3)" }
                     },
@@ -5918,7 +5918,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "label_revision",
-            "Name a revision, so it can be restored by name and is kept regardless of retention. Applied after the fact, to a revision that already exists — which is the point, since whether a change was worth marking is known afterwards. Omit 'label' to clear one.",
+            "Name a revision so it can be restored by name and survives retention. Omit 'label' to clear one.",
             || {
                 json!({
                     "type": "object",
@@ -5934,7 +5934,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "set_script_limits",
-            "Give one script its own execution budget, instead of the engine-wide one. Useful in both directions: raise it for a script that waits on a slow model API, or lower it to contain one that has started holding execution slots — the second takes effect without restarting the engine. Takes an administrator, because this is a claim on slots, threads and memory shared with every other script; owning the script is not the same question. Omit a field to leave it following the engine, and omit all of them to remove the override entirely.",
+            "Give one script its own execution budget, to raise it for a slow model API or lower it to contain a runaway; effective without a restart. Administrator only, because it claims shared slots, threads and memory. Omit a field to follow the engine; omit all to remove the override.",
             || {
                 json!({
                     "type": "object",
@@ -5965,7 +5965,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "list_tasks",
-            "Read a script's queued work: what is waiting to run, what is running now, and what failed with the error that failed it. A task that succeeded is not listed — its row is deleted when it completes, and what it did is in the script's log under its own invocation id. Use this to find out why background work is not happening: as well as a failure, the answer may be that the task is pending behind another in the same `lane`, since at most one task per lane runs at a time.",
+            "Read a script's queued work: pending, running, and failed (with the error). A task that succeeded is deleted; its output is in the log under its invocation id. A pending task may be waiting behind another in the same 'lane'.",
             || {
                 json!({
                     "type": "object",
@@ -5980,7 +5980,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "cancel_task",
-            "Stop one queued task that has not started, or discard the finished ones. Cancelling only works while a task is still pending: one already running is not stopped by this, and one that already failed is finished. Pass finished=true instead to clear out the failed and cancelled tasks once you have read them.",
+            "Cancel one pending task (one already running is not stopped), or with finished=true discard the failed and cancelled ones.",
             || {
                 json!({
                     "type": "object",
@@ -6000,7 +6000,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "deploy_script",
-            "Choose which revision of a script is served. Once deployed, writing the script's files records revisions and advances head without changing what answers requests — so code can be uploaded and tested while production stays where it is, and moves only when you say so. Pass revision='head' to take the newest, or omit 'revision' with follow=true to stop pinning entirely.",
+            "Choose which revision of a script is served. After the first deploy, writes advance head without changing what is served, until you deploy again. revision='head' takes the newest; follow=true stops pinning.",
             || {
                 json!({
                     "type": "object",
@@ -6009,7 +6009,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
                         "revision": { "type": "string", "description": "Which version to serve: a revision number, 'head', 'last-good', or a label" },
                         "follow": {
                             "type": "boolean",
-                            "description": "Stop pinning and serve the newest revision from now on. Ignores 'revision'.",
+                            "description": "Stop pinning; serve the newest revision. Ignores 'revision'.",
                             "default": false
                         }
                     },
@@ -6020,17 +6020,12 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "set_git_credential",
-            "Store your personal access token for a git host, so pulls can read private \
-            repositories. The token is encrypted at rest, is never returned by any endpoint or \
-            tool, and is not reachable from JavaScript. It is checked against the host before \
-            being stored, so a mistyped or revoked token is refused now rather than at the next \
-            pull. Always your own credential — there is no way to store or read one for anybody \
-            else.",
+            "Store your personal access token for a git host so pulls can read private repositories. Encrypted at rest, never returned, checked against the host first. Always your own credential.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "token": { "type": "string", "description": "Personal access token. A fine-grained token scoped to the repositories you want is enough; it needs no more than read access to their contents." },
+                        "token": { "type": "string", "description": "Personal access token; read access to the repositories' contents is enough" },
                         "host": { "type": "string", "description": "Git host. Defaults to github.com, the only host supported.", "default": "github.com" }
                     },
                     "required": ["token"]
@@ -6084,11 +6079,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "get_git_status",
-            "Where a script stands relative to the repository it came from: unbound, in_sync, \
-            behind, ahead, diverged, or unreachable. That is the whole decision about what to do \
-            next, so ask this rather than attempting a push and reading the refusal. Reports the \
-            deployment pin too, since a pull into a pinned script advances head without changing \
-            what answers requests.",
+            "Where a script stands against its repository: unbound, in_sync, behind, ahead, diverged or unreachable. Ask this before pushing rather than reading the refusal. Also reports the deployment pin.",
             || {
                 json!({
                     "type": "object",
@@ -6102,24 +6093,18 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "push_to_git",
-            "Publish a script's files to a GitHub repository as one commit. The root becomes \
-            main.{ext} and assets keep their paths, laid out the way a pull reads them back, so \
-            what this writes pulls onto any other engine. Files the script does not own — the \
-            README, CI configuration, anything .aiwebengineignore excludes — are left untouched. \
-            Refuses when both the repository and the script have changed since the last sync: \
-            the engine does not merge, it reports the divergence and leaves the reconciling to \
-            you. Needs a stored credential with write access.",
+            "Publish a script's files to a GitHub repository as one commit, laid out the way pull_from_git reads them back. Files the script does not own are left alone. Refuses when both sides changed since the last sync; the engine does not merge. Needs a stored credential with write access.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
                         "script": { "type": "string", "description": "URI of the script to publish" },
-                        "repo": { "type": "string", "description": "'owner/repo' or a GitHub URL. Optional once the script has been pulled, since it already knows where it came from." },
+                        "repo": { "type": "string", "description": "'owner/repo' or a GitHub URL; optional once the script was pulled" },
                         "branch": { "type": "string", "description": "Branch to write. Defaults to the one it was pulled from, or the repository's default branch." },
                         "message": { "type": "string", "description": "Commit message. Defaults to one naming the script." },
                         "force": {
                             "type": "boolean",
-                            "description": "Publish even when this engine believes the repository has moved. GitHub still refuses a non-fast-forward update, so this cannot overwrite work it has not seen.",
+                            "description": "Publish even if the repository seems to have moved; GitHub still refuses a non-fast-forward",
                             "default": false
                         }
                     },
@@ -6130,22 +6115,17 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "pull_from_git",
-            "Pull a public GitHub repository into this engine as scripts. The layout is read \
-            from the repository itself: a directory holding main.ts (or .js/.tsx/.jsx) is one \
-            script, every other file under it becomes an asset at the same relative path, and a \
-            repository with main.ts at its root is itself one script. Files removed upstream are \
-            removed here. Nothing about the mapping lives in the repository, so the same repo \
-            pulls onto any install.",
+            "Pull a public GitHub repository in as scripts: a directory holding main.ts (or .js/.tsx/.jsx) is one script, other files under it become assets at the same relative path, and files removed upstream are removed here.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
                         "repo": { "type": "string", "description": "'owner/repo', or any GitHub URL naming it" },
                         "branch": { "type": "string", "description": "Branch to read. Defaults to the repository's default branch." },
-                        "prefix": { "type": "string", "description": "URI prefix the scripts land under. Defaults to the repository name; set it to avoid colliding with a script somebody else already pulled." },
+                        "prefix": { "type": "string", "description": "URI prefix for the scripts; defaults to the repository name" },
                         "force": {
                             "type": "boolean",
-                            "description": "Download and re-apply even when the repository has not moved since the last pull. Use it when the engine's answer looks stale for a reason the commit cannot show.",
+                            "description": "Re-apply even if the repository has not moved",
                             "default": false
                         }
                     },
@@ -6170,14 +6150,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "check_script",
-            "Check what a script would do if it were deployed, without deploying it: resolve its \
-            asset-backed imports the way the engine does, run its init() with every registration \
-            withheld and database writes rolled back, and report diagnostics as {file, line, \
-            severity, code, message}. Catches what a local tsc cannot — import cycles the \
-            bundler rejects, registrations whose handler name is not defined as a global, an \
-            init() close to its deploy budget, and paths another script already claims. Pass \
-            'content' to check code before writing it. Requires the user to own the script or be \
-            an administrator.",
+            "Check a script's stored files (head) as if deployed, without deploying: bundle its imports, run init() with registrations withheld and database writes rolled back, and report diagnostics {file, line, severity, code, message}. Pass 'content' (or 'files') to check code before writing it. Owner or administrator.",
             || {
                 json!({
                     "type": "object",
@@ -6185,7 +6158,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
                         "script": { "type": "string", "description": "URI of the script to check" },
                         "content": {
                             "type": "string",
-                            "description": "Candidate source to check instead of what is deployed. Use this to check code before writing it."
+                            "description": "Candidate source to check instead of what is deployed"
                         },
                         "rollback": {
                             "type": "boolean",
@@ -6194,15 +6167,15 @@ fn native_tools() -> &'static [NativeToolEntry] {
                         },
                         "timeoutMs": {
                             "type": "integer",
-                            "description": "Ceiling for the init() run. Defaults to several times the deploy budget so a slow init() is measured rather than interrupted; raise it for one slower still."
+                            "description": "Ceiling for the init() run; defaults to several times the deploy budget"
                         },
                         "revision": {
                             "type": "string",
-                            "description": "Which version to check: a revision number, 'head', 'last-good', or a label. Omit for what is deployed. Combined with 'content' or 'files', the candidate is checked against that revision's modules."
+                            "description": "A revision number, 'head', 'last-good' or a label; omit for head"
                         },
                         "files": {
                             "type": "object",
-                            "description": "A candidate change spanning several files, none of them written: an object of path -> {content, mimetype?}, or path -> null to check what removing that file would do. Use this to check a change across modules — a schema module and the modules that read it — before any of it lands. Laid over what is deployed, or over 'revision' when given.",
+                            "description": "Candidate files laid over what is deployed: path -> {content, mimetype?}, or path -> null to check a removal",
                             "additionalProperties": true
                         }
                     },
@@ -6213,14 +6186,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "eval_script",
-            "Evaluate a JavaScript snippet against a deployed script's sandbox and return its \
-            value plus everything it logged. The script's own program is loaded first, so the \
-            snippet can call its functions and use the bindings its entrypoint imported. It can \
-            also import any module the entrypoint reaches, directly or through another module - \
-            `import { x } from \"./server/m.ts\"; x()` - or reach one with require(path). Use \
-            this to inspect data or try an expression without authoring, deploying and deleting \
-            a throwaway test. Database writes roll back by default; registrations do nothing. \
-            Requires the user to own the script or be an administrator.",
+            "Evaluate a JavaScript snippet in a deployed script's sandbox and return its value plus what it logged. The script's program is loaded first, so the snippet can call its functions and import its modules. Database writes roll back by default; registrations do nothing. Owner or administrator.",
             || {
                 json!({
                     "type": "object",
@@ -6228,7 +6194,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
                         "script": { "type": "string", "description": "URI of the script whose sandbox to evaluate in" },
                         "source": {
                             "type": "string",
-                            "description": "The snippet. Its last expression is the returned value; scripts run synchronously, so do not use async/await."
+                            "description": "The snippet; its last expression is the value. Synchronous: no async/await."
                         },
                         "rollback": {
                             "type": "boolean",
@@ -7872,6 +7838,30 @@ fn tool_remove_user_role(args: &Value, user: &UserContext) -> Value {
 
 #[cfg(test)]
 mod tests {
+    /// Every tool's description and schema is paid for in every agent's
+    /// context, listed or not used. A description says what the tool does and
+    /// the one rule that is not obvious; the rest is the schema's job.
+    #[test]
+    fn the_tool_listing_stays_small() {
+        let tools = super::native_mcp_tool_descriptors();
+        for tool in &tools {
+            assert!(
+                tool.description.len() <= 500,
+                "{} has a {}-character description; keep it to what it does and one rule",
+                tool.name,
+                tool.description.len()
+            );
+        }
+        let total: usize = tools
+            .iter()
+            .map(|tool| tool.description.len() + tool.input_schema.to_string().len())
+            .sum();
+        assert!(
+            total <= 26_000,
+            "the tool listing is {total} characters; cut before adding"
+        );
+    }
+
     use super::{host_is_allowed, reserved_route_prefix};
 
     #[test]

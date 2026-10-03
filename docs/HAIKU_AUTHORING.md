@@ -79,8 +79,12 @@ nothing new is served until the person approves.
    `check_script` result and the `init()` outcome together.
    _Done:_ `write_files` and `edit_file` answer with a `check` report beside
    `init`; `check: false` opts out.
-5. **Short tool descriptions.** The 50 engine tools' descriptions total about
-   50,000 characters; cut each to what it does plus one rule.
+5. **Short tool descriptions.** The 50 engine tools' descriptions and schemas
+   came to about 31,000 characters; cut each description to what it does plus
+   one rule. _Done:_ now about 25,000, and a test caps each description at 500
+   characters and the whole listing at 26,000. Stale tool names in descriptions
+   were fixed, and descriptions say "head" where they meant the stored files,
+   which is not what a pinned script serves.
 6. **Drafts are pins, not another host.** The run's first write is the
    template's stub, whose `init()` registers nothing, and the run pins that
    revision with `deploy_script` at once. From then on writes advance head while
