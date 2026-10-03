@@ -2156,3 +2156,94 @@ async fn a_revert_that_restores_only_the_entrypoint_says_something_happened() {
     assert!(outcome.assets_deleted.is_empty());
     assert!(outcome.changed_anything());
 }
+
+/// The authoring loop's draft: the run writes the stub first and pins it, so
+/// what follows is written to head while the stub keeps serving, and a route
+/// is live only once the person approves the deploy that moves the pin.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_draft_written_beside_a_pinned_stub_is_checked_and_tested_but_not_served() {
+    let engine = common::AdminServer::start()
+        .await
+        .expect("server failed to start");
+    let client = engine.client();
+    let call = |operation: &'static str, body: serde_json::Value| {
+        let client = client.clone();
+        let url = engine.url(&format!("/engine/{operation}"));
+        async move {
+            let response = client
+                .post(url)
+                .json(&body)
+                .send()
+                .await
+                .expect("the operation should answer");
+            let status = response.status();
+            let body: serde_json::Value = response.json().await.expect("a JSON answer");
+            (status, body)
+        }
+    };
+    let script = "pin-draft";
+
+    // The stub registers nothing; writing it creates the script.
+    let (status, body) = call(
+        "write_files",
+        serde_json::json!({ "script": script, "content": "function init() {}" }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = call(
+        "deploy_script",
+        serde_json::json!({ "script": script, "revision": "head" }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+
+    // The draft: a route, a module and a test.
+    let (status, body) = call(
+        "write_files",
+        serde_json::json!({
+            "script": script,
+            "content": "import { greeting } from \"./lib/greet.ts\";\n\
+                        function hello() { return ResponseBuilder.text(greeting(\"draft\")); }\n\
+                        function init() { routeRegistry.registerRoute(\"/pin-draft\", { handler: \"hello\" }); }",
+            "files": [
+                { "name": "lib/greet.ts", "text": "export function greeting(name: string): string { return `Hello, ${name}!`; }" },
+                { "name": "lib/greet.test.ts", "text": "import { greeting } from \"./greet.ts\";\ntest(\"greets\", () => { expect(greeting(\"x\")).toBe(\"Hello, x!\"); });" },
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["init"]["reason"], "pinned", "{body}");
+    assert_eq!(body["check"]["ok"], true, "{body}");
+    assert_eq!(
+        body["check"]["registrations"][0]["name"], "/pin-draft",
+        "{body}"
+    );
+
+    // Tests run against head, which is the draft.
+    let (_, tests) = call("run_tests", serde_json::json!({ "script": script })).await;
+    assert_eq!(tests["success"], true, "{tests}");
+
+    // The stub is still what answers requests.
+    let served = client
+        .get(engine.url("/pin-draft"))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(served.status(), 404);
+
+    // Approving the deploy moves the pin and the route comes up.
+    let (status, body) = call(
+        "deploy_script",
+        serde_json::json!({ "script": script, "revision": "head" }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let served = client
+        .get(engine.url("/pin-draft"))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(served.status(), 200);
+    assert_eq!(served.text().await.expect("body"), "Hello, draft!");
+}

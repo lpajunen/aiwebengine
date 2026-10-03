@@ -91,6 +91,8 @@ nothing new is served until the person approves.
    the stub keeps serving, until an approved deploy moves the pin. No engine
    change: a new script has no revision to pin until its first write, which is
    why the stub goes first.
+   _Verified:_ `a_draft_written_beside_a_pinned_stub_is_checked_and_tested_but_not_served`
+   in `tests/revisions.rs` runs the whole sequence over HTTP.
 
 ## Harness work (aiwebengine-agent)
 
