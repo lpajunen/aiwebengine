@@ -417,7 +417,9 @@ fn build_executable_program(
 ) -> Result<PreparedExecutable, ModuleLoaderError> {
     if contains_dynamic_import(root_content) {
         return Err(ModuleLoaderError::UnsupportedImport(
-            "Dynamic import() is not supported for asset-backed modules".to_string(),
+            "Dynamic import() is not supported. Use a static import at the top of the file, \
+             e.g. `import { name } from \"./lib/name.ts\"`."
+                .to_string(),
         ));
     }
 
@@ -673,7 +675,9 @@ fn transform_module_source(
 ) -> Result<TransformedModule, ModuleLoaderError> {
     if contains_dynamic_import(source) {
         return Err(ModuleLoaderError::UnsupportedImport(
-            "Dynamic import() is not supported for asset-backed modules".to_string(),
+            "Dynamic import() is not supported. Use a static import at the top of the file, \
+             e.g. `import { name } from \"./lib/name.ts\"`."
+                .to_string(),
         ));
     }
 
@@ -737,7 +741,10 @@ fn transform_module_source(
     let mut body = kept_lines.join("\n");
     if is_root && contains_static_export(&body) {
         return Err(ModuleLoaderError::UnsupportedImport(
-            "Root scripts cannot use export syntax; define global handlers instead".to_string(),
+            "The entrypoint (main.*) cannot use export syntax. Remove `export`: handlers are \
+             top-level functions named by string in registerRoute / registerTool, and `init` \
+             needs no export. Code other files import belongs in a module such as lib/name.ts."
+                .to_string(),
         ));
     }
 
@@ -841,7 +848,8 @@ fn render_named_binding_assignment(
         let local = parts.next().unwrap_or(exported);
         if exported.is_empty() || local.is_empty() {
             return Err(ModuleLoaderError::InvalidSpecifier(format!(
-                "Unsupported named import binding '{}'",
+                "Unsupported named import binding '{}'. Write `import {{ name }} from \"./file.ts\"` \
+                 or `import {{ name as other }} from \"./file.ts\"`",
                 trimmed
             )));
         }
@@ -873,7 +881,9 @@ fn rewrite_exports(
 
     if rewritten.contains("export default") {
         return Err(ModuleLoaderError::UnsupportedImport(
-            "Default exports are only supported for JSON asset modules in v1".to_string(),
+            "Default exports are only supported for JSON asset modules. Use a named export: \
+             `export function name() {}` and `import { name } from \"./file.ts\"`."
+                .to_string(),
         ));
     }
 
@@ -1103,7 +1113,9 @@ fn load_owned_asset_module_by_path(
 
     let file = view.fetch(root_script_uri, logical_path).ok_or_else(|| {
         ModuleLoaderError::InvalidSpecifier(format!(
-            "Module '{}' imported from '{}' was not found in assets for '{}'",
+            "Module '{}' imported from '{}' was not found in assets for '{}'. The specifier is \
+             relative to the importing file and must include the extension (`./lib/name.ts`); \
+             create the file or correct the path",
             original_specifier, importer_path, root_script_uri
         ))
     })?;
@@ -1702,7 +1714,9 @@ export const WORLD_TYPE_FOREST: WorldType = "forest";
         assert_eq!(
             error,
             ModuleLoaderError::UnsupportedImport(
-                "Dynamic import() is not supported for asset-backed modules".to_string(),
+                "Dynamic import() is not supported. Use a static import at the top of the file, \
+             e.g. `import { name } from \"./lib/name.ts\"`."
+                    .to_string(),
             )
         );
     }

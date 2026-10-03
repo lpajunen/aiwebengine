@@ -357,6 +357,30 @@ async fn a_script_with_no_init_is_told_it_registers_nothing() {
     // A warning, not an error: the script is valid, it just serves nothing.
     assert!(report.ok);
     assert_eq!(codes(&report), vec!["no-init"]);
+    assert!(message_for(&report, "no-init").contains("top-level `function init()"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_registration_is_reported_with_its_reason() {
+    let _guard = fixtures().await;
+    setup_env().await;
+
+    let report = check_candidate(
+        "test://check/refused-file",
+        r#"function init() {
+            routeRegistry.registerRoute("/page", { file: "public/missing.html" });
+        }"#,
+    );
+
+    assert!(!report.ok);
+    assert_eq!(
+        codes(&report),
+        vec!["registration-refused", "no-registrations"]
+    );
+    let message = message_for(&report, "registration-refused");
+    assert!(message.contains("file route '/page'"), "{message}");
+    assert!(message.contains("public/missing.html"), "{message}");
+    assert!(report.registrations.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]

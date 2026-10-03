@@ -453,6 +453,24 @@ fn check_blocking_into(
         crate::module_loader::invalidate_program(&script_uri);
     }
 
+    // A refused registration is not part of what would deploy, so it is kept
+    // out of the registrations and reported as the finding it is.
+    let mut outcome = outcome;
+    let refused: Vec<CollectedRegistration> = outcome
+        .pass
+        .collected
+        .iter()
+        .filter(|registration| registration.refusal.is_some())
+        .cloned()
+        .collect();
+    outcome
+        .pass
+        .collected
+        .retain(|registration| registration.refusal.is_none());
+    report
+        .diagnostics
+        .extend(refused.iter().map(|r| refusal_diagnostic(&script_uri, r)));
+
     collect_diagnostics(
         &script_uri,
         &outcome,
@@ -523,7 +541,8 @@ fn collect_diagnostics(
             script_uri,
             "no-init",
             "This script defines no init() function, so it registers nothing: no routes, \
-             resolvers, streams, jobs or tools. Export a function named 'init'.",
+             resolvers, streams, jobs or tools. Add a top-level `function init() { ... }` that \
+             makes the registrations; do not `export` it.",
         ));
     } else if outcome.error.is_none() && pass.collected.is_empty() {
         report.diagnostics.push(Diagnostic::warning(
@@ -584,6 +603,32 @@ fn budget_diagnostic(script_uri: &str, duration_ms: u64, budget_ms: u64) -> Opti
     }
 
     None
+}
+
+fn refusal_diagnostic(script_uri: &str, refused: &CollectedRegistration) -> Diagnostic {
+    let call = match refused.kind {
+        RegistrationKind::Stream => format!("stream '{}'", refused.name),
+        RegistrationKind::AssetRoute => format!("file route '{}'", refused.name),
+        _ => match refused.method.as_deref() {
+            Some(method) => format!("route '{} {}'", method, refused.name),
+            None => format!("route '{}'", refused.name),
+        },
+    };
+    Diagnostic::error(
+        script_uri,
+        "registration-refused",
+        format!(
+            "The {} was refused, so it is not registered: {}. The call returned \
+             `{{ ok: false, reason }}` rather than throwing, so nothing else stopped; read the \
+             result of every registration.",
+            call,
+            refused
+                .refusal
+                .as_deref()
+                .unwrap_or("no reason given")
+                .trim_end_matches('.')
+        ),
+    )
 }
 
 fn missing_handler_diagnostic(script_uri: &str, missing: &MissingHandler) -> Diagnostic {

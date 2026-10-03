@@ -4189,7 +4189,7 @@ fn record_missing_handlers(
     };
 
     let globals = ctx.globals();
-    for registration in collected.iter() {
+    for registration in collected.iter().filter(|r| r.refusal.is_none()) {
         let Some(handler) = registration.handler.as_deref() else {
             continue;
         };

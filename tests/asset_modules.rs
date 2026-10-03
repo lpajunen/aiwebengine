@@ -72,7 +72,7 @@ async fn module_loader_uses_root_script_owned_assets_only() {
 
     assert_eq!(
         error.to_string(),
-        "Module './server/shared.ts' imported from 'main.ts' was not found in assets for 'test://asset-module-owner-root'"
+        "Module './server/shared.ts' imported from 'main.ts' was not found in assets for 'test://asset-module-owner-root'. The specifier is relative to the importing file and must include the extension (`./lib/name.ts`); create the file or correct the path"
     );
 
     assert!(repository::delete_asset(
@@ -129,7 +129,7 @@ async fn module_loader_rejects_missing_asset() {
 
     assert_eq!(
         error.to_string(),
-        "Module './server/missing.ts' imported from 'main.ts' was not found in assets for 'test://asset-module-missing'"
+        "Module './server/missing.ts' imported from 'main.ts' was not found in assets for 'test://asset-module-missing'. The specifier is relative to the importing file and must include the extension (`./lib/name.ts`); create the file or correct the path"
     );
 }
 

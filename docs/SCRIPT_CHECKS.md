@@ -96,22 +96,23 @@ merged into the same list without the caller guessing which layer complained.
 
 ### Diagnostic codes
 
-| Code                 | Severity | Meaning                                                             |
-| -------------------- | -------- | ------------------------------------------------------------------- |
-| `circular-import`    | error    | An import chain leads back to a module already being compiled       |
-| `invalid-import`     | error    | A specifier the engine's resolver does not accept                   |
-| `unsupported-import` | error    | Dynamic `import()`, or `export` syntax in a root script             |
-| `transpile-error`    | error    | The script or one of its modules does not compile                   |
-| `init-failed`        | error    | `init()` threw                                                      |
-| `init-timeout`       | error    | `init()` was still running at the check's ceiling and was stopped   |
-| `init-blocked`       | error    | `init()` did not respond to being stopped — blocked in a host call  |
-| `missing-handler`    | error    | A registration names a delegate the program does not define         |
-| `script-not-found`   | error    | Nothing is deployed at that URI and no content was sent             |
-| `no-init`            | warning  | The script defines no `init()`, so it registers nothing             |
-| `no-registrations`   | warning  | `init()` ran but registered nothing                                 |
-| `init-budget`        | warning  | `init()` spent 70% or more of the deploy budget                     |
-| `init-budget`        | error    | `init()` ran past the deploy budget outright                        |
-| `route-conflict`     | warning  | Another script already serves that path and method on a shared host |
+| Code                   | Severity | Meaning                                                                |
+| ---------------------- | -------- | ---------------------------------------------------------------------- |
+| `circular-import`      | error    | An import chain leads back to a module already being compiled          |
+| `invalid-import`       | error    | A specifier the engine's resolver does not accept                      |
+| `unsupported-import`   | error    | Dynamic `import()`, or `export` syntax in a root script                |
+| `transpile-error`      | error    | The script or one of its modules does not compile                      |
+| `init-failed`          | error    | `init()` threw                                                         |
+| `init-timeout`         | error    | `init()` was still running at the check's ceiling and was stopped      |
+| `init-blocked`         | error    | `init()` did not respond to being stopped — blocked in a host call     |
+| `missing-handler`      | error    | A registration names a delegate the program does not define            |
+| `registration-refused` | error    | `registerRoute` answered `{ ok: false, reason }`; the reason is quoted |
+| `script-not-found`     | error    | Nothing is deployed at that URI and no content was sent                |
+| `no-init`              | warning  | The script defines no `init()`, so it registers nothing                |
+| `no-registrations`     | warning  | `init()` ran but registered nothing                                    |
+| `init-budget`          | warning  | `init()` spent 70% or more of the deploy budget                        |
+| `init-budget`          | error    | `init()` ran past the deploy budget outright                           |
+| `route-conflict`       | warning  | Another script already serves that path and method on a shared host    |
 
 ## What the check catches that a local toolchain cannot
 

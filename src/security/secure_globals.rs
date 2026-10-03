@@ -422,6 +422,11 @@ pub struct CollectedRegistration {
     /// without a customization function has nothing to call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handler: Option<String>,
+    /// Why the engine refused it, when it did. A refusal is answered to the
+    /// script as a value it may not read, so a dry run keeps it here for the
+    /// check to report; a refused registration is not part of what deploys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
 }
 
 impl CollectedRegistration {
@@ -431,7 +436,13 @@ impl CollectedRegistration {
             name: name.into(),
             method: None,
             handler: None,
+            refusal: None,
         }
+    }
+
+    pub fn with_refusal(mut self, reason: impl Into<String>) -> Self {
+        self.refusal = Some(reason.into());
+        self
     }
 
     pub fn with_method(mut self, method: impl Into<String>) -> Self {
@@ -669,6 +680,16 @@ impl GlobalSecurityConfig {
             collected.push(registration);
         }
         Some(reply)
+    }
+
+    /// Keep a refused registration where the check can report it. A no-op
+    /// outside a dry run.
+    fn note_dry_run_refusal(&self, registration: CollectedRegistration) {
+        if let Some(sink) = self.dry_run_sink.as_ref()
+            && let Ok(mut collected) = sink.lock()
+        {
+            collected.push(registration);
+        }
     }
 
     /// True when registration calls are being recorded rather than applied.
@@ -2923,9 +2944,25 @@ impl SecureGlobalContext {
                         );
                     }
                 };
+                let attempted = match &spec.target {
+                    RouteTarget::Handler { name, method } => {
+                        CollectedRegistration::new(RegistrationKind::Route, path.clone())
+                            .with_method(method.clone())
+                            .with_handler(name.clone())
+                    }
+                    RouteTarget::Stream { .. } => {
+                        CollectedRegistration::new(RegistrationKind::Stream, path.clone())
+                    }
+                    RouteTarget::File { .. } => {
+                        CollectedRegistration::new(RegistrationKind::AssetRoute, path.clone())
+                    }
+                };
                 match registrar.register(&path, spec) {
                     Ok(Registered::Done) => host_ok(serde_json::json!({ "ok": true })),
                     Ok(Registered::Refused(reason)) => {
+                        registrar
+                            .config
+                            .note_dry_run_refusal(attempted.with_refusal(reason.clone()));
                         host_ok(serde_json::json!({ "ok": false, "reason": reason }))
                     }
                     Err(failure) => host_failure(

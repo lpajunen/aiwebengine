@@ -70,6 +70,11 @@ nothing new is served until the person approves.
    header says handlers are named by string and must be top-level functions.
 3. **Errors that name the fix.** `check_script`, `run_tests` and refused
    registrations answer with the file, the line and the corrected call.
+   _Started:_ `check_script` reports a refused registration as
+   `registration-refused` with the engine's reason, and the module-loader
+   errors (export in `main.*`, dynamic `import()`, missing module, bad import
+   binding) name the corrected form. Still to do: `run_tests` failures and
+   `init-failed`, which carry a line but no suggested fix.
 4. **One call from write to verdict.** `write_files` can return the
    `check_script` result and the `init()` outcome together.
 5. **Short tool descriptions.** The 50 engine tools' descriptions total about
