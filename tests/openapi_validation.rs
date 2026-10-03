@@ -818,3 +818,45 @@ async fn test_type_definitions_describe_the_execution_model() {
         );
     }
 }
+
+/// The primer is the short document a small model reads instead of the whole
+/// declaration file, so it has to be served beside it and has to stay short.
+/// The declarations must also not demand an `init()` the engine does not.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_script_primer_is_served_beside_the_type_definitions() {
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let base = format!(
+        "http://localhost:{}/engine/types/v{}",
+        engine.port(),
+        env!("CARGO_PKG_VERSION")
+    );
+
+    let response = engine
+        .client()
+        .get(format!("{base}/script-primer.md"))
+        .send()
+        .await
+        .expect("Failed to fetch the primer");
+    assert_eq!(response.status(), 200);
+    let primer = response.text().await.expect("Failed to read the primer");
+    assert!(primer.contains("function init()"));
+    let words = primer.split_whitespace().count();
+    assert!(
+        words <= 1500,
+        "the primer is {words} words; keep it under 1500"
+    );
+
+    let types = engine
+        .client()
+        .get(format!("{base}/aiwebengine.d.ts"))
+        .send()
+        .await
+        .expect("Failed to fetch type definitions")
+        .text()
+        .await
+        .expect("Failed to read type definitions");
+    assert!(
+        !types.contains("MUST export an init()") && !types.contains("must be exported by every"),
+        "the declarations say init() is required, which the engine does not"
+    );
+}

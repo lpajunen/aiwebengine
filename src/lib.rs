@@ -3157,6 +3157,35 @@ async fn setup_routes(
         axum::routing::get(|| serve_type_defs("aiwebengine.d.ts")),
     );
 
+    /// Serve the script primer: the short, hand-written guide to the globals a
+    /// simple script uses, beside the declarations it summarises.
+    async fn serve_script_primer() -> axum::response::Response {
+        match repository::fetch_asset_async("https://example.com/core", "script-primer.md").await {
+            Some(asset) => {
+                let mut response = asset.content.into_response();
+                response.headers_mut().insert(
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::HeaderValue::from_static("text/markdown; charset=utf-8"),
+                );
+                response.headers_mut().insert(
+                    axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                    axum::http::HeaderValue::from_static("*"),
+                );
+                response.headers_mut().insert(
+                    axum::http::header::CACHE_CONTROL,
+                    axum::http::HeaderValue::from_static("public, max-age=3600"),
+                );
+                response
+            }
+            None => (StatusCode::NOT_FOUND, "Script primer not found").into_response(),
+        }
+    }
+
+    app = app.route(
+        &format!("/engine/types/v{}/script-primer.md", version),
+        axum::routing::get(serve_script_primer),
+    );
+
     // Add catch-all dynamic routes
     let auth_enabled_for_home = auth_enabled;
     let auth_enabled_for_path = auth_enabled;

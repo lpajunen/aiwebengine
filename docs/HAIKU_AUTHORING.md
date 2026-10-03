@@ -61,10 +61,13 @@ nothing new is served until the person approves.
 1. **A short script primer.** `aiwebengine.d.ts` is about 16,500 words. Write a
    primer of about 1,500 words covering the globals a simple script uses, and
    serve it as an engine asset. It is written by hand, like the `.d.ts`, and
-   updated in the same commit as any API change it covers.
+   updated in the same commit as any API change it covers. _Done:_
+   `assets/script-primer.md`, served at
+   `/engine/types/v{version}/script-primer.md`; a test caps it at 1,500 words.
 2. **Fix what the types get wrong.** The `.d.ts` says every script MUST export
    `init()`, which the engine does not require. A small model copies such
-   statements literally.
+   statements literally. _Done:_ `init()` is documented as optional, and the
+   header says handlers are named by string and must be top-level functions.
 3. **Errors that name the fix.** `check_script`, `run_tests` and refused
    registrations answer with the file, the line and the corrected call.
 4. **One call from write to verdict.** `write_files` can return the

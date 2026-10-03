@@ -7,8 +7,13 @@
  * Add this reference to your scripts for IDE autocomplete and type checking:
  * /// <reference path="https://your-engine.com/engine/types/v0.1.0/aiwebengine.d.ts" />
  *
- * IMPORTANT: Every script MUST export an init() function that registers routes,
- * MCP tools, or other initialization logic.
+ * A script with routes, MCP tools or jobs to register defines a top-level
+ * `function init()` that registers them. `init()` is optional: a script with
+ * none registers nothing and is still valid. Handlers are named by string and
+ * must be top-level functions; `export` is not needed.
+ *
+ * A short guide to the globals a simple script uses is served beside this file
+ * as `script-primer.md`.
  *
  * @example
  * // Minimal script structure
@@ -26,9 +31,9 @@
 // ============================================================================
 
 /**
- * Initialization function that must be exported by every script.
- * This function is called when the script is loaded and should register
- * routes, MCP tools, or perform other setup tasks.
+ * Optional initialization function. When the script defines one, the engine
+ * calls it at startup and on every deploy; it is where routes, MCP tools and
+ * jobs are registered. A script that defines none registers nothing.
  *
  * @param context - Handler context (optional, may not be provided during init)
  * @example

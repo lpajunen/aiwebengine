@@ -6199,6 +6199,17 @@ fn get_static_assets() -> HashMap<String, Asset> {
     };
     m.insert("aiwebengine.d.ts".to_string(), aiwebengine_dts);
 
+    let script_primer = Asset {
+        uri: "script-primer.md".to_string(),
+        name: Some("Script primer".to_string()),
+        mimetype: "text/markdown".to_string(),
+        content: include_bytes!("../assets/script-primer.md").to_vec(),
+        created_at: now,
+        updated_at: now,
+        script_uri: "https://example.com/core".to_string(),
+    };
+    m.insert("script-primer.md".to_string(), script_primer);
+
     m
 }
 
