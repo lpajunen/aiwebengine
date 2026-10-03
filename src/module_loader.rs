@@ -1182,8 +1182,7 @@ pub fn normalize_asset_module_specifier(
         }
 
         return Err(ModuleLoaderError::InvalidSpecifier(
-            "Module specifier must start with './' or '../', or use an asset-root path like 'server/module.ts'"
-                .to_string(),
+            unusable_specifier_message(importer_path, specifier),
         ));
     }
 
@@ -1200,6 +1199,33 @@ pub fn normalize_asset_module_specifier(
     }
 
     Ok(normalized)
+}
+
+/// What to tell an author whose import cannot be resolved: which import, in
+/// which file, and what to write instead.
+///
+/// A bare file name (`testing.ts`) is the usual slip and the fix is to say it is
+/// relative; a package name or a URL cannot be fixed that way, and the message
+/// says so rather than letting the author keep guessing at spellings.
+fn unusable_specifier_message(importer_path: &str, specifier: &str) -> String {
+    let file_like = [".ts", ".tsx", ".js", ".jsx", ".json", ".md", ".txt"]
+        .iter()
+        .any(|extension| specifier.ends_with(extension))
+        && !specifier.contains(':')
+        && !specifier.starts_with("//");
+    if file_like {
+        format!(
+            "Import '{specifier}' in '{importer_path}' must start with './' or '../'. \
+             For a file beside it, write './{specifier}'; for a file elsewhere in the script, \
+             give its path from the script's root, like 'lib/{specifier}'."
+        )
+    } else {
+        format!(
+            "Import '{specifier}' in '{importer_path}' cannot be loaded: packages and URLs are \
+             not available. Import a file of this script by a relative path such as \
+             './name.ts', or write the code in the script."
+        )
+    }
 }
 
 fn is_root_asset_specifier(specifier: &str) -> bool {
@@ -1582,12 +1608,17 @@ mod tests {
             "https://example.com/shared/format.ts",
         )
         .expect_err("url specifier should be rejected");
-        assert_eq!(
-            error,
-            ModuleLoaderError::InvalidSpecifier(
-                "Module specifier must start with './' or '../', or use an asset-root path like 'server/module.ts'"
-                    .to_string(),
-            )
+        let ModuleLoaderError::InvalidSpecifier(message) = error else {
+            panic!("expected an invalid specifier, got {error:?}");
+        };
+        assert!(
+            message.contains("'https://example.com/shared/format.ts'"),
+            "{message}"
+        );
+        assert!(message.contains("'server/main.ts'"), "{message}");
+        assert!(
+            message.contains("packages and URLs are not available"),
+            "{message}"
         );
     }
 
@@ -1595,13 +1626,28 @@ mod tests {
     fn reject_package_name_specifier() {
         let error = normalize_asset_module_specifier("server/main.ts", "react")
             .expect_err("package-name specifier should be rejected");
-        assert_eq!(
-            error,
-            ModuleLoaderError::InvalidSpecifier(
-                "Module specifier must start with './' or '../', or use an asset-root path like 'server/module.ts'"
-                    .to_string(),
-            )
+        let ModuleLoaderError::InvalidSpecifier(message) = error else {
+            panic!("expected an invalid specifier, got {error:?}");
+        };
+        assert!(
+            message.contains("Import 'react' in 'server/main.ts'"),
+            "{message}"
         );
+        assert!(
+            message.contains("packages and URLs are not available"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_bare_file_name_is_told_to_say_it_is_relative() {
+        let error = normalize_asset_module_specifier("lib/handlers.test.ts", "testing.ts")
+            .expect_err("a bare file name should be rejected");
+        let ModuleLoaderError::InvalidSpecifier(message) = error else {
+            panic!("expected an invalid specifier, got {error:?}");
+        };
+        assert!(message.contains("write './testing.ts'"), "{message}");
+        assert!(message.contains("'lib/handlers.test.ts'"), "{message}");
     }
 
     #[test]

@@ -38,11 +38,14 @@ fn hint_for(error: &str) -> Option<&'static str> {
              context it builds, so include the fields the handler reads.",
         );
     }
-    if lower.contains("is not a function") {
+    if lower.contains("not a function") {
         return Some(
-            "that is not a function of the object it was called on. Check the name against \
-             aiwebengine.d.ts: `ResponseBuilder.json`, `routeRegistry.registerRoute`, \
-             `scriptStorage.getItem` — and note `fetch` answers directly, with no `await`.",
+            "something that is not a function was called. If it is a name imported from \
+             another file, that file does not export it under that name (an import of a \
+             missing export is undefined, not an error), so check the export and the \
+             import. Otherwise check the name against aiwebengine.d.ts: \
+             `ResponseBuilder.json`, `routeRegistry.registerRoute`, `scriptStorage.getItem` — \
+             and note `fetch` answers directly, with no `await`.",
         );
     }
     if lower.contains("securityerror") {
@@ -63,6 +66,16 @@ mod tests {
         let text = with_hint("ReferenceError: helper is not defined\n    at init (main.ts:3:5)");
         assert!(text.starts_with("ReferenceError: helper is not defined"));
         assert!(text.contains("\nHint: that name is not a global"));
+    }
+
+    #[test]
+    fn quickjs_bare_not_a_function_gets_the_import_hint() {
+        let text = with_hint("not a function, \nStack: at <anonymous> (x.test.ts:3:5)");
+        assert!(
+            text.contains("Hint: something that is not a function"),
+            "{text}"
+        );
+        assert!(text.contains("does not export it"), "{text}");
     }
 
     #[test]
