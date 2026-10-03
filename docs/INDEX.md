@@ -78,6 +78,7 @@ routeRegistry.registerRoute("/hello", {
 | [Use Cases](engine-contributors/planning/USE_CASES.md)             | User scenarios and use case documentation               |
 | [Customer Survey](engine-contributors/planning/CUSTOMER_SURVEY.md) | Customer research and feedback                          |
 | [Simplification](SIMPLIFICATION.md)                                | What to collapse across the three API surfaces, and why |
+| [Haiku as a script author](HAIKU_AUTHORING.md)                     | Plan: the agent on Haiku builds simple scripts          |
 
 **📁 Location**: `docs/engine-contributors/planning/`
 
