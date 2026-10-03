@@ -96,9 +96,10 @@ nothing new is served until the person approves.
 
 ## Harness work (aiwebengine-agent)
 
-Built; the README of `aiwebengine-agent` describes it. A first live check — two
-tasks on Haiku 4.5 — passed in 5 turns each at about $0.02, where the same
-agent without this work ran out of turns on its first task.
+Built; the README of `aiwebengine-agent` describes it. The results are in
+`aiwebengine-agent/eval/results/`: on the ten seed tasks Haiku 4.5 passed 9 of
+10 in the latest run (14 turns and $0.05 per passed task), where the same agent
+without this work passed none of the five it was given.
 
 1. **An authoring mode with its own budgets.** A run started with
    `kind: "author"` gets 8,000 output tokens and 25 turns (chat keeps 1,024 and
@@ -107,9 +108,11 @@ agent without this work ran out of turns on its first task.
    `edit_file`, `read_file`, `check_script`, `run_tests`, `read_logs` and
    `request_deploy`, each bound to the scripts the run created. There is no HTTP
    probe: a pinned script's routes serve the pinned revision, so behaviour is
-   checked through `run_tests`. _Not yet:_ a test helper in the templates that
-   builds a request context, so a test can call a handler directly; today
-   handlers stay thin and the logic is tested in `lib/`.
+   checked through `run_tests`. Handlers live in `lib/handlers.ts` and `main.ts`
+   makes them global with `Object.assign(globalThis, {...})`, so a test imports
+   a handler and calls it with a context built by `makeContext` in
+   `lib/testing.ts`; an agent's model call is a parameter, so a test passes a
+   fake.
 3. **One guide per shape.** `build-site`, `build-tool` and `build-agent` are
    plain guides in `agent/authoring/`, returned by `create_script` together with
    the primer, rather than SKILL.md skills: a skill must be found and read, and
