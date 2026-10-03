@@ -96,28 +96,32 @@ nothing new is served until the person approves.
 
 ## Harness work (aiwebengine-agent)
 
-1. **An authoring mode with its own budgets.** About 8,000 output tokens per
-   turn (today `MAX_TOKENS` is 1,024), about 25 steps (today 12), and
-   `jobTimeoutMs` 120 s via `set_script_limits`. Chat runs stay as they are.
-2. **Direct tools instead of discovery.** `write_files`, `edit_file`,
-   `read_file`, `check_script`, `run_tests`, `read_logs` and `deploy_script` —
-   no `engine_tools` lookup. There is no HTTP probe: a pinned script's routes
-   serve the pinned revision, so behaviour is checked through `run_tests`,
-   which runs against head and calls handlers directly. The templates ship a
-   test helper that builds a request context for that.
-3. **One skill per shape.** `build-site`, `build-tool`, `build-agent`: steps,
-   template and known pitfalls, in the existing SKILL.md format.
+Built; the README of `aiwebengine-agent` describes it. A first live check — two
+tasks on Haiku 4.5 — passed in 5 turns each at about $0.02, where the same
+agent without this work ran out of turns on its first task.
+
+1. **An authoring mode with its own budgets.** A run started with
+   `kind: "author"` gets 8,000 output tokens and 25 turns (chat keeps 1,024 and
+   12), and `jobTimeoutMs` 120 s via `set_script_limits`.
+2. **Direct tools instead of discovery.** `create_script`, `write_files`,
+   `edit_file`, `read_file`, `check_script`, `run_tests`, `read_logs` and
+   `request_deploy`, each bound to the scripts the run created. There is no HTTP
+   probe: a pinned script's routes serve the pinned revision, so behaviour is
+   checked through `run_tests`. _Not yet:_ a test helper in the templates that
+   builds a request context, so a test can call a handler directly; today
+   handlers stay thin and the logic is tested in `lib/`.
+3. **One guide per shape.** `build-site`, `build-tool` and `build-agent` are
+   plain guides in `agent/authoring/`, returned by `create_script` together with
+   the primer, rather than SKILL.md skills: a skill must be found and read, and
+   a small model skips that step.
 4. **Templates in git**, in
    [`aiwebengine-template`](https://github.com/lpajunen/aiwebengine-template),
-   one directory per shape, fetched with `pull_from_git`.
-5. **Escalate instead of looping.** After the same check fails three times, the
-   run stops and writes a handoff note: the request, the script and revision,
-   the last error and what was tried. The person gives the note to a developer
-   working in Claude Code; nothing hands off automatically. The note's format
-   is part of the authoring skill, so a developer can start from it without
-   asking.
-6. **Deployment needs approval.** `deploy_script` always goes through
-   `request_approval`.
+   one directory per shape, pulled with `pull_from_git` as `template-<shape>`.
+5. **Escalate instead of looping.** The same check or test failure three times,
+   or running out of turns, stops the run and writes a handoff note. A turn
+   that speaks and calls no tool is nudged to act, three times at most.
+6. **Deployment needs approval.** `request_deploy` runs the check and the tests,
+   refuses on a failure, and then asks; approving moves the pin to head.
 
 ## Evaluation
 
