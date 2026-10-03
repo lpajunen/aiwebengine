@@ -77,6 +77,8 @@ nothing new is served until the person approves.
    get a `Hint:` line for the usual causes (`src/fix_hints.rs`).
 4. **One call from write to verdict.** `write_files` can return the
    `check_script` result and the `init()` outcome together.
+   _Done:_ `write_files` and `edit_file` answer with a `check` report beside
+   `init`; `check: false` opts out.
 5. **Short tool descriptions.** The 50 engine tools' descriptions total about
    50,000 characters; cut each to what it does plus one rule.
 6. **Drafts are pins, not another host.** The run's first write is the

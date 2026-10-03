@@ -191,6 +191,15 @@ when it did not. It reports `{"ran": false, "reason": …}` when `reinit` was
 `never`, and when nothing changed — a batch that wrote nothing has no
 registrations to rebuild.
 
+`check` is the [`check_script`](SCRIPT_CHECKS.md) report for the script as the
+write left it — diagnostics, `registrations`, the `init()` cost — so one call
+answers whether the change works. `init` says whether `init()` threw; `check`
+says what it never could, such as a registered handler that does not exist or
+a registration the engine refused. It is present when the write changed
+something, and `"check": false` in the request leaves it out. It checks head,
+so for a pinned script it is the verdict on the draft while the pin keeps
+serving. `edit_file` answers the same way.
+
 Note that `reinit: "never"` is local: other instances still learn of the change
 and reinitialize when they do. It is for a caller pushing one part of a larger
 change that is not coherent yet, not a way to keep a cluster quiet.

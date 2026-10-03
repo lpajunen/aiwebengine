@@ -332,6 +332,22 @@ async fn resolve_view(
     ))
 }
 
+/// The `check_script` report for what a write just stored, unless the caller
+/// opted out with `check: false`.
+///
+/// A write answers what `init()` did; it cannot say that a handler it
+/// registered does not exist, that a registration was refused, or what the
+/// script now serves. The check says all three, and a caller that writes and
+/// then asks would be making two round trips for one verdict. It runs against
+/// head, which is what was just written, so it is also the verdict for a
+/// pinned script whose `init()` was left alone.
+fn check_after_write(script: &str, user: &UserContext, args: &Value) -> Option<Value> {
+    if args.get("check").and_then(Value::as_bool) == Some(false) {
+        return None;
+    }
+    Some(tool_check_script(&json!({ "script": script }), user))
+}
+
 /// Re-initialise a script after a write, unless a write is not what it serves.
 ///
 /// A pinned script runs a revision, so writing its files changes nothing about
@@ -5512,7 +5528,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "write_files",
-            "Write several of a script's files as one change, then run its init() once, and remove whatever 'remove' names. A module goes in 'text' as plain source, the way /engine/check_script takes it; 'content_base64' is for a file that is not text. One transaction, one revision, one init(), and nothing is written if any file is rejected. The entrypoint is one of the files: name it in 'files' as 'main.ts' (or .js/.tsx/.jsx), or pass it as 'content'. Writing it takes WriteScripts; the rest take WriteAssets; both take ownership of the script or administrator.",
+            "Write several of a script's files as one change, then run its init() once, and remove whatever 'remove' names. The answer includes a 'check' report (as check_script) for what was written: read its diagnostics before anything else. A module goes in 'text' as plain source, the way /engine/check_script takes it; 'content_base64' is for a file that is not text. One transaction, one revision, one init(), and nothing is written if any file is rejected. The entrypoint is one of the files: name it in 'files' as 'main.ts' (or .js/.tsx/.jsx), or pass it as 'content'. Writing it takes WriteScripts; the rest take WriteAssets; both take ownership of the script or administrator.",
             || {
                 json!({
                     "type": "object",
@@ -5539,7 +5555,8 @@ fn native_tools() -> &'static [NativeToolEntry] {
                             "description": "Asset paths this change removes. Naming a file the script does not have is not an error.",
                             "items": { "type": "string" }
                         },
-                        "reinit": { "type": "string", "enum": ["after", "never"], "description": "Run the script's init() once after the batch lands (default 'after'), or leave it alone" }
+                        "reinit": { "type": "string", "enum": ["after", "never"], "description": "Run the script's init() once after the batch lands (default 'after'), or leave it alone" },
+                        "check": { "type": "boolean", "description": "Answer with the check_script report for what was written (default true)" }
                     },
                     "required": ["script"]
                 })
@@ -5569,7 +5586,8 @@ fn native_tools() -> &'static [NativeToolEntry] {
                             }
                         },
                         "base_sha256": { "type": "string", "description": "SHA-256 the file is expected to have right now, as read_file reported it. The patch is refused if the stored content has moved on." },
-                        "reinit": { "type": "string", "enum": ["after", "never"], "description": "Run the script's init() once the edits land (default 'after'), or leave it alone" }
+                        "reinit": { "type": "string", "enum": ["after", "never"], "description": "Run the script's init() once the edits land (default 'after'), or leave it alone" },
+                        "check": { "type": "boolean", "description": "Answer with the check_script report for the script as edited (default true)" }
                     },
                     "required": ["script", "path", "edits"]
                 })
@@ -7410,9 +7428,16 @@ fn tool_write_files(args: &Value, user: &UserContext) -> Value {
                     crate::database::run_blocking(reinitialize_after_write(script))
                 }
             };
+            let check = outcome
+                .changed()
+                .then(|| check_after_write(script, user, args))
+                .flatten();
             let mut body = batch_outcome_json(script, &outcome, init);
             if let Some(object) = body.as_object_mut() {
                 object.insert("success".to_string(), json!(true));
+                if let Some(check) = check {
+                    object.insert("check".to_string(), check);
+                }
             }
             body
         }
@@ -7476,12 +7501,18 @@ fn tool_edit_file(args: &Value, user: &UserContext) -> Value {
                     crate::database::run_blocking(reinitialize_after_write(script))
                 }
             };
+            let check = (outcome.status != "unchanged")
+                .then(|| check_after_write(script, user, args))
+                .flatten();
             let mut body = outcome.to_json();
             if let Some(object) = body.as_object_mut() {
                 object.insert("success".to_string(), json!(true));
                 object.insert("script".to_string(), json!(script));
                 object.insert("path".to_string(), json!(path));
                 object.insert("init".to_string(), init);
+                if let Some(check) = check {
+                    object.insert("check".to_string(), check);
+                }
                 if let Some(note) = deployment_note(script) {
                     object.insert("deployment".to_string(), note);
                 }

@@ -1361,3 +1361,45 @@ async fn create_file_refuses_what_is_already_there() {
         "export const n = 3;\n"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_write_answers_with_the_check_of_what_it_stored() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://assets-batch/check-answer";
+    deploy(uri, "function init() {}");
+
+    // init() runs and succeeds, yet the route names a handler nobody defined:
+    // only the check can say so.
+    let (status, body) = post_batch(
+        &format!("script={}", uri),
+        json!({
+            "content": "function init() { routeRegistry.registerRoute('/check-answer', { handler: 'nobody' }); }",
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["init"]["success"], true, "{body}");
+    assert_eq!(body["check"]["ok"], false, "{body}");
+    assert_eq!(
+        body["check"]["diagnostics"][0]["code"], "missing-handler",
+        "{body}"
+    );
+
+    // Opting out leaves the answer as it was.
+    let (_, body) = post_batch(
+        &format!("script={}", uri),
+        json!({ "content": "function init() {}\n// changed", "check": false }),
+    )
+    .await;
+    assert!(body.get("check").is_none(), "{body}");
+
+    // A write that changes nothing has nothing to check.
+    let (_, body) = post_batch(
+        &format!("script={}", uri),
+        json!({ "content": "function init() {}\n// changed" }),
+    )
+    .await;
+    assert!(body.get("check").is_none(), "{body}");
+}
