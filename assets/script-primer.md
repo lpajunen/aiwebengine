@@ -35,10 +35,11 @@ function init(): void {
 
 Rules that cause most failures:
 
-- A handler is named **by string** and must be a **top-level function** of
-  `main.ts`. A handler that is not defined, or is not a function, is a 500 on
-  the first request. Do not `export` handlers; do not put them in another file
-  unless `main.ts` declares a function that calls them.
+- A handler is named **by string** and must be a **global function** of
+  `main.ts`: either a top-level function there, or one imported from `lib/` and
+  made global with `Object.assign(globalThis, { home, about })`. A handler that
+  is not defined, or is not a function, is a 500 on the first request. `main.ts`
+  itself never uses `export`.
 - Register only inside `init()`. Registering from a handler does nothing and
   answers `{ ok: false, reason }`.
 - Registration problems are returned, not thrown: always read the result. A
@@ -207,8 +208,19 @@ Matchers: `toBe`, `toEqual`, `toBeTruthy`, `toBeFalsy`, `toBeNull`,
 `toBeDefined`, `toBeUndefined`, `toContain`, `toHaveLength`, `toMatch`,
 `toBeGreaterThan`, `toBeLessThan`, `toThrow`, and `.not` before any of them.
 
-Put logic in files under `lib/` that `main.ts` imports, so tests can import it
-too. A handler that only parses a request and calls into `lib/` stays small.
+A test cannot import `main.ts`, so put handlers in `lib/handlers.ts` (exported),
+import them in `main.ts` and add each to the `Object.assign(globalThis, {...})`
+line. A test then calls a handler with a request context it builds, and asserts
+on the answer's `status` and `body`:
+
+```ts
+import { addItem } from "./handlers.ts";
+
+test("a body with no name is a 400", () => {
+  const context = { request: { json: () => ({}), query: {}, params: {} } };
+  expect(addItem(context).status).toBe(400);
+});
+```
 
 ## Limits
 
