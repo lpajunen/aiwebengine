@@ -119,7 +119,31 @@ A page built from them:
 </html>
 ```
 
+## Account menu
+
+A page only a signed-in person sees can carry the same person button the
+engine's own signed-in pages have, in the top right with who is signed in,
+a link to `/auth/account` and Sign out:
+
+```html
+<link rel="stylesheet" href="/engine/engine.css" />
+<script src="/engine/engine.js"></script>
+
+<aw-account-menu>
+  <a href="/my-script/settings">Settings</a>
+  <button type="button" id="export">Export</button>
+</aw-account-menu>
+```
+
+Links and buttons nested in the element are your page's own items, listed above
+the engine's. The element asks `/auth/status` who is signed in (`label` is their
+email, else name, else id); signed out, it shows a Sign in link instead. It is
+styled by the sheet above, so a page must link both. `<script src>` needs
+`script-src 'self'` in the page's policy. Sign out returns to the current path.
+
 ## Caching
+
+`/engine/engine.js` is cached the same way.
 
 The path carries no version: a script linking it wants the look of whichever
 engine is serving it, and a versioned path would stop resolving after every

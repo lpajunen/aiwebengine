@@ -27,6 +27,21 @@ pub const STYLESHEET: &str = include_str!("../assets/engine.css");
 /// only on management hosts, since it is for every host's pages.
 pub const STYLESHEET_PATH: &str = "/engine/engine.css";
 
+/// The account menu's script, compiled into the binary. It defines
+/// `<aw-account-menu>`, a person button in the top right that shows who is
+/// signed in and offers the account page and sign-out; a page can put its own
+/// items in it by nesting them inside the element.
+pub const SCRIPT: &str = include_str!("../assets/engine.js");
+
+/// Where [`SCRIPT`] is published, for the same reasons as [`STYLESHEET_PATH`].
+pub const SCRIPT_PATH: &str = "/engine/engine.js";
+
+/// The account menu, for a page only a signed-in person sees. Appended to the
+/// body: the script is external (the policy allows `'self'`) and the element
+/// positions itself in the corner of the viewport.
+pub const ACCOUNT_MENU: &str = r#"<aw-account-menu></aw-account-menu>
+    <script src="/engine/engine.js"></script>"#;
+
 /// How wide a page's card is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Width {
@@ -107,32 +122,34 @@ pub fn response(status: StatusCode, html: String, nonce: &str) -> Response {
     }
 }
 
-/// The stylesheet's entity tag: a digest of its bytes, computed once.
+/// An asset's entity tag: a digest of its bytes.
 ///
-/// The path carries no version, because a script linking it wants the look of
+/// The paths carry no version, because a script linking one wants the look of
 /// whatever engine is serving it and a versioned path would 404 after every
-/// upgrade. So a browser revalidates instead, and an unchanged sheet costs a
+/// upgrade. So a browser revalidates instead, and an unchanged asset costs a
 /// 304.
-fn stylesheet_etag() -> &'static str {
-    static ETAG: OnceLock<String> = OnceLock::new();
-    ETAG.get_or_init(|| {
-        let digest = Sha256::digest(STYLESHEET.as_bytes());
-        format!("\"{}\"", hex::encode(&digest[..16]))
-    })
+fn etag_of(body: &str) -> String {
+    let digest = Sha256::digest(body.as_bytes());
+    format!("\"{}\"", hex::encode(&digest[..16]))
 }
 
-/// The engine's stylesheet, for scripts whose pages should match the engine's.
-#[utoipa::path(
-    get,
-    path = "/engine/engine.css",
-    tags = ["Assets"],
-    responses(
-        (status = 200, description = "The stylesheet behind the engine's own pages", content_type = "text/css"),
-        (status = 304, description = "Unchanged since the copy the client holds"),
-    )
-)]
-pub async fn stylesheet_route(headers: HeaderMap) -> Response {
-    let etag = stylesheet_etag();
+fn stylesheet_etag() -> &'static str {
+    static ETAG: OnceLock<String> = OnceLock::new();
+    ETAG.get_or_init(|| etag_of(STYLESHEET))
+}
+
+fn script_etag() -> &'static str {
+    static ETAG: OnceLock<String> = OnceLock::new();
+    ETAG.get_or_init(|| etag_of(SCRIPT))
+}
+
+/// Serve `body`, or a 304 when the client already holds the copy `etag` names.
+fn revalidated(
+    headers: &HeaderMap,
+    etag: &'static str,
+    content_type: &'static str,
+    body: &'static str,
+) -> Response {
     let cache_headers = [
         (header::ETAG, etag),
         (header::CACHE_CONTROL, "public, no-cache"),
@@ -154,10 +171,48 @@ pub async fn stylesheet_route(headers: HeaderMap) -> Response {
     (
         StatusCode::OK,
         cache_headers,
-        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-        STYLESHEET,
+        [(header::CONTENT_TYPE, content_type)],
+        body,
     )
         .into_response()
+}
+
+/// The engine's stylesheet, for scripts whose pages should match the engine's.
+#[utoipa::path(
+    get,
+    path = "/engine/engine.css",
+    tags = ["Assets"],
+    responses(
+        (status = 200, description = "The stylesheet behind the engine's own pages", content_type = "text/css"),
+        (status = 304, description = "Unchanged since the copy the client holds"),
+    )
+)]
+pub async fn stylesheet_route(headers: HeaderMap) -> Response {
+    revalidated(
+        &headers,
+        stylesheet_etag(),
+        "text/css; charset=utf-8",
+        STYLESHEET,
+    )
+}
+
+/// The account menu's script, for engine pages and for scripts' own.
+#[utoipa::path(
+    get,
+    path = "/engine/engine.js",
+    tags = ["Assets"],
+    responses(
+        (status = 200, description = "The script defining the account menu element", content_type = "text/javascript"),
+        (status = 304, description = "Unchanged since the copy the client holds"),
+    )
+)]
+pub async fn script_route(headers: HeaderMap) -> Response {
+    revalidated(
+        &headers,
+        script_etag(),
+        "text/javascript; charset=utf-8",
+        SCRIPT,
+    )
 }
 
 #[cfg(test)]
@@ -170,6 +225,16 @@ mod tests {
         assert!(html.contains(r#"<style nonce="abc">"#));
         assert!(html.contains("--aw-color-bg"));
         assert!(html.contains(r#"<main class="aw-card">"#));
+    }
+
+    #[tokio::test]
+    async fn the_script_is_served_as_javascript() {
+        let response = script_route(HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("text/javascript; charset=utf-8"))
+        );
     }
 
     #[test]

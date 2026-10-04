@@ -113,6 +113,9 @@ pub struct AuthResponse {
     pub user_id: Option<String>,
     pub is_admin: Option<bool>,
     pub is_editor: Option<bool>,
+    /// What to call the person: their email, else their name, else their id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub redirect: Option<String>,
 }
 
@@ -619,6 +622,13 @@ fn page_response(title: &str, width: Width, body: &str, nonce: &str) -> Response
         crate::engine_page::document(title, nonce, width, body),
         nonce,
     )
+}
+
+/// [`page_response`] for a page only a signed-in person sees, with the account
+/// menu in its corner.
+fn signed_in_page_response(title: &str, width: Width, body: &str, nonce: &str) -> Response {
+    let body = format!("{body}\n{}", crate::engine_page::ACCOUNT_MENU);
+    page_response(title, width, &body, nonce)
 }
 
 /// Account page parameters. Both are engine-written codes, rendered through a
@@ -1361,7 +1371,7 @@ pub async fn delegate_page(
         sender_fields = sender_fields,
     );
 
-    page_response("Authorise an app", Width::Narrow, &body, &nonce)
+    signed_in_page_response("Authorise an app", Width::Narrow, &body, &nonce)
 }
 
 /// The account page: what the signed-in person can do about their own way in.
@@ -1540,7 +1550,7 @@ pub async fn account_page(
         sessions = sessions,
     );
 
-    let mut response = page_response("Your account", Width::Wide, &body, &nonce);
+    let mut response = signed_in_page_response("Your account", Width::Wide, &body, &nonce);
     // The page names the account it belongs to. A shared cache holding it would
     // hand one person's to the next.
     response.headers_mut().insert(
@@ -2628,7 +2638,7 @@ fn render_recovery_codes_page(codes: &[String]) -> Response {
         items = items,
     );
 
-    let mut response = page_response("Recovery codes", Width::Narrow, &body, &nonce);
+    let mut response = signed_in_page_response("Recovery codes", Width::Narrow, &body, &nonce);
     // The one response in the engine that carries credentials in its body.
     response.headers_mut().insert(
         header::CACHE_CONTROL,
@@ -3400,11 +3410,17 @@ pub async fn auth_status(
             )
             .await
     {
+        let label = session
+            .email
+            .clone()
+            .or_else(|| session.name.clone())
+            .unwrap_or_else(|| session.user_id.clone());
         return Json(AuthResponse {
             success: true,
             user_id: Some(session.user_id),
             is_admin: Some(session.is_admin),
             is_editor: Some(session.is_editor),
+            label: Some(label),
             redirect: None,
         });
     }
@@ -3414,6 +3430,7 @@ pub async fn auth_status(
         user_id: None,
         is_admin: None,
         is_editor: None,
+        label: None,
         redirect: Some("/auth/login".to_string()),
     })
 }
@@ -4269,7 +4286,7 @@ fn render_consent_page(
         hidden_fields = hidden_fields,
     );
 
-    page_response(
+    signed_in_page_response(
         &format!("Authorize {}", validated.client.display_name()),
         Width::Narrow,
         &body,
@@ -6408,7 +6425,8 @@ pub async fn elevate_page(
         back = html_attribute(&safe_redirect_target(params.redirect.as_deref())),
     );
 
-    let mut response = page_response("Switch on more rights", Width::Narrow, &body, &nonce);
+    let mut response =
+        signed_in_page_response("Switch on more rights", Width::Narrow, &body, &nonce);
     // The page names the account it belongs to and carries a CSRF token bound
     // to it. A shared cache holding it would hand one person's to the next.
     response.headers_mut().insert(

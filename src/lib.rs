@@ -113,6 +113,7 @@ What a script may spend is worth knowing before writing one: each invocation get
         engine_api::unauthorized_page_route,
         engine_api::favicon_route,
         engine_page::stylesheet_route,
+        engine_page::script_route,
         auth::routes::login_page,
         auth::routes::account_page,
         auth::routes::start_guest,
@@ -3087,6 +3088,10 @@ async fn setup_routes(
         .route(
             engine_page::STYLESHEET_PATH,
             axum::routing::get(engine_page::stylesheet_route),
+        )
+        .route(
+            engine_page::SCRIPT_PATH,
+            axum::routing::get(engine_page::script_route),
         )
         .route(
             "/auth/unauthorized",
