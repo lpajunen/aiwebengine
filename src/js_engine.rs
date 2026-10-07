@@ -1317,7 +1317,10 @@ pub fn execute_script_for_request_secure(
     let execution = HandlerExecution::prepare(
         &script_uri_owned,
         Budget::Request,
-        GlobalSecurityConfig::new(Principal::Caller(params.user_context.clone()), log_context),
+        GlobalSecurityConfig {
+            client_ip: crate::security::client_ip::from_header_snapshot(&params.headers),
+            ..GlobalSecurityConfig::new(Principal::Caller(params.user_context.clone()), log_context)
+        },
     )?;
     let PreparePhases {
         fetch: t_fetch,

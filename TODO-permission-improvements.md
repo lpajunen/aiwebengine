@@ -326,14 +326,18 @@ Not done:
    what `sha256=` or `v0=` is), and a general hashing API (nothing has needed
    one).
 
-2. **No rate-limit primitive for scripts.** `rate_limiting.rs` protects engine
-   endpoints; a script with a public form writes its own, or does not.
-   `limits.consume(key, budget)` with the engine choosing the bucket (per
-   person, per judged IP) is the same move as `personalStorage`.
-3. **No CSRF for script routes.** `csrf.rs` protects engine forms. The
-   headers/CORS argument — the engine speaks only for pages it wrote — is about
-   _policy_; handing a script a correct token and validating it on an opted-in
-   route is not speaking for its page.
+2. ~~**No rate-limit primitive for scripts.**~~ **Done** —
+   `rateLimit.consume(bucket, { limit, windowSeconds, per })`. The script sizes
+   the bucket; the engine keys it to the signed-in person, else the address
+   `client_ip.rs` judged (`per: "caller"`), and holds it in Postgres beside
+   the engine's own budgets.
+3. ~~**No CSRF for script routes.**~~ **Done, without a token** —
+   `security/cross_origin.rs` refuses a state-changing request that carries a
+   session and that the browser says came from another origin
+   (`Sec-Fetch-Site`, else `Origin` against `Host`). A token would have needed
+   every script to emit and check it; this needs nothing from any of them, and
+   it also covers the case `SameSite=Lax` does not — another of this engine's
+   hosts is the same site.
 4. **Account deletion is only as complete as where personal data lives.**
    `delete_user` takes sessions, grants and git credentials; a person's rows in
    a script's own tables stay. An argument for making `personalStorage` and a
@@ -344,9 +348,11 @@ Not done:
    anything gets an auditable, uniform record instead of a boolean in its own
    table. Design it together with the elevation page — they are the same page
    asked at two lifetimes.
-6. **An audit log scripts can append to but not clear.** Scripts have
-   `console.log`, and `clear_logs` exists — a log the actor can delete is not
-   an audit trail.
+6. ~~**An audit log scripts can append to but not clear.**~~ **Done** —
+   `audit.record(action, details)` into `script_audit_events`, attributed by
+   the engine from the principal and the judged address, read by the owner or
+   an administrator through `read_audit`, removed only by age
+   (`logs.audit_retention_days`) or with the script.
 
 ---
 

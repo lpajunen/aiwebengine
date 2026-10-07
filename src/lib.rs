@@ -57,6 +57,7 @@ pub mod route_index;
 pub mod safe_helpers;
 pub mod sandbox;
 pub mod scheduler;
+pub mod script_audit;
 pub mod script_check;
 pub mod script_eval;
 pub mod script_init;
@@ -3497,6 +3498,27 @@ async fn handle_dynamic_request(
         if let Ok(value_str) = value.to_str() {
             header_map.insert(name.as_str().to_string(), value_str.to_string());
         }
+    }
+
+    // A signed-in visitor's browser must not be made to change something by a
+    // page on another origin — including another of this engine's hosts, which
+    // is the same site to `SameSite=Lax`. Decided here so that no script has to
+    // carry a token scheme to be safe; see `security::cross_origin`.
+    if auth_user.is_some()
+        && let Some(reason) = security::cross_origin::refusal(
+            &request_method,
+            request_host(req.headers()).as_deref(),
+            &header_map,
+        )
+    {
+        warn!("[{}] {} {}: {}", request_id, request_method, path, reason);
+        return error_to_response(
+            error::ErrorResponseBuilder::new(error::ErrorCode::Forbidden, reason)
+                .path(&path)
+                .method(&request_method)
+                .request_id(&request_id)
+                .build(),
+        );
     }
 
     // Extract content type before consuming the request

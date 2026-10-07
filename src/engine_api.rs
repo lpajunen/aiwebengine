@@ -5427,6 +5427,23 @@ fn native_tools() -> &'static [NativeToolEntry] {
             tool_read_logs,
         ),
         (
+            "read_audit",
+            "Read the events one script recorded with audit.record, newest first. Its owner or an administrator only; nothing deletes them.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "Script whose events to read" },
+                        "action": { "type": "string", "description": "Only events with this action" },
+                        "before_id": { "type": "integer", "description": "Only events older than this id; pass the smallest id of the last read for the next page" },
+                        "limit": { "type": "integer", "description": "At most this many (default 100, at most 1000)" }
+                    },
+                    "required": ["script"]
+                })
+            },
+            tool_read_audit,
+        ),
+        (
             "clear_logs",
             "Delete one script's log messages. Retention across every script is applied by the engine's own pruner and is not something a caller triggers.",
             || {
@@ -7116,6 +7133,61 @@ fn tool_read_logs(args: &Value, user: &UserContext) -> Value {
         }
         Err(e) => refuse(Refusal::Failed, format!("Failed to fetch logs: {}", e)),
     }
+}
+
+fn tool_read_audit(args: &Value, user: &UserContext) -> Value {
+    let Some(uri) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(100);
+    if limit <= 0 {
+        return refuse(
+            Refusal::BadRequest,
+            "Parameter 'limit' must be greater than zero",
+        );
+    }
+    match read_audit_authorized(
+        user,
+        uri,
+        arg_str(args, "action"),
+        args.get("before_id").and_then(Value::as_i64),
+        limit,
+    ) {
+        Ok(events) => json!({
+            "script": uri,
+            "events": events,
+            "count": events.len(),
+            "timestamp": iso_timestamp(),
+        }),
+        Err(refusal) => refusal,
+    }
+}
+
+/// A script's audit events: `ViewLogs` and ownership of the script, or an
+/// administrator.
+///
+/// Stricter than the log, which `ViewLogs` alone reads: an audit trail names
+/// people and addresses, and is read by whoever answers for the solution.
+pub fn read_audit_authorized(
+    user: &UserContext,
+    uri: &str,
+    action: Option<&str>,
+    before_id: Option<i64>,
+    limit: i64,
+) -> Result<Vec<crate::script_audit::AuditEvent>, Value> {
+    if !user.has_capability(&Capability::ViewLogs) || !is_admin_or_owner(user, uri) {
+        return Err(refuse(
+            Refusal::Forbidden,
+            "Only the script's owner or an administrator may read its audit events",
+        ));
+    }
+    crate::database::run_blocking(crate::script_audit::query(uri, action, before_id, limit))
+        .map_err(|e| {
+            refuse(
+                Refusal::Failed,
+                format!("Failed to read audit events: {}", e),
+            )
+        })
 }
 
 fn tool_clear_logs(args: &Value, user: &UserContext) -> Value {

@@ -185,6 +185,17 @@ Throw an `Error` for a failure the caller should see.
 which `read_logs` returns. Log the first thing you would want to know when a
 handler fails.
 
+## Safety the engine already provides
+
+- A `POST`, `PUT`, `PATCH` or `DELETE` from a signed-in browser on another
+  origin is refused before your handler runs. A form needs no CSRF token.
+- `rateLimit.consume("signup", { limit: 5, windowSeconds: 600 })` spends from a
+  budget the engine keys to the caller (the person, else their address). On
+  `allowed: false`, answer 429.
+- `audit.record("refund.issued", { orderId })` keeps an event the script cannot
+  delete, attributed by the engine. Use it for what someone will later ask
+  about, and `console` for debugging.
+
 ## Tests
 
 A file named `*.test.ts` is run by `run_tests`. It runs against the latest

@@ -161,6 +161,17 @@ pub struct LogsConfig {
 
     /// How often to run a pruning pass, in seconds.
     pub prune_interval_secs: u64,
+
+    /// Delete events scripts recorded with `audit.record` once they are this
+    /// many days old; zero keeps them as long as their script exists. Kept far
+    /// longer than log lines by default, because an audit trail is read when
+    /// something is questioned, which is rarely the same week.
+    #[serde(default = "default_audit_retention_days")]
+    pub audit_retention_days: u32,
+}
+
+fn default_audit_retention_days() -> u32 {
+    365
 }
 
 impl Default for LogsConfig {
@@ -175,6 +186,7 @@ impl Default for LogsConfig {
             // Hourly, matching the revision pruner: one indexed delete behind
             // an advisory lock, and nothing waits on it.
             prune_interval_secs: 3600,
+            audit_retention_days: default_audit_retention_days(),
         }
     }
 }

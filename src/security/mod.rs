@@ -2,6 +2,7 @@ pub mod audit;
 pub mod capabilities;
 pub mod client_ip;
 pub mod cors;
+pub mod cross_origin;
 pub mod csp;
 pub mod csrf;
 pub mod elevation;

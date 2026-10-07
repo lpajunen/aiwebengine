@@ -155,6 +155,18 @@ pub enum RateLimitKey {
     /// this way at least keeps the damage to the one channel rather than
     /// stopping every other way that person's agent runs.
     ChannelTrigger(String),
+    /// One of a script's own budgets (`rateLimit.consume`).
+    ///
+    /// The script names the bucket and its size; the engine decides whose it
+    /// is (`who`) from the request it judged, so a script cannot be talked
+    /// into spending somebody else's allowance or into giving a caller a
+    /// fresh one by trusting a header. Scoped by script, so two solutions
+    /// naming a bucket alike do not share it.
+    Script {
+        script: String,
+        bucket: String,
+        who: String,
+    },
     /// Rate limit by endpoint/resource
     Endpoint(String),
     /// Rate limit by user and endpoint combination
@@ -174,6 +186,11 @@ impl RateLimitKey {
             RateLimitKey::ClientRegistration(ip) => format!("client_registration:{}", ip),
             RateLimitKey::GitSync(user) => format!("git_sync:{}", user),
             RateLimitKey::ChannelTrigger(binding) => format!("channel_trigger:{}", binding),
+            RateLimitKey::Script {
+                script,
+                bucket,
+                who,
+            } => format!("script:{}:{}:{}", script, bucket, who),
             RateLimitKey::Endpoint(endpoint) => format!("endpoint:{}", endpoint),
             RateLimitKey::UserEndpoint(user_id, endpoint) => {
                 format!("user_endpoint:{}:{}", user_id, endpoint)
@@ -419,6 +436,48 @@ impl RateLimiter {
         result
     }
 
+    /// Spend from one of a script's own budgets, sized as the script says.
+    ///
+    /// The size travels with each call rather than being configured, because
+    /// it belongs to the solution: a sign-up form and an expensive model call
+    /// want different budgets, and only the script knows which it is. Fails
+    /// open on a database error, like every other budget here, and an
+    /// exhausted script budget is the script's business rather than a
+    /// security event, so it is not reported to the auditor.
+    pub async fn consume_script_budget(
+        &self,
+        key: RateLimitKey,
+        cost: u32,
+        capacity: u32,
+        window_seconds: u32,
+    ) -> RateLimitResult {
+        let config = RateLimitConfig {
+            max_tokens: capacity,
+            refill_rate: f64::from(capacity) / f64::from(window_seconds.max(1)),
+            window_duration: Duration::seconds(i64::from(window_seconds)),
+            burst_allowance: 0,
+            enabled: true,
+        };
+        let (allowed, remaining_tokens, retry_after) = match self
+            .process_rate_limit(&key.as_string(), cost, &config)
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                warn!("Rate limit DB error: {}", e);
+                (true, f64::from(capacity), None)
+            }
+        };
+        RateLimitResult {
+            allowed,
+            tokens_consumed: if allowed { cost } else { 0 },
+            remaining_tokens,
+            retry_after,
+            key,
+            config,
+        }
+    }
+
     /// What a key has left, without spending any of it.
     ///
     /// A failure counter has to answer two different questions — "has this
@@ -537,6 +596,8 @@ impl RateLimiter {
             RateLimitKey::ClientRegistration(_) => "client_registration",
             RateLimitKey::GitSync(_) => "git_sync",
             RateLimitKey::ChannelTrigger(_) => "channel_trigger",
+            // Sized by the script on every call; see `consume_script_budget`.
+            RateLimitKey::Script { .. } => "script",
             RateLimitKey::Endpoint(_) => "endpoint",
             RateLimitKey::UserEndpoint(_, _) => "user",
             RateLimitKey::IpEndpoint(_, _) => "ip",

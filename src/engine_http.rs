@@ -42,6 +42,7 @@ const READ_ONLY: &[&str] = &[
     "list_scripts",
     "search_files",
     "read_logs",
+    "read_audit",
     "list_routes",
     "exposure_report",
     "read_init_status",

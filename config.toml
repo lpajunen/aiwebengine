@@ -219,6 +219,9 @@ retention_hours = 168
 # enough of a diagnostic to still be there when somebody looks.
 keep_per_script = 10000
 prune_interval_secs = 3600
+# Events scripts record with audit.record are not log lines: no count bounds
+# them and clear_logs does not reach them. Only age does, and 0 turns that off.
+audit_retention_days = 365
 
 [auth]
 enabled = true

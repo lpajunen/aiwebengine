@@ -25,6 +25,8 @@ const TASKS_PRELUDE: &str = include_str!("../../assets/tasks_prelude.js");
 /// Builds `sandbox` over the host call that runs a narrowed sub-execution.
 const SANDBOX_PRELUDE: &str = include_str!("../../assets/sandbox_prelude.js");
 const CRYPTO_PRELUDE: &str = include_str!("../../assets/crypto_prelude.js");
+const RATE_LIMIT_PRELUDE: &str = include_str!("../../assets/rate_limit_prelude.js");
+const AUDIT_PRELUDE: &str = include_str!("../../assets/audit_prelude.js");
 const ENGINE_PRELUDE: &str = include_str!("../../assets/engine_prelude.js");
 const MCP_PRELUDE: &str = include_str!("../../assets/mcp_prelude.js");
 /// Builds `routeRegistry` over `__hostRouteRegistry`.
@@ -579,6 +581,11 @@ pub struct GlobalSecurityConfig {
     /// Empty for contexts with no invocation to name; a line written under an
     /// empty context is stored exactly as it was before this existed.
     pub log_context: repository::LogContext,
+    /// The address the request came from, as the edge judged it
+    /// ([`crate::security::client_ip`]). `None` where there is no HTTP request
+    /// behind the execution. Read by `rateLimit`, which keys a caller's
+    /// budget by it when nobody is signed in.
+    pub client_ip: Option<String>,
     /// Who this execution acts for. Decides the capabilities every global is
     /// checked against, what a delegated execution is narrowed to, and whether
     /// the `engine` global exists. See [`Principal`].
@@ -634,6 +641,16 @@ impl Principal {
         }
     }
 
+    /// The name an audit event records this principal under.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Caller(_) => "caller",
+            Self::Delegated { .. } => "delegated",
+            Self::Contained(_) => "contained",
+            Self::Engine(_) => "engine",
+        }
+    }
+
     /// Whether the `engine` global is installed.
     pub fn reaches_engine_api(&self) -> bool {
         matches!(self, Self::Caller(_) | Self::Delegated { .. })
@@ -653,6 +670,7 @@ impl GlobalSecurityConfig {
             dry_run_sink: None,
             console_sink: None,
             log_context,
+            client_ip: None,
             principal,
         }
     }
@@ -1465,6 +1483,8 @@ impl SecureGlobalContext {
         self.setup_task_functions(ctx, script_uri)?;
         self.setup_sandbox_functions(ctx, script_uri)?;
         self.setup_crypto_object(ctx, script_uri)?;
+        self.setup_rate_limit_object(ctx, script_uri)?;
+        self.setup_audit_object(ctx, script_uri)?;
         self.setup_engine_object(ctx, script_uri)?;
 
         // Setup JSX factory functions for server-side HTML generation
@@ -6084,6 +6104,216 @@ impl SecureGlobalContext {
         )?;
 
         debug!("crypto initialized for script: {}", script_uri);
+        Ok(())
+    }
+
+    /// `audit` — events a script records and cannot take back.
+    ///
+    /// The script says what happened; the engine says who, from this
+    /// execution's principal and the address the edge judged, so an event
+    /// cannot be attributed to anybody else. See [`crate::script_audit`].
+    fn setup_audit_object(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
+        let global = ctx.globals();
+        let host = rquickjs::Object::new(ctx.clone())?;
+
+        let script = script_uri.to_string();
+        let actor_kind = self.config.principal.kind();
+        let actor_id = self.user_context.user_id.clone();
+        let client_ip = self.config.client_ip.clone();
+        let request_id = self.config.log_context.request_id.clone();
+        let record = Function::new(
+            ctx.clone(),
+            move |action: String, details_json: String| -> JsResult<i64> {
+                let refuse = |message: String| {
+                    rquickjs::Error::new_from_js_message(
+                        "audit.record",
+                        "range_error",
+                        &format!("audit.record: {}", message),
+                    )
+                };
+                let details: Option<serde_json::Value> = if details_json.is_empty() {
+                    None
+                } else {
+                    Some(
+                        serde_json::from_str(&details_json)
+                            .map_err(|e| refuse(format!("details are not JSON: {}", e)))?,
+                    )
+                };
+                if let Some(reason) = crate::script_audit::refusal(&action, details.as_ref()) {
+                    return Err(refuse(reason));
+                }
+
+                crate::database::run_blocking(crate::script_audit::record(
+                    crate::script_audit::NewAuditEvent {
+                        script_uri: script.clone(),
+                        action,
+                        details,
+                        actor_kind,
+                        actor_id: actor_id.clone(),
+                        client_ip: client_ip.clone(),
+                        request_id: request_id.clone(),
+                    },
+                ))
+                .map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "audit.record",
+                        "storage_error",
+                        &format!("audit.record: the event could not be stored: {}", e),
+                    )
+                })
+            },
+        )?;
+
+        host.set("record", record)?;
+        global.set("__hostAudit", host)?;
+
+        crate::bytecode::eval_program(ctx, "engine://audit-prelude", AUDIT_PRELUDE).map_err(
+            |e| {
+                rquickjs::Error::new_from_js_message(
+                    "audit",
+                    "prelude",
+                    &format!("audit prelude failed to load: {}", e),
+                )
+            },
+        )?;
+
+        debug!("audit initialized for script: {}", script_uri);
+        Ok(())
+    }
+
+    /// `rateLimit` — a budget the script sizes and the engine keys.
+    ///
+    /// A script with a public form otherwise writes its own limiter, keyed by
+    /// whatever it can read, which is a header the caller wrote. Here the
+    /// script says how big a bucket is and the engine says whose it is: the
+    /// signed-in person, else the address the edge judged, so neither a forged
+    /// header nor a script bug can hand a caller a fresh allowance or spend
+    /// somebody else's. Buckets live in Postgres, so the budget holds across
+    /// every instance of the engine.
+    fn setup_rate_limit_object(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
+        let global = ctx.globals();
+        let host = rquickjs::Object::new(ctx.clone())?;
+
+        let script = script_uri.to_string();
+        let person = self.user_context.user_id.clone();
+        let client_ip = self.config.client_ip.clone();
+        let consume = Function::new(
+            ctx.clone(),
+            move |options_json: String| -> JsResult<String> {
+                let refuse = |message: String| {
+                    rquickjs::Error::new_from_js_message(
+                        "rateLimit.consume",
+                        "range_error",
+                        &format!("rateLimit.consume: {}", message),
+                    )
+                };
+                let options: serde_json::Value = serde_json::from_str(&options_json)
+                    .map_err(|e| refuse(format!("options are not valid JSON: {}", e)))?;
+
+                let bucket = options["bucket"].as_str().unwrap_or_default();
+                if bucket.is_empty()
+                    || bucket.len() > 64
+                    || !bucket
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+                {
+                    return Err(refuse(format!(
+                        "'{}' is not a bucket name: use 1-64 letters, digits, '_', '-' or '.'",
+                        bucket
+                    )));
+                }
+                let whole = |name: &str, low: u64, high: u64| -> JsResult<u32> {
+                    match options[name].as_u64() {
+                        Some(n) if (low..=high).contains(&n) => Ok(n as u32),
+                        _ => Err(refuse(format!(
+                            "'{}' must be a whole number from {} to {}",
+                            name, low, high
+                        ))),
+                    }
+                };
+                let limit = whole("limit", 1, 1_000_000)?;
+                let window_seconds = whole("windowSeconds", 1, 7 * 24 * 3600)?;
+                let cost = if options["cost"].is_null() {
+                    1
+                } else {
+                    whole("cost", 1, u64::from(limit))?
+                };
+
+                // Whose bucket, decided here and never by the script.
+                let who = match options["per"].as_str().unwrap_or("caller") {
+                    "caller" => match (&person, &client_ip) {
+                        (Some(id), _) => format!("user:{}", id),
+                        (None, Some(ip)) => format!("ip:{}", ip),
+                        (None, None) => "anonymous".to_string(),
+                    },
+                    "ip" => format!(
+                        "ip:{}",
+                        client_ip
+                            .as_deref()
+                            .unwrap_or(crate::security::client_ip::UNKNOWN)
+                    ),
+                    "script" => "script".to_string(),
+                    other => {
+                        return Err(unknown_name_error(
+                            "rateLimit.consume",
+                            "per",
+                            other,
+                            &["caller", "ip", "script"],
+                        ));
+                    }
+                };
+
+                let Some(limiter) = crate::security::rate_limiting::shared() else {
+                    // No limiter before startup — a unit test. Nothing to spend
+                    // against, so nothing is refused, as on a database error.
+                    return Ok(serde_json::json!({
+                        "allowed": true,
+                        "remaining": limit - cost,
+                        "retryAfterSeconds": null,
+                    })
+                    .to_string());
+                };
+                let key = crate::security::RateLimitKey::Script {
+                    script: script.clone(),
+                    bucket: bucket.to_string(),
+                    who,
+                };
+                let result = crate::database::run_blocking(limiter.consume_script_budget(
+                    key,
+                    cost,
+                    limit,
+                    window_seconds,
+                ));
+
+                let remaining = result.remaining_tokens.max(0.0);
+                let retry_after = (!result.allowed).then(|| {
+                    let missing = f64::from(cost) - remaining;
+                    (missing * f64::from(window_seconds) / f64::from(limit))
+                        .ceil()
+                        .max(1.0) as u64
+                });
+                Ok(serde_json::json!({
+                    "allowed": result.allowed,
+                    "remaining": remaining.floor() as u64,
+                    "retryAfterSeconds": retry_after,
+                })
+                .to_string())
+            },
+        )?;
+
+        host.set("consume", consume)?;
+        global.set("__hostRateLimit", host)?;
+
+        crate::bytecode::eval_program(ctx, "engine://rate-limit-prelude", RATE_LIMIT_PRELUDE)
+            .map_err(|e| {
+                rquickjs::Error::new_from_js_message(
+                    "rateLimit",
+                    "prelude",
+                    &format!("rateLimit prelude failed to load: {}", e),
+                )
+            })?;
+
+        debug!("rateLimit initialized for script: {}", script_uri);
         Ok(())
     }
 

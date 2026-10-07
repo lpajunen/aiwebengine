@@ -186,6 +186,17 @@ pub fn from_headers(headers: &HeaderMap) -> String {
         .to_string()
 }
 
+/// [`from_headers`] over a snapshot of the headers, as a request handed to a
+/// script carries them. `None` when the edge established no address.
+pub fn from_header_snapshot(headers: &std::collections::HashMap<String, String>) -> Option<String> {
+    headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(FORWARDED_FOR))
+        .map(|(_, value)| value.trim())
+        .filter(|value| !value.is_empty() && *value != UNKNOWN)
+        .map(str::to_string)
+}
+
 /// The user agent a request carries, beside the address it came from because
 /// the two are read together everywhere: they are the session fingerprint.
 pub fn user_agent_from_headers(headers: &HeaderMap) -> String {

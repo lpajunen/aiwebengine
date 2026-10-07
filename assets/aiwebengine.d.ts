@@ -2413,6 +2413,83 @@ declare var personalTasks: PersonalTasks;
 declare var mcpRegistry: McpRegistry;
 declare var mcp: Mcp;
 /**
+ * Events the script records and cannot take back.
+ *
+ * Use it for what someone will later ask about — a refund issued, a role
+ * changed, an export downloaded — rather than `console`, which is pruned and
+ * can be cleared. The script names the action and its details; the engine adds
+ * who the execution acted for, the client address and the request id, so an
+ * event cannot be attributed to anybody else.
+ *
+ * An event is stored at once and kept even if the handler then fails or its
+ * transaction rolls back. Events leave only by age (`logs.audit_retention_days`)
+ * or with the script. The script's owner or an administrator reads them with
+ * the `read_audit` operation.
+ *
+ * @example
+ * ```ts
+ * audit.record("refund.issued", { orderId, amount });
+ * ```
+ */
+interface Audit {
+  /**
+   * Record `action` (at most 128 bytes) with optional `details` (an object, at
+   * most 16 KB as JSON), returning the event's id. Throws when either is out
+   * of bounds or the event cannot be stored.
+   */
+  record(action: string, details?: Record<string, unknown>): number;
+}
+
+/** What one `rateLimit.consume` answered. */
+interface RateLimitResult {
+  /** Whether the cost was spent. When false, nothing was taken. */
+  allowed: boolean;
+  /** What is left in the bucket after this call. */
+  remaining: number;
+  /** When `allowed` is false, roughly how long until the cost would fit. */
+  retryAfterSeconds: number | null;
+}
+
+/**
+ * Budgets the script sizes and the engine keys, held in Postgres so they apply
+ * across every instance of the engine.
+ *
+ * The script names the bucket and says how big it is. The engine decides whose
+ * it is, from the request it judged rather than from anything the script reads:
+ *
+ * - `"caller"` (the default): the signed-in person, else the client address.
+ * - `"ip"`: the client address, signed in or not.
+ * - `"script"`: one bucket for everyone.
+ *
+ * A bucket refills evenly: `limit` per `windowSeconds`. Spending is not undone
+ * when the handler fails or its transaction rolls back.
+ *
+ * @example Five sign-ups per caller per ten minutes
+ * ```ts
+ * const budget = rateLimit.consume("signup", { limit: 5, windowSeconds: 600 });
+ * if (!budget.allowed) {
+ *   return ResponseBuilder.error(429, `Try again in ${budget.retryAfterSeconds}s`);
+ * }
+ * ```
+ */
+interface RateLimit {
+  /**
+   * Spend `cost` (default 1) from `bucket`. Throws when the bucket name or a
+   * number is out of range: names are 1-64 of letters, digits, `_`, `-`, `.`;
+   * `limit` 1 to 1,000,000; `windowSeconds` 1 to 604,800; `cost` 1 to `limit`.
+   */
+  consume(
+    bucket: string,
+    options: {
+      limit: number;
+      windowSeconds: number;
+      per?: "caller" | "ip" | "script";
+      cost?: number;
+    },
+  ): RateLimitResult;
+}
+
+/**
  * The cryptography a solution should not be writing for itself.
  *
  * The engine asks scripts to verify their own webhook signatures — it cannot
@@ -2621,6 +2698,8 @@ declare var console: Console;
 declare var sandbox: Sandbox;
 declare var convert: Convert;
 declare var crypto: Crypto;
+declare var rateLimit: RateLimit;
+declare var audit: Audit;
 declare var engine: EngineApi | undefined;
 
 // ============================================================================

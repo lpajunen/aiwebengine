@@ -74,6 +74,7 @@ pub fn spawn_pruner(config: LogsConfig, shutdown: tokio::sync::oneshot::Receiver
     }
 
     let retention = LogRetention::from_config(&config);
+    let audit_retention_days = config.audit_retention_days;
     let period = std::time::Duration::from_secs(config.prune_interval_secs.max(60));
 
     tokio::spawn(async move {
@@ -105,6 +106,13 @@ pub fn spawn_pruner(config: LogsConfig, shutdown: tokio::sync::oneshot::Receiver
                         }
                         Ok(_) => {}
                         Err(e) => tracing::warn!("Log pruning pass failed: {}", e),
+                    }
+                    match crate::script_audit::prune(audit_retention_days).await {
+                        Ok(deleted) if deleted > 0 => {
+                            tracing::info!(deleted = deleted, "Pruned script audit events");
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!("Audit pruning pass failed: {}", e),
                     }
                 }
                 _ = &mut shutdown => {
