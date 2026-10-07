@@ -10,7 +10,7 @@ Welcome to the aiwebengine implementation documentation! This section helps cont
 
 ### 🎯 Start Here
 
-- **[ROADMAP.md](./ROADMAP.md)** - Prioritized development roadmap showing what needs to be done
+- **[ROADMAP.md](../../../ROADMAP.md)** - Prioritized development roadmap showing what needs to be done
 - **[CONTRIBUTING.md](./CONTRIBUTING.md)** - How to contribute new features and improvements
 - **[DEVELOPMENT.md](./DEVELOPMENT.md)** - Core development guidelines and coding standards
 
@@ -76,7 +76,7 @@ The following must be completed before authentication implementation can begin:
 - [ ] Test coverage >80% with all tests passing
 - [ ] Session storage foundation implemented
 
-**Details:** See [ROADMAP.md](./ROADMAP.md) → Critical Prerequisites
+**Details:** See [ROADMAP.md](../../../ROADMAP.md) → Critical Prerequisites
 
 ---
 
@@ -155,21 +155,21 @@ We use a color-coded priority system:
 
 **Add a new feature:**
 
-1. Check [ROADMAP.md](./ROADMAP.md) to see if it's planned
+1. Check [ROADMAP.md](../../../ROADMAP.md) to see if it's planned
 2. Read [guides/adding-new-features.md](./guides/adding-new-features.md)
 3. Review the specific feature guide in `/features/`
 4. Follow [CONTRIBUTING.md](./CONTRIBUTING.md) for the contribution process
 
 **Fix/improve existing code:**
 
-1. Check [ROADMAP.md](./ROADMAP.md) for priority
+1. Check [ROADMAP.md](../../../ROADMAP.md) for priority
 2. Review the relevant guide in `/improvements/`
 3. Follow [DEVELOPMENT.md](./DEVELOPMENT.md) coding standards
 4. Add comprehensive tests per [guides/testing-guidelines.md](./guides/testing-guidelines.md)
 
 **Understand what needs work:**
 
-1. Start with [ROADMAP.md](./ROADMAP.md) for the big picture
+1. Start with [ROADMAP.md](../../../ROADMAP.md) for the big picture
 2. Dive into specific areas via [features/README.md](./features/README.md) or [improvements/README.md](./improvements/README.md)
 
 **Review someone's contribution:**
@@ -205,7 +205,7 @@ Found outdated information? Want to improve these docs?
 
 1. Update the status indicator in the document
 2. Move completed implementation details to `/archive/implementing/`
-3. Update [ROADMAP.md](./ROADMAP.md) to mark items as complete
+3. Update [ROADMAP.md](../../../ROADMAP.md) to mark items as complete
 4. Consider creating example scripts or user-facing documentation
 
 ---

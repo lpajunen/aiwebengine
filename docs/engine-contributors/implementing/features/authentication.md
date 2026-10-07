@@ -52,7 +52,7 @@ This document outlines the implementation plan for adding OAuth2/OIDC authentica
 
 ## ⚠️ IMPORTANT: Prerequisites
 
-Before implementing authentication, the following security infrastructure must be in place (see SECURITY_TODO.md):
+Before implementing authentication, the following security infrastructure must be in place (see `ROADMAP.md`):
 
 ### ✅ COMPLETED:
 

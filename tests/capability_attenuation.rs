@@ -7,7 +7,7 @@
 //! the narrowing arithmetic; these run real code in a real sub-execution and
 //! check that the refusal arrives.
 //!
-//! The shape they describe is the one item 1 of `TODO-agent.md` asked for:
+//! The shape they describe is the one an in-engine agent asked for:
 //!
 //!   - model-authored code evaluated holding a chosen subset, and
 //!   - a plan mode that is enforced rather than offered — a turn that may read

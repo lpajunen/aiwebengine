@@ -312,7 +312,7 @@ async fn main() -> AppResult<()> {
     // does — both lines printed a configured value that nothing enforced, so
     // an operator reading the startup log was told the opposite of the truth
     // about two protections. Rate limiting is on, with per-key budgets rather
-    // than one number; CORS is in SECURITY-todo.md.
+    // than one number.
     tracing::info!("Auth configuration present: {}", config.auth.is_some());
     if let Some(ref auth_cfg) = config.auth {
         tracing::info!("Auth enabled: {}", auth_cfg.enabled);

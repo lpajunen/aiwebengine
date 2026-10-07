@@ -10,7 +10,7 @@ Welcome! This guide helps you contribute features and improvements to the aiwebe
 
 ### 1. Check the Roadmap
 
-Before implementing anything, check [ROADMAP.md](./docs/engine-contributors/implementing/ROADMAP.md) to:
+Before implementing anything, check [ROADMAP.md](./ROADMAP.md) to:
 
 - See if your feature/improvement is already planned
 - Understand priority and timeline
@@ -545,7 +545,7 @@ Small, focused PRs are easier to review and merge.
 ### Resources
 
 - [DEVELOPMENT.md](./docs/engine-contributors/implementing/DEVELOPMENT.md) - Development guidelines
-- [ROADMAP.md](./docs/engine-contributors/implementing/ROADMAP.md) - What needs to be done
+- [ROADMAP.md](./ROADMAP.md) - What needs to be done
 - [guides/](./docs/engine-contributors/implementing/guides/) - Implementation guides
 - [features/](./docs/engine-contributors/implementing/features/) - Feature specifications
 - [improvements/](./docs/engine-contributors/implementing/improvements/) - Improvement guides

@@ -13,9 +13,9 @@
 //! of ending the execution.
 //!
 //! That shape is right for this engine rather than merely tolerable. A host
-//! call blocks the script and there is no event loop to yield to
-//! (`TODO-agent.md` item 6), so suspending a handler would have been an
-//! interpreter change; re-running one needs nothing new. And each round trip is
+//! call blocks the script and there is no event loop to yield to (see
+//! `ROADMAP.md`), so suspending a handler would have been an interpreter
+//! change; re-running one needs nothing new. And each round trip is
 //! an ordinary call with an ordinary budget, so no execution slot is held while
 //! a person thinks.
 //!

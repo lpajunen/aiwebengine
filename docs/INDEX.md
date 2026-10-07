@@ -87,7 +87,7 @@ routeRegistry.registerRoute("/hello", {
 | Document                                                                  | Description                                 |
 | ------------------------------------------------------------------------- | ------------------------------------------- |
 | [Implementation Overview](engine-contributors/implementing/README.md)     | Navigation hub for implementation work      |
-| [Development Roadmap](engine-contributors/implementing/ROADMAP.md)        | Prioritized development roadmap             |
+| [Roadmap](../ROADMAP.md)                                                  | What is open, in one place                  |
 | [Contributing Guide](engine-contributors/implementing/CONTRIBUTING.md)    | How to contribute features and improvements |
 | [Development Guidelines](engine-contributors/implementing/DEVELOPMENT.md) | Core development guidelines and standards   |
 
@@ -115,7 +115,7 @@ routeRegistry.registerRoute("/hello", {
 → Visit [Troubleshooting Guide](engine-administrators/06-TROUBLESHOOTING.md)
 
 **Contribute to the project**
-→ Read [Development Guide](engine-contributors/implementing/DEVELOPMENT.md) and [Roadmap](engine-contributors/implementing/ROADMAP.md)
+→ Read [Development Guide](engine-contributors/implementing/DEVELOPMENT.md) and [Roadmap](../ROADMAP.md)
 
 ---
 
@@ -145,7 +145,6 @@ docs/
         ├── README.md                 # Implementation overview
         ├── DEVELOPMENT.md            # Development setup
         ├── CONTRIBUTING.md           # Contribution guide
-        ├── ROADMAP.md                # Roadmap and tasks
         ├── AUTH_DEBUGGING_GUIDE.md   # Auth debugging
         ├── features/                 # New capabilities to build
         ├── improvements/             # Quality/perf/security work
