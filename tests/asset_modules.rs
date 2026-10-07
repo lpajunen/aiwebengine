@@ -217,7 +217,9 @@ async fn imported_asset_module_executes_in_request_path() {
     let setup_result = execute_script_secure(
         script_uri,
         script_content,
-        UserContext::authenticated("asset-request-user".to_string()),
+        aiwebengine::security::Principal::Caller(UserContext::authenticated(
+            "asset-request-user".to_string(),
+        )),
     );
     assert!(
         setup_result.success,
@@ -360,7 +362,9 @@ async fn imported_asset_root_module_executes_in_request_path() {
     let setup_result = execute_script_secure(
         script_uri,
         script_content,
-        UserContext::authenticated("asset-root-request-user".to_string()),
+        aiwebengine::security::Principal::Caller(UserContext::authenticated(
+            "asset-root-request-user".to_string(),
+        )),
     );
     assert!(
         setup_result.success,
@@ -428,7 +432,9 @@ async fn imported_multiline_asset_root_module_executes_in_request_path() {
     let setup_result = execute_script_secure(
         script_uri,
         script_content,
-        UserContext::authenticated("asset-root-multiline-request-user".to_string()),
+        aiwebengine::security::Principal::Caller(UserContext::authenticated(
+            "asset-root-multiline-request-user".to_string(),
+        )),
     );
     assert!(
         setup_result.success,
@@ -515,7 +521,9 @@ async fn imported_typescript_asset_module_with_type_exports_executes() {
     let setup_result = execute_script_secure(
         script_uri,
         script_content,
-        UserContext::authenticated("asset-root-type-exports-user".to_string()),
+        aiwebengine::security::Principal::Caller(UserContext::authenticated(
+            "asset-root-type-exports-user".to_string(),
+        )),
     );
     assert!(
         setup_result.success,
@@ -764,7 +772,9 @@ async fn nested_asset_relative_import_chain_executes_in_request_path() {
     let setup_result = execute_script_secure(
         script_uri,
         script_content,
-        UserContext::authenticated("asset-nested-chain-user".to_string()),
+        aiwebengine::security::Principal::Caller(UserContext::authenticated(
+            "asset-nested-chain-user".to_string(),
+        )),
     );
     assert!(
         setup_result.success,
@@ -1063,7 +1073,9 @@ async fn a_markdown_module_exports_its_text_without_reading_it_as_source() {
     let setup_result = execute_script_secure(
         script_uri,
         script_content,
-        UserContext::authenticated("markdown-module-user".to_string()),
+        aiwebengine::security::Principal::Caller(UserContext::authenticated(
+            "markdown-module-user".to_string(),
+        )),
     );
     assert!(
         setup_result.success,

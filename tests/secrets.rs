@@ -23,7 +23,11 @@ async fn test_secrets_exists_returns_false_without_manager() {
     "#;
 
     let user_context = UserContext::admin("test".to_string());
-    let result = execute_script_secure("test://secrets", script, user_context);
+    let result = execute_script_secure(
+        "test://secrets",
+        script,
+        aiwebengine::security::Principal::Caller(user_context),
+    );
 
     assert!(
         result.success,
@@ -43,7 +47,11 @@ async fn test_secrets_get_not_exposed() {
     "#;
 
     let user_context = UserContext::admin("test".to_string());
-    let result = execute_script_secure("test://secrets", script, user_context);
+    let result = execute_script_secure(
+        "test://secrets",
+        script,
+        aiwebengine::security::Principal::Caller(user_context),
+    );
 
     assert!(
         result.success,
@@ -79,7 +87,11 @@ async fn test_secrets_cannot_access_values_directly() {
     "#;
 
     let user_context = UserContext::admin("test".to_string());
-    let result = execute_script_secure("test://secrets", script, user_context);
+    let result = execute_script_secure(
+        "test://secrets",
+        script,
+        aiwebengine::security::Principal::Caller(user_context),
+    );
 
     assert!(
         result.success,

@@ -61,7 +61,11 @@ async fn test_secret_storage_exists_available_for_all() {
         }
     "#;
 
-    let result = execute_script_secure("test://api-test", script, user);
+    let result = execute_script_secure(
+        "test://api-test",
+        script,
+        aiwebengine::security::Principal::Caller(user),
+    );
     assert!(
         result.success,
         "exists() should be public: {:?}",
@@ -91,7 +95,11 @@ async fn test_scheduler_service_available_for_admin() {
         // Should not throw error
     "#;
 
-    let result = execute_script_secure("test://scheduler-admin", script, admin);
+    let result = execute_script_secure(
+        "test://scheduler-admin",
+        script,
+        aiwebengine::security::Principal::Caller(admin),
+    );
     assert!(
         result.success,
         "Script should access schedulerService: {:?}",
@@ -120,7 +128,11 @@ async fn test_scheduler_service_available_for_any_script() {
         // Should not throw error
     "#;
 
-    let result = execute_script_secure("test://scheduler-any", script, admin);
+    let result = execute_script_secure(
+        "test://scheduler-any",
+        script,
+        aiwebengine::security::Principal::Caller(admin),
+    );
     assert!(
         result.success,
         "Any script should access schedulerService: {:?}",
@@ -149,7 +161,11 @@ async fn test_scheduler_register_once_available_for_any_script() {
         }
     "#;
 
-    let result = execute_script_secure("test://non-priv-sched", script, admin);
+    let result = execute_script_secure(
+        "test://non-priv-sched",
+        script,
+        aiwebengine::security::Principal::Caller(admin),
+    );
     assert!(result.success, "Should be available: {:?}", result.error);
 }
 
@@ -174,7 +190,11 @@ async fn test_scheduler_register_recurring_available_for_any_script() {
         }
     "#;
 
-    let result = execute_script_secure("test://non-priv-recur", script, admin);
+    let result = execute_script_secure(
+        "test://non-priv-recur",
+        script,
+        aiwebengine::security::Principal::Caller(admin),
+    );
     assert!(result.success, "Should be available: {:?}", result.error);
 }
 
@@ -200,7 +220,11 @@ async fn test_convert_btoa_available_for_all() {
         }
     "#;
 
-    let result = execute_script_secure("test://api-test", script, user);
+    let result = execute_script_secure(
+        "test://api-test",
+        script,
+        aiwebengine::security::Principal::Caller(user),
+    );
     assert!(
         result.success,
         "convert.btoa() should be public: {:?}",
@@ -226,7 +250,11 @@ async fn test_convert_atob_available_for_all() {
         }
     "#;
 
-    let result = execute_script_secure("test://api-test", script, user);
+    let result = execute_script_secure(
+        "test://api-test",
+        script,
+        aiwebengine::security::Principal::Caller(user),
+    );
     assert!(
         result.success,
         "convert.atob() should be public: {:?}",
@@ -246,7 +274,11 @@ async fn test_convert_markdown_to_html_available_for_all() {
         }
     "##;
 
-    let result = execute_script_secure("test://api-test", script, user);
+    let result = execute_script_secure(
+        "test://api-test",
+        script,
+        aiwebengine::security::Principal::Caller(user),
+    );
     assert!(
         result.success,
         "convert.markdown_to_html() should be public: {:?}",
@@ -269,7 +301,11 @@ async fn test_convert_render_handlebars_available_for_all() {
         }
     "#;
 
-    let result = execute_script_secure("test://api-test", script, user);
+    let result = execute_script_secure(
+        "test://api-test",
+        script,
+        aiwebengine::security::Principal::Caller(user),
+    );
     assert!(
         result.success,
         "convert.render_handlebars_template() should be public: {:?}",
@@ -295,7 +331,11 @@ async fn test_console_logging_available_for_all() {
         // Should not throw errors
     "#;
 
-    let result = execute_script_secure("test://api-test", script, user);
+    let result = execute_script_secure(
+        "test://api-test",
+        script,
+        aiwebengine::security::Principal::Caller(user),
+    );
     assert!(
         result.success,
         "Console logging should be public: {:?}",
@@ -328,7 +368,11 @@ async fn test_register_route_allowed_for_any_script() {
         // Should not throw
     "#;
 
-    let result = execute_script_secure("test://any-script-routes", script, user);
+    let result = execute_script_secure(
+        "test://any-script-routes",
+        script,
+        aiwebengine::security::Principal::Caller(user),
+    );
     assert!(
         result.success,
         "Any script should be able to register non-reserved routes: {:?}",
@@ -357,7 +401,11 @@ async fn test_register_route_denied_for_reserved_path() {
         }
     "#;
 
-    let result = execute_script_secure("test://reserved-path-routes", script, user);
+    let result = execute_script_secure(
+        "test://reserved-path-routes",
+        script,
+        aiwebengine::security::Principal::Caller(user),
+    );
     assert!(
         result.success,
         "Reserved paths should be denied for route registration: {:?}",
@@ -380,7 +428,11 @@ async fn test_register_stream_route_allowed_for_any_script() {
         // Should not throw
     "#;
 
-    let result = execute_script_secure("test://any-script-streams", script, user);
+    let result = execute_script_secure(
+        "test://any-script-streams",
+        script,
+        aiwebengine::security::Principal::Caller(user),
+    );
     assert!(
         result.success,
         "Any script should be able to register non-reserved stream routes: {:?}",
@@ -406,7 +458,11 @@ async fn test_register_stream_route_denied_for_reserved_path() {
         }
     "#;
 
-    let result = execute_script_secure("test://reserved-path-streams", script, user);
+    let result = execute_script_secure(
+        "test://reserved-path-streams",
+        script,
+        aiwebengine::security::Principal::Caller(user),
+    );
     assert!(
         result.success,
         "Reserved paths should be denied for stream registration: {:?}",
@@ -432,7 +488,11 @@ async fn test_register_asset_route_denied_for_reserved_path() {
         }
     "#;
 
-    let result = execute_script_secure("test://reserved-path-assets", script, user);
+    let result = execute_script_secure(
+        "test://reserved-path-assets",
+        script,
+        aiwebengine::security::Principal::Caller(user),
+    );
     assert!(
         result.success,
         "Reserved paths should be denied for asset route registration: {:?}",
@@ -455,7 +515,11 @@ async fn test_register_routes_allowed_for_any_script() {
         // Should not throw errors
     "#;
 
-    let result = execute_script_secure("test://register-routes", script, admin);
+    let result = execute_script_secure(
+        "test://register-routes",
+        script,
+        aiwebengine::security::Principal::Caller(admin),
+    );
     assert!(
         result.success,
         "Script should register routes: {:?}",
@@ -485,7 +549,11 @@ async fn test_route_introspection_includes_stream_and_asset_routes() {
         routeRegistry.registerRoute("/test-introspection.css", { file: "public/test-introspection.css" });
     "#;
 
-    let result = execute_script_secure("test://route-introspection", script, admin.clone());
+    let result = execute_script_secure(
+        "test://route-introspection",
+        script,
+        aiwebengine::security::Principal::Caller(admin.clone()),
+    );
     assert!(
         result.success,
         "Script should register stream and asset routes: {:?}",
@@ -546,7 +614,11 @@ async fn test_send_stream_message_requires_manage_streams() {
         }
     "#;
 
-    let result = execute_script_secure("test://stream-msg-no-cap", script, user);
+    let result = execute_script_secure(
+        "test://stream-msg-no-cap",
+        script,
+        aiwebengine::security::Principal::Caller(user),
+    );
     assert!(result.success, "Should be denied: {:?}", result.error);
 }
 
@@ -574,7 +646,11 @@ async fn test_send_stream_message_filtered_accepts_optional_match_mode() {
         }
     "#;
 
-    let result = execute_script_secure("test://filtered-stream-msg", script, admin);
+    let result = execute_script_secure(
+        "test://filtered-stream-msg",
+        script,
+        aiwebengine::security::Principal::Caller(admin),
+    );
     assert!(
         result.success,
         "Script should accept optional match mode: {:?}",
@@ -602,7 +678,11 @@ async fn test_send_stream_message_filtered_rejects_invalid_match_mode() {
         );
     "#;
 
-    let result = execute_script_secure("test://filtered-stream-msg-invalid", script, admin);
+    let result = execute_script_secure(
+        "test://filtered-stream-msg-invalid",
+        script,
+        aiwebengine::security::Principal::Caller(admin),
+    );
     assert!(!result.success, "Invalid match mode should fail");
     assert!(
         result
@@ -635,7 +715,11 @@ async fn test_engine_script_updates_stream_cannot_be_claimed() {
         }
     "#;
 
-    let result = execute_script_secure("test://engine-stream-claim", script, user);
+    let result = execute_script_secure(
+        "test://engine-stream-claim",
+        script,
+        aiwebengine::security::Principal::Caller(user),
+    );
     assert!(
         result.success,
         "The engine script-updates stream must be unclaimable: {:?}",
@@ -669,7 +753,11 @@ async fn test_script_update_broadcast_requires_capability() {
         }
     "#;
 
-    let result = execute_script_secure("test://forge-script-updates", script, user);
+    let result = execute_script_secure(
+        "test://forge-script-updates",
+        script,
+        aiwebengine::security::Principal::Caller(user),
+    );
     assert!(
         result.success,
         "Broadcasting script updates without ManageStreams must be denied: {:?}",

@@ -484,7 +484,11 @@ async fn test_secure_script_execution_authenticated() {
         }
     "#;
 
-    let result = execute_script_secure("/test_secure", script_content, user_context);
+    let result = execute_script_secure(
+        "/test_secure",
+        script_content,
+        aiwebengine::security::Principal::Caller(user_context),
+    );
 
     assert!(
         result.success,
@@ -520,7 +524,11 @@ async fn test_secure_script_execution_anonymous() {
         }
     "#;
 
-    let result = execute_script_secure("/test_anonymous", script_content, user_context);
+    let result = execute_script_secure(
+        "/test_anonymous",
+        script_content,
+        aiwebengine::security::Principal::Caller(user_context),
+    );
 
     // The script catches the refusal, so it runs to completion
     assert!(
@@ -553,8 +561,11 @@ async fn test_secure_request_execution() {
     // Store the script, then execute it to register the handler
     aiwebengine::repository::upsert_script("/test_request_script", script_content)
         .expect("script should be stored");
-    let result =
-        execute_script_secure("/test_request_script", script_content, user_context.clone());
+    let result = execute_script_secure(
+        "/test_request_script",
+        script_content,
+        aiwebengine::security::Principal::Caller(user_context.clone()),
+    );
     assert!(result.success, "Script setup should succeed");
 
     // Now test secure request execution
@@ -601,7 +612,11 @@ async fn test_secure_script_validation() {
         console.log("This part should still work");
     "#;
 
-    let result = execute_script_secure("/test_dangerous", dangerous_script, user_context);
+    let result = execute_script_secure(
+        "/test_dangerous",
+        dangerous_script,
+        aiwebengine::security::Principal::Caller(user_context),
+    );
 
     // The script should execute (validation warnings are logged, not blocking)
     // but the dangerous patterns should be logged
@@ -626,7 +641,11 @@ async fn test_capability_enforcement() {
         }
     "#;
 
-    let result = execute_script_secure("/test_capabilities", script_content, user_context);
+    let result = execute_script_secure(
+        "/test_capabilities",
+        script_content,
+        aiwebengine::security::Principal::Caller(user_context),
+    );
 
     // The script catches the refusal, so it runs to completion
     assert!(
@@ -652,7 +671,11 @@ async fn test_asset_upsert_sets_script_uri() {
 
     aiwebengine::repository::upsert_script(script_uri, &script_content)
         .expect("script should be stored");
-    let result = execute_script_secure(script_uri, &script_content, user_context);
+    let result = execute_script_secure(
+        script_uri,
+        &script_content,
+        aiwebengine::security::Principal::Caller(user_context),
+    );
 
     assert!(
         result.success,

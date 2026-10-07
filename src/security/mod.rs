@@ -30,7 +30,7 @@ pub use encryption::{
 pub use headers::{SecurityHeadersConfig, security_headers_middleware};
 pub use operations::{OperationResult, SecureOperations, UpsertScriptRequest};
 pub use rate_limiting::{RateLimitConfig, RateLimitKey, RateLimitResult, RateLimiter, TokenBucket};
-pub use secure_globals::{GlobalSecurityConfig, SecureGlobalContext};
+pub use secure_globals::{GlobalSecurityConfig, Principal, SecureGlobalContext};
 pub use session::{
     CreateSessionParams, SecureSessionManager, SessionData, SessionError, SessionFingerprint,
     SessionSummary, SessionToken, delete_sessions_for_user,

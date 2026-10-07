@@ -194,7 +194,7 @@ async fn test_basic_streaming_functionality() {
     let result = js_engine::execute_script_secure(
         "test_basic_streaming.js",
         test_script,
-        aiwebengine::security::UserContext::admin("test".to_string()),
+        aiwebengine::security::Principal::Engine("test"),
     );
     assert!(
         result.success,
@@ -240,7 +240,7 @@ async fn test_basic_streaming_functionality() {
     let send_result = js_engine::execute_script_secure(
         "test_send.js",
         send_script,
-        aiwebengine::security::UserContext::admin("test".to_string()),
+        aiwebengine::security::Principal::Engine("test"),
     );
     assert!(
         send_result.success,
@@ -313,7 +313,7 @@ async fn test_direct_stream_message() {
     let result = js_engine::execute_script_secure(
         "test_direct.js",
         test_script,
-        aiwebengine::security::UserContext::admin("test".to_string()),
+        aiwebengine::security::Principal::Engine("test"),
     );
     assert!(
         result.success,
@@ -345,7 +345,7 @@ async fn test_direct_stream_message() {
             timestamp: new Date().toISOString()
         }));
     "#,
-        aiwebengine::security::UserContext::admin("test".to_string()),
+        aiwebengine::security::Principal::Engine("test"),
     );
     assert!(
         result2.success,
@@ -618,7 +618,7 @@ async fn test_stream_endpoints() {
     let result = js_engine::execute_script_secure(
         "stream-test",
         script_content,
-        aiwebengine::security::UserContext::admin("test".to_string()),
+        aiwebengine::security::Principal::Engine("test"),
     );
     println!("Script execution result: {:?}", result);
     assert!(result.success, "Script should execute successfully");
@@ -775,7 +775,7 @@ async fn test_stream_messaging() {
     let minimal_result = js_engine::execute_script_secure(
         "minimal-test",
         minimal_test,
-        aiwebengine::security::UserContext::admin("test".to_string()),
+        aiwebengine::security::Principal::Engine("test"),
     );
     println!("Minimal test result: {:?}", minimal_result);
     let minimal_logs = repository::fetch_log_messages("minimal-test");
@@ -785,7 +785,7 @@ async fn test_stream_messaging() {
     let result = js_engine::execute_script_secure(
         "notification-test",
         script_content,
-        aiwebengine::security::UserContext::admin("test".to_string()),
+        aiwebengine::security::Principal::Engine("test"),
     );
     println!("Notification script execution result: {:?}", result);
     assert!(result.success, "Script should execute successfully");
@@ -1076,7 +1076,7 @@ async fn test_simple_stream_registration() {
     let result = js_engine::execute_script_secure(
         "simple_test.js",
         test_script,
-        aiwebengine::security::UserContext::admin("test".to_string()),
+        aiwebengine::security::Principal::Engine("test"),
     );
 
     if !result.success {
@@ -1119,7 +1119,7 @@ async fn test_simple_message_sending() {
     let result = js_engine::execute_script_secure(
         "simple_send.js",
         test_script,
-        aiwebengine::security::UserContext::admin("test".to_string()),
+        aiwebengine::security::Principal::Engine("test"),
     );
 
     println!(
@@ -1155,7 +1155,7 @@ async fn test_combined_functionality() {
     let result = js_engine::execute_script_secure(
         "combined_test.js",
         test_script,
-        aiwebengine::security::UserContext::admin("test".to_string()),
+        aiwebengine::security::Principal::Engine("test"),
     );
 
     println!(

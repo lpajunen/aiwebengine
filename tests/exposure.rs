@@ -67,7 +67,11 @@ async fn a_file_outside_public_is_refused_and_reported() {
         routeRegistry.registerRoute("/exposure-misplaced.css", { file: "branding/logo.css" });
         routeRegistry.registerRoute("/exposure-ok.css", { file: "public/ok.css" });
     "#;
-    let result = execute_script_secure(uri, script, admin.clone());
+    let result = execute_script_secure(
+        uri,
+        script,
+        aiwebengine::security::Principal::Caller(admin.clone()),
+    );
     assert!(
         result.success,
         "registration should run: {:?}",
@@ -162,7 +166,8 @@ async fn a_refusal_does_not_stop_the_rest_of_init() {
         routeRegistry.registerRoute("/exposure-still.css", { file: "branding/still.css" });
         routeRegistry.registerRoute("/exposure-after.css", { file: "public/after.css" });
     "#;
-    let result = execute_script_secure(uri, script, admin);
+    let result =
+        execute_script_secure(uri, script, aiwebengine::security::Principal::Caller(admin));
     assert!(
         result.success,
         "a refusal is a returned message, not a throw: {:?}",

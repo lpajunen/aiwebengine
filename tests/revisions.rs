@@ -190,7 +190,13 @@ async fn a_script_writing_its_own_asset_records_a_revision() {
     let source = r#"files.write("skills/written/SKILL.md", "a skill body");"#.to_string();
     let wrote = tokio::task::spawn_blocking({
         let (uri, source) = (uri.to_string(), source.clone());
-        move || aiwebengine::js_engine::execute_script_secure(&uri, &source, admin())
+        move || {
+            aiwebengine::js_engine::execute_script_secure(
+                &uri,
+                &source,
+                aiwebengine::security::Principal::Caller(admin()),
+            )
+        }
     })
     .await
     .expect("the write should not panic");
@@ -228,7 +234,13 @@ async fn a_script_deleting_its_own_asset_records_a_revision() {
     let write = r#"files.write("scratch.txt", "temporary");"#.to_string();
     let written = tokio::task::spawn_blocking({
         let (uri, source) = (uri.to_string(), write);
-        move || aiwebengine::js_engine::execute_script_secure(&uri, &source, admin())
+        move || {
+            aiwebengine::js_engine::execute_script_secure(
+                &uri,
+                &source,
+                aiwebengine::security::Principal::Caller(admin()),
+            )
+        }
     })
     .await
     .expect("no panic");
@@ -242,7 +254,7 @@ async fn a_script_deleting_its_own_asset_records_a_revision() {
             aiwebengine::js_engine::execute_script_secure(
                 &uri,
                 r#"files.delete("scratch.txt");"#,
-                admin(),
+                aiwebengine::security::Principal::Caller(admin()),
             )
         }
     })

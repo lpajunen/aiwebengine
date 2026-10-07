@@ -10,7 +10,7 @@ mod common;
 
 use aiwebengine::js_engine::execute_script_secure;
 use aiwebengine::repository;
-use aiwebengine::security::{Capability, UserContext};
+use aiwebengine::security::{Capability, Principal, UserContext};
 use common::{setup_env, test_mutex};
 
 fn deploy(script_uri: &str, content: &str) {
@@ -240,7 +240,7 @@ async fn a_script_cannot_rewrite_its_own_entrypoint_through_asset_storage() {
     "#;
 
     deploy(uri, attempt);
-    let result = execute_script_secure(uri, attempt, editor);
+    let result = execute_script_secure(uri, attempt, Principal::Caller(editor));
     assert!(
         result.success,
         "the entrypoint must survive both: {:?}",
@@ -264,7 +264,11 @@ async fn executing_a_script_leaves_its_tree_alone() {
     aiwebengine::engine_api::upsert_root_authorized(&owner, uri, Some("main.ts"), stored, None)
         .expect("the entrypoint should be written");
 
-    let result = execute_script_secure(uri, "function init() { /* ran */ }", owner);
+    let result = execute_script_secure(
+        uri,
+        "function init() { /* ran */ }",
+        Principal::Caller(owner),
+    );
     assert!(result.success, "the script should run: {:?}", result.error);
 
     let names: Vec<String> = repository::fetch_assets(uri).into_keys().collect();
@@ -320,7 +324,7 @@ async fn writing_an_entrypoint_by_name_is_how_its_language_changes() {
 
     // And it is built as what it now says it is: TypeScript that ran
     // untranspiled would fail on the interface.
-    let result = execute_script_secure(uri, ts, owner);
+    let result = execute_script_secure(uri, ts, Principal::Caller(owner));
     assert!(
         result.success,
         "main.ts should transpile: {:?}",
@@ -378,7 +382,11 @@ async fn files_answers_in_values() {
         check(files.delete("skills/refund.md") === true, "delete answers true");
         check(files.delete("skills/refund.md") === false, "and false the second time");
     "##;
-    let result = execute_script_secure(uri, script, UserContext::admin("tree-files".to_string()));
+    let result = execute_script_secure(
+        uri,
+        script,
+        Principal::Caller(UserContext::admin("tree-files".to_string())),
+    );
     assert!(
         result.success,
         "files should answer in values: {:?}",
@@ -397,7 +405,11 @@ async fn a_script_may_name_its_own_variable_files() {
     let uri = "test://tree/files-shadowed";
     let script = "const files = [1, 2, 3];\nfunction init() {}\n";
     deploy(uri, script);
-    let result = execute_script_secure(uri, script, UserContext::admin("tree-files".to_string()));
+    let result = execute_script_secure(
+        uri,
+        script,
+        Principal::Caller(UserContext::admin("tree-files".to_string())),
+    );
     assert!(
         result.success,
         "a top-level `const files` should load: {:?}",

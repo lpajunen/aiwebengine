@@ -579,74 +579,91 @@ pub struct GlobalSecurityConfig {
     /// Empty for contexts with no invocation to name; a line written under an
     /// empty context is stored exactly as it was before this existed.
     pub log_context: repository::LogContext,
-    /// When this execution is acting on somebody's behalf, what they
-    /// authorised ([`crate::delegation::Scope`]).
-    ///
-    /// `None` means this is not a delegated execution, and nothing is
-    /// narrowed. That is every path but a delegated task: an ordinary request
-    /// *is* the person, so there is no grant to hold it to and no question of
-    /// exceeding one. Making `None` the permissive case is what keeps this
-    /// change invisible to everything that existed before delegation did.
-    ///
-    /// `Some` is the narrow case, and it is narrow by omission: a scope not
-    /// listed is not granted. So a grant covering only `personal_storage`
-    /// reaches this person's storage and *not* their secrets, which is what
-    /// the consent page said and what was previously only decoration.
-    pub delegated_scopes: Option<Vec<crate::delegation::Scope>>,
-    /// Whether this execution may reach the engine's own management tools
-    /// through the `engine` global.
-    ///
-    /// **False by default, and every construction site states its answer**,
-    /// because the capability check underneath is not enough on its own. Two
-    /// kinds of execution hold capabilities that were never a person's:
-    ///
-    /// - The engine's own actors. A scheduled job runs as
-    ///   `UserContext::admin("scheduler")` and `init()` as
-    ///   `admin("script-init")` — synthetic administrators with nobody behind
-    ///   them. `engine.call` there would mean any script in the engine
-    ///   administers it from a cron line, which is not a capability anybody
-    ///   granted.
-    ///
-    /// - A narrowed sub-execution. `sandbox.run` hands model-authored code a
-    ///   chosen subset, and the subset cannot express this: the agent grants
-    ///   `view_logs` so that `console` works, and `read_logs` is gated on
-    ///   exactly that capability while taking *any* script's URI as an
-    ///   argument. Granting one would hand over the other.
-    ///
-    /// So it is on for the two executions whose authority came from a
-    /// credential — a script serving a request, and a delegated task, where
-    /// the person consented on a page that named what they were consenting to
-    /// — and off everywhere else.
-    pub engine_api: bool,
+    /// Who this execution acts for. Decides the capabilities every global is
+    /// checked against, what a delegated execution is narrowed to, and whether
+    /// the `engine` global exists. See [`Principal`].
+    pub principal: Principal,
 }
 
-impl Default for GlobalSecurityConfig {
-    fn default() -> Self {
-        Self {
-            // Fail closed: a caller that does not opt in cannot mutate
-            // registries that outlive its own invocation.
-            registration_phase: false,
-            enable_audit_logging: true,
-            dry_run_sink: None,
-            console_sink: None,
-            log_context: repository::LogContext::default(),
-            // Not acting for anybody, so nothing to narrow.
-            delegated_scopes: None,
-            // Fail closed, like `registration_phase` above: an execution that
-            // did not ask for the management surface does not get it.
-            engine_api: false,
+/// Who an execution acts for.
+///
+/// Every way into a script names one of these, and everything that depends on
+/// *who* follows from it rather than being set beside it: the capabilities the
+/// globals are checked against, the delegated scopes, and the management
+/// surface. The last is the reason this is one value. The capability check
+/// under `engine.call` is not enough on its own, because two kinds of
+/// execution hold capabilities that were never a person's — the engine's own
+/// actors, which run as synthetic administrators, and contained code such as
+/// `sandbox.run`, whose capability subset cannot express "console but not
+/// `read_logs` on any script". Deciding `engine` per site let a site get it
+/// wrong; deciding it from the principal does not.
+#[derive(Debug, Clone)]
+pub enum Principal {
+    /// Someone who presented a credential — an HTTP request or an MCP call,
+    /// anonymous included. `engine` is installed and authorized against them,
+    /// as `/engine/*` and `/mcp` would be.
+    Caller(UserContext),
+    /// A person who delegated background work
+    /// ([`crate::delegation`]). `engine` is installed, and what they did not
+    /// grant is not reachable: a scope not listed is not granted.
+    Delegated {
+        user: UserContext,
+        scopes: Vec<crate::delegation::Scope>,
+    },
+    /// The caller's own authority running code that is not a handler serving
+    /// them: a test run, an evaluation, `sandbox.run`. No `engine`, so
+    /// `run_tests` and `eval_script` are not a way to spend whatever the
+    /// caller holds on tools nobody named, and model-authored code cannot
+    /// reach the management surface through a capability it was granted for
+    /// something else.
+    Contained(UserContext),
+    /// Nobody: the engine itself — startup, `init()`, a scheduled job, a task
+    /// nobody delegated. It runs as a synthetic administrator named by the
+    /// label, and gets no `engine`: nothing here came from a credential, so
+    /// nothing here administers.
+    Engine(&'static str),
+}
+
+impl Principal {
+    /// The context the globals' capability checks are made against.
+    pub fn user_context(&self) -> UserContext {
+        match self {
+            Self::Caller(user) | Self::Contained(user) => user.clone(),
+            Self::Delegated { user, .. } => user.clone(),
+            Self::Engine(label) => UserContext::admin((*label).to_string()),
         }
+    }
+
+    /// Whether the `engine` global is installed.
+    pub fn reaches_engine_api(&self) -> bool {
+        matches!(self, Self::Caller(_) | Self::Delegated { .. })
     }
 }
 
 impl GlobalSecurityConfig {
+    /// A context acting for `principal` that registers nothing and writes its
+    /// output under `log_context`. Registration and capture are opted into by
+    /// overriding the fields.
+    pub fn new(principal: Principal, log_context: repository::LogContext) -> Self {
+        Self {
+            // Fail closed: a caller that does not opt in cannot mutate
+            // registries that outlive its own invocation.
+            registration_phase: false,
+            enable_audit_logging: false,
+            dry_run_sink: None,
+            console_sink: None,
+            log_context,
+            principal,
+        }
+    }
+
     /// Whether this execution is acting on somebody's behalf.
     ///
     /// The question is not "is there a user" — an ordinary request has one too.
     /// It is whether the user is *absent*, which is what makes a grant the
     /// only authority for touching anything of theirs.
     pub fn is_delegated(&self) -> bool {
-        self.delegated_scopes.is_some()
+        matches!(self.principal, Principal::Delegated { .. })
     }
 
     /// Whether `scope` may be exercised here.
@@ -655,9 +672,9 @@ impl GlobalSecurityConfig {
     /// present and acting for themselves. For a delegated one it is exactly
     /// what they ticked.
     pub fn allows_delegated(&self, scope: crate::delegation::Scope) -> bool {
-        match &self.delegated_scopes {
-            None => true,
-            Some(scopes) => scopes.contains(&scope),
+        match &self.principal {
+            Principal::Delegated { scopes, .. } => scopes.contains(&scope),
+            _ => true,
         }
     }
 
@@ -1400,21 +1417,12 @@ fn send_stream_message(
 }
 
 impl SecureGlobalContext {
-    pub fn new(user_context: UserContext) -> Self {
+    /// The globals for one execution, checked against `config.principal`.
+    pub fn new(config: GlobalSecurityConfig) -> Self {
         let pool = crate::database::get_global_database().map(|db| db.pool().clone());
 
         Self {
-            user_context,
-            auditor: SecurityAuditor::new(pool),
-            config: GlobalSecurityConfig::default(),
-        }
-    }
-
-    pub fn new_with_config(user_context: UserContext, config: GlobalSecurityConfig) -> Self {
-        let pool = crate::database::get_global_database().map(|db| db.pool().clone());
-
-        Self {
-            user_context,
+            user_context: config.principal.user_context(),
             auditor: SecurityAuditor::new(pool),
             config,
         }
@@ -6091,19 +6099,19 @@ impl SecureGlobalContext {
     /// implementation of each tool rather than an in-process copy that could
     /// drift from the HTTP one.
     ///
-    /// Installed only where [`GlobalSecurityConfig::engine_api`] says so,
-    /// which is the request path and a delegated task. That flag exists
-    /// because the capability check is not sufficient on its own: a scheduled
-    /// job and `init()` run as synthetic administrators with nobody behind
-    /// them, and a `sandbox.run` subset cannot distinguish "my own `console`"
-    /// from "every script's logs". Its documentation has the argument.
+    /// Installed only for a [`Principal`] that came from a credential — a
+    /// caller or a delegating person — because the capability check is not
+    /// sufficient on its own: a scheduled job and `init()` run as synthetic
+    /// administrators with nobody behind them, and a `sandbox.run` subset
+    /// cannot distinguish "my own `console`" from "every script's logs".
+    /// [`Principal`] has the argument.
     ///
     /// What is *not* here is a second authorization model. This adds no
     /// capability, no bypass and no special case; it adds a way to reach
     /// functions that were previously only reachable over HTTP, with the
     /// checks they already had.
     fn setup_engine_object(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
-        if !self.config.engine_api {
+        if !self.config.principal.reaches_engine_api() {
             return Ok(());
         }
 
@@ -6436,18 +6444,11 @@ mod api_surface_tests {
         let rt = Runtime::new().expect("runtime");
         let ctx = Context::full(&rt).expect("context");
         ctx.with(|ctx| {
-            let config = GlobalSecurityConfig {
-                registration_phase: false,
-                enable_audit_logging: false,
-                engine_api: false,
-                dry_run_sink: None,
-                console_sink: None,
-                log_context: repository::LogContext::default(),
-                // Not acting for anybody: nothing to narrow.
-                delegated_scopes: None,
-            };
-            let context =
-                SecureGlobalContext::new_with_config(UserContext::admin("t".into()), config);
+            let config = GlobalSecurityConfig::new(
+                Principal::Engine("t"),
+                repository::LogContext::default(),
+            );
+            let context = SecureGlobalContext::new(config);
             context
                 .setup_secure_functions(&ctx, "test://script", None)
                 .expect("install globals");

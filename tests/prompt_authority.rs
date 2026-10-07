@@ -20,7 +20,13 @@ const SCRIPT: &str = r#"
 function handlePrompt(context) {
   let verdict;
   try {
-    verdict = JSON.stringify(database.ensureTable("prompt_authority_probe", { columns: [] }));
+    if (context.arguments.probe === "engine") {
+      verdict = typeof engine === "undefined"
+        ? "engine absent"
+        : JSON.stringify(engine.callRaw("list_users", {}));
+    } else {
+      verdict = JSON.stringify(database.ensureTable("prompt_authority_probe", { columns: [] }));
+    }
   } catch (e) {
     verdict = e.message;
   }
@@ -37,12 +43,15 @@ function init(context) {
 "#;
 
 fn verdict_for(user_context: UserContext) -> String {
+    verdict_of(user_context, serde_json::json!({}))
+}
+
+fn verdict_of(user_context: UserContext, arguments: serde_json::Value) -> String {
     // Unattended: this prompt is about which authority the handler runs with,
     // not about elicitation, so there is nobody to ask and nothing to answer.
     let outcome = mcp::execute_mcp_prompt(
         "promptAuthority",
-        serde_json::json!({}),
-        None,
+        arguments,
         user_context,
         aiwebengine::mcp_elicitation::Exchange::unattended(),
     )
@@ -98,6 +107,33 @@ async fn a_prompt_handler_keeps_what_the_caller_that_asked_holds() {
         !verdict.contains("Insufficient permissions"),
         "an administrator's request should carry their own authority into the \
          prompt handler; the handler reported: {verdict}"
+    );
+
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+/// A prompt is a request like an HTTP route, so its handler reaches `engine`
+/// the same way: present, and authorized against whoever asked.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_prompt_handler_reaches_the_engine_as_the_caller_that_asked() {
+    let context = engine_with_the_prompt().await;
+    let probe = serde_json::json!({ "probe": "engine" });
+
+    let anonymous = verdict_of(UserContext::anonymous(), probe.clone());
+    assert!(
+        anonymous != "engine absent" && !anonymous.contains("\"users\""),
+        "an anonymous caller should meet engine.call and be refused by it; \
+         the handler reported: {anonymous}"
+    );
+
+    let administrator = verdict_of(
+        UserContext::admin("prompt-authority-admin".to_string()),
+        probe,
+    );
+    assert!(
+        administrator.contains("\"users\""),
+        "an administrator's prompt should list users through engine.call; \
+         the handler reported: {administrator}"
     );
 
     context.cleanup().await.expect("Failed to cleanup");

@@ -112,9 +112,8 @@ that were never a person's: the engine's own actors (a scheduled job runs as
 `UserContext::admin("scheduler")`, `init()` as `admin("script-init")`), and a
 `sandbox.run` subset that cannot express the distinction — an agent grants
 `view_logs` for `console`, and `read_logs` is gated on exactly that while
-taking any script's URI as an argument. So `GlobalSecurityConfig::engine_api`
-decides, it is false by default, and every construction site states its answer
-because the compiler makes it.
+taking any script's URI as an argument. So the execution's `Principal` decides:
+`engine` exists for a caller or a delegating person, and for nothing else.
 
 ### Phase 2 — session elevation (step-up)
 

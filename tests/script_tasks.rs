@@ -71,6 +71,59 @@ async fn a_task_runs_its_handler_with_the_payload_it_carried() {
     );
 }
 
+/// A task nobody delegated acts for nobody, so it has no credential to spend on
+/// the engine's management tools. Were `engine` installed, it would run as the
+/// engine's own synthetic context — every capability, no owner — and any script
+/// could administer the engine by enqueueing work.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_undelegated_task_cannot_reach_the_management_tools() {
+    setup_env().await;
+
+    let script_uri = "test://tasks/no-engine";
+    repository::upsert_script(
+        script_uri,
+        r#"
+        function handleWork(context) {
+          if (typeof engine === "undefined") {
+            console.log("engine absent");
+            return;
+          }
+          const answer = engine.callRaw("list_users", {});
+          console.log("engine answered " + JSON.stringify(answer));
+        }
+        "#,
+    )
+    .expect("script should store");
+    repository::clear_log_messages(script_uri).expect("logs should clear");
+
+    let task = tasks::enqueue(new_task(script_uri, "handleWork"))
+        .await
+        .expect("the task should be accepted");
+
+    let invocation = tasks::TaskInvocation {
+        task_id: task.task_id,
+        invocation_id: "test-invocation".to_string(),
+        script_uri: script_uri.to_string(),
+        handler_name: "handleWork".to_string(),
+        payload: task.payload.clone(),
+        attempts: 0,
+        max_attempts: task.max_attempts,
+        run_as: None,
+    };
+
+    tokio::task::spawn_blocking(move || js_engine::execute_task_handler(&invocation, None))
+        .await
+        .expect("no panic")
+        .expect("the handler should run");
+
+    let logs = repository::fetch_log_messages(script_uri);
+    assert!(
+        logs.iter().any(|entry| entry.message == "engine absent"),
+        "an undelegated task reached the management tools: {:?}",
+        logs.iter().map(|entry| &entry.message).collect::<Vec<_>>()
+    );
+}
+
 /// The distinction from `scheduler_jobs`, which `script_init` wipes before
 /// every re-initialisation because a schedule belongs to the version of the
 /// code that declared it. Work already accepted does not.

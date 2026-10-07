@@ -37,24 +37,27 @@ this makes the tools reachable without a credential to store.
 
 ## Where it is, and where it is not
 
-`engine` is `undefined` unless `GlobalSecurityConfig::engine_api` is set, which
-is **two** executions:
+Every execution acts for a `Principal` (`security/secure_globals.rs`), and
+`engine` exists exactly when that principal came from a credential — a
+`Caller` or a `Delegated` person:
 
-| Execution                  | Has it | Why                                              |
-| -------------------------- | ------ | ------------------------------------------------ |
-| A script serving a request | yes    | runs as whoever made the request                 |
-| A delegated task           | yes    | the person consented, on a page that said so     |
-| A scheduled job            | no     | runs as `UserContext::admin("scheduler")`        |
-| `init()`                   | no     | runs as `admin("script-init")`                   |
-| Startup                    | no     | runs every script as a synthetic administrator   |
-| A test run                 | no     | executes a script's cases, not somebody's intent |
-| `/engine/eval_script`      | no     | shares its path with `sandbox.run`               |
-| `sandbox.run`              | no     | see below                                        |
+| Execution                                | Principal   | Has it | Why                                              |
+| ---------------------------------------- | ----------- | ------ | ------------------------------------------------ |
+| A script serving a request               | `Caller`    | yes    | runs as whoever made the request                 |
+| An MCP tool or prompt handler            | `Caller`    | yes    | runs as whoever called it                        |
+| A stream or asset authorization function | `Caller`    | yes    | runs as whoever is connecting or reading         |
+| A delegated task                         | `Delegated` | yes    | the person consented, on a page that said so     |
+| A task nobody delegated                  | `Engine`    | no     | acts for nobody                                  |
+| A scheduled job                          | `Engine`    | no     | acts for nobody                                  |
+| `init()`, startup                        | `Engine`    | no     | the engine bringing a script up                  |
+| A test run                               | `Contained` | no     | executes a script's cases, not somebody's intent |
+| `/engine/eval_script`, `sandbox.run`     | `Contained` | no     | see below                                        |
 
 **The capability check is not enough on its own**, which is the whole reason
-that flag exists rather than relying on `has_capability`.
+the principal decides rather than `has_capability`.
 
-The engine's own actors — a scheduled job, `init()`, startup — run as synthetic
+The engine's own actors — a scheduled job, an undelegated task, `init()`,
+startup — run as synthetic
 administrators with nobody behind them. They hold `AdministerEngine` because
 something has to bring a script up, not because anyone granted it. Reaching
 `engine.call` from a cron line would mean any script in the engine

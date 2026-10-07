@@ -15,8 +15,8 @@ use crate::security::UserContext;
 
 // Use the enhanced secure globals implementation
 use crate::security::secure_globals::{
-    CollectedRegistration, ConsoleLine, ConsoleSink, GlobalSecurityConfig, RegistrationKind,
-    RegistrationSink, SecureGlobalContext,
+    CollectedRegistration, ConsoleLine, ConsoleSink, GlobalSecurityConfig, Principal,
+    RegistrationKind, RegistrationSink, SecureGlobalContext,
 };
 
 // Type alias for route registrations map
@@ -792,23 +792,18 @@ type RegisterFunctionType = std::rc::Rc<
     dyn Fn(&str, &repository::RouteMetadata, Option<&str>) -> Result<(), rquickjs::Error>,
 >;
 
-/// Sets up secure global functions with proper capability validation
+/// Installs every global, each checked against `config.principal`.
 ///
-/// This function replaces the old vulnerable setup_global_functions with a secure implementation
-/// that enforces all security validation in Rust before allowing JavaScript operations.
-///
-/// Note: Authentication context is no longer set up here. It should be attached to the
-/// request object as `req.auth` by the caller.
+/// The caller's authentication is not a global: it reaches the script as
+/// `context.request.auth`, through the handler context.
 fn setup_secure_global_functions(
     ctx: &rquickjs::Ctx<'_>,
     script_uri: &str,
-    user_context: UserContext,
-    config: &GlobalSecurityConfig,
+    config: GlobalSecurityConfig,
     register_fn: Option<RegisterFunctionType>,
-    _auth_context: Option<crate::auth::JsAuthContext>, // Kept for API compatibility but unused
 ) -> Result<(), rquickjs::Error> {
     let t = Instant::now();
-    let secure_context = SecureGlobalContext::new_with_config(user_context, config.clone());
+    let secure_context = SecureGlobalContext::new(config);
     let d_ctor = t.elapsed();
 
     // Setup secure functions with proper capability validation
@@ -949,7 +944,7 @@ impl ScriptExecutionResult {
 pub fn execute_script_secure(
     uri: &str,
     content: &str,
-    user_context: UserContext,
+    principal: Principal,
 ) -> ScriptExecutionResult {
     let start_time = Instant::now();
 
@@ -998,23 +993,16 @@ pub fn execute_script_secure(
                         // Startup is the registration phase: this pass exists to
                         // collect what the script registers.
                         registration_phase: true,
-                        enable_audit_logging: false, // Disable for startup to reduce noise
-                        // Startup registers for real; nothing to withhold.
-                        dry_run_sink: None,
-                        console_sink: None,
                         // Bringing the script up is one invocation, so its
                         // output groups under one id like any other.
-                        log_context: HandlerInvocationKind::Init.log_context(
-                            &uri_owned,
-                            crate::middleware::generate_request_id(),
-                            None,
-                        ),
-                        // Not acting for anybody: nothing to narrow.
-                        delegated_scopes: None,
-                        // Startup runs every script in the engine as a
-                        // synthetic administrator. Nothing here came from a
-                        // credential, so nothing here administers.
-                        engine_api: false,
+                        ..GlobalSecurityConfig::new(
+                            principal,
+                            HandlerInvocationKind::Init.log_context(
+                                &uri_owned,
+                                crate::middleware::generate_request_id(),
+                                None,
+                            ),
+                        )
                     };
 
                     // Create the register function that captures registrations
@@ -1043,10 +1031,8 @@ pub fn execute_script_secure(
                     setup_secure_global_functions(
                         &ctx,
                         &uri_owned,
-                        user_context,
-                        &security_config,
+                        security_config,
                         Some(register_impl),
-                        None, // No auth context during script execution with config
                     )?;
 
                     // Execute the script (already bundled above)
@@ -1137,13 +1123,167 @@ impl JsHttpResponse {
     }
 }
 
-/// Executes a JavaScript script for an HTTP request with secure global functions
+/// Which execution budget a handler runs under.
+#[derive(Debug, Clone, Copy)]
+enum Budget {
+    /// `javascript.execution_timeout_ms`, or the script's own override.
+    Request,
+    /// `javascript.job_timeout_ms`, or the script's own override: background
+    /// work, which nobody is waiting on.
+    Job,
+}
+
+/// How long each step of [`HandlerExecution::prepare`] took, for the request
+/// profiler.
+#[derive(Debug, Default, Clone, Copy)]
+struct PreparePhases {
+    fetch: Duration,
+    transpile: Duration,
+    runtime: Duration,
+    globals: Duration,
+    eval: Duration,
+}
+
+/// A script's program evaluated in a fresh sandbox, ready for one handler call.
 ///
-/// This function creates a QuickJS runtime, sets up secure host functions,
-/// executes the script, calls the specified handler with request parameters,
-/// and returns the response.
+/// Every way a handler is reached — an HTTP request, a scheduled job, a task, an
+/// MCP tool or prompt, a stream or asset authorization — is the same sequence:
+/// fetch and bundle the program, create a runtime under a budget, install the
+/// globals for a [`Principal`], evaluate the program, then call one global
+/// function and settle what it returned. They differ only in who the principal
+/// is, which budget applies, what the function is handed and what is read
+/// back, so those are the parameters and the sequence is written once.
+struct HandlerExecution {
+    // Declared before `rt`, so it is dropped first: a context must not
+    // outlive its runtime.
+    ctx: Context,
+    rt: Runtime,
+    _budget: crate::database::HostCallBudget,
+    script_uri: String,
+    phases: PreparePhases,
+}
+
+impl HandlerExecution {
+    /// Builds the sandbox and evaluates the script's program in it.
+    fn prepare(
+        script_uri: &str,
+        budget: Budget,
+        config: GlobalSecurityConfig,
+    ) -> Result<Self, String> {
+        let mut phases = PreparePhases::default();
+
+        // Fetch and bundle the program *before* creating the runtime: the
+        // interrupt deadline armed by `create_sandboxed_runtime` starts at
+        // runtime creation, so preparing the program afterwards charges the
+        // bundle against the execution budget. On a cold cache — the state
+        // every deploy leaves behind — an asset-backed script fetches and
+        // transpiles every imported module here, which was enough to exhaust
+        // the budget before the handler ran.
+        let phase = Instant::now();
+        let source = repository::fetch_script(script_uri)
+            .ok_or_else(|| format!("no script for uri {}", script_uri))?;
+        phases.fetch = phase.elapsed();
+
+        // Transpile if needed (TypeScript/JSX/TSX) — cached by (uri, source hash).
+        let phase = Instant::now();
+        let executable_code = transpile_if_needed(script_uri, &source)?;
+        phases.transpile = phase.elapsed();
+
+        let phase = Instant::now();
+        let limits = match budget {
+            Budget::Request => crate::script_limits::for_script(script_uri),
+            Budget::Job => crate::script_limits::for_script_job(script_uri),
+        };
+        let (rt, host_budget) = create_sandboxed_runtime(&limits)?;
+        let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
+        phases.runtime = phase.elapsed();
+
+        let phase = Instant::now();
+        ctx.with(|ctx| setup_secure_global_functions(&ctx, script_uri, config, None))
+            .map_err(|e| format!("install globals: {}", e))?;
+        phases.globals = phase.elapsed();
+
+        // Bytecode is cached, but the top-level program still executes on every
+        // invocation.
+        let phase = Instant::now();
+        ctx.with(|ctx| {
+            crate::bytecode::eval_program(&ctx, script_uri, &executable_code)
+                .map_err(|e| format!("script eval: {}", extract_error_details(&ctx, &e)))
+        })?;
+        phases.eval = phase.elapsed();
+
+        Ok(Self {
+            ctx,
+            rt,
+            _budget: host_budget,
+            script_uri: script_uri.to_string(),
+            phases,
+        })
+    }
+
+    /// Calls into the program and settles the result, committing the
+    /// invocation's transaction when it succeeds and rolling it back when it
+    /// does not. `what` names the call in a never-settles message.
+    fn invoke<T>(
+        &self,
+        what: &str,
+        call: impl for<'js> FnOnce(&rquickjs::Ctx<'js>) -> Result<rquickjs::Promise<'js>, String>,
+        finish: impl for<'js> FnOnce(&rquickjs::Ctx<'js>, Value<'js>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        call_and_settle(
+            &self.rt,
+            &self.ctx,
+            &self.script_uri,
+            what,
+            TransactionHandling::Auto,
+            call,
+            finish,
+        )
+    }
+}
+
+/// Makes `handler_context` the `context` global, as well as the handler's
+/// argument, so `personalStorage` and the other APIs that read the caller from
+/// it can find it.
+fn install_handler_context<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    handler_context: &rquickjs::Object<'js>,
+) -> Result<(), String> {
+    ctx.globals()
+        .set("context", handler_context.clone())
+        .map_err(|e| format!("set context global: {}", e))
+}
+
+/// Calls the global function `name` with `argument`, as a promise.
 ///
-/// All global functions are secured with capability checking and input validation.
+/// A function that throws before returning never reaches the microtask queue,
+/// so its transaction is rolled back here. One that rejects after an `await`
+/// settles during the drain, and [`call_and_settle`] finishes it.
+fn call_global_function<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    name: &str,
+    argument: Value<'js>,
+) -> Result<rquickjs::Promise<'js>, String> {
+    let function: Value = ctx
+        .globals()
+        .get(name)
+        .map_err(|e| format!("no handler {}: {}", name, e))?;
+    let function = function
+        .as_function()
+        .ok_or_else(|| format!("handler '{}' not found, or not a function", name))?;
+
+    let result: Value = function.call((argument,)).map_err(|e| {
+        let details = extract_error_details(ctx, &e);
+        if crate::database::get_current_transaction_active() {
+            let _ = crate::database::Database::rollback_transaction();
+        }
+        format!("call handler: {}", details)
+    })?;
+
+    promise_resolve(ctx, result)
+}
+
+/// Runs the handler a route names for one HTTP request, as whoever made it.
 pub fn execute_script_for_request_secure(
     mut params: RequestExecutionParams,
 ) -> Result<JsHttpResponse, String> {
@@ -1174,72 +1314,25 @@ pub fn execute_script_for_request_secure(
     // final log line is gated so profiling adds no measurable overhead when off.
     let profile = request_profiling_enabled();
 
-    // Fetch and bundle the program *before* creating the runtime: the interrupt
-    // deadline armed by `create_sandboxed_runtime` starts at runtime creation,
-    // so preparing the program afterwards charges the bundle against the
-    // request's execution budget. On a cold cache — the state every deploy
-    // leaves behind — an asset-backed script fetches and transpiles every
-    // imported module here, which was enough to exhaust the budget before the
-    // handler ran.
-    let phase = Instant::now();
-    let owner_script = repository::fetch_script(&params.script_uri)
-        .ok_or_else(|| format!("no script for uri {}", params.script_uri))?;
-    let t_fetch = phase.elapsed();
-
-    // Transpile if needed (TypeScript/JSX/TSX) — cached by (uri, source hash).
-    let phase = Instant::now();
-    let executable_code = transpile_if_needed(&params.script_uri, &owner_script)?;
-    let t_transpile = phase.elapsed();
+    let execution = HandlerExecution::prepare(
+        &script_uri_owned,
+        Budget::Request,
+        GlobalSecurityConfig::new(Principal::Caller(params.user_context.clone()), log_context),
+    )?;
+    let PreparePhases {
+        fetch: t_fetch,
+        transpile: t_transpile,
+        runtime: t_runtime,
+        globals: t_globals,
+        eval: t_eval,
+    } = execution.phases;
 
     let phase = Instant::now();
-    let (rt, _budget) =
-        create_sandboxed_runtime(&crate::script_limits::for_script(&params.script_uri))?;
-    let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
-    let t_runtime = phase.elapsed();
-
-    let phase = Instant::now();
-    ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-        // Set up all secure global functions
-        // For request handling, registrations are not collected but everything else is enabled
-        let security_config = GlobalSecurityConfig {
-            enable_audit_logging: false, // Disable for tests to avoid runtime conflicts
-            log_context: log_context.clone(),
-            // A script serving a request runs as whoever made it, so the
-            // management surface is authorized against a real credential —
-            // the same one `/engine/*` and `/mcp` would check.
-            engine_api: true,
-            ..Default::default()
-        };
-
-        setup_secure_global_functions(
-            &ctx,
-            &script_uri_owned,
-            params.user_context.clone(),
-            &security_config,
-            None,
-            params.auth_context.clone(), // Pass auth context for request handling
-        )?;
-
-        Ok(())
-    })
-    .map_err(|e| format!("install secure host fns: {}", e))?;
-    let t_globals = phase.elapsed();
-
-    // Evaluate the script and capture detailed error information if it fails.
-    // Bytecode is cached, but the top-level program still executes each request.
-    let phase = Instant::now();
-    ctx.with(|ctx| -> Result<(), String> {
-        let result = crate::bytecode::eval_program(&ctx, &params.script_uri, &executable_code);
-        if let Err(ref e) = result {
-            let details = extract_error_details(&ctx, e);
-            return Err(format!("owner eval: {}", details));
-        }
-        Ok(())
-    })?;
-    let t_eval = phase.elapsed();
-
-    let phase = Instant::now();
-    let response_exec = invoke_handler_and_build_response(&rt, &ctx, &params, &auth_context);
+    let response_exec = execution.invoke(
+        &format!("Handler '{}'", params.handler_name),
+        |ctx| call_handler(ctx, &params, &auth_context),
+        |_ctx, value| build_http_response(value),
+    );
 
     let t_handler = phase.elapsed();
 
@@ -1271,8 +1364,6 @@ pub fn execute_script_for_request_secure(
         }
     }
 
-    // Ensure clean shutdown: drop Context before Runtime
-    drop(ctx);
     Ok(response_result)
 }
 
@@ -1286,11 +1377,6 @@ fn call_handler<'js>(
     params: &RequestExecutionParams,
     auth_context: &Option<crate::auth::JsAuthContext>,
 ) -> Result<rquickjs::Promise<'js>, String> {
-    let global = ctx.globals();
-    let func: Function = global
-        .get::<_, Function>(&params.handler_name)
-        .map_err(|e| format!("no handler {}: {}", params.handler_name, e))?;
-
     let request_context = JsRequestContext {
         path: Some(params.path.clone()),
         url: params.url.clone(),
@@ -1318,24 +1404,9 @@ fn call_handler<'js>(
     let handler_context = context_builder
         .build(ctx)
         .map_err(|e| format!("build context: {}", e))?;
+    install_handler_context(ctx, &handler_context)?;
 
-    // Set context as a global variable so personalStorage and other APIs can access it
-    global
-        .set("context", handler_context.clone())
-        .map_err(|e| format!("set context global: {}", e))?;
-
-    // A handler that throws before returning never reaches the queue, so its
-    // transaction is finished here. One that rejects *after* an await settles
-    // during the drain instead, and is finished by the caller.
-    let result: Value = func.call::<_, Value>((handler_context,)).map_err(|e| {
-        let details = extract_error_details(ctx, &e);
-        if crate::database::get_current_transaction_active() {
-            let _ = crate::database::Database::rollback_transaction();
-        }
-        format!("call handler: {}", details)
-    })?;
-
-    promise_resolve(ctx, result)
+    call_global_function(ctx, &params.handler_name, handler_context.into_value())
 }
 
 /// Commits or rolls back the request's transaction, if it opened one.
@@ -1508,33 +1579,6 @@ fn build_http_response(result: Value<'_>) -> Result<JsHttpResponse, String> {
     }
 }
 
-/// Builds the per-request handler context, invokes the named handler, settles
-/// whatever it returned, and maps that into an [`JsHttpResponse`].
-///
-/// The three phases cannot share one `ctx.with`: draining the microtask queue
-/// requires the runtime, and touching the runtime from inside a context panics
-/// with "RefCell already borrowed". So the handler's result is persisted, the
-/// queue is drained outside the context, and the value is restored to finish.
-///
-/// Shared by the standard request path and the pooling prototype so both agree
-/// on transaction handling and response shaping.
-fn invoke_handler_and_build_response(
-    rt: &Runtime,
-    context: &Context,
-    params: &RequestExecutionParams,
-    auth_context: &Option<crate::auth::JsAuthContext>,
-) -> Result<JsHttpResponse, String> {
-    call_and_settle(
-        rt,
-        context,
-        &params.script_uri,
-        &format!("Handler '{}'", params.handler_name),
-        TransactionHandling::Auto,
-        |ctx| call_handler(ctx, params, auth_context),
-        |_ctx, value| build_http_response(value),
-    )
-}
-
 /// Executes a JavaScript handler for scheduler jobs
 pub fn execute_scheduled_handler(
     script_uri: &str,
@@ -1550,57 +1594,18 @@ pub fn execute_scheduled_handler(
         Some(invocation.key.clone()),
     );
 
-    // Fetch and bundle before arming the runtime's interrupt deadline (see
-    // `execute_script_for_request_secure`).
-    let owner_script = repository::fetch_script(script_uri)
-        .ok_or_else(|| format!("no script for uri {}", script_uri))?;
-    let executable_code = transpile_if_needed(script_uri, &owner_script)?;
-
-    // A job's budget rather than a request's (`javascript.job_timeout_ms`,
-    // or this script's own override). The scheduler renews its claim for as
-    // long as the run lasts, so the two no longer have to agree on a number
-    // — but this is still what bounds the run.
-    let (rt, _budget) =
-        create_sandboxed_runtime(&crate::script_limits::for_script_job(script_uri))?;
-    let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
-
-    ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-        let security_config = GlobalSecurityConfig {
-            enable_audit_logging: false,
-            log_context: log_context.clone(),
-            ..Default::default()
-        };
-
-        setup_secure_global_functions(
-            &ctx,
-            &script_uri_owned,
-            UserContext::admin("scheduler".to_string()),
-            &security_config,
-            None,
-            None,
-        )
-    })
-    .map_err(|e| format!("install scheduler globals: {}", e))?;
-
-    ctx.with(|ctx| {
-        crate::bytecode::eval_program(&ctx, script_uri, &executable_code).map_err(|e| {
-            let details = extract_error_details(&ctx, &e);
-            format!("script eval: {}", details)
-        })
-    })?;
-
-    let handler_result = call_and_settle(
-        &rt,
-        &ctx,
+    // A job's budget rather than a request's. The scheduler renews its claim
+    // for as long as the run lasts, so the two no longer have to agree on a
+    // number — but this is still what bounds the run. A job acts for nobody.
+    let execution = HandlerExecution::prepare(
         script_uri,
-        &format!("Scheduled handler '{}'", handler_name),
-        TransactionHandling::Auto,
-        |ctx| {
-            let global = ctx.globals();
-            let func: Function = global
-                .get::<_, Function>(handler_name)
-                .map_err(|e| format!("no handler {}: {}", handler_name, e))?;
+        Budget::Job,
+        GlobalSecurityConfig::new(Principal::Engine("scheduler"), log_context),
+    )?;
 
+    execution.invoke(
+        &format!("Scheduled handler '{}'", handler_name),
+        |ctx| {
             let schedule_meta = serde_json::json!({
                 "jobId": invocation.job_id.to_string(),
                 "name": invocation.key,
@@ -1616,33 +1621,12 @@ pub fn execute_scheduled_handler(
                 .with_invocation_id(invocation.invocation_id.clone())
                 .build(ctx)
                 .map_err(|e| format!("build context: {}", e))?;
+            install_handler_context(ctx, &handler_context)?;
 
-            // Set context as a global variable so personalStorage and other APIs can access it
-            global
-                .set("context", handler_context.clone())
-                .map_err(|e| format!("set context global: {}", e))?;
-
-            // A job that throws before returning never reaches the queue, so
-            // its transaction is rolled back here. One that rejects after an
-            // await settles during the drain, and `call_and_settle` finishes it.
-            let result = func.call::<_, Value>((handler_context,)).map_err(|e| {
-                let details = extract_error_details(ctx, &e);
-                if crate::database::get_current_transaction_active() {
-                    let _ = crate::database::Database::rollback_transaction();
-                }
-                format!("call handler: {}", details)
-            })?;
-
-            promise_resolve(ctx, result)
+            call_global_function(ctx, handler_name, handler_context.into_value())
         },
         |_ctx, _value| Ok(()),
-    );
-
-    // Ensure clean shutdown
-    drop(ctx);
-
-    handler_result?;
-    Ok(())
+    )
 }
 
 /// Run one attempt of a queued task ([`crate::tasks`]).
@@ -1653,9 +1637,8 @@ pub fn execute_scheduled_handler(
 /// attempt count, where a job carries its schedule — and in what the caller
 /// does with the outcome, which for a task is a retry with backoff.
 ///
-/// A task runs in script context. It holds what the script holds, and nothing
-/// belonging to whoever enqueued it: acting as a person in the background is a
-/// grant that person has to make, and there is nowhere yet for them to make it.
+/// A task acts for nobody unless a person delegated it, and then for that
+/// person, narrowed to what they granted ([`crate::delegation`]).
 pub fn execute_task_handler(
     invocation: &crate::tasks::TaskInvocation,
     delegated: Option<&crate::delegation::Delegated>,
@@ -1670,75 +1653,32 @@ pub fn execute_task_handler(
         Some(handler_name.to_string()),
     );
 
-    // Fetch and bundle before arming the runtime's interrupt deadline (see
-    // `execute_script_for_request_secure`).
-    let owner_script = repository::fetch_script(script_uri)
-        .ok_or_else(|| format!("no script for uri {}", script_uri))?;
-    let executable_code = transpile_if_needed(script_uri, &owner_script)?;
+    // A delegated task acts for the person who granted it, narrowed to what
+    // they granted, and reaches the management tools through `Scope::Author`
+    // and `Scope::Administer` — the person consented on a page that named what
+    // they were consenting to. An undelegated one acts for nobody.
+    //
+    // The principal is also what `fetch` resolves `{{secret:...}}` against —
+    // `user_secrets` for this id, then the script's — so a delegated task
+    // reaches the person's own key here and nowhere else.
+    let principal = match delegated {
+        Some(delegated) => Principal::Delegated {
+            user: delegated.user_context.clone(),
+            scopes: delegated.grant.scopes.clone(),
+        },
+        None => Principal::Engine("tasks"),
+    };
 
-    // A queued task is background work, so it takes the job budget — this
-    // script's own if one has been set for it.
-    let (rt, _budget) =
-        create_sandboxed_runtime(&crate::script_limits::for_script_job(script_uri))?;
-    let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
-
-    ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-        let security_config = GlobalSecurityConfig {
-            enable_audit_logging: false,
-            log_context: log_context.clone(),
-            // What this person authorised, when it is acting for one. `None`
-            // for an ordinary task, which acts for nobody and so narrows
-            // nothing — the scopes only ever take things away.
-            delegated_scopes: delegated.map(|d| d.grant.scopes.clone()),
-            // Queued work reaches the management tools, which is the whole
-            // point of `Scope::Author` and `Scope::Administer`: the person
-            // consented on a page that named what they were consenting to. An
-            // *undelegated* task acts for nobody and gets the engine's own
-            // context, which holds no management capability to spend.
-            engine_api: true,
-            ..Default::default()
-        };
-
-        // The context the globals are installed with is what `fetch` resolves
-        // `{{secret:...}}` against — `user_secrets` for this id, then the
-        // script's. A delegated task therefore reaches the person's own key
-        // here and nowhere else; an undelegated one is the engine's own
-        // context, which has no personal secrets to find.
-        let user_context = match delegated {
-            Some(delegated) => delegated.user_context.clone(),
-            None => UserContext::admin("tasks".to_string()),
-        };
-
-        setup_secure_global_functions(
-            &ctx,
-            &script_uri_owned,
-            user_context,
-            &security_config,
-            None,
-            None,
-        )
-    })
-    .map_err(|e| format!("install task globals: {}", e))?;
-
-    ctx.with(|ctx| {
-        crate::bytecode::eval_program(&ctx, script_uri, &executable_code).map_err(|e| {
-            let details = extract_error_details(&ctx, &e);
-            format!("script eval: {}", details)
-        })
-    })?;
-
-    let handler_result = call_and_settle(
-        &rt,
-        &ctx,
+    // A queued task is background work, so it takes the job budget.
+    let execution = HandlerExecution::prepare(
         script_uri,
-        &format!("Task handler '{}'", handler_name),
-        TransactionHandling::Auto,
-        |ctx| {
-            let global = ctx.globals();
-            let func: Function = global
-                .get::<_, Function>(handler_name)
-                .map_err(|e| format!("no handler {}: {}", handler_name, e))?;
+        Budget::Job,
+        GlobalSecurityConfig::new(principal, log_context),
+    )?;
 
+    execution.invoke(
+        &format!("Task handler '{}'", handler_name),
+        |ctx| {
             // `attempt` counts from one, because a handler reads it to say
             // "attempt 2 of 5" and nobody calls the first one attempt zero.
             let task_meta = serde_json::json!({
@@ -1776,20 +1716,9 @@ pub fn execute_task_handler(
             let handler_context = builder
                 .build(ctx)
                 .map_err(|e| format!("build context: {}", e))?;
+            install_handler_context(ctx, &handler_context)?;
 
-            global
-                .set("context", handler_context.clone())
-                .map_err(|e| format!("set context global: {}", e))?;
-
-            let result = func.call::<_, Value>((handler_context,)).map_err(|e| {
-                let details = extract_error_details(ctx, &e);
-                if crate::database::get_current_transaction_active() {
-                    let _ = crate::database::Database::rollback_transaction();
-                }
-                format!("call handler: {}", details)
-            })?;
-
-            promise_resolve(ctx, result)
+            call_global_function(ctx, handler_name, handler_context.into_value())
         },
         // What the handler returned, kept rather than discarded.
         //
@@ -1819,11 +1748,7 @@ pub fn execute_task_handler(
             let text: Option<String> = stringify.call((value,)).ok();
             Ok(text.and_then(|text| serde_json::from_str(&text).ok()))
         },
-    );
-
-    drop(ctx);
-
-    handler_result
+    )
 }
 
 /// The JavaScript authoring API (`test`, `expect`, hooks) evaluated into a test
@@ -1992,39 +1917,22 @@ fn install_and_collect_tests<'js>(
     code: &str,
 ) -> Result<Vec<(String, rquickjs::Persistent<Function<'static>>)>, String> {
     let invocation_id = crate::middleware::generate_request_id();
-    let security_config = GlobalSecurityConfig {
-        // A test must not mutate registries that outlive the run: routes,
-        // streams, and jobs registered here would stay registered, and no
-        // rollback undoes them. `registration_phase: false` is what
-        // enforces that - the APIs stay callable and report that they did
-        // nothing, rather than disappearing from the test's global scope.
-        registration_phase: false,
-        enable_audit_logging: false,
-        dry_run_sink: None,
-        console_sink: None,
-        log_context: HandlerInvocationKind::Test.log_context(
+    // A test must not mutate registries that outlive the run: routes,
+    // streams, and jobs registered here would stay registered, and no
+    // rollback undoes them. Outside the registration phase the APIs stay
+    // callable and report that they did nothing, rather than disappearing
+    // from the test's global scope.
+    let security_config = GlobalSecurityConfig::new(
+        Principal::Contained(params.user_context.clone()),
+        HandlerInvocationKind::Test.log_context(
             &params.script_uri,
             invocation_id.clone(),
             Some(module_path.to_string()),
         ),
-        // Not acting for anybody: nothing to narrow.
-        delegated_scopes: None,
-        // A test run is not somebody administering the engine: it
-        // executes a script's own cases, and giving it the management
-        // surface would make `run_tests` a way to spend whatever the
-        // caller holds on tools nobody named.
-        engine_api: false,
-    };
+    );
 
-    setup_secure_global_functions(
-        ctx,
-        &params.script_uri,
-        params.user_context.clone(),
-        &security_config,
-        None,
-        None,
-    )
-    .map_err(|e| format!("install test globals: {}", extract_error_details(ctx, &e)))?;
+    setup_secure_global_functions(ctx, &params.script_uri, security_config, None)
+        .map_err(|e| format!("install test globals: {}", extract_error_details(ctx, &e)))?;
 
     let handler_context = JsHandlerContextBuilder::new(HandlerInvocationKind::Test)
         .with_script_metadata(params.script_uri.clone(), module_path)
@@ -2164,113 +2072,39 @@ fn run_test_module(
     Ok(ModuleOutcome { cases, timed_out })
 }
 
-/// Execute an MCP tool handler
-///
-/// This function loads a script and calls the specified MCP tool handler function with the provided arguments.
-///
-/// # Arguments
-/// * `script_uri` - The URI of the script containing the tool handler
-/// * `handler_function` - The name of the handler function to call
-/// * `tool_name` - The name of the MCP tool being invoked
-/// * `arguments` - The tool arguments as a JSON value
-///
-/// # Returns
-/// * `Ok(String)` - The result from the handler function (as JSON string)
-/// * `Err(String)` - Error message if execution fails
+/// Execute an MCP prompt handler, which is called with its arguments rather
+/// than with a handler context, as whoever asked for the prompt.
 pub fn execute_mcp_prompt_handler(
     script_uri: &str,
     handler_function: &str,
     arguments: serde_json::Value,
-    auth_context: Option<crate::auth::JsAuthContext>,
     user_context: UserContext,
     exchange: crate::mcp_elicitation::Exchange,
 ) -> Result<crate::mcp::PromptOutcome, String> {
-    let script_uri_owned = script_uri.to_string();
-    let handler_function_owned = handler_function.to_string();
-    let arguments_owned = arguments.clone();
-    let auth_context_owned = auth_context;
-    let user_context_owned = user_context;
-
-    // Fetch and bundle before arming the runtime's interrupt deadline (see
-    // `execute_script_for_request_secure`).
-    let script_content = repository::fetch_script(&script_uri_owned)
-        .ok_or_else(|| format!("no script for uri {}", script_uri_owned))?;
-    let executable_code = transpile_if_needed(&script_uri_owned, &script_content)?;
-
-    let (rt, _budget) = create_sandboxed_runtime(&crate::script_limits::for_script(script_uri))?;
-    let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
-
-    let setup_exec = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-        // Set up all global functions using the secure helper function
-        // For MCP prompt handlers, we enable minimal features
-        let config = GlobalSecurityConfig {
-            enable_audit_logging: false,
-            log_context: HandlerInvocationKind::McpPrompt.log_context(
-                &script_uri_owned,
-                crate::middleware::generate_request_id(),
-                Some(handler_function_owned.clone()),
-            ),
-            ..Default::default()
-        };
-
-        // The caller's own context, as the tool path already did. A prompt is
-        // answered for whoever asked for it.
-        setup_secure_global_functions(
-            &ctx,
-            &script_uri_owned,
-            user_context_owned.clone(),
-            &config,
-            None,
-            auth_context_owned.clone(),
-        )?;
-
-        // Execute the script (fetched and bundled above)
-        crate::bytecode::eval_program(&ctx, &script_uri_owned, &executable_code)?;
-
-        Ok(())
-    });
-
-    if let Err(e) = setup_exec {
-        return Err(format!("Prompt handler execution failed: {}", e));
-    }
+    // A prompt is answered for whoever asked for it.
+    let log_context = HandlerInvocationKind::McpPrompt.log_context(
+        script_uri,
+        crate::middleware::generate_request_id(),
+        Some(handler_function.to_string()),
+    );
+    let execution = HandlerExecution::prepare(
+        script_uri,
+        Budget::Request,
+        GlobalSecurityConfig::new(Principal::Caller(user_context), log_context),
+    )
+    .map_err(|e| format!("Prompt handler execution failed: {}", e))?;
 
     let guard = crate::mcp_elicitation::ExchangeGuard::install(exchange);
 
-    let result_exec = call_and_settle(
-        &rt,
-        &ctx,
-        &script_uri_owned,
-        &format!("MCP prompt handler '{}'", handler_function_owned),
-        TransactionHandling::Auto,
-        |ctx| -> Result<rquickjs::Promise<'_>, String> {
-            // Get the handler function
-            let handler_result: rquickjs::Value = ctx
-                .globals()
-                .get(&handler_function_owned)
-                .map_err(|e| format!("no handler {}: {}", handler_function_owned, e))?;
-            let handler_func = handler_result.as_function().ok_or_else(|| {
-                format!(
-                    "handler '{}' not found, or not a function",
-                    handler_function_owned
-                )
-            })?;
-
-            // Parse arguments as a JavaScript object
-            let args_str = arguments_owned.to_string();
-            let args_obj: rquickjs::Value = ctx
-                .json_parse(args_str)
+    let result_exec = execution.invoke(
+        &format!("MCP prompt handler '{}'", handler_function),
+        |ctx| {
+            let arguments: Value = ctx
+                .json_parse(arguments.to_string())
                 .map_err(|e| format!("parse prompt arguments: {}", e))?;
-
-            // Call the handler with arguments
-            let result: rquickjs::Value = handler_func.call((args_obj,)).map_err(|e| {
-                let details = extract_error_details(ctx, &e);
-                format!("call prompt handler: {}", details)
-            })?;
-
-            promise_resolve(ctx, result)
+            call_global_function(ctx, handler_function, arguments)
         },
         |ctx, result| {
-            // Convert result to JSON
             let result_json_str = ctx
                 .json_stringify(result)
                 .map_err(|e| format!("stringify prompt result: {}", e))?
@@ -2319,77 +2153,27 @@ pub fn execute_mcp_tool_handler(
     user_context: UserContext,
     exchange: crate::mcp_elicitation::Exchange,
 ) -> Result<crate::mcp::ToolOutcome, String> {
-    let script_uri_owned = script_uri.to_string();
-    let handler_function_owned = handler_function.to_string();
-    let tool_name_owned = tool_name.to_string();
-    let arguments_owned = arguments.clone();
-    let auth_context_owned = auth_context;
-    let user_context_owned = user_context;
     let invocation_id = crate::middleware::generate_request_id();
     let log_context = HandlerInvocationKind::McpTool.log_context(
-        &script_uri_owned,
+        script_uri,
         invocation_id.clone(),
-        Some(tool_name_owned.clone()),
+        Some(tool_name.to_string()),
     );
 
-    // Fetch and bundle before arming the runtime's interrupt deadline (see
-    // `execute_script_for_request_secure`).
-    let script_content = repository::fetch_script(&script_uri_owned)
-        .ok_or_else(|| format!("no script for uri {}", script_uri_owned))?;
-    let executable_code = transpile_if_needed(&script_uri_owned, &script_content)?;
-
-    let (rt, _budget) = create_sandboxed_runtime(&crate::script_limits::for_script(script_uri))?;
-    let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
-
-    let setup_exec = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-        // Set up all global functions using the secure helper function
-        // For MCP tool handlers, we enable minimal features
-        let config = GlobalSecurityConfig {
-            enable_audit_logging: false,
-            log_context: log_context.clone(),
-            ..Default::default()
-        };
-
-        // MCP tool handlers inherit the validated caller context from MCP auth middleware.
-        setup_secure_global_functions(
-            &ctx,
-            &script_uri_owned,
-            user_context_owned.clone(),
-            &config,
-            None,
-            auth_context_owned.clone(),
-        )?;
-
-        // Execute the script (fetched and bundled above)
-        crate::bytecode::eval_program(&ctx, &script_uri_owned, &executable_code)?;
-
-        Ok(())
-    });
-
-    if let Err(e) = setup_exec {
-        return Err(format!("JavaScript execution error: {}", e));
-    }
+    // The validated caller from the MCP auth middleware: a tool call is a
+    // request like any other, so it reaches `engine` as that caller.
+    let execution = HandlerExecution::prepare(
+        script_uri,
+        Budget::Request,
+        GlobalSecurityConfig::new(Principal::Caller(user_context), log_context),
+    )
+    .map_err(|e| format!("JavaScript execution error: {}", e))?;
 
     let guard = crate::mcp_elicitation::ExchangeGuard::install(exchange);
 
-    let result_exec = call_and_settle(
-        &rt,
-        &ctx,
-        &script_uri_owned,
-        &format!("MCP tool handler '{}'", handler_function_owned),
-        TransactionHandling::Auto,
-        |ctx| -> Result<rquickjs::Promise<'_>, String> {
-            let handler_result: rquickjs::Value = ctx
-                .globals()
-                .get(&handler_function_owned)
-                .map_err(|e| format!("no handler {}: {}", handler_function_owned, e))?;
-            let handler_func = handler_result.as_function().ok_or_else(|| {
-                format!(
-                    "handler '{}' not found, or not a function",
-                    handler_function_owned
-                )
-            })?;
-
+    let result_exec = execution.invoke(
+        &format!("MCP tool handler '{}'", handler_function),
+        |ctx| {
             let request_context = JsRequestContext {
                 path: Some("/mcp/tools/call".to_string()),
                 url: None,
@@ -2403,45 +2187,22 @@ pub fn execute_mcp_tool_handler(
             };
 
             let mut context_builder = JsHandlerContextBuilder::new(HandlerInvocationKind::McpTool)
-                .with_script_metadata(&script_uri_owned, &handler_function_owned)
+                .with_script_metadata(script_uri, handler_function)
                 .with_request(request_context)
                 .with_invocation_id(invocation_id.clone())
-                .with_args(arguments_owned)
-                .with_metadata_value(
-                    "mcp",
-                    serde_json::json!({
-                        "toolName": tool_name_owned
-                    }),
-                );
+                .with_args(arguments)
+                .with_metadata_value("mcp", serde_json::json!({ "toolName": tool_name }));
 
-            if let Some(auth_context) = auth_context_owned.clone() {
+            if let Some(auth_context) = auth_context {
                 context_builder = context_builder.with_auth_context(auth_context);
             }
 
             let handler_context = context_builder
                 .build(ctx)
                 .map_err(|e| format!("build context: {}", e))?;
+            install_handler_context(ctx, &handler_context)?;
 
-            // Set context as a global variable
-            let global = ctx.globals();
-            global
-                .set("context", handler_context.clone())
-                .map_err(|e| format!("set context global: {}", e))?;
-
-            // A handler that throws before returning never reaches the queue, so
-            // its transaction is rolled back here. One that rejects after an await
-            // settles during the drain, and `call_and_settle` finishes it.
-            let result_value = handler_func
-                .call::<_, rquickjs::Value>((handler_context,))
-                .map_err(|e| {
-                    let details = extract_error_details(ctx, &e);
-                    if crate::database::get_current_transaction_active() {
-                        let _ = crate::database::Database::rollback_transaction();
-                    }
-                    format!("call handler: {}", details)
-                })?;
-
-            promise_resolve(ctx, result_value)
+            call_global_function(ctx, handler_function, handler_context.into_value())
         },
         |ctx, result_value| -> Result<String, String> {
             // Convert the result to a JSON string
@@ -2480,14 +2241,10 @@ pub fn execute_mcp_tool_handler(
         return Ok(crate::mcp::Outcome::Handed(handed.clone()));
     }
     if let Some(asked) = exchange.into_asked() {
-        drop(ctx);
         return Ok(crate::mcp::ToolOutcome::InputRequired(asked));
     }
 
     let result_string = result_exec.map_err(|e| format!("JavaScript execution error: {}", e))?;
-
-    // Ensure clean shutdown: drop Context before Runtime
-    drop(ctx);
     Ok(crate::mcp::ToolOutcome::Complete(result_string))
 }
 
@@ -2538,67 +2295,29 @@ pub fn execute_authorization_function(
     query_params: &std::collections::HashMap<String, String>,
     auth_context: Option<crate::auth::JsAuthContext>,
 ) -> Result<crate::resource_access::AccessDecision, String> {
-    let script_uri_owned = script_uri.to_string();
-    let function_name_owned = function_name.to_string();
-    let path_owned = path.to_string();
-    let query_params_owned = query_params.clone();
     let invocation_id = crate::middleware::generate_request_id();
-    let log_context = kind.log_context(
-        &script_uri_owned,
-        invocation_id.clone(),
-        Some(path_owned.clone()),
-    );
+    let log_context = kind.log_context(script_uri, invocation_id.clone(), Some(path.to_string()));
 
-    // Fetch and bundle before arming the runtime's interrupt deadline (see
-    // `execute_script_for_request_secure`).
-    let script_content = repository::fetch_script(&script_uri_owned)
-        .ok_or_else(|| format!("no script for uri {}", script_uri_owned))?;
-    let executable_code = transpile_if_needed(&script_uri_owned, &script_content)?;
+    // Asked on behalf of whoever is connecting or reading, anonymous included.
+    let execution = HandlerExecution::prepare(
+        script_uri,
+        Budget::Request,
+        GlobalSecurityConfig::new(
+            Principal::Caller(caller_context(auth_context.as_ref())),
+            log_context,
+        ),
+    )
+    .map_err(|e| format!("Customization function execution error: {}", e))?;
 
-    let (rt, _budget) = create_sandboxed_runtime(&crate::script_limits::for_script(script_uri))?;
-    let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
-
-    let setup_exec = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-        // Set up global functions with minimal security for customization function
-        let config = GlobalSecurityConfig {
-            enable_audit_logging: false,
-            log_context: log_context.clone(),
-            ..Default::default()
-        };
-
-        setup_secure_global_functions(
-            &ctx,
-            &script_uri_owned,
-            caller_context(auth_context.as_ref()),
-            &config,
-            None,
-            auth_context.clone(),
-        )?;
-
-        // The script was fetched and bundled above.
-
-        crate::bytecode::eval_program(&ctx, &script_uri_owned, &executable_code)?;
-
-        Ok(())
-    });
-
-    if let Err(e) = setup_exec {
-        return Err(format!("Customization function execution error: {}", e));
-    }
-
-    let result_exec = call_and_settle(
-        &rt,
-        &ctx,
-        &script_uri_owned,
-        &format!("{} '{}'", kind.as_str(), function_name_owned),
-        TransactionHandling::Auto,
-        |ctx| -> Result<rquickjs::Promise<'_>, String> {
+    let result_exec = execution.invoke(
+        &format!("{} '{}'", kind.as_str(), function_name),
+        |ctx| {
             let request_context = JsRequestContext {
-                path: Some(path_owned.clone()),
+                path: Some(path.to_string()),
                 url: None,
                 method: Some("GET".to_string()),
                 headers: HashMap::new(),
-                query_params: query_params_owned.clone(),
+                query_params: query_params.clone(),
                 form_data: HashMap::new(),
                 body: None,
                 route_params: HashMap::new(),
@@ -2606,7 +2325,7 @@ pub fn execute_authorization_function(
             };
 
             let mut context_builder = JsHandlerContextBuilder::new(kind)
-                .with_script_metadata(&script_uri_owned, &function_name_owned)
+                .with_script_metadata(script_uri, function_name)
                 .with_request(request_context)
                 .with_invocation_id(invocation_id.clone())
                 .with_metadata_value(
@@ -2614,12 +2333,12 @@ pub fn execute_authorization_function(
                         HandlerInvocationKind::AssetAuthorization => "asset",
                         _ => "stream",
                     },
-                    serde_json::json!({ "path": path_owned }),
+                    serde_json::json!({ "path": path }),
                 );
 
-            if !query_params_owned.is_empty() {
+            if !query_params.is_empty() {
                 let args_json = JsonValue::Object(
-                    query_params_owned
+                    query_params
                         .iter()
                         .map(|(key, value)| (key.clone(), JsonValue::String(value.clone())))
                         .collect(),
@@ -2634,31 +2353,9 @@ pub fn execute_authorization_function(
             let handler_context = context_builder
                 .build(ctx)
                 .map_err(|e| format!("build context: {}", e))?;
+            install_handler_context(ctx, &handler_context)?;
 
-            // Set context as a global variable so personalStorage and other APIs can access it
-            let global = ctx.globals();
-            global
-                .set("context", handler_context.clone())
-                .map_err(|e| format!("set context global: {}", e))?;
-
-            // Get the customization function
-            let customization_func: rquickjs::Function = global
-                .get(&function_name_owned)
-                .map_err(|_| format!("'{}' not found", function_name_owned))?;
-
-            // A function that throws before returning never reaches the queue,
-            // so its transaction is rolled back here. One that rejects after an
-            // await settles during the drain, and `call_and_settle` finishes it.
-            let result_value: rquickjs::Value =
-                customization_func.call((handler_context,)).map_err(|e| {
-                    let details = extract_error_details(ctx, &e);
-                    if crate::database::get_current_transaction_active() {
-                        let _ = crate::database::Database::rollback_transaction();
-                    }
-                    format!("call customization: {}", details)
-                })?;
-
-            promise_resolve(ctx, result_value)
+            call_global_function(ctx, function_name, handler_context.into_value())
         },
         |_ctx, result_value| {
             use crate::resource_access::{AccessDecision, deny_reason, deny_status};
@@ -2721,12 +2418,7 @@ pub fn execute_authorization_function(
         },
     );
 
-    let decision =
-        result_exec.map_err(|e| format!("Customization function execution error: {}", e))?;
-
-    // Ensure clean shutdown
-    drop(ctx);
-    Ok(decision)
+    result_exec.map_err(|e| format!("Customization function execution error: {}", e))
 }
 
 /// What to evaluate, and under which budget.
@@ -2933,39 +2625,28 @@ fn run_snippet(
     let prepared = context.with(|ctx| -> Result<Prepared, Box<EvalOutcome>> {
         let ctx = &ctx;
         let invocation_id = crate::middleware::generate_request_id();
+        // Same rule as a test run: the APIs stay callable and report that they
+        // did nothing, rather than installing registrations that outlive the
+        // request with no rollback to undo them. Contained, because this is
+        // shared by `/engine/eval_script` and `sandbox.run`, and the second
+        // runs model-authored code.
         let security_config = GlobalSecurityConfig {
-            // Same rule as a test run: the APIs stay callable and report that they
-            // did nothing, rather than installing registrations that outlive the
-            // request with no rollback to undo them.
-            registration_phase: false,
-            enable_audit_logging: false,
-            dry_run_sink: None,
             console_sink: Some(std::sync::Arc::clone(console)),
-            log_context: HandlerInvocationKind::Eval.log_context(
-                &params.script_uri,
-                invocation_id.clone(),
-                None,
-            ),
-            // Not acting for anybody: nothing to narrow.
-            delegated_scopes: None,
-            // Shared by `/engine/eval_script` and `sandbox.run`, so it fails
-            // closed for the second: model-authored code must not reach the
-            // management tools, and the capability subset cannot say so —
-            // `read_logs` is gated on `view_logs`, which an agent grants for
-            // `console`, and takes any script's URI as an argument.
-            engine_api: false,
+            ..GlobalSecurityConfig::new(
+                Principal::Contained(params.user_context.clone()),
+                HandlerInvocationKind::Eval.log_context(
+                    &params.script_uri,
+                    invocation_id.clone(),
+                    None,
+                ),
+            )
         };
 
         let mut outcome = EvalOutcome::default();
 
-        if let Err(e) = setup_secure_global_functions(
-            ctx,
-            &params.script_uri,
-            params.user_context.clone(),
-            &security_config,
-            None,
-            None,
-        ) {
+        if let Err(e) =
+            setup_secure_global_functions(ctx, &params.script_uri, security_config, None)
+        {
             outcome.error = Some(format!(
                 "install globals: {}",
                 extract_error_details(ctx, &e)
@@ -3525,25 +3206,21 @@ fn run_registration_pass(
     let result = ctx
         .with(|ctx| -> Result<bool, rquickjs::Error> {
             // Set up secure global functions with minimal config for init
+            // `init()` is the registration phase, and the script's top-level
+            // program runs under it too. A check reports diagnostics, not
+            // output; console writes go to the script's log as they would on a
+            // deploy.
             let config = GlobalSecurityConfig {
-                // `init()` is the registration phase, and the script's
-                // top-level program runs under it too.
                 registration_phase: true,
-                enable_audit_logging: false,
                 dry_run_sink: dry_run_sink.clone(),
-                // A check reports diagnostics, not output; console writes go to
-                // the script's log as they would on a deploy.
-                console_sink: None,
-                log_context: HandlerInvocationKind::Init.log_context(
-                    script_uri,
-                    invocation_id.clone(),
-                    None,
-                ),
-                // Not acting for anybody: nothing to narrow.
-                delegated_scopes: None,
-                // `init()` runs as a synthetic administrator. Nothing here
-                // came from a credential.
-                engine_api: false,
+                ..GlobalSecurityConfig::new(
+                    Principal::Engine("script-init"),
+                    HandlerInvocationKind::Init.log_context(
+                        script_uri,
+                        invocation_id.clone(),
+                        None,
+                    ),
+                )
             };
 
             // Create the register function that captures registrations
@@ -3583,15 +3260,8 @@ fn run_registration_pass(
                 },
             );
 
-            // Init runs with admin context to allow script registration operations
-            let setup_result = setup_secure_global_functions(
-                &ctx,
-                script_uri,
-                UserContext::admin("script-init".to_string()),
-                &config,
-                Some(register_impl),
-                None,
-            );
+            let setup_result =
+                setup_secure_global_functions(&ctx, script_uri, config, Some(register_impl));
 
             if let Err(ref e) = setup_result {
                 let details = extract_error_details(&ctx, e);
@@ -3930,7 +3600,7 @@ mod tests {
     fn execute_script_secure(
         uri: &str,
         content: &str,
-        user_context: crate::security::UserContext,
+        principal: Principal,
     ) -> ScriptExecutionResult {
         if should_skip_db_tests() {
             return ScriptExecutionResult {
@@ -3943,7 +3613,7 @@ mod tests {
         let rt = get_runtime();
         let _guard = rt.enter();
         setup_db();
-        super::execute_script_secure(uri, content, user_context)
+        super::execute_script_secure(uri, content, principal)
     }
 
     // Shadow execute_script_for_request_secure
@@ -4011,11 +3681,7 @@ mod tests {
             routeRegistry.registerRoute("/test", { handler: "handler_function", method: "GET" });
         "#;
 
-        let result = execute_script_secure(
-            "test-script",
-            content,
-            UserContext::admin("test".to_string()),
-        );
+        let result = execute_script_secure("test-script", content, Principal::Engine("test"));
 
         assert!(result.success, "Script execution should succeed");
         assert!(result.error.is_none(), "Should not have error");
@@ -4164,11 +3830,7 @@ mod tests {
             routeRegistry.registerRoute("/api/users/:id", { handler: "updateUser", method: "PUT" });
         "#;
 
-        let result = execute_script_secure(
-            "multi-script",
-            content,
-            UserContext::admin("test".to_string()),
-        );
+        let result = execute_script_secure("multi-script", content, Principal::Engine("test"));
 
         assert!(result.success);
         assert_eq!(result.registrations.len(), 3);
@@ -4198,11 +3860,8 @@ mod tests {
             routeRegistry.registerRoute("/default-method", { handler: "handler", method: "GET" });
         "#;
 
-        let result = execute_script_secure(
-            "default-method-script",
-            content,
-            UserContext::admin("test".to_string()),
-        );
+        let result =
+            execute_script_secure("default-method-script", content, Principal::Engine("test"));
 
         if !result.success {
             println!("Default method test failed with error: {:?}", result.error);
@@ -4226,11 +3885,7 @@ mod tests {
             // Missing closing parenthesis - syntax error
         "#;
 
-        let result = execute_script_secure(
-            "error-script",
-            content,
-            UserContext::admin("test".to_string()),
-        );
+        let result = execute_script_secure("error-script", content, Principal::Engine("test"));
 
         assert!(!result.success, "Script with syntax error should fail");
         assert!(result.error.is_some(), "Should have error message");
@@ -4246,11 +3901,8 @@ mod tests {
             throw new Error("Runtime error test");
         "#;
 
-        let result = execute_script_secure(
-            "runtime-error-script",
-            content,
-            UserContext::admin("test".to_string()),
-        );
+        let result =
+            execute_script_secure("runtime-error-script", content, Principal::Engine("test"));
 
         assert!(!result.success);
         assert!(result.error.is_some());
@@ -4271,11 +3923,7 @@ mod tests {
             setupRoutes();
         "#;
 
-        let result = execute_script_secure(
-            "complex-script",
-            content,
-            UserContext::admin("test".to_string()),
-        );
+        let result = execute_script_secure("complex-script", content, Principal::Engine("test"));
 
         assert!(
             result.success,
@@ -4300,8 +3948,7 @@ mod tests {
         if should_skip_db_tests() {
             return;
         }
-        let result =
-            execute_script_secure("empty-script", "", UserContext::admin("test".to_string()));
+        let result = execute_script_secure("empty-script", "", Principal::Engine("test"));
 
         assert!(result.success, "Empty script should succeed");
         assert!(result.error.is_none());
@@ -4317,11 +3964,7 @@ mod tests {
             routeRegistry.registerRoute("/logged", { handler: "loggedHandler", method: "GET" });
         "#;
 
-        let result = execute_script_secure(
-            "console-script",
-            content,
-            UserContext::admin("test".to_string()),
-        );
+        let result = execute_script_secure("console-script", content, Principal::Engine("test"));
 
         // Should succeed even with console.log (which may not be available)
         // The important thing is it doesn't crash
@@ -4379,7 +4022,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_register_web_stream_function() {
-        use crate::security::UserContext;
         use std::sync::Once;
         static INIT: Once = Once::new();
 
@@ -4404,7 +4046,7 @@ mod tests {
         let result = execute_script_secure(
             "stream-test-func",
             script_content,
-            UserContext::admin("test-admin".to_string()),
+            Principal::Engine("test-admin"),
         );
 
         assert!(
@@ -4452,7 +4094,7 @@ mod tests {
         let result = execute_script_secure(
             "stream-invalid-test",
             script_content,
-            UserContext::admin("test".to_string()),
+            Principal::Engine("test"),
         );
 
         assert!(
@@ -4475,7 +4117,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_send_stream_message_function() {
-        use crate::security::UserContext;
         if should_skip_db_tests() {
             return;
         }
@@ -4496,7 +4137,7 @@ mod tests {
         let result = execute_script_secure(
             "stream-message-test",
             script_content,
-            UserContext::admin("test-admin".to_string()),
+            Principal::Engine("test-admin"),
         );
 
         assert!(
@@ -4528,7 +4169,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_send_stream_message_json_object() {
-        use crate::security::UserContext;
         if should_skip_db_tests() {
             return;
         }
@@ -4561,7 +4201,7 @@ mod tests {
         let result = execute_script_secure(
             "stream-json-test",
             script_content,
-            UserContext::admin("test-admin".to_string()),
+            Principal::Engine("test-admin"),
         );
 
         assert!(
@@ -4604,7 +4244,7 @@ mod tests {
         let result = execute_script_secure(
             "test-large-script",
             &large_script,
-            UserContext::admin("test".to_string()),
+            Principal::Engine("test"),
         );
 
         assert!(!result.success);

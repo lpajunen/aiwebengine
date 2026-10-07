@@ -83,7 +83,6 @@ mod test_db;
 
 use repository::Repository;
 use resource_access::AccessDecision;
-use security::UserContext;
 
 // Re-export the unified error type
 pub use error::{AppError, AppResult};
@@ -1223,11 +1222,11 @@ async fn execute_startup_scripts() -> AppResult<()> {
     scripts.sort();
     for (uri, content) in scripts {
         info!("Executing script: {}", uri);
-        // Use secure execution with admin user context for startup script execution
+        // Startup acts for nobody: it is the engine bringing its scripts up.
         let result = js_engine::execute_script_secure(
             uri,
             content,
-            UserContext::admin("system".to_string()),
+            crate::security::Principal::Engine("system"),
         );
 
         if !result.success {
@@ -2732,9 +2731,6 @@ async fn setup_routes(
                 // The caller's own identity, built the same way the tools
                 // branch builds it. A prompt handler is script code answering
                 // a request, so it runs as whoever made it.
-                let auth_context = mcp_session
-                    .as_ref()
-                    .map(|session| create_js_auth_context_from_session(Some(session)));
                 let user_context = create_user_context_from_session(mcp_session.as_ref());
 
                 // A prompt may ask too: the specification permits
@@ -2784,13 +2780,7 @@ async fn setup_routes(
                     }
                 };
 
-                match mcp::execute_mcp_prompt(
-                    &params.name,
-                    arguments,
-                    auth_context,
-                    user_context,
-                    exchange,
-                ) {
+                match mcp::execute_mcp_prompt(&params.name, arguments, user_context, exchange) {
                     Ok(mcp::Outcome::Handed(create_result)) => {
                         // The handler queued its work. The handle is already
                         // recorded — `mcp.task` writes it before the execution
@@ -2952,9 +2942,6 @@ async fn setup_routes(
 
                 let context_arguments = params.context.and_then(|c| c.arguments);
 
-                let auth_context = mcp_session
-                    .as_ref()
-                    .map(|session| create_js_auth_context_from_session(Some(session)));
                 let user_context = create_user_context_from_session(mcp_session.as_ref());
 
                 match mcp::execute_mcp_completion(
@@ -2962,7 +2949,6 @@ async fn setup_routes(
                     &params.argument.name,
                     &params.argument.value,
                     context_arguments,
-                    auth_context,
                     user_context,
                 ) {
                     Ok(result) => {
@@ -4130,7 +4116,7 @@ mod tests {
         let test_editor_result = js_engine::execute_script_secure(
             "https://example.com/test_editor",
             include_str!("../scripts/test_scripts/test_editor.js"),
-            crate::security::UserContext::admin("test".to_string()),
+            crate::security::Principal::Engine("test"),
         );
         assert!(
             test_editor_result.success,

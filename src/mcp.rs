@@ -530,7 +530,6 @@ pub fn get_prompt(name: &str) -> Option<McpPrompt> {
 pub fn execute_mcp_prompt(
     prompt_name: &str,
     arguments: serde_json::Value,
-    auth_context: Option<crate::auth::JsAuthContext>,
     user_context: crate::security::UserContext,
     exchange: crate::mcp_elicitation::Exchange,
 ) -> Result<PromptOutcome, String> {
@@ -564,7 +563,6 @@ pub fn execute_mcp_prompt(
         &script_uri,
         &handler_function,
         context,
-        auth_context,
         user_context,
         exchange,
     )?;
@@ -579,7 +577,6 @@ pub fn execute_mcp_completion(
     argument_name: &str,
     argument_value: &str,
     context_arguments: Option<serde_json::Value>,
-    auth_context: Option<crate::auth::JsAuthContext>,
     user_context: crate::security::UserContext,
 ) -> Result<serde_json::Value, String> {
     debug!(
@@ -617,7 +614,6 @@ pub fn execute_mcp_completion(
         &script_uri,
         &handler_function,
         context,
-        auth_context,
         user_context,
         crate::mcp_elicitation::Exchange::unattended(),
     )?;
