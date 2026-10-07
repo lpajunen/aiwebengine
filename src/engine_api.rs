@@ -1149,7 +1149,8 @@ pub fn log_entry_json(entry: &repository::LogEntry) -> Value {
     })
 }
 
-/// Run a filtered log query, newest first; ViewLogs capability required.
+/// Run a filtered log query, newest first. See
+/// [`query_log_entries_authorized`] for who may read what.
 ///
 /// Denial is an error, not an empty result: over HTTP a caller has to be able
 /// to tell "you may not read these" from "there is nothing to read". The
@@ -1170,12 +1171,47 @@ pub fn query_logs_authorized(
 /// The live tail needs each entry's `seq` to advance its cursor, and reading it
 /// back out of the JSON would be a worse kind of coupling. Both functions go
 /// through this one so the capability check exists once.
+///
+/// `ViewLogs`, and then the script's owner or an administrator: a log carries
+/// whatever a script wrote while serving people, so it is read by whoever
+/// answers for the script, as its audit trail is. A query naming no script
+/// spans every script for an administrator and the caller's own for anyone
+/// else.
 pub fn query_log_entries_authorized(
     user: &UserContext,
     query: &repository::LogQuery,
 ) -> AppResult<Vec<repository::LogEntry>> {
     user.require_capability(&Capability::ViewLogs)?;
-    repository::query_log_messages(query)
+    if has_admin_capability(user) {
+        return repository::query_log_messages(query);
+    }
+
+    let refused = || crate::error::AppError::AuthorizationFailed {
+        message: match &query.script_uri {
+            Some(uri) => format!(
+                "You must be an administrator or owner to read the logs of script '{}'",
+                uri
+            ),
+            None => "Reading logs takes being signed in as the owner of a script".to_string(),
+        },
+    };
+    let Some(user_id) = user.user_id.clone() else {
+        return Err(refused());
+    };
+    if let Some(uri) = &query.script_uri
+        && !user_owns_script(user, uri)
+    {
+        warn!(
+            user_id = %user_id,
+            script_name = %uri,
+            "Permission denied: only an administrator or owner may read a script's logs"
+        );
+        return Err(refused());
+    }
+    repository::query_log_messages(&repository::LogQuery {
+        owned_by: Some(user_id),
+        ..query.clone()
+    })
 }
 
 /// Clear one script's logs; `DeleteLogs` and ownership of the script, or an
@@ -3565,6 +3601,8 @@ impl LogTailParams {
             revision: self.revision,
             route: self.route.clone(),
             limit: None,
+            // Set by the authorization check, never by the caller.
+            owned_by: None,
         }
     }
 }
@@ -5406,7 +5444,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "read_logs",
-            "Read log messages for one script ('script') or all. Each entry carries its invocation (requestId, kind, route), so one request's lines can be read alone.",
+            "Read log messages for one script ('script') or every script you own. Owners and administrators only. Each entry carries its invocation (requestId, kind, route), so one request's lines can be read alone.",
             || {
                 json!({
                     "type": "object",
@@ -7116,6 +7154,8 @@ fn tool_read_logs(args: &Value, user: &UserContext) -> Value {
             .map(|revision| revision as i32),
         route: arg_str(args, "route").map(str::to_string),
         limit,
+        // Set by the authorization check, never by the caller.
+        owned_by: None,
     };
 
     match query_logs_authorized(user, &query) {
@@ -7131,7 +7171,7 @@ fn tool_read_logs(args: &Value, user: &UserContext) -> Value {
                 "timestamp": iso_timestamp(),
             })
         }
-        Err(e) => refuse(Refusal::Failed, format!("Failed to fetch logs: {}", e)),
+        Err(e) => refuse_app(&e, format!("Failed to fetch logs: {}", e)),
     }
 }
 
@@ -7164,10 +7204,8 @@ fn tool_read_audit(args: &Value, user: &UserContext) -> Value {
 }
 
 /// A script's audit events: `ViewLogs` and ownership of the script, or an
-/// administrator.
-///
-/// Stricter than the log, which `ViewLogs` alone reads: an audit trail names
-/// people and addresses, and is read by whoever answers for the solution.
+/// administrator — the rule its log is read under, since an audit trail names
+/// people and addresses and is read by whoever answers for the solution.
 pub fn read_audit_authorized(
     user: &UserContext,
     uri: &str,

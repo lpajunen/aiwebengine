@@ -315,6 +315,10 @@ pub struct LogQuery {
     pub revision: Option<i32>,
     /// Keep at most this many of the *newest* matching entries.
     pub limit: Option<i64>,
+    /// Keep only entries of scripts this account owns. Set by the
+    /// authorization layer for a caller who is not an administrator, so a
+    /// query spanning "every script" spans every script *of theirs*.
+    pub owned_by: Option<String>,
 }
 
 impl LogQuery {
@@ -2774,6 +2778,8 @@ where
               AND ($7::text IS NULL OR route = $7)
               AND ($8::bigint IS NULL OR seq > $8)
               AND ($10::int4 IS NULL OR revision = $10)
+              AND ($11::text IS NULL OR script_uri IN (
+                    SELECT script_uri FROM script_owners WHERE user_id = $11))
             -- Without a cursor the constant leaves the ordering to the keys
             -- that follow, so the limit keeps the newest entries; with one it
             -- orders oldest-first, so the limit keeps the next page instead.
@@ -2796,6 +2802,7 @@ where
     .bind(query.after_seq)
     .bind(query.limit)
     .bind(query.revision)
+    .bind(query.owned_by.as_deref())
     .fetch_all(executor)
     .await
     .map_err(|e| {
