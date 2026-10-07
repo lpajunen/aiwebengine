@@ -454,6 +454,37 @@ pub async fn scripts_for_host(host: &str) -> Option<std::collections::HashSet<St
     )
 }
 
+/// The scripts publishing on at least one host `script_uri` publishes on, or
+/// `None` when every script should be treated as reachable from it.
+///
+/// What `tools.call` filters by. A script has no request host of its own — a
+/// delegated task has none at all — so the hosts it serves stand in for the
+/// one `/mcp` would filter by, and a tool bound away from every one of them
+/// stays as unreachable from the script as it is from `/mcp` there.
+pub async fn scripts_sharing_a_host(script_uri: &str) -> Option<std::collections::HashSet<String>> {
+    if !crate::hosts::is_configured() {
+        return None;
+    }
+    let index = match current_index().await {
+        Ok(index) => index,
+        Err(e) => {
+            debug!("Could not resolve hosts for {}: {}", script_uri, e);
+            return None;
+        }
+    };
+    // Unknown to the index: the rule `script_serves_host` follows, where the
+    // registries rather than a stale index decide what exists.
+    let own = index.script_hosts.get(script_uri)?;
+    Some(
+        index
+            .script_hosts
+            .iter()
+            .filter(|(_, hosts)| hosts.iter().any(|host| own.contains(host)))
+            .map(|(uri, _)| uri.clone())
+            .collect(),
+    )
+}
+
 /// Every file route in the engine, as `(path, script_uri, file)`.
 ///
 /// Reads the registrations rather than a registry of its own — there is not

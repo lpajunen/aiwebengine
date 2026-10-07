@@ -126,6 +126,14 @@ pub enum Capability {
     /// Queueing work is how an execution outlives itself, so a context that
     /// may not write must not be able to queue a write for later.
     EnqueueTasks,
+    /// Call another script's MCP tools as this caller (`tools.call`).
+    ///
+    /// The in-process counterpart of `tools/call` on `/mcp`, which an
+    /// authenticated caller can already make. It is named so that it can be
+    /// withheld: the engine's own executions never hold it, because a tool
+    /// reached from a scheduled job would run as nobody, and model-authored
+    /// code holds it only when given it by name.
+    CallTools,
 }
 
 /// Comprehensive input validator - ALL VALIDATION IN RUST

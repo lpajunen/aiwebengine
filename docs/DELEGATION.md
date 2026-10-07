@@ -25,18 +25,23 @@ owner's tab was open.
 Widening the background context would not do. Background work holding
 somebody's API key is a real grant, and a grant has to answer four questions.
 
-**What.** A fixed vocabulary of two nouns and a verb. Each names something the
-engine actually gates on, at the surface it names:
+**What.** A fixed vocabulary: two nouns, a verb, and `tools`. Each names
+something the engine actually gates on, at the surface it names:
 
 | Scope              | Kind | Reaches                                                            |
 | ------------------ | ---- | ------------------------------------------------------------------ |
 | `personal_storage` | noun | `personalStorage` for that person                                  |
 | `secrets`          | noun | their key in a `{{secret:...}}` header, and `secretStorage.exists` |
 | `write`            | verb | changing anything at all                                           |
+| `tools`            | —    | other scripts' MCP tools, through `tools.call` (`call_tools`)      |
 
 The nouns say **whose things** are in scope. The verb says **what may be done
 with them**, and until capability attenuation existed there was nowhere to
 enforce it, so every grant was a grant to change as well as to read.
+
+A tool reached through `tools` runs under the same delegation, so it holds
+what this grant holds: without `write` it reads. See
+[Using another script's tools](SCRIPT_TOOLS.md).
 
 A scope not ticked is not granted. A grant covering only `personal_storage`
 reaches that person's storage and _not_ their secrets, and the refusal is the

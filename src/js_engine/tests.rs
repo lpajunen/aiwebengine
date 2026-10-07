@@ -141,7 +141,7 @@ fn execute_mcp_tool_handler(
         tool_name,
         arguments,
         auth_context,
-        user_context,
+        crate::security::Principal::Caller(user_context),
         crate::mcp_elicitation::Exchange::unattended(),
     )? {
         crate::mcp::ToolOutcome::Complete(result) => Ok(result),

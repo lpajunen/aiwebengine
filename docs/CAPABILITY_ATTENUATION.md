@@ -69,8 +69,9 @@ makes **read-only** expressible.
 | `read_storage`           | Reading `scriptStorage` and `personalStorage`                                   |
 | `write_storage`          | Writing or clearing either                                                      |
 | `enqueue_tasks`          | `scriptTasks` and `personalTasks` — enqueue and cancel                          |
+| `call_tools`             | `tools.list` and `tools.call` — another script's MCP tools, as the caller       |
 
-The seven script-side names at the bottom of that table are new, and **adding
+The seven script-side names from `use_network` to `enqueue_tasks` are new, and **adding
 them took nothing away from anybody**. Every tier that could already do the
 thing holds the name for it, including the anonymous tier, which could always
 `fetch` and reach `scriptStorage`. They exist to be taken away.

@@ -287,6 +287,7 @@ impl SecureGlobalContext {
         self.setup_scheduler_functions(ctx, script_uri)?;
         self.setup_task_functions(ctx, script_uri)?;
         self.setup_sandbox_functions(ctx, script_uri)?;
+        self.setup_tools_functions(ctx, script_uri)?;
         self.setup_crypto_object(ctx, script_uri)?;
         self.setup_rate_limit_object(ctx, script_uri)?;
         self.setup_audit_object(ctx, script_uri)?;
@@ -342,6 +343,7 @@ mod api_surface_tests {
             "convert",
             "McpClient",
             "fetch",
+            "tools",
         ] {
             assert_eq!(
                 eval_outside_registration_phase(&format!("typeof {}", global)),

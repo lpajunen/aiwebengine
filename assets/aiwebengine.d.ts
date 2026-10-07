@@ -1050,9 +1050,10 @@ interface ScriptTasks {
  *
  * Two nouns and a verb. The nouns say whose things are in scope;
  * `"write"` says the run may change them rather than only read them — without
- * it a delegated run holds no write capability at all.
+ * it a delegated run holds no write capability at all. `"tools"` lets the run
+ * call other scripts' MCP tools as the person (`tools.call`).
  */
-type DelegationScope = "personal_storage" | "secrets" | "write";
+type DelegationScope = "personal_storage" | "secrets" | "write" | "tools";
 
 interface DelegationState {
   /** False when nobody is signed in; nothing can be delegated then. */
@@ -1410,6 +1411,48 @@ declare class McpClient {
   /** Call one of the server's tools with `args`; answers its result. */
   callTool(name: string, args?: Record<string, unknown>): any;
 }
+
+// ============================================================================
+// Tools API
+// ============================================================================
+
+/** A tool another script publishes, as `tools.list` describes it. */
+interface ScriptToolInfo {
+  name: string;
+  description: string;
+  /** JSON schema of its arguments. */
+  inputSchema: any;
+  /** The script that publishes it. */
+  script: string;
+}
+
+/**
+ * The MCP tools other scripts publish, called in process as the person this
+ * execution runs for — what `tools/call` on `/mcp` would do for them.
+ *
+ * Requires `call_tools`: held by a signed-in caller, by a delegated run whose
+ * grant includes `"tools"`, and by a `sandbox.run` only when named. Never by
+ * `init()` or a scheduled job. Listed are the tools of scripts sharing a host
+ * with this one; the engine's own tools are `engine.call`'s.
+ *
+ * A tool cannot ask questions (`mcp.canAsk()` is false in it). Failures throw:
+ * `NotFoundError`, `SecurityError`, or `ToolError` when the tool itself failed.
+ *
+ * @example
+ * const items = tools.call("backlog_list", { status: "open" }, { readOnly: true });
+ */
+interface ToolsApi {
+  /** Tools whose name, description or script mentions `filter`; all without one. */
+  list(filter?: string): ScriptToolInfo[];
+  /**
+   * Call one, answering with its result.
+   * @param options.readOnly - Run it holding no write capability, so a tool
+   *   that tries to change something is refused.
+   */
+  call(name: string, args?: Record<string, unknown>, options?: { readOnly?: boolean }): any;
+}
+
+declare const tools: ToolsApi;
 
 // ============================================================================
 // HTTP Fetch API
@@ -2069,6 +2112,7 @@ type Capability =
   | "read_storage"
   | "write_storage"
   | "enqueue_tasks"
+  | "call_tools"
   | "send_messages";
 
 /** One line the sub-execution wrote through `console`. */

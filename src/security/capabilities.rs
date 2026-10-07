@@ -139,6 +139,7 @@ impl Capability {
             Capability::ReadStorage => "read_storage",
             Capability::WriteStorage => "write_storage",
             Capability::EnqueueTasks => "enqueue_tasks",
+            Capability::CallTools => "call_tools",
         }
     }
 
@@ -152,7 +153,7 @@ impl Capability {
             .find(|capability| capability.as_str() == value.trim())
     }
 
-    pub fn all() -> [Capability; 20] {
+    pub fn all() -> [Capability; 21] {
         [
             Capability::ReadScripts,
             Capability::WriteScripts,
@@ -174,6 +175,7 @@ impl Capability {
             Capability::ReadStorage,
             Capability::WriteStorage,
             Capability::EnqueueTasks,
+            Capability::CallTools,
         ]
     }
 }
@@ -401,6 +403,9 @@ impl UserContext {
             Capability::ManageStreams,
             Capability::ReadScriptData,
             Capability::WriteScriptData,
+            // What `tools/call` on `/mcp` already lets a signed-in caller do.
+            // Not anonymous: `/mcp` takes no call without a bearer token.
+            Capability::CallTools,
         ]);
         capabilities
     }
@@ -427,7 +432,8 @@ impl UserContext {
     /// executions of it need: an editor's set without the capabilities that
     /// reach past the script — replacing or deleting a program
     /// (`WriteScripts`, `DeleteScripts`), clearing the log
-    /// (`DeleteLogs`) and acting on what is not yours (`AdministerEngine`).
+    /// (`DeleteLogs`), calling another script's tools (`CallTools`) and acting
+    /// on what is not yours (`AdministerEngine`).
     /// `WriteAssets` and `DeleteAssets` stay: through `files` they reach only
     /// the script's own tree, and never its entrypoint.
     fn script_capabilities() -> HashSet<Capability> {
@@ -436,6 +442,8 @@ impl UserContext {
             Capability::WriteScripts,
             Capability::DeleteScripts,
             Capability::DeleteLogs,
+            // Another script's tool, run with nobody behind the call.
+            Capability::CallTools,
         ] {
             capabilities.remove(&reaching_past_the_script);
         }

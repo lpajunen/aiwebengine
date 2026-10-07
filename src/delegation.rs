@@ -112,6 +112,14 @@ pub enum Scope {
     /// users is asking it. Granted only to an account that holds the
     /// administrator role, because a grant is consent and not a promotion.
     Administer,
+    /// Use the person's other solutions — call the MCP tools other scripts
+    /// publish — as them, while they are away.
+    ///
+    /// A noun-shaped reach with a verb's enforcement: it adds
+    /// [`Capability::CallTools`], so it is checked by the same gate as every
+    /// other caller. The tool runs under this same delegation, so what it may
+    /// do there is what this grant allows — without [`Scope::Write`] it reads.
+    Tools,
 }
 
 impl Scope {
@@ -122,6 +130,7 @@ impl Scope {
             Scope::Write => "write",
             Scope::Author => "author",
             Scope::Administer => "administer",
+            Scope::Tools => "tools",
         }
     }
 
@@ -132,6 +141,7 @@ impl Scope {
             "write" => Some(Scope::Write),
             "author" => Some(Scope::Author),
             "administer" => Some(Scope::Administer),
+            "tools" => Some(Scope::Tools),
             _ => None,
         }
     }
@@ -159,6 +169,7 @@ impl Scope {
             Scope::PersonalStorage => "Read the data this app keeps for you",
             Scope::Secrets => "Use the API keys you have given this app",
             Scope::Write => "Change things, not just read them",
+            Scope::Tools => "Use your other apps' tools as you",
             // Worded harder than the rest, because these are the two that
             // reach past what using a solution needs and the person deciding
             // is usually being asked by the app that wants them.
@@ -185,6 +196,7 @@ impl Scope {
             // be a second place to forget. `context_for` reads it from
             // [`Scope::grade`].
             Scope::PersonalStorage | Scope::Secrets | Scope::Author | Scope::Administer => &[],
+            Scope::Tools => &[Capability::CallTools],
             Scope::Write => &[
                 Capability::WriteScriptData,
                 Capability::WriteStorage,
@@ -204,11 +216,12 @@ impl Scope {
         }
     }
 
-    pub fn all() -> [Scope; 5] {
+    pub fn all() -> [Scope; 6] {
         [
             Scope::PersonalStorage,
             Scope::Secrets,
             Scope::Write,
+            Scope::Tools,
             Scope::Author,
             Scope::Administer,
         ]
@@ -1423,5 +1436,18 @@ mod tests {
             );
         }
         assert!(!context_for("u1", &Scope::all(), &[]).has_capability(&Capability::WriteSecrets));
+    }
+
+    /// Calling another solution's tools is consented to on its own: no other
+    /// scope, management ones included, carries it.
+    #[test]
+    fn only_the_tools_scope_reaches_other_solutions() {
+        let roles = [crate::user_repository::UserRole::Administrator];
+        let without: Vec<Scope> = Scope::all()
+            .into_iter()
+            .filter(|scope| *scope != Scope::Tools)
+            .collect();
+        assert!(!context_for("u1", &without, &roles).has_capability(&Capability::CallTools));
+        assert!(context_for("u1", &[Scope::Tools], &[]).has_capability(&Capability::CallTools));
     }
 }

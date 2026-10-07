@@ -760,10 +760,108 @@ pub fn execute_mcp_tool(
         tool_name,
         arguments,
         auth_context,
-        user_context,
+        crate::security::Principal::Caller(user_context),
         exchange,
     )
     .map_err(|e| format!("Tool execution failed: {}", e))
+}
+
+/// Why `tools.call` did not produce a result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScriptToolRefusal {
+    /// No script tool by that name is reachable from the calling script. The
+    /// engine's own tools answer this too: they are `engine.call`'s.
+    NotFound(String),
+    /// The tool ran and failed, or answered with something that is not JSON.
+    Failed(String),
+}
+
+impl std::fmt::Display for ScriptToolRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound(name) => write!(
+                f,
+                "no tool called '{}' is reachable from this script - tools.list() lists them",
+                name
+            ),
+            Self::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
+/// The script-registered tools `caller_script` may call with `tools.call`,
+/// sorted by name.
+///
+/// The same set `/mcp` lists on the hosts the calling script serves, without
+/// the engine's own tools. Those are the management surface, and reaching it
+/// from a script is `engine.call`, behind its own grant.
+pub fn tools_callable_from(caller_script: &str) -> Vec<McpTool> {
+    let reachable =
+        crate::database::run_blocking(crate::route_index::scripts_sharing_a_host(caller_script));
+    let registry_arc = get_registry();
+    let Ok(registry) = registry_arc.read() else {
+        error!("Failed to acquire read lock on MCP registry");
+        return Vec::new();
+    };
+    let mut tools: Vec<McpTool> = registry
+        .get_tools()
+        .values()
+        .filter(|tool| !crate::engine_api::is_native_mcp_tool(&tool.name))
+        .filter(|tool| {
+            reachable
+                .as_ref()
+                .is_none_or(|scripts| scripts.contains(&tool.script_uri))
+        })
+        .cloned()
+        .collect();
+    tools.sort_by(|a, b| a.name.cmp(&b.name));
+    tools
+}
+
+/// Call a script tool from inside another execution, as `principal`.
+///
+/// Unattended: there is no client to put a question to or hand a task handle
+/// back to, so `mcp.canAsk()` and `mcp.canTask()` are false in the tool and it
+/// takes the path it takes for a scheduled caller.
+pub fn call_tool_from_script(
+    caller_script: &str,
+    tool_name: &str,
+    arguments: serde_json::Value,
+    auth_context: Option<crate::auth::JsAuthContext>,
+    principal: crate::security::Principal,
+) -> Result<serde_json::Value, ScriptToolRefusal> {
+    let Some(tool) = tools_callable_from(caller_script)
+        .into_iter()
+        .find(|tool| tool.name == tool_name)
+    else {
+        return Err(ScriptToolRefusal::NotFound(tool_name.to_string()));
+    };
+
+    let outcome = crate::js_engine::execute_mcp_tool_handler(
+        &tool.script_uri,
+        &tool.handler_function,
+        tool_name,
+        arguments,
+        auth_context,
+        principal,
+        crate::mcp_elicitation::Exchange::unattended(),
+    )
+    .map_err(ScriptToolRefusal::Failed)?;
+
+    match outcome {
+        Outcome::Complete(result) => serde_json::from_str(&result).map_err(|e| {
+            ScriptToolRefusal::Failed(format!(
+                "tool '{}' answered with something that is not JSON: {}",
+                tool_name, e
+            ))
+        }),
+        // Unreachable by construction, as for a completion: the exchange says
+        // nobody can be asked and nothing can be handed back.
+        Outcome::InputRequired(_) | Outcome::Handed(_) => Err(ScriptToolRefusal::Failed(format!(
+            "tool '{}' needs a client to answer it, and a script is not one",
+            tool_name
+        ))),
+    }
 }
 
 /// Versions reachable through the `initialize` handshake, newest first.

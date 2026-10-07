@@ -38,6 +38,7 @@ the `aiwebengine-dev` repository.
 | [Concurrent fetches](FETCH_CONCURRENCY.md)                 | `fetchAll`, `fetchStream`, and the per-script limits on both |
 | [Verifying webhooks](SCRIPT_CRYPTO.md)                     | `crypto` with keys the script never holds                    |
 | [Calling MCP servers](MCP_CLIENT.md)                       | `McpClient`: tools on another MCP server                     |
+| [Using another script's tools](SCRIPT_TOOLS.md)            | `tools`: this engine's script tools, as the caller           |
 | [Asking the person mid-tool](MCP_ELICITATION.md)           | `mcp.ask` and elicitation                                    |
 | [Managing the engine from a script](ENGINE_API_FROM_JS.md) | `engine.call` and the operation table                        |
 

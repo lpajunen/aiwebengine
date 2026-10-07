@@ -721,7 +721,7 @@ pub fn execute_mcp_tool_handler(
     tool_name: &str,
     arguments: serde_json::Value,
     auth_context: Option<crate::auth::JsAuthContext>,
-    user_context: UserContext,
+    principal: Principal,
     exchange: crate::mcp_elicitation::Exchange,
 ) -> Result<crate::mcp::ToolOutcome, String> {
     let invocation_id = crate::middleware::generate_request_id();
@@ -731,12 +731,14 @@ pub fn execute_mcp_tool_handler(
         Some(tool_name.to_string()),
     );
 
-    // The validated caller from the MCP auth middleware: a tool call is a
-    // request like any other, so it reaches `engine` as that caller.
+    // Over `/mcp` the validated caller from the auth middleware: a tool call
+    // is a request like any other, so it reaches `engine` as that caller.
+    // From `tools.call`, whoever the calling execution acted for, delegated
+    // scopes included.
     let execution = HandlerExecution::prepare(
         script_uri,
         Budget::Request,
-        GlobalSecurityConfig::new(Principal::Caller(user_context), log_context),
+        GlobalSecurityConfig::new(principal, log_context),
     )
     .map_err(|e| format!("JavaScript execution error: {}", e))?;
 
