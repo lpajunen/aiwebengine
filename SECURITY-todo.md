@@ -8,29 +8,7 @@ Each item says what is true today, what should be true, and how you would know
 the work is done. Anything finished should leave this file rather than sit here
 marked done.
 
-## 1. MCP prompt handlers are the last request path without an owner check
-
-`execute_mcp_prompt_handler` now runs as its caller. What it does not do is
-check whether that caller may reach _this_ script — there is no ownership or
-publication check the way `engine_api` applies one for script management.
-
-Worth deciding whether a prompt registered by one solution should be callable
-by anyone who can reach `/mcp` on that host, or only by someone the script's
-owner would recognise.
-
-## 2. Engine-entered contexts still run as an administrator
-
-Four invocations construct `UserContext::admin(...)` because there is no caller
-to attribute: startup script execution (`lib.rs`), route discovery, `init()`,
-and the scheduler (`js_engine.rs`).
-
-That is defensible — none of them is reachable from a request — but a scheduled
-job arguably should run as the identity that registered it rather than as an
-engine-wide administrator, so that a solution's background work cannot do more
-than the solution itself. This needs a notion of "the script's owner" at
-scheduling time, which the engine does not currently record.
-
-## 3. There is no machine-to-machine credential, on purpose
+## 1. There is no machine-to-machine credential, on purpose
 
 `security.api_key` used to be here as an item about rotation — one configured
 value, no per-client key, no way to revoke one caller without changing it for

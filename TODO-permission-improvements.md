@@ -108,8 +108,8 @@ refuses loopback.
 
 **The capability check turned out not to be sufficient on its own**, which is
 the finding worth keeping from this. Two kinds of execution hold capabilities
-that were never a person's: the engine's own actors (a scheduled job runs as
-`UserContext::admin("scheduler")`, `init()` as `admin("script-init")`), and a
+that were never a person's: the engine's own actors (a scheduled job and
+`init()` run as `UserContext::engine_actor`, holding what the script may do), and a
 `sandbox.run` subset that cannot express the distinction — an agent grants
 `view_logs` for `console`, and `read_logs` is gated on exactly that while
 taking any script's URI as an argument. So the execution's `Principal` decides:

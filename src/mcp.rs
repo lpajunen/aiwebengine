@@ -506,6 +506,27 @@ pub async fn tool_is_available_on_host(tool_name: &str, host: &str, native_allow
     crate::route_index::script_serves_host(&script_uri, host).await
 }
 
+/// Whether a prompt may be asked for from `host`, which is also what decides
+/// whether it may be completed there.
+///
+/// The same rule as [`tool_is_available_on_host`]: a prompt is part of what
+/// its script publishes on the hosts it is bound to, and answering it runs that
+/// script as whoever asked — so naming it on another host must not reach it.
+pub async fn prompt_is_available_on_host(prompt_name: &str, host: &str) -> bool {
+    let script_uri = match get_registry().read() {
+        Ok(registry) => match registry.get_prompt(prompt_name) {
+            Some(prompt) => prompt.script_uri.clone(),
+            // Unknown prompt; about to fail with "not found" anyway.
+            None => return true,
+        },
+        Err(e) => {
+            error!("Failed to read MCP registry for host check: {}", e);
+            return false;
+        }
+    };
+    crate::route_index::script_serves_host(&script_uri, host).await
+}
+
 /// List all registered MCP prompts
 pub fn list_prompts() -> Vec<McpPrompt> {
     if let Ok(registry) = get_registry().read() {

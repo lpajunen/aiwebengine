@@ -57,11 +57,12 @@ Every execution acts for a `Principal` (`security/secure_globals.rs`), and
 the principal decides rather than `has_capability`.
 
 The engine's own actors — a scheduled job, an undelegated task, `init()`,
-startup — run as synthetic
-administrators with nobody behind them. They hold `AdministerEngine` because
-something has to bring a script up, not because anyone granted it. Reaching
-`engine.call` from a cron line would mean any script in the engine
-administering it, which is not authority anybody conferred.
+startup — have nobody behind them. They hold what the script may do to its own
+rows, files, storage and registrations (`UserContext::engine_actor`), and that
+includes capabilities such as `ViewLogs` and `ManageMcp` that the management
+tools are gated on while taking any script as an argument. Reaching
+`engine.call` from a cron line would turn the script's own authority into
+authority over every script, which is not something anybody conferred.
 
 And a `sandbox.run` subset **cannot express the distinction this needs**. An
 agent grants `view_logs` so that model-authored code can use `console`.

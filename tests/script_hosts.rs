@@ -474,3 +474,33 @@ async fn a_collision_on_one_host_is_reported_and_the_older_script_holds_it() {
     repository::delete_script(&holder);
     repository::delete_script(&latecomer);
 }
+
+/// A prompt is published where its script is, and dispatch repeats that the way
+/// it does for a tool: naming a prompt on a host its script is not bound to must
+/// not run the script there.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_prompt_is_available_only_where_its_script_publishes() {
+    setup_hosts().await;
+
+    let uri = create_script("prompt");
+    set_script_hosts_authorized(&admin(), &uri, &["world.softagen.com".to_string()])
+        .expect("admin may set bindings");
+    let name = format!("hosted-prompt-{}", uuid::Uuid::new_v4());
+    mcp::register_mcp_prompt(
+        name.clone(),
+        "a prompt bound to one host".to_string(),
+        "[]".to_string(),
+        "handler".to_string(),
+        uri.clone(),
+    )
+    .expect("the prompt should register");
+
+    assert!(mcp::prompt_is_available_on_host(&name, "world.softagen.com").await);
+    assert!(
+        !mcp::prompt_is_available_on_host(&name, "softagen.com").await,
+        "a prompt must not be reachable on a host its script is not bound to"
+    );
+
+    mcp::clear_script_mcp_registrations(&uri);
+    repository::delete_script(&uri);
+}

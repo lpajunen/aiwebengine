@@ -2726,6 +2726,24 @@ async fn setup_routes(
                     }
                 };
 
+                // Repeat the listing's host filter at dispatch, as `tools/call`
+                // does, so naming a prompt that is not published here does not
+                // reach its script.
+                if !mcp::prompt_is_available_on_host(&params.name, &canonical_host).await {
+                    warn!(
+                        "MCP prompt '{}' is not published on host {}; refusing it",
+                        params.name, canonical_host
+                    );
+                    return axum::response::Json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32602,
+                            "message": format!("Prompt '{}' not found", params.name)
+                        },
+                        "id": rpc_request.id
+                    }));
+                }
+
                 let arguments = params.arguments.unwrap_or(serde_json::json!({}));
 
                 // The caller's own identity, built the same way the tools
@@ -2939,6 +2957,23 @@ async fn setup_routes(
                         }));
                     }
                 };
+
+                // A completion runs the prompt's handler, so it is reachable
+                // exactly where the prompt is.
+                if !mcp::prompt_is_available_on_host(&prompt_name, &canonical_host).await {
+                    warn!(
+                        "MCP prompt '{}' is not published on host {}; refusing it",
+                        prompt_name, canonical_host
+                    );
+                    return axum::response::Json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32602,
+                            "message": format!("Prompt '{}' not found", prompt_name)
+                        },
+                        "id": rpc_request.id
+                    }));
+                }
 
                 let context_arguments = params.context.and_then(|c| c.arguments);
 

@@ -287,6 +287,24 @@ impl UserContext {
         }
     }
 
+    /// The context the engine runs a script as when nobody is behind the
+    /// execution: startup, `init()`, a scheduled job, a task nobody delegated.
+    ///
+    /// It holds [`Self::script_capabilities`] — what a script may do to its own
+    /// rows, files, storage, secrets and registrations — and nothing that acts
+    /// on the engine or on another script. `label` names the actor in logs and
+    /// audit; it is not an account, and since accounts are UUIDs it cannot be
+    /// mistaken for one.
+    pub fn engine_actor(label: String) -> Self {
+        Self {
+            user_id: Some(label),
+            is_authenticated: true,
+            capabilities: Self::script_capabilities(),
+            attenuated: false,
+            network_scope: None,
+        }
+    }
+
     /// The context a credential is entitled to.
     ///
     /// The one place the engine turns a session's roles into a tier. Every
@@ -409,6 +427,25 @@ impl UserContext {
             Capability::ManageMcp,
             Capability::ManageScriptDatabase,
         ]);
+        capabilities
+    }
+
+    /// What a script may do to its own things, which is what the engine's own
+    /// executions of it need: an editor's set without the capabilities that
+    /// reach past the script — replacing or deleting a program
+    /// (`WriteScripts`, `DeleteScripts`), clearing the log
+    /// (`DeleteLogs`) and acting on what is not yours (`AdministerEngine`).
+    /// `WriteAssets` and `DeleteAssets` stay: through `files` they reach only
+    /// the script's own tree, and never its entrypoint.
+    fn script_capabilities() -> HashSet<Capability> {
+        let mut capabilities = Self::editor_capabilities();
+        for reaching_past_the_script in [
+            Capability::WriteScripts,
+            Capability::DeleteScripts,
+            Capability::DeleteLogs,
+        ] {
+            capabilities.remove(&reaching_past_the_script);
+        }
         capabilities
     }
 
@@ -543,6 +580,41 @@ impl UserContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The engine running a script with nobody behind it holds what the script
+    /// may do to its own things, and nothing that acts on the engine or on
+    /// another script's program.
+    #[test]
+    fn an_engine_actor_holds_the_script_and_nothing_past_it() {
+        let actor = UserContext::engine_actor("scheduler".to_string());
+
+        for past_the_script in [
+            Capability::AdministerEngine,
+            Capability::WriteScripts,
+            Capability::DeleteScripts,
+            Capability::DeleteLogs,
+        ] {
+            assert!(
+                !actor.has_capability(&past_the_script),
+                "an engine actor must not hold {:?}",
+                past_the_script
+            );
+        }
+        for own_things in [
+            Capability::ManageScriptDatabase,
+            Capability::WriteScriptData,
+            Capability::WriteAssets,
+            Capability::ManageMcp,
+            Capability::EnqueueTasks,
+            Capability::UseNetwork,
+        ] {
+            assert!(
+                actor.has_capability(&own_things),
+                "an engine actor needs {:?} to run its script",
+                own_things
+            );
+        }
+    }
 
     /// A wildcard matches subdomains and not the bare parent, which is the CSP
     /// and CORS rule and the one that makes a list say what it looks like it

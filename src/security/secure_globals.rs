@@ -593,7 +593,7 @@ pub struct GlobalSecurityConfig {
 /// surface. The last is the reason this is one value. The capability check
 /// under `engine.call` is not enough on its own, because two kinds of
 /// execution hold capabilities that were never a person's — the engine's own
-/// actors, which run as synthetic administrators, and contained code such as
+/// actors, which hold what their script may do, and contained code such as
 /// `sandbox.run`, whose capability subset cannot express "console but not
 /// `read_logs` on any script". Deciding `engine` per site let a site get it
 /// wrong; deciding it from the principal does not.
@@ -618,9 +618,9 @@ pub enum Principal {
     /// something else.
     Contained(UserContext),
     /// Nobody: the engine itself — startup, `init()`, a scheduled job, a task
-    /// nobody delegated. It runs as a synthetic administrator named by the
-    /// label, and gets no `engine`: nothing here came from a credential, so
-    /// nothing here administers.
+    /// nobody delegated. It holds what the script may do to its own things
+    /// ([`UserContext::engine_actor`]) and gets no `engine`: nothing here came
+    /// from a credential, so nothing here administers.
     Engine(&'static str),
 }
 
@@ -630,7 +630,7 @@ impl Principal {
         match self {
             Self::Caller(user) | Self::Contained(user) => user.clone(),
             Self::Delegated { user, .. } => user.clone(),
-            Self::Engine(label) => UserContext::admin((*label).to_string()),
+            Self::Engine(label) => UserContext::engine_actor((*label).to_string()),
         }
     }
 
