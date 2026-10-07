@@ -306,9 +306,15 @@ script serving public content cannot drive the management API from a signed-in
 administrator's browser. Every host used for sign-in needs its callback path
 registered with each OAuth provider.
 
-**Managed Postgres** is a supported variant of the same topology: drop the
-`postgres` service and point `APP_REPOSITORY__DATABASE_URL` at the managed
-instance with `sslmode=require`. One caveat that will bite silently — if a
+**Managed Postgres** is a supported variant of the same topology: set
+`ENGINE_DATABASE_URL` in the env file to the managed instance, with
+`sslmode=require`. It has to be that variable — the compose file sets
+`APP_REPOSITORY__DATABASE_URL` for the containers from it, and a container's
+`environment` wins over its `env_file`, so `APP_REPOSITORY__DATABASE_URL` in the
+env file is ignored. The bundled `postgres` service is in `docker-compose.yml`
+and the engines depend on it, so it still starts unless the deployment passes
+an overlay of its own through `COMPOSE_FILES` (none ships in this repository).
+One caveat that will bite silently — if a
 connection pooler is put in front of the database, it must run in session
 pooling mode. Transaction pooling breaks `LISTEN`/`NOTIFY`, and the visible
 symptom is not an error but stale caches on instances that never hear about a
@@ -393,11 +399,11 @@ multi-stage build selected with `build: { target: ... }` and is not yet.
   `backup` service is behind `profiles: ["backup"]` for the same reason;
   `COMPOSE_PROFILES` is one variable, so a deployment wanting both writes
   `ha,backup`.
-- A bundled Postgres cannot be a profile: `depends_on` naming a service whose
+- The bundled Postgres is not a profile: `depends_on` naming a service whose
   profile is inactive fails the whole project
-  (`depends on undefined service "postgres"`). It has to be a small overlay file
-  that adds both the service and the `depends_on` entries — which a managed-
-  database deployment simply omits.
+  (`depends on undefined service "postgres"`). It is an ordinary service of
+  `docker-compose.yml`, and a managed-database deployment points
+  `ENGINE_DATABASE_URL` elsewhere (see above).
 - `.env` can carry `COMPOSE_FILE` and `COMPOSE_PROFILES` themselves, so the file
   list, the instance count and every value come from one place:
   `docker compose --env-file .env-staging up -d`.

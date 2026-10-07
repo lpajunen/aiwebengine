@@ -101,7 +101,7 @@ script's.
 it in a `{{secret:key}}` template in a request header or the URL:
 
 ```javascript
-await fetch("https://api.anthropic.com/v1/messages", {
+const response = fetch("https://api.anthropic.com/v1/messages", {
   method: "POST",
   headers: { "x-api-key": "{{secret:anthropic_api_key}}" },
   body: JSON.stringify(request),

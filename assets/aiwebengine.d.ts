@@ -353,14 +353,17 @@ interface HandlerContext {
   /** HTTP request information (for HTTP route handlers) */
   request?: HttpRequest;
 
-  /** Function arguments */
-  args?: Record<string, any>;
-
-  /** Handler invocation type */
-  invocationType?: HandlerInvocationKind;
+  /** Arguments of an MCP tool or prompt call; `null` for other invocations */
+  args?: Record<string, any> | null;
 
   /** What kind of invocation this is */
   kind?: HandlerInvocationKind;
+
+  /** The script this handler belongs to */
+  scriptUri?: string;
+
+  /** The name the handler was registered under */
+  handlerName?: string;
 
   /**
    * Identifies this invocation. Every log line the handler writes is filed
@@ -369,9 +372,6 @@ interface HandlerContext {
    * `x-request-id`, which the response carries back to the caller.
    */
   invocationId?: string;
-
-  /** Additional metadata */
-  metadata?: Record<string, any>;
 
   /**
    * What this particular kind of invocation was given. A scheduled handler
@@ -471,9 +471,10 @@ interface FileRouteSpec extends RouteDocs {
  *
  * ```ts
  * function mayWatchOrder(context) {
- *   if (!context.auth?.userId) return { deny: 401 };
+ *   const auth = context.request.auth;
+ *   if (!auth.isAuthenticated) return { deny: 401 };
  *   const orderId = context.request.params.id;
- *   if (!ownsOrder(context.auth.userId, orderId)) {
+ *   if (!ownsOrder(auth.userId, orderId)) {
  *     return { deny: 403, reason: "not your order" };
  *   }
  *   return { orderId };
@@ -1300,6 +1301,12 @@ interface McpRegistry {
 
   /**
    * Register an MCP prompt.
+   *
+   * The handler is called with `{ mode: "prompt", arguments }` for
+   * `prompts/get` and answers `{ messages: [{ role, content: { type: "text",
+   * text } }] }`. For `completion/complete` it is called with
+   * `{ mode: "completion", completingArgument, partialValue, arguments }` and
+   * answers `{ values: string[], total?, hasMore? }`. It runs as the caller.
    * @example
    * mcpRegistry.registerPrompt("generateCode", {
    *   description: "Generates code based on requirements",
@@ -1449,7 +1456,11 @@ interface ToolsApi {
    * @param options.readOnly - Run it holding no write capability, so a tool
    *   that tries to change something is refused.
    */
-  call(name: string, args?: Record<string, unknown>, options?: { readOnly?: boolean }): any;
+  call(
+    name: string,
+    args?: Record<string, unknown>,
+    options?: { readOnly?: boolean },
+  ): any;
 }
 
 declare const tools: ToolsApi;
@@ -2892,13 +2903,14 @@ declare var ResponseBuilder: {
   noContent(): HttpResponse;
 
   /**
-   * Create a 302 redirect response
+   * Create a redirect response
    * @param location - Redirect URL
+   * @param status - HTTP status code (default: 302)
    * @returns HTTP response object
    * @example
    * return ResponseBuilder.redirect("/login");
    */
-  redirect(location: string): HttpResponse;
+  redirect(location: string, status?: number): HttpResponse;
 };
 
 // ============================================================================

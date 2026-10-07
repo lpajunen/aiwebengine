@@ -26,7 +26,7 @@ pub(super) fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
 /// A tool call's `edits` argument, read the way the HTTP routes read theirs.
 ///
 /// Going through [`StringEditBody`] rather than picking the fields out of the
-/// JSON is what keeps an `edit_asset` call and a `/engine/edit_file` of the
+/// JSON is what keeps an `edit_file` tool call and a `/engine/edit_file` of the
 /// same edits from disagreeing about which of them is malformed.
 pub(super) fn parse_tool_edits(edits: &[Value]) -> Result<Vec<StringEdit>, String> {
     let bodies: Vec<StringEditBody> = edits

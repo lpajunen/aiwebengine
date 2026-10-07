@@ -20,7 +20,8 @@ source .env-local && cargo run     # http://localhost:3000
 2. Branch from `main`.
 3. A change that alters the JavaScript API or an engine operation changes the
    script repositories with it (`aiwebengine-examples`, `aiwebengine-dev`,
-   `aiwebengine-agent`, `aiwebengine-private`). There is no
+   `aiwebengine-agent`, `aiwebengine-template`, `aiwebengine-private`). There
+   is no
    backwards-compatibility requirement.
 
 ## Before a pull request

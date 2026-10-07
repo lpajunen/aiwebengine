@@ -33,7 +33,8 @@ cargo run -- --validate-config     # check a config without starting the server
 - Conventional commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `perf:`, `chore:`; `!` for breaking.
 - Breaking changes are fine: there is no backwards-compatibility requirement.
   Change the engine and the script repositories (`aiwebengine-examples`,
-  `aiwebengine-dev`, `aiwebengine-agent`, `aiwebengine-private`) together.
+  `aiwebengine-dev`, `aiwebengine-agent`, `aiwebengine-template`,
+  `aiwebengine-private`) together.
 - Treat `src/security/`, `src/auth/` and `delegation.rs` as security-critical
   (`SECURITY.md`).
 - Comments and docs describe what is true now. History goes in commit messages.

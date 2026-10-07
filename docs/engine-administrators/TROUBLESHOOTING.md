@@ -62,7 +62,8 @@ headers.
 
 - **A handler times out.** `javascript.execution_timeout_ms` bounds a request,
   `init_timeout_ms` an `init()`, and `job_timeout_ms` scheduled and background
-  work.
+  work. One script can be given more or less than those with
+  `set_script_limits` — see `docs/SCRIPT_LIMITS.md`.
 - **A script's log is empty.** Lines are pruned by count and age under `[logs]`.
   Read them with `read_logs` as the script's owner or an administrator.
 

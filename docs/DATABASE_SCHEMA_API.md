@@ -93,8 +93,7 @@ database.query("presence", {
 });
 ```
 
-`query`'s options are `where`, `limit` (default
-{{limits.database.defaultQueryLimit}}, at most {{limits.database.maxQueryLimit}}),
+`query`'s options are `where`, `limit` (default 100, at most 1,000),
 `orderBy`, `order` (`"asc"` or `"desc"`) and `forUpdate` (see
 [transactions](TRANSACTIONS.md#reading-in-order-to-write)). An option the
 engine does not know is refused rather than ignored: `{ limt: 5 }` answering

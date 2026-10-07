@@ -20,7 +20,7 @@ The engine logs to stdout, and Docker collects it:
 
 ```bash
 make docker-logs ENV=production        # follow
-docker compose logs --since 2h aiwebengine
+docker compose logs --since 2h aiwebengine-1
 ```
 
 A script's own `console.*` output is stored in the database, read with
@@ -112,8 +112,18 @@ it replaces a populated database, and `--exit-on-error`, so a partial restore
 does not report success.
 
 If the encryption key differs from the one the dump was taken under, the restore
-succeeds and every stored secret is unreadable. Read one secret back before
-deciding a restore worked.
+succeeds and every stored secret is unreadable. Check one before deciding a
+restore worked: no operation returns a secret's value, but `crypto.secretEquals`
+decrypts it host-side and compares it with one you know, so an `eval_script`
+against a script holding the secret answers the question:
+
+```bash
+curl -X POST https://manage.example.com/engine/eval_script \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"script": "<a script with a secret>", "source": "crypto.secretEquals(\"KEY\", \"<the value you stored>\")"}'
+```
+
+A value of `true` means the key decrypts what the dump holds; `false` or an error means it does not.
 
 ### Rehearsing a restore
 
@@ -137,7 +147,8 @@ docker compose --env-file .env-rehearsal exec -T postgres \
           (SELECT count(*) FROM users)   AS users,
           (SELECT count(*) FROM assets)  AS files;"
 
-# 4. Start the engine against it and read a secret back through /engine.
+# 4. Start the engine against it and check a secret with crypto.secretEquals
+#    (see Restoring above).
 
 # 5. Tear it down.
 docker compose --env-file .env-rehearsal down -v

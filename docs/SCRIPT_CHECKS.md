@@ -162,7 +162,7 @@ The check deliberately runs `init()` with **headroom above the deploy budget**
 Capping the run at the budget would make the one script that most needs an
 answer — the one that is over budget — the only one that cannot get it: the run
 would be interrupted at the ceiling and the report could say `interrupted` but
-never `took 12.4s, 2.5x the budget`. Raise `timeout_ms` (up to 60s) for an
+never `took 12.4s, 2.5x the budget`. Raise `timeoutMs` (up to 60s) for an
 `init()` slower still.
 
 **Paths another script already claims.** The route index is keyed by

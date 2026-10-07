@@ -14,7 +14,7 @@ written**.
 curl "https://your-engine/engine/read_logs?script=myapp&request_id=$REQUEST_ID"
 
 # Watch a live session, one route only
-curl -N "https://your-engine/engine/script_logs/stream?uri=myapp&route=/world/:id/move"
+curl -N "https://your-engine/engine/script_logs/stream?script=myapp&route=/world/:id/move"
 ```
 
 Reading logs takes the `ViewLogs` capability, and the endpoints answer only on a
@@ -153,7 +153,7 @@ Events:
   reached so a client can reconnect from there.
 
 ```bash
-curl -N "https://your-engine/engine/script_logs/stream?uri=myapp&backlog=50&level=error"
+curl -N "https://your-engine/engine/script_logs/stream?script=myapp&backlog=50&level=error"
 ```
 
 If a tail drops, reconnect with `after_seq` set to the last `seq` you saw and
