@@ -229,7 +229,7 @@ clear_git_remote(script: "x")   # stop tracking
 ```
 
 Clearing a binding leaves the script and its files exactly as they are; what
-goes is the record of where they came from, so later pulls no longer treat it
+goes is the record of where they came from, so later pulls do not treat it
 as that repository's to replace.
 
 There is deliberately no call that _sets_ a binding without writing anything. A

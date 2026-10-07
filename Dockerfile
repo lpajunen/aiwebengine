@@ -88,9 +88,7 @@ COPY --from=builder /app/target/release/aiwebengine /usr/local/bin/aiwebengine
 # The configuration file is the only thing this image reads from disk. Engine
 # assets — favicon, stylesheet, logo, the TypeScript declarations — are embedded
 # in the binary by include_bytes!, scripts and their assets live in Postgres,
-# migrations are compiled in by sqlx::migrate!, and logs go to stdout. The
-# /app/logs, /app/scripts, /app/assets, /app/docs and /app/data directories this
-# replaced were created and populated for a runtime that never opened them.
+# migrations are compiled in by sqlx::migrate!, and logs go to stdout.
 COPY config.toml /app/config.toml
 RUN chown aiwebengine:aiwebengine /app /app/config.toml
 
@@ -102,10 +100,9 @@ EXPOSE 3000
 
 # Health check
 # A TCP connect rather than a request to /health: the runtime stage installs
-# ca-certificates and libssl3 only, so neither curl nor wget exists here and the
-# HTTP probe this replaced reported every container unhealthy unless a compose
-# file overrode it. The database-aware /health probe lives at the proxy, in
-# Caddy's active health checks.
+# ca-certificates and libssl3 only, so neither curl nor wget exists here. The
+# database-aware /health probe lives at the proxy, in Caddy's active health
+# checks.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
     CMD timeout 2 bash -c '</dev/tcp/localhost/3000' || exit 1
 

@@ -20,9 +20,7 @@ x-engine: &engine
   # No volumes: this service reads nothing from disk but its configuration,
   # which the image carries. Scripts and assets live in Postgres, migrations
   # are embedded in the binary by sqlx::migrate!, and logs go to stdout for
-  # Docker to collect — the ./scripts, ./data and ./logs mounts this replaced
-  # were bind mounts onto directories no code has opened since the repository
-  # moved into the database.
+  # Docker to collect.
   #
   # Every APP_* setting comes from one per-environment file, named by
   # ENV_FILE. Listing keys here instead would set each one whether the

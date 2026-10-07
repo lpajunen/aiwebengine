@@ -42,11 +42,10 @@ the reads and none of the writes.
 
 ## The capability vocabulary
 
-Narrowing is only worth as much as the vocabulary can express, and the old one
-could not express the things an agent's tools actually do. `fetch` was gated by
-nothing at all. `secretStorage` and `personalStorage` were gated only by a
-delegation scope. Reads and writes of a script's tables shared one capability,
-so **read-only was inexpressible**.
+Narrowing is only worth as much as the vocabulary can express, so every thing
+an agent's tools actually do has a name of its own — the network, secrets,
+storage, and reads and writes of a script's tables separately, which is what
+makes **read-only** expressible.
 
 | Name                     | Gates                                                                           |
 | ------------------------ | ------------------------------------------------------------------------------- |

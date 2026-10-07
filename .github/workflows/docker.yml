@@ -92,7 +92,7 @@ jobs:
 
     # DATABASE_URL names a *server*: every test process claims a numbered slot
     # database on it and recreates that slot from a migrated template
-    # (tests/common/testdb.rs), so the database named here is only ever the
+    # (src/test_db.rs), so the database named here is only ever the
     # maintenance connection. That is also why the service user is the
     # container's superuser — the harness runs CREATE DATABASE.
     services:

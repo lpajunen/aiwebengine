@@ -32,12 +32,12 @@ and pruned by `[logs]` retention in `config.toml`.
 An administrator manages accounts with the engine operations, over
 `/engine/<name>` or the MCP tool of the same name:
 
-| Operation          | What it does                                           |
-| ------------------ | ------------------------------------------------------ |
-| `list_users`       | Every account, with its roles and identity providers   |
-| `add_user_role`    | Grants `Editor` or `Administrator`                     |
-| `remove_user_role` | Revokes one                                            |
-| `set_user_realm`   | Which hosts an account is a principal on               |
+| Operation          | What it does                                         |
+| ------------------ | ---------------------------------------------------- |
+| `list_users`       | Every account, with its roles and identity providers |
+| `add_user_role`    | Grants `Editor` or `Administrator`                   |
+| `remove_user_role` | Revokes one                                          |
+| `set_user_realm`   | Which hosts an account is a principal on             |
 
 ```bash
 curl -X POST https://manage.example.com/engine/add_user_role \
@@ -148,6 +148,7 @@ Step 4 is the one not to skip: steps 1–3 pass with the wrong encryption key.
 
 ### Desktop standalone
 
-`.env-desktop` and the embedded data directory (`data/postgres` by default) are
-the whole install. Back them up together with the app stopped — a copy of a
-running PostgreSQL's data directory may not start. The same key caveat applies.
+`config.toml` and `postgres/` in the app's data directory are the whole
+install. Back them up together with the app stopped — a copy of a running
+PostgreSQL's data directory may not start — and never one without the other,
+since `config.toml` holds the encryption key.

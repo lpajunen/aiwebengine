@@ -44,7 +44,7 @@ Out of scope at first:
 Request → Copy a template → Pin the stub → Write files → Check and test → Passes?
           (pull_from_git)   (deploy_script) (write_files)  (check_script,     │
                                                  ▲          run_tests)        ├─ yes → Ask approval → Deploy
-                                                 │ retry                      │        (request_approval) (deploy_script)
+                                                 │ retry                      │        (request_deploy)   (deploy_script)
                                                  └──────── Fix from error ◄── no
                                                            (edit_file)
                                                                 │ 3rd failure
@@ -56,67 +56,49 @@ Haiku decides what to fix from the engine's checks, not from its own judgement.
 Repeating a failure leads to a handoff note rather than another loop, and
 nothing new is served until the person approves.
 
-## Engine work (aiwebengine)
+## What the engine provides
 
-1. **A short script primer.** `aiwebengine.d.ts` is about 16,500 words. Write a
-   primer of about 1,500 words covering the globals a simple script uses, and
-   serve it as an engine asset. It is written by hand, like the `.d.ts`, and
-   updated in the same commit as any API change it covers. _Done:_
-   `assets/script-primer.md`, served at
-   `/engine/types/v{version}/script-primer.md`; a test caps it at 1,500 words.
-2. **Fix what the types get wrong.** The `.d.ts` says every script MUST export
-   `init()`, which the engine does not require. A small model copies such
-   statements literally. _Done:_ `init()` is documented as optional, and the
-   header says handlers are named by string and must be top-level functions.
-3. **Errors that name the fix.** `check_script`, `run_tests` and refused
-   registrations answer with the file, the line and the corrected call.
-   _Done:_ `check_script` reports a refused route, stream, file route or MCP
-   resource as `registration-refused` with the engine's reason; the module-loader
-   errors (export in `main.*`, dynamic `import()`, missing module, bad import
-   binding) name the corrected form; and `init-failed` and failing test cases
-   get a `Hint:` line for the usual causes (`src/fix_hints.rs`).
-4. **One call from write to verdict.** `write_files` can return the
-   `check_script` result and the `init()` outcome together.
-   _Done:_ `write_files` and `edit_file` answer with a `check` report beside
-   `init`; `check: false` opts out.
-5. **Short tool descriptions.** The 50 engine tools' descriptions and schemas
-   came to about 31,000 characters; cut each description to what it does plus
-   one rule. _Done:_ now about 25,000, and a test caps each description at 500
-   characters and the whole listing at 26,000. Stale tool names in descriptions
-   were fixed, and descriptions say "head" where they meant the stored files,
-   which is not what a pinned script serves.
-6. **Drafts are pins, not another host.** The run's first write is the
-   template's stub, whose `init()` registers nothing, and the run pins that
-   revision with `deploy_script` at once. From then on writes advance head while
-   the stub keeps serving, until an approved deploy moves the pin. No engine
-   change: a new script has no revision to pin until its first write, which is
-   why the stub goes first.
-   _Verified:_ `a_draft_written_beside_a_pinned_stub_is_checked_and_tested_but_not_served`
-   in `tests/revisions.rs` runs the whole sequence over HTTP.
+- **A short script primer**, `assets/script-primer.md`, served at
+  `/engine/types/v{version}/script-primer.md` beside the 16,500-word
+  `aiwebengine.d.ts`. It is hand-written, updated in the same commit as any API
+  change it covers, and a test caps it at 1,500 words. A small model copies
+  statements literally, so the primer and the `.d.ts` say only what is true —
+  for example that `init()` is optional.
+- **Errors that name the fix.** `check_script` reports a refused registration as
+  `registration-refused` with the engine's reason; module-loader errors (export
+  in `main.*`, dynamic `import()`, missing module, bad import binding) name the
+  corrected form; `init-failed` and failing test cases carry a `Hint:` line for
+  the usual causes (`src/fix_hints.rs`).
+- **One call from write to verdict.** `write_files` and `edit_file` answer with
+  a `check` report beside `init`; `check: false` opts out.
+- **Short tool descriptions.** Each is capped at 500 characters and the whole
+  listing at 26,000 by a test.
+- **Drafts are pins.** The run's first write is the template's stub, whose
+  `init()` registers nothing, and the run pins it with `deploy_script` at once;
+  later writes advance head while the stub serves, until an approved deploy
+  moves the pin. `tests/revisions.rs`
+  (`a_draft_written_beside_a_pinned_stub_is_checked_and_tested_but_not_served`)
+  runs the sequence over HTTP.
 
-## Harness work (aiwebengine-agent)
+## What the harness provides
 
-Built; the README of `aiwebengine-agent` describes it. The results are in
-`aiwebengine-agent/eval/results/`: on the ten seed tasks Haiku 4.5 passed 9 of
-10 in the latest run (14 turns and $0.05 per passed task), where the same agent
-without this work passed none of the five it was given.
+Described in the `aiwebengine-agent` README; `aiwebengine-agent/eval` runs the
+suite.
 
 1. **An authoring mode with its own budgets.** A run started with
    `kind: "author"` gets 8,000 output tokens and 25 turns (chat keeps 1,024 and
    12), and `jobTimeoutMs` 120 s via `set_script_limits`.
-2. **Direct tools instead of discovery.** `create_script`, `write_files`,
-   `edit_file`, `read_file`, `check_script`, `run_tests`, `read_logs` and
-   `request_deploy`, each bound to the scripts the run created. There is no HTTP
-   probe: a pinned script's routes serve the pinned revision, so behaviour is
-   checked through `run_tests`. Handlers live in `lib/handlers.ts` and `main.ts`
-   makes them global with `Object.assign(globalThis, {...})`, so a test imports
-   a handler and calls it with a context built by `makeContext` in
-   `lib/testing.ts`; an agent's model call is a parameter, so a test passes a
-   fake.
-3. **One guide per shape.** `build-site`, `build-tool` and `build-agent` are
-   plain guides in `agent/authoring/`, returned by `create_script` together with
-   the primer, rather than SKILL.md skills: a skill must be found and read, and
-   a small model skips that step.
+2. **Direct tools.** `create_script`, `write_files`, `edit_file`, `read_file`,
+   `check_script`, `run_tests`, `read_logs` and `request_deploy`, each bound to
+   the scripts the run created. Behaviour is checked through `run_tests`, since
+   a pinned script's routes serve the pinned revision. Handlers live in
+   `lib/handlers.ts` and `main.ts` makes them global with
+   `Object.assign(globalThis, {...})`, so a test imports a handler and calls it
+   with a context from `makeContext` in `lib/testing.ts`; an agent's model call
+   is a parameter, so a test passes a fake.
+3. **One guide per shape.** `build-site`, `build-tool` and `build-agent` in
+   `agent/authoring/`, returned by `create_script` with the primer rather than
+   left as skills to be found, because a small model skips that step.
 4. **Templates in git**, in
    [`aiwebengine-template`](https://github.com/lpajunen/aiwebengine-template),
    one directory per shape, pulled with `pull_from_git` as `template-<shape>`.
@@ -137,14 +119,12 @@ without this work passed none of the five it was given.
 - **Failure review:** a larger model reads the failed runs and changes the
   platform. Changing the task to make it pass is not allowed.
 
-| Metric                       | Target for phase 3 |
+| Metric                       | Target             |
 | ---------------------------- | ------------------ |
 | Tasks passed without help    | at least 80%       |
 | Turns per passed task        | 15 or fewer        |
 | Cost per passed task         | under $0.10        |
 | Escalations that were needed | fewer than 1 in 10 |
-
-The targets are starting guesses; adjust them after the baseline.
 
 ## Safety
 
@@ -159,19 +139,18 @@ The targets are starting guesses; adjust them after the baseline.
 - **Undo is easy.** Every write is a revision; `revert_script` restores the last
   version that started cleanly.
 
-## Phases and gates
+## Where it stands
 
-| Phase       | Work                                                                                                   | Built by                    | Gate to the next phase                            |
-| ----------- | ------------------------------------------------------------------------------------------------------ | --------------------------- | ------------------------------------------------- |
-| 1. Baseline | Write the suite; run today's agent with only budgets raised                                            | Claude Code (Sonnet)        | A recorded pass rate and the top failure causes   |
-| 2. Platform | Primer, `.d.ts` fixes, actionable errors, `write_files` returning its check, shorter tool descriptions | Claude Code (Opus)          | Baseline rerun improves; `make check` passes      |
-| 3. Harness  | Authoring mode, direct tools, three skills, templates in git, escalation                               | Claude Code (Opus / Sonnet) | 80% pass, 15 turns or fewer, under $0.10 per task |
-| 4. Real use | Used for your own small scripts; failures become new suite tasks                                       | Haiku, reviewed by you      | Two weeks without a fix needing a larger model    |
-| 5. Widen    | Add one capability at a time from the out-of-scope list, each with tasks                               | Claude Code + Haiku         | Pass rate holds on the whole suite                |
+The baseline, platform and harness phases are done: on the ten seed tasks
+the agent passed every check in the latest run (`aiwebengine-agent/eval`),
+against none of five before this work. What is next is real use — Haiku
+building small scripts for people, with each failure becoming a new suite task
+— and then widening the scope one capability at a time from the out-of-scope
+list, each with tasks, as long as the pass rate holds on the whole suite.
 
 ## Later goals
 
-These come after phase 5. Each starts as suite tasks, like any widening.
+These come after the widening. Each starts as suite tasks.
 
 1. **The agent replaces the `aiwebengine-dev` tools.** `admin/`, `editor/` and
    `docs/` stop being deployed; their work is done by prompting the agent with
@@ -196,7 +175,7 @@ These come after phase 5. Each starts as suite tasks, like any widening.
 
 ## Decided
 
-- **Drafts are pins**, not a separate host (engine work, item 6).
+- **Drafts are pins**, not a separate host.
 - **Templates live in
   [`aiwebengine-template`](https://github.com/lpajunen/aiwebengine-template).**
 - **The primer is hand-written**, like `aiwebengine.d.ts`.
@@ -206,7 +185,5 @@ These come after phase 5. Each starts as suite tasks, like any widening.
 
 ## Open questions
 
-- Does 8,000 output tokens per turn fit in 120 s for Haiku on this engine?
-  Measure in phase 1.
 - Which of the `admin/`, `editor/` and `docs/` features are actually used, and
   so need suite coverage before retiring them?

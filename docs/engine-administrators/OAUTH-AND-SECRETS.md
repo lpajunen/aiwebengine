@@ -67,12 +67,12 @@ Further administrators are granted by an administrator with `add_user_role`
 Four values have no default, and the engine refuses to start without them when
 authentication is enabled. Generate each with `openssl rand -base64 32`:
 
-| Variable                               | What it protects                                     | Rotating it                          |
-| -------------------------------------- | ---------------------------------------------------- | ------------------------------------ |
-| `APP_SECURITY__SESSION_ENCRYPTION_KEY` | Session payloads                                     | Signs everyone out                   |
-| `APP_SECURITY__CSRF_KEY`               | CSRF tokens                                          | Fails forms already open             |
-| `APP_SECURITY__SECRET_ENCRYPTION_KEY`  | Script secrets, user secrets and git credentials     | Makes every stored secret unreadable |
-| `APP_AUTH__JWT_SECRET`                 | Checked at startup (at least 32 characters) only     | No effect                            |
+| Variable                               | What it protects                                 | Rotating it                          |
+| -------------------------------------- | ------------------------------------------------ | ------------------------------------ |
+| `APP_SECURITY__SESSION_ENCRYPTION_KEY` | Session payloads                                 | Signs everyone out                   |
+| `APP_SECURITY__CSRF_KEY`               | CSRF tokens                                      | Fails forms already open             |
+| `APP_SECURITY__SECRET_ENCRYPTION_KEY`  | Script secrets, user secrets and git credentials | Makes every stored secret unreadable |
+| `APP_AUTH__JWT_SECRET`                 | Checked at startup (at least 32 characters) only | No effect                            |
 
 Every instance of one deployment must share all four. Back the environment file
 up with the database dumps, and not in the same place: a dump restored without

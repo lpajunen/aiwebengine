@@ -16,39 +16,33 @@ if (
 
 The engine asks scripts to verify their own webhook signatures, and it is right
 to: Telegram echoes a shared secret in a header, Slack and GitHub sign the
-body, and only the sender's documentation says which. What was wrong is that it
-asked and then handed them nothing to do it with. There was no HMAC in the
-JavaScript API, no constant-time comparison, and no source of randomness — so
-every solution that followed the documentation wrote the same three mistakes.
+body, and only the sender's documentation says which. `crypto` gives them what
+that takes, shaped around the three mistakes webhook verification invites.
 
-## The three mistakes, and what replaces each
+## Three mistakes, and what prevents each
 
-**The secret was fetched into JavaScript.** `secretStorage` has no read, on
-purpose — `exists()` only says whether a key is there — so a script that needed
-to _compare_ a secret had nowhere to keep it but `scriptStorage`, in the clear,
-readable by anything holding `read_storage`. The agent's own Telegram webhook
-says so in its setup instructions: the shared secret lives in `scriptStorage`
-"because checking it means _comparing_ it, and the engine never returns a
-secret's value to JavaScript".
+**Fetching the secret into JavaScript.** `secretStorage` has no read, on
+purpose — `exists()` only says whether a key is there — and keeping a secret in
+`scriptStorage` to compare it puts it in the clear, readable by anything holding
+`read_storage`.
 
-Now the secret is **named, not passed**. `secretEquals` and `hmacVerify` take
+So the secret is **named, not passed**. `secretEquals` and `hmacVerify` take
 the name of a secret and resolve it host-side, exactly as `fetch` resolves
 `{{secret:NAME}}` in a header — `user_secrets` first, then the script's own. A
-script cannot leak a value it is never given, and the webhook secret goes back
-to being a secret.
+script cannot leak a value it is never given.
 
 The option is `secretName` rather than `secret` for that reason. A field called
 `secret` invites somebody to pass one, which would work, and would silently
 give up the property they came here for.
 
-**The comparison was `===`.** Which leaks the secret a byte at a time to
+**Comparing with `===`**, which leaks the secret a byte at a time to
 anyone who can time the endpoint, and looks like working code forever.
 `constantTimeEqual` is the primitive; `secretEquals` is it applied to a value
 the script never sees. Length is not secret — it is visible in the encoding of
 anything that carries one — so a length mismatch answers immediately; what
 stays constant is the time taken over two strings of equal length.
 
-**The webhook secret was typed by a person.** `randomToken` mints one. It is
+**A webhook secret typed by a person.** `randomToken` mints one. It is
 refused below 16 bytes and above 64 rather than clamped, because a caller who
 asked for 8 and silently got 16 would go on believing it had asked for
 something it did not get, and the thing it did not get is the entropy.

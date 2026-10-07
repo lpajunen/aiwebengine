@@ -76,9 +76,8 @@ allow_recovery_codes = true
 min_password_length = 12
 ```
 
-All three shipped templates — local, staging and production — turn these on,
-because a solution whose users cannot sign themselves up has no use for
-internal credentials.
+`.env-local` turns all of them on; `.env.example` enables accounts with
+registration and guests off.
 
 **The code defaults are the opposite.** Every field defaults to `false`, so an
 engine whose configuration says nothing about `[auth.internal]` gets nothing:
@@ -126,7 +125,7 @@ offers exactly one of two forms, because they are different acts:
   `/auth/local/password`, so it asks for the current one and ends every other
   session on success.
 - **Add a username and password**, when it holds none. Posts to
-  `/auth/local/claim` — the control that endpoint shipped without. A guest is
+  `/auth/local/claim`. A guest is
   told what it is for in the terms that matter to a guest: the account is gone
   when the browser is. A federated account is told the other thing it is for: a
   way in that does not depend on the provider being reachable.
@@ -144,7 +143,7 @@ no account, leaving `SameSite=Lax` as the only thing between the password form
 and a cross-site POST — and a browser will carry a Lax cookie on a cross-site
 POST for the first couple of minutes after it is set. `/auth/local/password`
 demands a bound token; `/auth/local/claim` accepts either, because solutions
-have been posting it a token from the sign-in page since it shipped.
+post it a token from the sign-in page.
 
 A form whose token has expired — the page sat open long enough — comes back to
 the page with `?error=csrf` and a fresh token, rather than the JSON an API
@@ -296,10 +295,8 @@ are on `/auth/account` as a list with a button per row. Neither depends on
 `[auth.internal]`: a session is a session however it was minted, and somebody
 signed in through Google has the same reason to look.
 
-Before this, the only thing a person could do about a session they did not
-recognise was change their password, which ends every session they have —
-including the four they wanted to keep — and which an account with no password
-cannot do at all.
+Ending one session leaves the others alone, which changing the password — the
+alternative — does not, and an account with no password could not do at all.
 
 What a listing may say, and what it may not:
 
@@ -329,8 +326,7 @@ The current session gets no button: ending it is what `/auth/logout` does, and a
 button here that silently signed somebody out would read as one that had failed.
 
 A list shorter than someone expects is usually `auth.max_concurrent_sessions`,
-which has been dropping an account's oldest session on each sign-in past the
-limit since long before there was anywhere to see it happen.
+which drops an account's oldest session on each sign-in past the limit.
 
 ## Rules worth knowing
 

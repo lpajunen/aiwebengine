@@ -115,7 +115,8 @@ the script uses, and `/engine/edit_file` is the patch that asks for that.
 curl -X POST "https://your-engine/engine/edit_file" \
      -H "Content-Type: application/json" \
      -d '{
-           "uri": "https://your-engine/myapp.ts",
+           "script": "myapp",
+           "path": "main.ts",
            "edits": [
              {
                "old_string": "registerRoute(\"/play\"",
@@ -148,48 +149,30 @@ script rather than a file inside one:
 has in hand. It takes a form, as it always has; `/engine/edit_file` takes
 JSON, because a list of edits is not something form encoding expresses.
 
-The digest to aim a patch with comes from the read. `/engine/read_file`
-answers with the script itself, so there is nowhere in the body to put one: it
-travels as an `ETag`, and `read_file` over MCP reports it as `sha256`.
+The digest to aim a patch with comes from the read: every `read_file` answer
+carries the whole file's `sha256`, whichever part of it was asked for.
 
 ```bash
-curl -i "https://your-engine/engine/read_file?uri=https://your-engine/myapp.ts"
-# HTTP/1.1 200 OK
-# content-type: application/javascript
-# etag: "4b1…"
+curl "https://your-engine/engine/read_file?script=myapp&path=main.ts"
+# {"encoding": "utf8", "content": "…", "sha256": "4b1…", "bytes": 2210, "total_lines": 74}
 ```
-
-That read takes the same `lines` and `grep` filters a read of an asset takes,
-for the same reason: the counterpart to editing without sending the file is
-finding the place to edit without receiving it.
-
-```bash
-# where a pattern matches, without the script
-curl "…/engine/read_file?uri=https://your-engine/myapp.ts&grep=registerRoute"
-
-# lines 40 to 60, as text
-curl "…/engine/read_file?uri=https://your-engine/myapp.ts&lines=40-60"
-```
-
-A scoped read is a view of the file and cannot be the file, so it answers in
-JSON — `content` with `start_line`/`end_line` for a range, `matches` for a
-pattern, and `sha256`/`bytes`/`total_lines` describing the whole script either
-way. A read with neither filter is unchanged: the script, as JavaScript, with
-its digest in the `ETag`.
 
 ## Reading part of a file
 
 The counterpart to editing without sending the file is reading without
-receiving it. `/engine/read_file` takes two optional filters on a single
-asset:
+receiving it. `read_file` takes two optional filters:
 
 ```bash
 # lines 120 to 180, as text
-curl "…/engine/write_file?script=myapp&asset=server/move-player.ts&lines=120-180"
+curl "…/engine/read_file?script=myapp&path=server/move-player.ts&lines=120-180"
 
 # where a pattern matches, without the file
-curl "…/engine/write_file?script=myapp&asset=server/move-player.ts&grep=^export%20function"
+curl "…/engine/read_file?script=myapp&path=server/move-player.ts&grep=^export%20function"
 ```
+
+A range answers `content` with `start_line`/`end_line`, a pattern answers
+`matches`, and `sha256`/`bytes`/`total_lines` describe the whole file either
+way.
 
 `lines` accepts `120-180`, `120-` (to the end of the file), or `120` (that line
 alone), counting from 1. An `end` past the end of the file clamps — `120-1000`
@@ -257,16 +240,11 @@ are not the same for a script pinned with `/engine/deploy_script`: it serves the
 revision it is pinned to, while writes go on recording revisions and advancing
 head, which is the separation pinning exists to create.
 
-The root source used to be the exception, and silently. `read_file` answered
-with the pinned revision and `edit_file` applied its edits to that, then stored
-the result as head — so a patch after a batch replaced the batch's work with
-the pinned content plus three lines, and `base_sha256` could not catch it: the
-digest was taken from the same pinned content the edits were applied to, so the
-precondition agreed with itself while disagreeing with what was stored. The
-assets never behaved that way, so the two halves of a pinned script's tree were
-being edited from different versions of it.
+Reads and edits always work on head, the entrypoint included: editing the
+pinned revision and storing the result as head would silently discard whatever
+had been written since the pin.
 
-An answer about a pinned script now carries a `deployment` block naming the
+An answer about a pinned script carries a `deployment` block naming the
 revision that is serving, because "the write landed" and "the change is live"
 stop being the same sentence:
 
@@ -281,8 +259,8 @@ stop being the same sentence:
 }
 ```
 
-`/engine/get_deployment?uri=…` reports the pin, and `/engine/deploy_script (follow=true)` removes
-it so the script follows head again. See
+`get_deployment` reports the pin, and `deploy_script` with `follow: true`
+removes it so the script follows head again. See
 [Deploying a Revision](SCRIPT_REVISIONS.md).
 
 ## Over MCP

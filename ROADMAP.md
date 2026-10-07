@@ -79,15 +79,13 @@ The order inside each section is the order they matter.
    `fetchAll` covers parallel network calls. The rest means an event loop under
    QuickJS with host calls that yield.
 2. **Handlers are named by string and must be globals of `main.ts`.** The
-   primer's most common failure. Either accept function values, or make a
-   handler that is not a global function a refusal at `check_script` time
-   rather than a 500 on the first request.
-3. **`fetch` bodies are strings.** Binary responses need a byte form.
-   (`resources/read` already serves binary assets as base64.)
-4. **Schema and data access.** `database` is ten methods and `ensureTable` in
+   primer's most common failure. `check_script` reports it (`missing-handler`),
+   but a deploy that skips the check still fails on the first request.
+   Accepting function values would remove the failure rather than report it.
+3. \*\*Schema and data access. `database` is ten methods and `ensureTable` in
    `init()`. Typed rows, declarative schema changes and aggregates are the
    gaps worth weighing; a raw-SQL escape hatch is not.
-5. **Web-standard globals.** `URLSearchParams` and `Headers` exist; `URL`,
+4. \*\*Web-standard globals. `URLSearchParams` and `Headers` exist; `URL`,
    `TextEncoder`/`TextDecoder` and `structuredClone` do not, and `fetch` is
    synchronous rather than WHATWG's promise-returning shape.
 
@@ -107,10 +105,17 @@ The order inside each section is the order they matter.
    `safe_helpers.rs` have few or no callers. Delete what nothing uses.
 5. **Unit tests that skip without a database.** `js_engine.rs`'s test helpers
    return early on `should_skip_db_tests`, which the test rules forbid.
-6. **`mcp.ask` has no user.** See `docs/SIMPLIFICATION.md` §7; reconsider with
-   the next MCP revision.
+6. **`mcp.ask` has no user.** No script in the four repositories calls it, so
+   `mcp_elicitation.rs` buys conformance and its tests, not a user. It stays
+   because nothing else does its job: an ask reaches the person driving the
+   client, and a stream cannot carry an answer back into a tool call.
+   Reconsider with the next MCP revision; removing it is one module and one
+   prelude, with no storage.
 7. **Not verified in a browser:** the editor's and admin's own flows after the
    operation-table and slug changes, and git sync against a real repository.
+8. **`run_tests` with a `filter` that matches nothing** answers "No test
+   modules found", which describes a different failure and sends the caller
+   looking for a discovery bug.
 
 ## Operations
 

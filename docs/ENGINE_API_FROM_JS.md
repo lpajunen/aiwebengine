@@ -101,9 +101,8 @@ use.
 
 ## What this is not
 
-It is not a new capability, a bypass, or a special case. It adds a way to reach
-functions that were previously only reachable over HTTP, with the checks they
-already had. Ownership is still checked at every write
+It is not a new capability, a bypass, or a special case. It reaches the
+same operations as `/engine/*` and `/mcp`, with the same checks. Ownership is still checked at every write
 (`repository::user_owns_script`), `AdministerEngine` still marks acting on what
 you do not own, and a refusal still audits.
 

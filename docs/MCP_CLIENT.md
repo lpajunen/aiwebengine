@@ -2,7 +2,7 @@
 
 ## Overview
 
-The MCP Client module enables AIWebEngine scripts to connect to external Model Context Protocol (MCP) servers and use their tools. This allows integration with services like GitHub, Anthropic, and other MCP-compatible servers.
+`McpClient` lets a script to connect to external Model Context Protocol (MCP) servers and use their tools. This allows integration with services like GitHub, Anthropic, and other MCP-compatible servers.
 
 ## Features
 
@@ -18,17 +18,12 @@ The MCP Client module enables AIWebEngine scripts to connect to external Model C
 
 ## Setup
 
-### 1. Configure Secrets
+### 1. Store the token as a secret
 
-Add your MCP server authentication tokens to `.env`:
-
-```bash
-# GitHub MCP Server
-SECRET_GITHUB_TOKEN=ghp_your_personal_access_token_here
-```
-
-Get GitHub token from: https://github.com/settings/tokens
-Required scopes: `repo` (for private repos) or `public_repo` (for public repos only)
+The token is a script secret (or a person's own), set with `write_secret` —
+see [Secret Configuration](#secret-configuration). For GitHub, create a token at
+<https://github.com/settings/tokens> with `repo` (private repositories) or
+`public_repo` scope.
 
 ### 2. Create MCP Client in JavaScript
 
@@ -188,7 +183,7 @@ The GitHub MCP server provides tools for:
 
 ### Full Example
 
-See [github_mcp_issues.js](https://github.com/lpajunen/aiwebengine-examples/blob/main/src/github_mcp_issues/github_mcp_issues.js) in the aiwebengine-examples repo for a complete working example.
+See `github_mcp_issues/main.js` in the `aiwebengine-examples` repository for a complete working example.
 
 ```javascript
 // List all open issues in a repository
@@ -335,7 +330,7 @@ Ensure the secret has been stored in the database:
 # As an admin or owner of the script: store a script-level secret
 curl -X POST "https://your-engine.com/engine/write_secret" \
   -H "Content-Type: application/json" \
-  -d '{"script": "https://your-script-uri", "key": "github_token", "value": "ghp_..."}'
+  -d '{"script": "my-script", "key": "github_token", "value": "ghp_..."}'
 ```
 
 ```javascript
@@ -361,11 +356,8 @@ Check:
 
 ### Cache not updating
 
-Tool list cache expires after 1 hour. To force refresh:
-
-1. Restart the AIWebEngine server, or
-2. Wait for cache TTL to expire, or
-3. Connect to a different server URL (cache is per-URL)
+A tool list is cached per server URL for the server's own `ttlMs`, or an hour
+when it gives none. Restarting the engine clears it.
 
 ## API Reference
 
@@ -417,15 +409,15 @@ interface Tool {
 
 ### Protocol Flow
 
-1. **Initialization** (automatic, on first request)
-   - Send `initialize` JSON-RPC request
-   - Negotiate protocol version
-   - Exchange capabilities
+1. **Discovery** (once per server)
+   - Send `server/discover`; a server that answers naming `2026-07-28` is
+     spoken to statelessly, with `_meta` on each request
+   - Any other answer means an older server: open with the `initialize`
+     handshake instead
 
 2. **Tool Discovery** (cached)
    - Send `tools/list` JSON-RPC request
-   - Parse tool schemas
-   - Cache results for 1 hour
+   - Cache the result for the server's `ttlMs`, or an hour
 
 3. **Tool Invocation**
    - Send `tools/call` JSON-RPC request
@@ -463,5 +455,5 @@ Authorization: Bearer <token-injected-by-rust>
 
 - [Model Context Protocol Specification](https://modelcontextprotocol.io/)
 - [GitHub MCP Server](https://github.com/github/github-mcp-server)
-- [AIWebEngine Secrets Management](./secrets.md)
+- [OAuth and secrets](engine-administrators/OAUTH-AND-SECRETS.md#script-secrets)
 - [Example Scripts](https://github.com/lpajunen/aiwebengine-examples)

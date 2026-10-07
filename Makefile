@@ -102,7 +102,7 @@ dev-local:
 # Deliberately not --all-features: `embedded-postgres` starts a PostgreSQL of
 # the engine's own, which is the one thing the test harness must not do — every
 # test claims a numbered slot database on the server DATABASE_URL names
-# (tests/common/testdb.rs) — and `embedded-postgres-bundled` would stage a
+# (src/test_db.rs) — and `embedded-postgres-bundled` would stage a
 # 13 MB archive into every build that ran it. Compile-checked separately by
 # `make check-embedded`; add real features here as they appear.
 TEST_FEATURES ?=
@@ -196,11 +196,9 @@ build-desktop:
 # One flag, and everything it needs it makes for itself: `--desktop` creates
 # the configuration and its four keys in the platform's application-data
 # directory on first launch, then starts a PostgreSQL of its own beside it.
-#
-# This target used to generate `.env-desktop` with `openssl rand`, which is the
-# Makefile standing in for a first-run path the binary did not have. It has one
-# now (src/desktop.rs), so a packaged application — which ships no checkout, no
-# toolchain and no make — reaches the same install this does.
+# First run lives in the binary (src/desktop.rs) rather than here, so a
+# packaged application — no checkout, no toolchain, no make — reaches the same
+# install this does.
 #
 # AIWEBENGINE_DATA_DIR names somewhere else, for a second install or a
 # throwaway one.
@@ -465,11 +463,7 @@ docker-logs-all: check-shell-env
 
 # Remove one server environment's containers *and its volumes*, which includes
 # postgres-data: every script, asset, user, secret, log and revision it holds.
-#
-# The guard is here because this target used to be harmless by accident. It ran
-# a bare `docker-compose down -v`, which — with COMPOSE_PROJECT_NAME set in the
-# env file — named a project that did not exist and deleted nothing. Now that
-# it reaches the real project, it does exactly what it says.
+# It reaches the real project, so it asks for CONFIRM=yes first.
 docker-clean: check-shell-env
 	@if [ "$(CONFIRM)" != "yes" ]; then \
 		echo "This deletes the $(ENV) database: scripts, assets, users, secrets, logs."; \

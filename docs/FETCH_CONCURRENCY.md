@@ -87,12 +87,11 @@ boundary regularly falls inside one, and decoding each read on its own would
 replace the halves with `U+FFFD` — silently, and most often on exactly the
 text a model is generating.
 
-## The pieces that were already there
+## Streaming to the page
 
-The outbound half of streaming was built before this: `stream_registry` and
-`routeRegistry.sendStreamMessage` push to a person's open page today. What
-was missing was a `fetch` that hands back a reader, and the bridge between
-the two is the `for...of` in the example at the top.
+`stream_registry` and `routeRegistry.sendStreamMessage` push to a person's open
+page; `fetchStream` hands back a reader. The bridge between the two is the
+`for...of` in the example at the top.
 
 ## What this is not
 

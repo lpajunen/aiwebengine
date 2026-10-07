@@ -1,61 +1,20 @@
 # Database Migrations
 
-This directory contains SQL migration files for AIWebEngine's PostgreSQL database.
+SQL migrations for the engine's Postgres database, applied in filename order.
+The engine applies any pending ones itself when it starts (`Database::migrate`
+in `src/database.rs`), with the statement and lock timeouts lifted.
 
-## Migration Files
-
-Migrations are applied in sequential order by filename:
-
-- `20241024000001_create_scripts.sql` - Scripts table
-- `20241024000002_create_assets.sql` - Assets table
-- `20241024000003_create_logs.sql` - Logs table
-- `20241024000004_create_users.sql` - Users table
-- `20241024000005_create_sessions.sql` - Sessions table
-- `20251027155422_add_provider_user_id_to_users.sql` - Add provider user ID to users
-- `20251028100000_alter_users_drop_email_unique.sql` - Drop email unique constraint
-- `20251030175548_create_script_storage.sql` - Script storage table
-
-## Running Migrations
-
-### Automatic (Development)
-
-Set in `config.toml`:
-
-```toml
-[repository]
-auto_migrate = true
-```
-
-The server will run migrations on startup.
-
-### Manual (Production - Recommended)
+## Adding one
 
 ```bash
-# Install SQLx CLI
 cargo install sqlx-cli --no-default-features --features postgres
-
-# Set database URL
-export DATABASE_URL="postgresql://user:password@localhost:5432/aiwebengine"
-
-# Run migrations
-sqlx migrate run
-
-# Check status
-sqlx migrate info
+sqlx migrate add <description>   # creates migrations/<timestamp>_<description>.sql
 ```
 
-## Creating New Migrations
+A changed or added migration invalidates the test template database:
+`DROP DATABASE aiwebengine_test_template` and the next test run rebuilds it.
+Check a migration against a copy of real data too
+(`CREATE DATABASE x TEMPLATE aiwebengine`).
 
-```bash
-# Create new migration
-sqlx migrate add <description>
-
-# Example
-sqlx migrate add add_user_preferences
-
-# Edit the generated file: migrations/YYYYMMDDHHMMSS_add_user_preferences.sql
-```
-
-## Documentation
-
-See `docs/engine-administrators/DATABASE-MIGRATIONS.md` for detailed guide.
+Migrations are forward-only. For what that means during a rolling upgrade, see
+`DEPLOYMENT.md` (Operational essentials).

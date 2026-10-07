@@ -16,15 +16,13 @@ function scheduleDigest(context) {
 rather than anybody's. That is right for work belonging to the solution, and
 useless for work belonging to a person.
 
-Which is why an agent could previously only act while its owner's tab was open.
-A scheduled handler runs as `UserContext::admin("scheduler")`, so `fetch`
-looking up a user secret searched under a user literally named `scheduler`,
-missed, and fell back to the script-wide one. Anything needing a person's
-credential or a person's storage had to run inside that person's request.
+Without a delegation, anything needing a person's credential or storage could
+only run inside that person's request — an agent could act only while its
+owner's tab was open.
 
 ## Why this is a grant and not a setting
 
-The fix is not to widen the background context. Background work holding
+Widening the background context would not do. Background work holding
 somebody's API key is a real grant, and a grant has to answer four questions.
 
 **What.** A fixed vocabulary of two nouns and a verb. Each names something the

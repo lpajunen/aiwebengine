@@ -31,9 +31,8 @@ function transfer(context) {
 }
 ```
 
-It replaced six calls — `beginTransaction`, `commitTransaction`,
-`rollbackTransaction` and three savepoint calls — whose one easy mistake was
-leaving a transaction open. A scoped function cannot.
+A scoped function is the whole API, because the one easy mistake with
+separate begin and commit calls is leaving a transaction open.
 
 ## Nesting
 

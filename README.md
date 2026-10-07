@@ -2,276 +2,77 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Rust Edition](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/lpajunen/aiwebengine/releases)
-[![Language](https://img.shields.io/badge/language-Rust%20%7C%20JavaScript-red.svg)](https://github.com/lpajunen/aiwebengine)
 
-AI and Web Engine for JavaScript / TypeScript based Solutions - Secure and Scalable Platform for Building Websites, APIs, Web Apps, and AI Tools and agents
+An engine for JavaScript/TypeScript solutions — websites, HTTP APIs, web apps,
+MCP tools and agents — built to be developed with generative AI. It is written
+in Rust (Axum, Postgres) and runs each solution's scripts in a sandboxed QuickJS
+runtime.
 
-Excels when developing solutions using generative AI technologies.
+⚠️ **Work in progress.** Core functionality works and is used in production;
+APIs change without notice.
 
-Supports JavaScript / TypeScript as the primary programming language. Also supports JSX / TSX for building user interfaces.
+## What a solution is
 
-Code first approach. Then provide tools for verification and testing.
-Verify code by providing automatic API descriptions such as OpenAPI and the MCP tool list.
-Test code by providing automatic test case generation and execution environment. A script carries its own tests as assets named `*.test.ts`; `POST /engine/run_tests?script=<script>` runs them inside the same sandbox that serves the script and reports a verdict per case — see [Testing Solution Scripts](docs/SCRIPT_TESTS.md).
+A **script** is a tree of files stored in the engine's database, with an
+entrypoint `main.{ts,js,tsx,jsx}`. There is no build step: the engine
+transpiles and bundles on load. A script's `init()` registers what it publishes
+— HTTP routes, streams, MCP tools, prompts and resources, scheduled jobs — and
+which of its files the world may reach is decided by directory: `public/` may be
+served, `resources/` may be an MCP resource, everything else is private.
 
-Check code before deploying it. `POST /engine/check_script?script=<script>` bundles a script with the engine's own module resolution and runs its `init()` with every registration withheld, reporting what a local `tsc` cannot see: import cycles the bundler refuses, registrations whose handler name does not resolve, an `init()` close to its deploy budget, and paths another script already serves — see [Checking Solution Scripts](docs/SCRIPT_CHECKS.md).
+All scripts are equal: each sees the same JavaScript API, and what a call may do
+depends on the calling user — their capabilities, whether they own the target
+script, and whether they hold the editor or administrator role. The engine knows
+three roles and a script cannot add one; whether a person may read a solution's
+record is decided by that solution's handler, from `context.request.auth` and
+its own tables.
 
-Inspect a running solution without deploying anything to do it. `POST /engine/eval_script?script=<script>` evaluates a snippet against a deployed script's sandbox — its own functions and imported modules in scope — and returns the value plus everything it logged, rolling back database writes by default: see [Evaluating Snippets Against a Script](docs/SCRIPT_EVAL.md).
+## Developing against an engine
 
-Deploy a change as a change. `/engine/write_files?script=<script>` writes a script's files in one request — the modules, the root source that imports them, and whatever the change removes; one transaction, one revision, one `init()` at the end, each file's sha256 echoed back — so a multi-file change is never applied halfway and the rest of the cluster hears about it once: see [Writing a Script's Files as One Change](docs/ASSET_BATCH.md).
+Everything that manages an engine is one table of operations, reached three
+ways with the same authorization: `/engine/<operation>` over HTTP, the engine's
+MCP tools at `/mcp`, and `engine.call()` from a script. Among them:
 
-Edit a file without resending it. `/engine/edit_file?script=<script>&asset=<path>` applies string replacements to an asset the engine already has, refusing an ambiguous match and — when the caller passes the `base_sha256` it read — a version that has moved on since. `/engine/edit_file` does the same aimed at a script's entrypoint, under what writing a script takes rather than what writing a file inside one takes. `/engine/read_file` and `/engine/read_file` read back the same way: `lines=120-180` for a range, `grep=<pattern>` to locate without downloading, and the digest to aim the next edit with reported either way. `/engine/search_files?query=<pattern>` is the step before that — which file mentions this — across every script's root source and modules: see [Editing a Script's Files Without Resending Them](docs/ASSET_EDIT.md).
+- **Write as one change.** `write_files` writes several files in one
+  transaction, one revision and one `init()` — [docs/ASSET_BATCH.md](docs/ASSET_BATCH.md).
+- **Edit without resending.** `edit_file`, `read_file` with line ranges and grep,
+  `search_files` — [docs/ASSET_EDIT.md](docs/ASSET_EDIT.md).
+- **Check before deploying.** `check_script` bundles a script and runs its
+  `init()` with registrations withheld — [docs/SCRIPT_CHECKS.md](docs/SCRIPT_CHECKS.md).
+- **Test.** A script carries `*.test.ts` files; `run_tests` runs them in the
+  script's own sandbox — [docs/SCRIPT_TESTS.md](docs/SCRIPT_TESTS.md).
+- **Inspect.** `eval_script` evaluates a snippet in a deployed script's sandbox,
+  rolling back database writes — [docs/SCRIPT_EVAL.md](docs/SCRIPT_EVAL.md).
+- **Choose what production serves.** Every write records a revision;
+  `deploy_script` pins one, `revert_script` and `diff_revisions` work across
+  them — [docs/SCRIPT_REVISIONS.md](docs/SCRIPT_REVISIONS.md).
+- **Debug by what it said.** `read_logs` filters by request, revision and route,
+  and `/engine/script_logs/stream` tails live — [docs/SCRIPT_LOGS.md](docs/SCRIPT_LOGS.md).
+- **Share through GitHub**, in both directions — [docs/GIT_SYNC.md](docs/GIT_SYNC.md).
 
-Choose what production serves. `/engine/deploy_script?script=<script>&revision=<n|head|last-good|label>` pins a script to a revision: writing its files then records revisions and advances head without changing what answers requests, so code can be uploaded, checked and tested while production stays where it is and moves only on command. `/engine/get_deployment` reports what is served, what is newest, and how far apart they are; `DELETE` goes back to following head: see [What a Script's Files Have Been](docs/SCRIPT_REVISIONS.md).
+Solution developers' documentation, type definitions and tooling are in
+`aiwebengine-dev`; worked examples in `aiwebengine-examples`; an agent that
+builds scripts in `aiwebengine-agent`.
 
-Undo a change you have no checkout for. Every write records a revision of the whole script — its root source and every file — so `GET /engine/list_revisions?script=<script>` reports what changed, when, at whose hand, and whether the script still initialised afterwards; `lastGood` names the newest revision that did. `check`, `run_tests` and `eval` take `revision=<n|head|last-good|label>`, so a version can be bundled and exercised without being deployed and a broken head does not make the version before it unreachable. `POST /engine/revert_script` puts the files back as a new revision rather than a rewrite of history, removing what the target never had, refusing a target that does not bundle, and reporting the change first with `dry_run`. `GET /engine/diff_revisions` shows what changed as a unified diff per file — by default the newest change — and `POST /engine/label_revision` names a revision so it can be restored by name and kept through retention: see [What a Script's Files Have Been](docs/SCRIPT_REVISIONS.md).
-
-Debug a running solution by what it says. Every line a script logs records the invocation that emitted it and the revision that was running, so `GET /engine/read_logs?request_id=<id>` returns exactly the lines one request or scheduler tick produced, `revision=<n>` returns everything one version produced, and `route=`, `kind=`, `contains=` and a `seq` cursor narrow the rest. `GET /engine/script_logs/stream` follows the same, filtered, as it is written — a live tail of a real session: see [Reading a Script's Log](docs/SCRIPT_LOGS.md).
-
-API access: script-internal and external. Script-internal APIs are reachable only by the script that owns what they touch, and the scoping is in the schema rather than in a check somebody has to remember — `script_storage` is unique per `(script, key)`, `user_secrets` per `(script, user, key)`, assets are keyed `(script, path)`, and a script's tables are named after it. External APIs are what a script publishes to the outside world: HTTP routes, asset routes, streams, and MCP tools, prompts and resources.
-
-A script reaches another script's work only through the engine's own management tools, and those are authorized against the calling user rather than against the fact that both scripts happen to run in the same engine.
-
-External API access: public, authenticated, or decided by the handler. The engine knows three roles — authenticated, editor and administrator — and that set is closed; a script cannot add one. What a solution can do is decide for itself, in the handler, using the identity on `context.request.auth` and whatever it keeps in its own tables. That is the right place for it, because "may this person read this record" is a fact about the solution's data that the engine has no way to know.
-
-All scripts are equal: every script sees the same JavaScript API. What a call is allowed to do depends on the calling user — their capabilities, whether they own the target script, and whether they hold the editor or administrator role.
-
-Engine administration — managing scripts, assets, users, secrets, logs, and route introspection — is reachable three ways: the `/engine/*` HTTP endpoints, the engine's MCP tools, and `engine.call()` from a script. Each runs the same authorized operation underneath and so applies the same capability, ownership and role rules; `engine.call()` in particular carries the calling user's context, so a script administering the engine is bound by exactly what its caller could have done over HTTP.
-
-Engine supports user authentication and authorization. Engine supports user role and permission management. Engine supports script management and deployment. Engine supports logging and monitoring. (In the future, it could be possible to separate user authentication and authorization to a separate service if some cloud environment is used and they provide such capabilities. In that case, the engine would focus on script management and deployment, logging and monitoring, and API access control.)
-
-Solution development support is separate to own repositories. There are tools for creating, testing, and deploying solutions. In addition, there are documentation and examples for solution developers.
-
-## Overview
-
-**aiwebengine** (AI Web Engine) is an open-source project designed to facilitate the development of web-based solutions using JavaScript by providing a secure sandbox for executing untrusted code. It is an application engine for software written in the AI era. The engine implements core protocols and features needed for building websites, HTTP APIs, web applications, and AI tools with minimal overhead. The solution developers can focus on writing JavaScript scripts to implement their business logic, while the engine handles the underlying infrastructure and common functionalities.
-
-In addition to being a web application engine, aiwebengine provides an editorial environment for creating, testing, and deploying JavaScript and related web resource based solutions.
-
-AI Web Engine consists of the following main components:
-
-- **Engine Core Runtime**: The core of the engine, implemented in Rust, which provides the main functionality for handling HTTP requests, managing scripts, and executing JavaScript code securely.
-- **JavaScript Runtime**: An embedded QuickJS JavaScript engine that allows the execution of JavaScript code within the Rust application.
-- **Server Script and Asset Repository**: A module for managing and storing JavaScript scripts and related web assets, allowing dynamic loading and updating of scripts without restarting the engine.
-- **Logging System**: A built-in logging mechanism for monitoring and debugging purposes.
-- **Editorial Environment**: A web-based interface for solution developers to create, test, and deploy their JavaScript-based solutions.
-
-**aiwebengine** is a lightweight web application engine built in Rust that enables developers to create secure solutions using JavaScript scripts. The project leverages the QuickJS JavaScript runtime to provide a simple yet powerful platform for building websites, HTTP APIs, web applications, and AI tools with minimal overhead.
-
-## User Roles
-
-Understanding the different roles in the aiwebengine ecosystem:
-
-| Role                        | Description                                                                    | Primary Activities                                                                         |
-| --------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| **End Users**               | People using websites, applications, and AI tools built on aiwebengine         | Interact with solutions through web browsers or APIs                                       |
-| **Solution Developers**     | Developers building solutions (websites, web apps, AI tools) using aiwebengine | Write and edit JavaScript scripts, design application logic, create user interfaces        |
-| **Solution Administrators** | People deploying and managing individual solutions built on aiwebengine        | Configure solution settings, monitor performance, manage deployments                       |
-| **Engine Administrators**   | People deploying and managing aiwebengine instances                            | Install and configure aiwebengine, manage infrastructure, ensure security and availability |
-| **Engine Contributors**     | Developers contributing to the aiwebengine core project                        | Implement features, fix bugs, improve performance, enhance documentation                   |
-
-**Note**: The same person may fulfill multiple roles. For example, a Solution Developer might also be an Engine Administrator for their deployment.
-
-### What are "Solutions"?
-
-In the context of aiwebengine, a **solution** refers to any website, HTTP API, web application, or AI tool built using the engine. Solutions are created by writing JavaScript scripts that handle HTTP requests, process data, and generate responses. Examples include:
-
-- Public-facing websites and blogs
-- RESTful APIs and MCP servers
-- AI-powered tools and services
-- Custom web applications with dynamic content
-
-## Key Features
-
-- **JavaScript-Powered Solutions**: Build complete solutions using familiar JavaScript syntax
-- **Lightweight Architecture**: Built with Rust for high performance and low resource consumption
-- **Embedded JavaScript Runtime**: Utilizes QuickJS for efficient server-side JavaScript execution
-- **RESTful API Support**: Handle HTTP requests and responses with JavaScript handlers
-- **Built-in Logging**: Integrated logging system for debugging and monitoring
-- **Script Management**: Dynamic loading and management of JavaScript scripts
-
-## Project Status
-
-⚠️ **Work in Progress**: This project is currently in active development. Core functionality is implemented and functional, but additional features and enhancements are planned for future releases.
-
-### Current Capabilities
-
-- Basic HTTP request handling (GET, POST)
-- JavaScript script execution and registration
-- Query parameter and form data parsing
-- Response generation with custom status codes and content types
-- PostgreSQL-based persistent storage
-- Script repository management
-- Authentication and security middleware
-- Test runner for solution scripts ([docs](docs/SCRIPT_TESTS.md))
-- Atomic multi-file writes for a script's assets ([docs](docs/ASSET_BATCH.md))
-- Correlated script logs with filtering and a live tail ([docs](docs/SCRIPT_LOGS.md))
-- Sharing a solution through a GitHub repository, in both directions ([docs](docs/GIT_SYNC.md))
-
-### Roadmap
-
-The project roadmap includes planned enhancements such as:
-
-- Database integration
-- Public cloud deployment guides like Terraform scripts
-- System monitoring and alerting
-
-## Getting Started
-
-### Prerequisites
-
-- Rust (latest stable version recommended)
-- Basic understanding of JavaScript
-
-### Documentation
-
-Comprehensive documentation is available for all user roles:
-
-- **📚 [Documentation Index](docs/INDEX.md)** - Complete guide to all documentation
-- **🔧 Engine Administrators** - [Getting Started](docs/engine-administrators/01-GETTING-STARTED.md) | [Configuration](docs/engine-administrators/02-CONFIGURATION.md) | [Running Environments](docs/engine-administrators/03-RUNNING-ENVIRONMENTS.md) | [Quick Reference](docs/engine-administrators/QUICK-REFERENCE.md)
-- **🛠️ Engine Contributors** - [Requirements](docs/engine-contributors/planning/REQUIREMENTS.md) | [Roadmap](ROADMAP.md)
-
-**Engine Administrators**: New task-based documentation guides you from setup to production deployment. Start with [Getting Started](docs/engine-administrators/01-GETTING-STARTED.md) or jump to the [Quick Reference](docs/engine-administrators/QUICK-REFERENCE.md) for command lookups.
-
-For quick reference, see the role-based organization in the [Documentation Index](docs/INDEX.md).
-
-### Installation
+## Running it
 
 ```bash
-# Clone the repository
-git clone https://github.com/lpajunen/aiwebengine.git
-cd aiwebengine
-
-# Set up configuration
-# nothing to copy: config.toml and .env-local are both in the repository
-cp .env.example .env
-# Edit .env with your OAuth credentials and secrets
-
-# Build the project
-cargo build --release
-
-# Run the server
-source .env && cargo run
+make postgres-local                # Postgres in a container
+source .env-local && cargo run     # http://localhost:3000
 ```
 
-### Docker Deployment
+`.env-local` is tracked and holds throwaway development values, with local
+accounts enabled and `admin` as the bootstrap username. The containerised,
+desktop and server deployments are described in [DEPLOYMENT.md](DEPLOYMENT.md);
+every setting in `config.toml`.
 
-The easiest way to get started is with Docker:
+## Documentation
 
-```bash
-# Quick start with Docker Compose
-make docker-setup
-make docker-prod
-
-# Or manually
-cp .env.example .env
-# Edit .env with your configuration
-docker-compose up -d
-```
-
-For the deployment options and what each one requires, see
-[DEPLOYMENT.md](DEPLOYMENT.md); for step-by-step instructions, see
-[docs/engine-administrators/03-RUNNING-ENVIRONMENTS.md](docs/engine-administrators/03-RUNNING-ENVIRONMENTS.md).
-
-### Development
-
-For local development, you have multiple options depending on your needs:
-
-#### Option 1: Cargo Run (`http://localhost:3000`)
-
-Simplest option for quick development without Docker:
-
-```bash
-# Set up local configuration
-# nothing to copy: config.toml and .env-local are both in the repository
-cp .env.example .env
-# Edit .env with your development credentials
-
-# Install development tools
-make deps
-
-# Run development server with localhost OAuth
-make dev-local
-# Or manually: source .env && APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI=http://localhost:3000/auth/callback/google cargo run
-```
-
-#### Option 2: Docker with Localhost (`https://localhost`)
-
-Works offline, no DNS setup required:
-
-```bash
-# Set up environment
-cp .env.example .env
-# Edit .env with your credentials (DIGITALOCEAN_TOKEN not required)
-
-# Run with Docker Compose
-make docker-localhost
-# Access at: https://localhost
-# Note: Accept self-signed certificate warning in browser
-```
-
-#### Option 3: Docker with DNS Domain (`https://local.softagen.com`)
-
-Uses Let's Encrypt for real SSL certificate (requires DNS token):
-
-```bash
-# Set up environment
-cp .env.example .env
-# Edit .env and add: DIGITALOCEAN_TOKEN=your_token_here
-
-# Check DNS configuration
-make check-dns
-
-# Run with Docker Compose
-make docker-dns
-# Access at: https://local.softagen.com
-```
-
-#### Option 4: /etc/hosts Method (DNS name without external DNS)
-
-Use DNS names locally without Let's Encrypt:
-
-```bash
-# Add to /etc/hosts
-sudo sh -c 'echo "127.0.0.1 local.softagen.com" >> /etc/hosts'
-
-# Run without DNS token (uses self-signed cert). SITE_HOSTS names the hosts
-# Caddy serves; it defaults to localhost, 127.0.0.1 and local.test, and a name
-# it does not list has no certificate and no site to route to.
-SITE_HOSTS=local.softagen.com make docker-localhost
-# Access at: https://local.softagen.com
-# Note: Accept self-signed certificate warning in browser
-```
-
-**Important for Google OAuth**: Add redirect URIs to your Google Cloud Console based on which option you use:
-
-- Option 1: `http://localhost:3000/auth/callback/google`
-- Option 2: `https://localhost/auth/callback/google`
-- Option 3/4: `https://local.softagen.com/auth/callback/google`
-
-See [docs/engine-administrators/02-CONFIGURATION.md](docs/engine-administrators/02-CONFIGURATION.md) for detailed configuration options.
-
-## Architecture
-
-The engine consists of several key components:
-
-- **Server Layer**: Built with Axum web framework for HTTP handling
-- **JavaScript Runtime**: QuickJS integration for script execution
-- **Script Repository**: In-memory storage and management of JavaScript code
-- **Request Processing**: Automatic parsing of HTTP requests and routing to appropriate handlers
-
-## Contributing
-
-This project welcomes contributions! As it's in active development, there are many opportunities to:
-
-- Implement new features from the roadmap
-- Improve documentation and examples
-- Add comprehensive tests
-- Enhance performance and security
-
-Please see [ROADMAP.md](ROADMAP.md) for detailed information about planned features and development priorities.
+- [docs/INDEX.md](docs/INDEX.md) — every document, by topic
+- [docs/engine-contributors/ARCHITECTURE.md](docs/engine-contributors/ARCHITECTURE.md) — why the engine is shaped as it is
+- [ROADMAP.md](ROADMAP.md) — what is open
+- [CONTRIBUTING.md](CONTRIBUTING.md) — working on the engine
 
 ## License
 
-This project is licensed under the terms specified in the LICENSE file.
+AGPL-3.0; see [LICENSE](LICENSE).

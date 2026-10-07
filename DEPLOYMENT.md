@@ -1,10 +1,7 @@
 # Deployment Options
 
 How aiwebengine is meant to be run, and what each way of running it costs and
-requires. This is the map; the step-by-step instructions live in
-[docs/engine-administrators/03-RUNNING-ENVIRONMENTS.md](docs/engine-administrators/03-RUNNING-ENVIRONMENTS.md),
-and the settings themselves in
-[02-CONFIGURATION.md](docs/engine-administrators/02-CONFIGURATION.md).
+requires. Every setting is described where it is defined, in `config.toml`.
 
 In every option below, the engine is reached the same way — over HTTP, by a
 browser, an MCP client or anything else that speaks HTTP.
@@ -176,11 +173,9 @@ supervisor without staging an archive, and `cargo run --features
 embedded-postgres --example embedded_smoke -- <dir>` exercises it for real —
 install, migrate, restart, stop — which no test in the suite can.
 
-**First-run setup exists now** (`src/desktop.rs`, `--desktop` /
-`--init-config`), and it had to move into the binary for the reason above: the
-Makefile's `.env-desktop` generation worked for somebody with a checkout, a
-toolchain and `make`, which is exactly the population that does not need a
-desktop build.
+**First-run setup is in the binary** (`src/desktop.rs`, `--desktop` /
+`--init-config`), because somebody with a checkout, a toolchain and `make` is
+exactly the person who does not need a desktop build.
 
 **What is still missing is packaging.** A per-OS bundle, an app icon, something
 that opens a browser at the loopback port, code signing and notarization on
@@ -205,7 +200,7 @@ The fast loop, and what `make dev` targets.
 
 ```bash
 make postgres-local          # Postgres container only, on localhost:5432
-source .env && cargo run     # or: make dev (cargo-watch), ./dev-local.sh
+source .env-local && cargo run   # or: make dev (cargo-watch)
 ```
 
 `.env-local` carries the development values over `config.toml`'s defaults:
@@ -234,10 +229,7 @@ genuinely differs: these engine containers carry a toolchain and compile the
 crate, which is a different kind of container rather than the same container
 with different parameters. Everything else — the site block, the health checks,
 the retry policy, the `ha` profile, the number of instances — comes from the
-server file, and is therefore the same thing being rehearsed. It had been a
-parallel stack with its own service names, its own Caddyfile and its own
-hardcoded instance count, which is a rehearsal of something other than what
-ships.
+server file, and is therefore the same thing being rehearsed.
 
 Two engine instances by default, since cross-instance invalidation is one of
 the things only a second instance exercises. For the single-node shape, the
@@ -330,12 +322,10 @@ number of instances, same `management_hosts` discipline — differing only in
 hostnames, credentials, database contents, and log level. A staging environment
 that differs structurally tests something other than what will be shipped.
 
-Concretely that means staging should not be its own compose file with its own
-service names and its own instance count. Prefer one compose file parameterised
-by environment: `docker compose --env-file .env.staging up -d`, with the
-hostname in the Caddyfile coming from a variable (`{$SITE_HOST}`) rather than
-being written in. What is genuinely staging-specific — a lower log level, a
-smaller instance, a permissive `bootstrap_admins` — belongs in the env file.
+Concretely, staging is the same compose file driven by `.env-staging`, with its
+hostnames coming from variables (`{$SITE_HOSTS}`) rather than written into the
+Caddyfile. What is genuinely staging-specific — a lower log level, a smaller
+instance, a permissive `bootstrap_admins` — belongs in the env file.
 
 Image promotion should follow the same rule: staging and production run the
 _same digest_, promoted, not two builds of the same commit.
@@ -394,10 +384,8 @@ multi-stage build selected with `build: { target: ... }` and is not yet.
 **One compose file, plus overlays for what is structurally different.**
 
 - A top-level YAML anchor (`x-engine: &engine`, then `<<: *engine`) defines an
-  engine instance once. The two services were duplicated twenty-line blocks,
-  which is how they drift: every change has to be made twice, and one made in
-  only one place is invisible until the instance behaving differently is the one
-  serving the request. The anchor has to be top-level rather than inside
+  engine instance once, so the instances cannot drift apart. The anchor has to
+  be top-level rather than inside
   `services:` — compose reads `x-engine` there as a service and tries to start
   it.
 - The second instance goes behind `profiles: ["ha"]`, so single-node and
@@ -412,10 +400,9 @@ multi-stage build selected with `build: { target: ... }` and is not yet.
   database deployment simply omits.
 - `.env` can carry `COMPOSE_FILE` and `COMPOSE_PROFILES` themselves, so the file
   list, the instance count and every value come from one place:
-  `docker compose --env-file .env.staging up -d`.
+  `docker compose --env-file .env-staging up -d`.
 
-**What stays genuinely separate:** the development overlay, and it is now an
-overlay rather than a parallel stack. Source bind-mounts, cargo cache volumes
+**What stays genuinely separate:** the development overlay. Source bind-mounts, cargo cache volumes
 and a watch command are a different kind of container, not the same container
 with different parameters — and that is exactly what a compose overlay is for.
 It holds nothing else: the service names, the Caddyfile, the health checks, the
@@ -424,13 +411,12 @@ standalone has no Caddy and no compose at all.
 
 **One trap this arrangement has, worth knowing.** Compose reads a variable from
 the shell in preference to its `--env-file`. This project's documented workflow
-is `source .env-local && cargo run`, so a shell that has done that used to
-carry `ENV_FILE`, `SITE_HOSTS` and friends into every later compose command —
-including one deploying production, which would then load `.env-local`'s
-throwaway keys and serve `SITE_HOSTS=localhost`. Two things answer it: nothing
-compose interpolates lives in `.env-local` any more (the Makefile supplies those
-per invocation, where they cannot leak into a shell), and every server target
-refuses to run while such a variable is set, naming it.
+is `source .env-local && cargo run`, and a variable such a shell carries would
+reach every later compose command — including one deploying production. Two
+things answer it: nothing compose interpolates lives in `.env-local` (the
+Makefile supplies those per invocation, where they cannot leak into a shell),
+and every server target refuses to run while such a variable is set, naming
+it.
 
 **Configuration is one file.** `config.toml` holds the defaults and the
 reasoning behind them; every environment supplies its differences as `APP_`
@@ -461,12 +447,12 @@ Applying to every server deployment, and to the desktop build in reduced form:
   `secret_encryption_key` comes back with every secret unreadable. Rehearse a
   restore, including a secret read, since the first three steps of one pass with
   the wrong key. See
-  [05 - Monitoring and Maintenance](docs/engine-administrators/05-MONITORING-AND-MAINTENANCE.md#backup-and-restore).
+  [Operations](docs/engine-administrators/OPERATIONS.md#backup-and-restore).
 - **Upgrades.** `make docker-pull ENV=<env>` then `make docker-deploy ENV=<env>`:
   the roll replaces one instance at a time and waits on its health check before
   touching the next, so a clustered deployment is never without an instance that
   has finished starting. Three things have to hold together for that to be
-  seamless, and all three are now set: `stop_grace_period: 40s` on the engine
+  seamless, and all three are set: `stop_grace_period: 40s` on the engine
   services, longer than the engine's own `shutdown_timeout_secs` so a drain is
   not interrupted by SIGKILL; `lb_try_duration` in the Caddyfile, which retries
   on the other upstream the dial that a stopping instance refuses, instead of
@@ -499,9 +485,8 @@ Applying to every server deployment, and to the desktop build in reduced form:
 
 ## Related documentation
 
-- [03 - Running Environments](docs/engine-administrators/03-RUNNING-ENVIRONMENTS.md) — step-by-step for each environment
-- [02 - Configuration](docs/engine-administrators/02-CONFIGURATION.md) — every setting
-- [04 - Secrets and Security](docs/engine-administrators/04-SECRETS-AND-SECURITY.md) — OAuth setup, key generation, bootstrap admins
-- [05 - Monitoring and Maintenance](docs/engine-administrators/05-MONITORING-AND-MAINTENANCE.md) — health checks, backups, user management
-- [Database Migrations](docs/engine-administrators/DATABASE-MIGRATIONS.md)
+- `config.toml` — every setting, with its reasoning
+- [OAuth and Secrets](docs/engine-administrators/OAUTH-AND-SECRETS.md) — providers, the first administrator, keys, script secrets
+- [Operations](docs/engine-administrators/OPERATIONS.md) — health, logs, accounts, backups
+- [Troubleshooting](docs/engine-administrators/TROUBLESHOOTING.md)
 - [Internal Authentication](docs/INTERNAL_AUTH.md) — guests and local accounts, which is how a desktop or provider-less install signs anyone in

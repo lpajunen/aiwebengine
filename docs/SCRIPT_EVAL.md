@@ -4,9 +4,7 @@ A snippet can be run against a deployed script's sandbox and its value read
 back. The script's own program is loaded first, so the snippet sees what that
 program defined.
 
-This replaces the loop it used to take to answer a small question — author a
-test file, deploy it, run the suite, decode the answer out of an assertion
-message, delete the file again:
+A small question needs no test file, deploy or suite run:
 
 ```bash
 curl -X POST "https://your-engine/engine/eval_script" \

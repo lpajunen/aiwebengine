@@ -83,18 +83,14 @@ rather than guessed at, and so is the whole batch with it.
 
 `asset` and `content` are accepted as aliases for `name` and `content_base64`,
 so a caller written against the single-asset route does not have to rename its
-fields. Note that `content` inside a `files` entry still means base64, not
-text: callers have been sending base64 under that name since the batch shipped,
-and re-pointing the name would decode their files as though they were prose.
+fields. Note that `content` inside a `files` entry means base64, not text.
 One batch may carry 10MB of content in total.
 
 ### Why a module goes in as text
 
-A batch used to require base64 for every file, including the modules. That made
-the request that _applies_ a change disagree with the one that _describes_ it:
-`/engine/check_script` has always taken candidate modules as plain source, and says
-why — "a module the bundler can read has to be UTF-8 anyway". So a caller
-checked a change in one encoding and deployed the identical bytes in another.
+A module goes in as plain source, the same encoding `check_script` takes
+candidate modules in — a module the bundler can read has to be UTF-8 anyway —
+so a change is checked and deployed as the identical request.
 
 The cost is not only the extra third of the request. Base64 is a step an agent
 cannot do reliably without leaving what it is doing, and the documented way

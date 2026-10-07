@@ -110,8 +110,8 @@ A revision that does not exist is refused rather than quietly falling back to
 what is deployed.
 
 This matters most when head is broken. A root that imports a module someone has
-since deleted cannot be bundled at all, and until now that made every earlier
-version equally unreachable: there was nothing else to build from. Pointed at
+since deleted cannot be bundled at all, and without a revision to build from
+every earlier version would be equally unreachable. Pointed at
 the revision that still held the module, the same check succeeds, which is how
 you find out that the deletion — rather than anything else in the change — is
 what broke it.
@@ -157,7 +157,7 @@ would be reporting on a program that exists nowhere.
 
 ```bash
 # What would change, without changing it
-curl -X POST "…/engine/revert_script?script=myapp&revision=41&dry_run=true"
+curl -X POST "…/engine/revert_script?script=myapp&revision=41&dryRun=true"
 
 # Do it
 curl -X POST "…/engine/revert_script?script=myapp&revision=last-good"
@@ -321,8 +321,8 @@ crediting a revision nothing executed makes it an assurance the engine cannot
 back. A revision that has never run carries `initOk: null` — not `false`, and
 exactly what a pinned script's unserved writes look like.
 
-Lines with nothing to attribute — engine-internal output, anything written
-before this existed — carry no revision rather than a guessed one.
+Lines with nothing to attribute, such as engine-internal output, carry no
+revision rather than a guessed one.
 
 ## Scripts that predate their own history
 
@@ -412,12 +412,12 @@ moved since:
 }
 ```
 
-The comparison runs before anything is applied, so `dry_run` reports it while
+The comparison runs before anything is applied, so `dryRun` reports it while
 there is still the option not to. It is advisory in both directions and always:
 nothing is migrated, dropped or created on the strength of it. The case worth
 reading closely is the reverse of the one above — a table or column the target
 revision **expects and cannot find**, because those modules will fail rather
 than merely ignore something.
 
-A revision recorded before this existed carries no fingerprint, and says so
-rather than reporting a match it cannot vouch for.
+A revision without a fingerprint says so rather than reporting a match it
+cannot vouch for.
