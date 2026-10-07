@@ -1,10 +1,10 @@
 //! What a stream customization function is allowed to do.
 //!
 //! A customization function decides which messages a connecting client should
-//! receive. It used to run as `UserContext::admin("stream-customization")`,
-//! so opening an SSE connection — something any visitor can do — ran script
-//! code holding `ManageScriptDatabase`, `WriteAssets` and `AdministerEngine`.
-//! It serves a connection request, so it runs as whoever made it.
+//! receive. It serves a connection request, so it runs as whoever made it —
+//! opening an SSE connection is something any visitor can do, and must not run
+//! script code holding `ManageScriptDatabase`, `WriteAssets` or
+//! `AdministerEngine`.
 //!
 //! Driven through `execute_stream_customization_function` directly, because
 //! what the function returns is connection filter criteria: it never reaches

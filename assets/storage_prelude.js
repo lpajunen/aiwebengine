@@ -9,10 +9,8 @@
 //
 // What that buys, beyond familiarity:
 //
-//   - a failed write throws instead of returning a string. `setItem` used to
-//     answer `"Error: …"` while the type declaration said `void`, so a quota
-//     overflow, a database error, or writing to personal storage with nobody
-//     logged in were all invisible to a script that believed its own types.
+//   - a failed write throws: a quota overflow, a database error, or writing
+//     to personal storage with nobody signed in is never silent.
 //   - keys and values are coerced with `String()`, as the spec requires, so
 //     `setItem("count", 1)` stores `"1"` rather than throwing a TypeError out
 //     of the host binding.

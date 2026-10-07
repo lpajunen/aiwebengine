@@ -176,12 +176,11 @@ async fn a_narrowed_turn_cannot_reach_the_network() {
     );
 }
 
-/// `fetch` is not the only way out, and the other one used to be ungated.
+/// `fetch` is not the only way out.
 ///
 /// `McpClient` opens an outbound request to a caller-named URL carrying a
-/// secret resolved host-side, and it was installed into every context without
-/// consulting the capability set at all — so a narrowing that took away
-/// `use_network` and `read_secrets` took away neither on this path.
+/// secret resolved host-side, so a narrowing that takes away `use_network` and
+/// `read_secrets` has to take both away on this path too.
 ///
 /// The call under test is `callTool` on a **forged** client — an object with
 /// `McpClient`'s prototype and a hand-written client blob, never constructed —

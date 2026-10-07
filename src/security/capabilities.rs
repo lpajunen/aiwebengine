@@ -5,23 +5,23 @@ use std::sync::Arc;
 /// Which hosts an execution may reach, when that is narrower than "any".
 ///
 /// [`Capability::UseNetwork`] names the verb and nothing else, so "may call the
-/// network" has always meant "may call anything". That is the gap a capability
+/// network" means "may call anything". That is the gap a capability
 /// set cannot close on its own: **exfiltration needs no write capability**, so
 /// a planning turn holding only reads can still put what it read into a URL. A
 /// tool that runs model-authored code is the sharp case, because the untrusted
 /// text and the network reach the same execution.
 ///
 /// This is the destination dimension. `None` on a [`UserContext`] means
-/// unrestricted, which is what every context built from a tier is and what the
-/// engine did before this existed; `Some` means these hosts and nothing else,
+/// unrestricted, which is what every context built from a tier is; `Some` means these hosts and nothing else,
 /// checked against the request's host **and against every redirect hop** —
 /// an open redirector on an allowed host is otherwise the way out.
 ///
 /// It is not a capability, and is deliberately not spelled as one. A capability
 /// is a verb held or not held; this is an argument to one. Which is why
 /// `sandbox.run` takes `hosts` beside `capabilities` rather than inventing
-/// names like `use_network:api.example.com`, a spelling that would have made
-/// the set no longer a set of verbs and every `has_capability` call a parse.
+/// names like `use_network:api.example.com`, a spelling that would make the
+/// set something other than a set of verbs and every `has_capability` call a
+/// parse.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkScope {
     /// Lower-cased host patterns. An entry beginning `*.` matches subdomains.
@@ -181,20 +181,16 @@ impl Capability {
 /// The roles a credential carries, as every carrier of one spells them.
 ///
 /// [`crate::auth::AuthUser`], [`crate::auth::AuthSession`] and
-/// [`crate::auth::JsAuthContext`] are three views of one session, and each of
-/// them held its own copy of the "which tier is this" match — four copies in
-/// all, counting the one written inline in the dynamic-request path. That is
-/// three too many for a rule which is about to grow a second half: a session
-/// will carry the roles it was minted with *and* how much of them is switched
-/// on right now (`docs/SESSION_ELEVATION.md`). A second half added to a rule
-/// that lives in four places lands in three of them and is forgotten in the
-/// fourth, and the one it is forgotten in is the one that keeps working.
+/// [`crate::auth::JsAuthContext`] are three views of one session, and the
+/// "which tier is this" rule lives here once for all of them — it has two
+/// halves, the roles a session was minted with and how much of them is
+/// switched on right now (`docs/SESSION_ELEVATION.md`), and a rule written in
+/// several places is forgotten in one of them.
 ///
 /// `user_id` carries the option rather than the caller testing for one,
 /// because a carrier can hold an id and still not be a principal —
 /// [`crate::auth::JsAuthContext`] does, when `is_authenticated` is false. Such
-/// a carrier passes `None` and gets the anonymous tier, which is what it did
-/// before this existed.
+/// a carrier passes `None` and gets the anonymous tier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SessionRoles<'a> {
     /// The account this credential belongs to, or `None` for a caller with no
@@ -366,14 +362,11 @@ impl UserContext {
     /// What a caller with no identity holds: enough to be served a solution,
     /// and nothing that changes one.
     ///
-    /// There is no second answer to this. A development mode used to hand this
-    /// tier `AdministerEngine`, `WriteScripts` and the rest so a local instance
-    /// could be driven without a login — which meant an engine bound to
-    /// anything but loopback was administrable by whoever reached the port, and
-    /// an `AIWEBENGINE_MODE` env var could turn it on in a deployment whose
-    /// configuration said otherwise. Administering an engine now takes being an
-    /// administrator: `auth.internal.bootstrap_admin_usernames` names one, and
-    /// `--grant-role` appoints one with no server running.
+    /// There is no second answer to this and no mode that widens it: a widened
+    /// anonymous tier would make an engine administrable by whoever reached its
+    /// port. Administering an engine takes being an administrator:
+    /// `auth.internal.bootstrap_admin_usernames` names one, and `--grant-role`
+    /// appoints one with no server running.
     fn anonymous_capabilities() -> HashSet<Capability> {
         [
             Capability::ReadScripts, // Read public scripts only
@@ -693,10 +686,8 @@ mod tests {
         );
     }
 
-    /// There is one anonymous tier and no way to widen it. What used to sit
-    /// here — a configured flag and an `AIWEBENGINE_MODE` env var that
-    /// outranked it, either of which handed anonymous callers the engine —
-    /// is gone; administering the engine takes being an administrator.
+    /// There is one anonymous tier and no way to widen it; administering the
+    /// engine takes being an administrator.
     ///
     /// "Change nothing" is about the *solution* — its scripts, its assets,
     /// its schema. The script-side capabilities this tier also holds
@@ -891,8 +882,7 @@ mod tests {
         );
     }
 
-    /// The tiers, from the one place that decides them. Each arm is the whole
-    /// of what the four call sites used to spell for themselves.
+    /// The tiers, from the one place that decides them.
     #[test]
     fn a_session_gets_the_tier_its_roles_name() {
         let administrator = UserContext::for_session(SessionRoles {

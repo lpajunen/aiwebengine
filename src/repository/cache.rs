@@ -90,9 +90,8 @@ pub(super) fn invalidate_script_asset_caches(
     // installs what it read. A write landing in that gap is overwritten by
     // the older content the reader already had in hand, and the cache — which
     // is what `fetch_script` answers from — stays permanently behind the
-    // database. Only `Repository::upsert_script` used to be able to change a
-    // script's source, so counting there was enough; a root written as an
-    // ordinary file of the tree reaches the cache through here instead.
+    // database. A root written as an ordinary file of the tree reaches the
+    // cache through here, so the write is counted here.
     note_script_write();
 
     match content.map(|bytes| std::str::from_utf8(bytes)) {

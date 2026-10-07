@@ -6,10 +6,9 @@
 // failure.
 //
 // The envelope exists because a host binding cannot throw a JavaScript
-// exception of the right type, and because the alternative the engine used to
-// use — returning `"Error: ..."` as the value — is indistinguishable from a
-// successful answer that happens to be a string. `scriptStorage` learned this
-// first; see `storage_prelude.js`.
+// exception of the right type, and because returning `"Error: ..."` as the
+// value would be indistinguishable from a successful answer that happens to be
+// a string.
 
 (function () {
   function unwrap(raw) {

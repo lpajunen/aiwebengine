@@ -1027,12 +1027,10 @@ async fn rewriting_an_asset_keeps_it_with_its_script() {
 
 /// A Markdown file is a module whose default export is its text.
 ///
-/// The case this is really about is the one the previous arrangement would
-/// have got wrong: every module used to be run through the linker's import
-/// rewriting first, and only a `.json` file's transformed form was thrown
-/// away afterwards. A skill document's whole job is to contain code examples,
-/// so a fenced `import` inside one would have been resolved as a dependency
-/// on a module that does not exist.
+/// A skill document's whole job is to contain code examples, so a fenced
+/// `import` inside one must not be resolved as a dependency on a module that
+/// does not exist — which is what running it through the linker's import
+/// rewriting would do.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_markdown_module_exports_its_text_without_reading_it_as_source() {
     let _guard = test_mutex().lock().await;

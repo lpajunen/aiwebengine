@@ -69,9 +69,7 @@ pub fn routes_introspection_authorized(user: &UserContext) -> AppResult<Vec<Valu
     for metadata in metadata_list {
         if metadata.initialized && !metadata.registrations.is_empty() {
             for ((path, method), route_meta) in metadata.registrations {
-                // Handlers and file routes come from the same list now, which
-                // is what this view always showed them as: the asset half
-                // used to be assembled from a registry of its own here.
+                // Handlers and file routes come from the same list.
                 let tags = if route_meta.tags.is_empty()
                     && route_meta.kind != repository::RouteKind::Handler
                 {
@@ -168,9 +166,8 @@ pub fn generate_merged_openapi_spec() -> String {
 
     // File routes, taken from the same registrations as the handler routes
     // below and rendered separately because what they document is a file
-    // rather than an operation. They used to come from a registry of their
-    // own; the collect-first is only because the loop below consumes the
-    // metadata list.
+    // rather than an operation. The collect-first is only because the loop
+    // below consumes the metadata list.
     let file_routes: Vec<(String, String, String, repository::RouteMetadata)> = metadata_list
         .iter()
         .filter(|metadata| metadata.initialized)

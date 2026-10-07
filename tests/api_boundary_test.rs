@@ -360,8 +360,8 @@ async fn test_register_route_allowed_for_any_script() {
 
     let script = r#"
         routeRegistry.registerRoute("/test", { handler: "handler", method: "GET" });
-        // OAuth2 now lives entirely under /auth, so the top-level names it
-        // used to occupy are available to solution developers.
+        // OAuth2 lives entirely under /auth, so these top-level names are
+        // available to solution developers.
         routeRegistry.registerRoute("/token", { handler: "handler", method: "GET" });
         routeRegistry.registerRoute("/authorize", { handler: "handler", method: "GET" });
         routeRegistry.registerRoute("/oauth2/token", { handler: "handler", method: "GET" });
@@ -727,10 +727,9 @@ async fn test_engine_script_updates_stream_cannot_be_claimed() {
     );
 }
 
-/// Broadcasting used to skip the `ManageStreams` check for `/script_updates`,
-/// which let a script with no capabilities forge engine script-change
-/// notifications to every subscriber. Only the shared `/system/` namespace is
-/// exempt now.
+/// Broadcasting to `/script_updates` takes `ManageStreams`, or a script with no
+/// capabilities could forge engine script-change notifications to every
+/// subscriber. Only the shared `/system/` namespace is exempt.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_update_broadcast_requires_capability() {
     setup_env().await;

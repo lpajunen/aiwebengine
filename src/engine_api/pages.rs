@@ -47,9 +47,8 @@ pub(super) const LOCK_DIAGNOSTIC_LIMIT: i64 = 10;
 
 /// Statements currently waiting on a lock, and the sessions holding them.
 ///
-/// The question this answers used to be unanswerable from inside the engine:
-/// a wedged table shows up as requests that never return, and telling that
-/// apart from a slow script meant reaching for `psql`. A blocked statement
+/// A wedged table shows up as requests that never return; this tells that
+/// apart from a slow script without reaching for `psql`. A blocked statement
 /// names its own query, and `pg_blocking_pids` names whoever is in front of it,
 /// which together identify a lock wedge without leaving the health check.
 ///
@@ -282,7 +281,7 @@ pub struct UnauthorizedQuery {
 }
 
 /// Insufficient permissions page, shown when an authenticated user lacks the
-/// role required for the page they attempted to access (formerly auth.js).
+/// role required for the page they attempted to access.
 #[utoipa::path(
     get,
     path = "/auth/unauthorized",

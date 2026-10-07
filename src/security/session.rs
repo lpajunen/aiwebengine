@@ -388,9 +388,9 @@ impl SecureSessionManager {
 
     /// Hold sessions to the address they were minted from.
     ///
-    /// Worth having only because an address is now established from the
-    /// connection rather than read out of a header the caller wrote: pinning to
-    /// a claim pins nothing. Costly for a phone, which changes networks
+    /// Worth having only because an address is established from the connection
+    /// rather than read out of a header the caller wrote: pinning to a claim
+    /// pins nothing. Costly for a phone, which changes networks
     /// mid-session and would be signed out for it — and cheap for a personal
     /// install or an engine reached from fixed addresses, which is where an
     /// operator would turn it on.
@@ -402,12 +402,10 @@ impl SecureSessionManager {
     /// Whether this presentation of a session matches what it was minted
     /// against. Answers `true` when the address is new but the session stands.
     ///
-    /// The old shape of this asked one question and then unpicked the answer
-    /// with exceptions: a User-Agent mismatch was forgiven for a caller whose
-    /// User-Agent *said* it was an editor or an MCP client, and any mismatch at
-    /// all was forgiven once the address had changed — so the more of the
-    /// fingerprint differed, the more likely the session was accepted. Both
-    /// halves are set by whoever holds the token.
+    /// No exception is made on what the caller says about itself: a
+    /// User-Agent claiming to be an editor or an MCP client, or a changed
+    /// address, is set by whoever holds the token, so neither may forgive a
+    /// mismatch.
     async fn check_binding(
         &self,
         session_data: &SessionData,
@@ -435,10 +433,8 @@ impl SecureSessionManager {
             )
             .await;
 
-        // The address, when the operator asked for it to be binding. Worth
-        // having now that an address is established from the connection rather
-        // than read out of a header the caller wrote — before that, pinning to
-        // an address pinned to a claim. Off by default, because a phone moving
+        // The address, when the operator asked for it to be binding. Off by
+        // default, because a phone moving
         // between networks changes address mid-session and would otherwise be
         // signed out for it.
         if self.strict_ip_validation && !ip_matches {

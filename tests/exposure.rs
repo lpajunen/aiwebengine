@@ -1,11 +1,5 @@
 //! Exposure belongs to the tree, not to `init()`.
 //!
-//! A file used to become world-readable because some line of `init()` named
-//! it. Three things followed: you could not look at a file and know whether
-//! it was public, the default was private while the *failure mode* was
-//! public, and script data — prompts, skill definitions, few-shot examples —
-//! was private only because nobody happened to name it.
-//!
 //! `public/` is served, `resources/` is an MCP resource, everything else is
 //! reachable only to the linker and the script itself — and a registration
 //! naming a file outside its directory is refused, so publishing a file
@@ -431,8 +425,8 @@ async fn a_stream_matches_a_pattern_and_the_guard_sees_it() {
     let port = engine.port();
     let client = engine.client();
 
-    // A refused subscription answers the status the function chose, rather
-    // than the 500 a throw used to produce.
+    // A refused subscription answers the status the function chose, not a
+    // 500.
     let refused = client
         .get(format!("http://127.0.0.1:{}/orders/7/events", port))
         .send()

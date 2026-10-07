@@ -1,17 +1,11 @@
 //! Which connection a schema change runs on.
 //!
-//! Schema work used to take its own pooled connection while the caller's
-//! transaction stayed open on another. `CREATE INDEX` takes SHARE and `ALTER
-//! TABLE` takes ACCESS EXCLUSIVE, so the moment the caller had written to the
-//! same table its own ROW EXCLUSIVE blocked the schema change — and Postgres
-//! could not see that as a deadlock, because the holder was waiting on the
-//! engine rather than on the database. The statement blocked until the
-//! connection died, with every later writer queued behind the pending strong
-//! lock: reads on the table stayed fast while every write in the cluster
-//! stopped.
-//!
-//! Schema changes now join the caller's transaction, where a connection cannot
-//! block on locks it already holds.
+//! Schema changes join the caller's transaction, where a connection cannot
+//! block on locks it already holds. On a connection of their own, `CREATE
+//! INDEX` (SHARE) and `ALTER TABLE` (ACCESS EXCLUSIVE) would block on the
+//! caller's own ROW EXCLUSIVE — a wait Postgres cannot see as a deadlock,
+//! because the holder is waiting on the engine — and every later writer in the
+//! cluster would queue behind the pending strong lock.
 
 mod common;
 
@@ -33,7 +27,7 @@ const WEDGE_TIMEOUT: Duration = Duration::from_secs(20);
 ///
 /// A rolled-back evaluation is the engine's own `beginTransaction`, so the
 /// snippet runs with a transaction already open — the state a script is in
-/// inside `transaction()`, and the one that used to wedge.
+/// inside `transaction()`, and the one that would wedge.
 ///
 /// The timeout is what makes a regression visible. The blocking thread cannot
 /// be cancelled once it is parked inside a lock wait — that is the whole
@@ -153,9 +147,8 @@ async fn a_rolled_back_transaction_takes_its_schema_with_it() {
     setup_env().await;
 
     // The other half of joining the transaction, and the reason `--rollback`
-    // means what it says: a table created inside one used to be committed by a
-    // connection the rollback never reached, so an evaluation that promised to
-    // leave nothing behind left a table behind every time.
+    // means what it says: a table created inside one must not be committed by
+    // a connection the rollback never reaches.
     drop_table("test://schema-locks/rollback", "ephemeral").await;
 
     let created = eval(
@@ -254,7 +247,7 @@ async fn ensuring_a_table_converges_it_and_then_does_nothing() {
     drop_table("test://schema-locks/ensure", "world_items").await;
 
     // First run builds it. Note this is inside a transaction, which is where a
-    // solution's ensureSchema() actually runs and where it used to wedge.
+    // solution's ensureSchema() actually runs.
     let first = eval(
         "test://schema-locks/ensure",
         false,

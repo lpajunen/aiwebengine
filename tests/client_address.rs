@@ -1,9 +1,9 @@
 //! Which address a request is taken to have come from.
 //!
-//! Rate limits and session fingerprints are keyed on it, and it used to be
-//! whatever the caller wrote in `X-Forwarded-For`: an attacker rotating one
-//! header got a fresh token bucket per request, and on a machine with nothing
-//! in front of it every caller collapsed into the single string "unknown".
+//! Rate limits and session fingerprints are keyed on it, so it must not be
+//! whatever the caller wrote in `X-Forwarded-For` — an attacker rotating one
+//! header would get a fresh token bucket per request — and on a machine with
+//! nothing in front of it callers must not collapse into one "unknown".
 //!
 //! These run against a real server because the thing under test is what a
 //! request carries by the time anything reads it — the header is rewritten at
@@ -76,8 +76,8 @@ async fn a_forwarding_header_from_an_untrusted_caller_is_replaced() {
     context.cleanup().await.expect("cleanup should succeed");
 }
 
-/// The other half of it: a laptop with nothing in front of it used to key every
-/// caller as "unknown", so one noisy client rate-limited everybody.
+/// The other half of it: a laptop with nothing in front of it must not key every
+/// caller as "unknown", or one noisy client rate-limits everybody.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_direct_request_is_named_by_the_socket_it_arrived_on() {
     let context = TestContext::new();

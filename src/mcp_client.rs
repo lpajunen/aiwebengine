@@ -20,16 +20,9 @@
 //!
 //! # Being a client of both eras
 //!
-//! This module used to speak `2025-11-25` and nothing else: it sent
-//! `initialize`, ignored whether it worked, and then sent `tools/list` with no
-//! `_meta`. That was survivable only for as long as every server was either
-//! legacy or dual-era. A server that implements `2026-07-28` alone answers no
-//! `initialize` and refuses a request that names no version, and this client
-//! had nothing to fall forward to — the mirror image of the problem the engine's
-//! *server* half solved by staying dual-era, and worth fixing in the same
-//! place in the argument rather than after somebody hits it.
-//!
-//! So the era is **learned rather than assumed**, by the method the
+//! A server that implements `2026-07-28` alone answers no `initialize` and
+//! refuses a request that names no version, while a legacy server knows only
+//! the handshake. So the era is **learned rather than assumed**, by the method the
 //! specification provides for exactly this: `server/discover`, which every
 //! modern server MUST implement and no legacy server does. An answer naming a
 //! modern version we speak means modern; anything else — a JSON-RPC error, a
@@ -557,8 +550,7 @@ impl McpClient {
         user_id: Option<&str>,
     ) -> Result<Value, McpClientError> {
         // The era matters here as much as on a listing — a modern server
-        // refuses a `tools/call` that names no version, and this arm used to
-        // send neither a handshake nor `_meta`.
+        // refuses a `tools/call` that names no version.
         let era = self.era(script_uri, user_id);
         let mut params = serde_json::Map::new();
         params.insert("name".to_string(), Value::String(name.clone()));

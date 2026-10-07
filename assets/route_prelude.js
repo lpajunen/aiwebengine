@@ -46,11 +46,10 @@
         throw new TypeError(api + ": path must be a string");
       }
       if (typeof spec === "string") {
-        // The shape this replaced. Named in the error because every script
-        // written before the change makes exactly this call.
+        // A positional handler name: answer with the call's correct shape.
         throw new TypeError(
           api +
-            '(path, handlerName, method) is now registerRoute(path, { handler: "' +
+            '(path, handlerName, method) is not a valid call; use registerRoute(path, { handler: "' +
             spec +
             '", method })',
         );

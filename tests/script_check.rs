@@ -325,8 +325,8 @@ async fn a_cycle_that_closes_on_the_entrypoint_names_the_entrypoint() {
             // Imports the root module back by its own logical path, which is
             // the file it occupies in the tree. A root module cannot export,
             // so the cycle can only be a side-effect import — which is
-            // exactly the shape that used to be caught one level too deep,
-            // naming the wrong module.
+            // exactly the shape that must be caught at the right level, naming
+            // the right module.
             "import \"../main.js\";\nexport const helper = 1;",
         )],
     );
@@ -647,8 +647,8 @@ async fn body_json(response: Response) -> Value {
     serde_json::from_slice(&bytes).expect("body should be JSON")
 }
 
-/// Posts a check the way the old endpoint took one: the script in the query,
-/// and the candidate as a raw body or as JSON. Both end up as the operation's
+/// Posts a check with the script in the query, and the candidate as a raw body
+/// or as JSON. Both end up as the operation's
 /// arguments.
 async fn post_check(
     query: &str,

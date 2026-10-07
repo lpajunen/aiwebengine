@@ -41,15 +41,13 @@ pub(crate) fn create_sandboxed_runtime(
 
 /// What a request-driven invocation runs as: the calling user, or nobody.
 ///
-/// Stream customization functions used to run as `UserContext::admin(...)`
-/// while the caller's own identity was passed alongside for the JavaScript
-/// `auth` object to read — so `auth.isAdmin` could say false in the same
-/// invocation that held `AdministerEngine`. It is entered by a request, and a
-/// script serving a request runs under the requesting user's context.
+/// A stream customization function is entered by a request, and a script
+/// serving a request runs under the requesting user's context — so `auth`
+/// and the capabilities held always describe the same person.
 ///
-/// `JsAuthContext::to_user_context` already mapped an identity onto its tier
-/// and had no caller anywhere in the engine. Absent identity means anonymous,
-/// so `None` is the stream connection that arrived with no session.
+/// `JsAuthContext::to_user_context` maps an identity onto its tier. Absent
+/// identity means anonymous, so `None` is the stream connection that arrived
+/// with no session.
 pub(super) fn caller_context(auth_context: Option<&crate::auth::JsAuthContext>) -> UserContext {
     auth_context
         .map(|identity| identity.to_user_context())

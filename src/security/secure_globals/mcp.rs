@@ -734,12 +734,10 @@ impl SecureGlobalContext {
     /// where the message names the call the script actually wrote; the two on
     /// the methods are the enforcement.
     ///
-    /// This was ungated entirely until now, which made it the way around
-    /// [`super::capabilities::UserContext::attenuated`]: `sandbox.run` narrowed
-    /// to hold neither capability still installed this class, so model-authored
-    /// source could reach any public address and spend the person's API key
-    /// getting there. A capability model enforced everywhere except through a
-    /// secret name is not enforced where it matters.
+    /// Ungated, this would be the way around
+    /// [`super::capabilities::UserContext::attenuated`]: model-authored source
+    /// in a narrowed `sandbox.run` could reach any public address and spend the
+    /// person's API key getting there.
     pub(super) fn setup_mcp_client_class(
         &self,
         ctx: &rquickjs::Ctx<'_>,

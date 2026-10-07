@@ -171,7 +171,7 @@ pub fn overrides_for(script_uri: &str) -> Overrides {
 /// The limits one script's request-shaped execution runs under.
 ///
 /// The engine's configured limits with this script's overrides laid over them,
-/// so a script with no row gets exactly what it got before this existed.
+/// so a script with no row gets exactly the engine's limits.
 pub fn for_script(script_uri: &str) -> ExecutionLimits {
     let base = crate::js_engine::current_execution_limits();
     apply(base, &overrides_for(script_uri), false)

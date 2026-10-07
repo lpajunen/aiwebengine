@@ -1,11 +1,10 @@
 //! The HTML pages the engine renders itself, and the stylesheet behind them.
 //!
 //! Every such page — sign-in, account, consent, delegation, elevation, the
-//! permission and install pages — used to carry its own `<head>` and its own
-//! `<style>` block, four of them in all, with forty-odd colours typed out by
-//! hand and no dark mode. They now share one shell and one sheet,
+//! permission and install pages — shares one shell and one sheet,
 //! `assets/engine.css`, whose custom properties are the vocabulary the pages are
-//! written in.
+//! written in. A page with a `<style>` block of its own is how designs
+//! diverge.
 //!
 //! The sheet is inlined rather than linked. A page is often shown because
 //! something has gone wrong — a refused permission, a failed sign-in — and one

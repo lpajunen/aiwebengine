@@ -1008,14 +1008,11 @@ pub(super) fn root_write(writes: &[AssetWrite]) -> Option<&AssetWrite> {
 /// Write a script's files as one change: one transaction per store, one
 /// revision, one `init()`.
 ///
-/// A script's modules were already one unit of change; its root source was
-/// not. A change that touches both had to be two writes — two revisions, two
-/// cluster notifications, two `init()` runs, and a window in which the
-/// deployment is half-changed — even though `/engine/check_script` would check
-/// exactly such a change in one request. That asymmetry is what this removes:
-/// the request that describes a change is now the request that applies it.
+/// The request that describes a change (`check_script`) and the one that
+/// applies it are the same shape, and the change lands whole: one revision,
+/// one cluster notification, one `init()`, no half-changed window.
 ///
-/// What remains asymmetric is the script *row*, and only the row. Every file
+/// What is asymmetric is the script *row*, and only the row. Every file
 /// references it, so a change carrying the first file of a script that does
 /// not exist yet has to create it first — and creating a script is a
 /// different permission from writing to one that is already there, which is
@@ -1064,9 +1061,8 @@ pub fn write_script_files_authorized(
         }
     };
 
-    // The file write refuses an empty batch — right for a caller who sent an
-    // empty request, and there is nothing else for this to be now that a root
-    // is one of the files.
+    // The file write refuses an empty batch, which is what an empty request
+    // is.
     let assets = if change.writes.is_empty() && change.delete.is_empty() {
         BatchWriteOutcome {
             results: Vec::new(),

@@ -1,10 +1,8 @@
 //! What a script is called.
 //!
-//! A script's identifier used to be a URL (`https://example.com/shop.ts`) that
-//! nothing parsed as one: the host was ignored, `script_hosts` decides where a
-//! script publishes, and the only part anything read was the extension, which
-//! said what language the entrypoint was in. That is now the entrypoint file's
-//! name (`main.ts`), so what is left to call a script is a name.
+//! A script's identifier is a name. Where it publishes is `script_hosts`, and
+//! what language its entrypoint is in is the entrypoint file's name
+//! (`main.ts`), so nothing about either belongs in the identifier.
 //!
 //! A slug is flat — `shop`, not `acme/shop`. A name with a slash is a path, and
 //! a path invites the question of what the prefix means, which the engine has
@@ -12,11 +10,9 @@
 //! `/` of the hosts it is bound to). Two people who both want `shop` take it in
 //! turn; the one who comes second picks another name.
 //!
-//! **Enforced where a script comes into being**, not where it is stored. Every
-//! script that already exists keeps the identifier it has, URL-shaped or not,
-//! and goes on working; `rename_script` is how it moves to a slug when its
-//! owner chooses. Validating in the repository instead would have refused every
-//! row already in the database.
+//! **Enforced where a script comes into being** (create, pull, rename), not
+//! where it is stored, so a stored identifier that is not a slug keeps working
+//! and `rename_script` moves it to one when its owner chooses.
 
 /// Longest slug accepted.
 pub const MAX_SLUG_LEN: usize = 64;

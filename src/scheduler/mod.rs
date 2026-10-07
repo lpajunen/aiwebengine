@@ -26,9 +26,8 @@ use crate::lease::TTL_SECONDS as DB_LOCK_TTL_SECONDS;
 
 /// How many times a one-off job is run before the engine stops trying.
 ///
-/// A one-off used to retry every two seconds for as long as the engine was up,
-/// so a job failing on something that would never change — a handler that no
-/// longer exists, a payload the script cannot parse — was an endless loop
+/// A job failing on something that will never change — a handler that does
+/// not exist, a payload the script cannot parse — must not be an endless loop
 /// writing an endless log. Five attempts over a few minutes is enough to ride
 /// out a restarting dependency and short enough that a genuine failure stops
 /// being one.
@@ -1387,10 +1386,10 @@ mod tests {
         /// renewal that has not happened by now has not happened.
         const RENEWAL_WAIT_SECONDS: u64 = 45;
 
-        /// The bug this replaced: a claim lapsed a fixed time after it was
-        /// taken, however long the run turned out to be, so a long job had its
-        /// row re-claimed while it was still running and its own completing
-        /// statement then matched nothing.
+        /// A claim must not lapse a fixed time after it was taken, however
+        /// long the run turns out to be, or a long job has its row re-claimed
+        /// while still running and its own completing statement matches
+        /// nothing.
         #[tokio::test]
         async fn a_claim_is_extended_while_the_job_runs() {
             let pool = use_the_test_database();
@@ -1415,18 +1414,12 @@ mod tests {
                 invocation.key.clone(),
             );
 
-            // Waited for rather than slept past. This used to sleep
-            // `RENEW_EVERY_SECONDS + 2` and then abort, which gave the
-            // renewal's own statement two seconds to reach the database and
-            // come back — and under a loaded suite it does not always, so the
-            // abort cancelled a renewal that was still in flight and the test
-            // read a lease nobody had pushed out. The margin on the *value*
-            // was thirteen seconds; the margin on the *query* was two, and it
-            // was the second one that ran out.
-            //
-            // Polling for the condition tests the same property — the claim
-            // is pushed out rather than left to lapse — without depending on
-            // how long one statement takes.
+            // Waited for rather than slept past: under a loaded suite the
+            // renewal's own statement can take longer than any fixed sleep, and
+            // aborting then would cancel a renewal still in flight. Polling for
+            // the condition tests the same property — the claim is pushed out
+            // rather than left to lapse — without depending on how long one
+            // statement takes.
             let deadline =
                 tokio::time::Instant::now() + StdDuration::from_secs(RENEWAL_WAIT_SECONDS);
             let pushed_out = loop {

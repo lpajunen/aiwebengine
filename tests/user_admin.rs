@@ -380,10 +380,9 @@ async fn user_endpoints_are_documented_in_openapi() {
 // Roles on sessions minted by the OAuth token exchange
 // ============================================================================
 
-/// The `/auth/token` exchange used to hardcode `is_admin: false`, so a Bearer
-/// token obtained through the PKCE flow never reached the administrator-only
-/// engine APIs even for an administrator. The roles must come from the user
-/// repository, like they do for a browser login.
+/// A Bearer token obtained through the PKCE flow carries the account's roles,
+/// read from the user repository like a browser login's, so it reaches the
+/// administrator-only engine APIs for an administrator.
 #[tokio::test(flavor = "multi_thread")]
 async fn session_identity_carries_repository_roles() {
     setup_env().await;

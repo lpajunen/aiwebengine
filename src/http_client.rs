@@ -739,8 +739,7 @@ impl HttpClient {
         }
 
         // Undo the content coding before the UTF-8 decode: a gzipped body is
-        // not text, and reading it as such is where this used to fail with
-        // `invalid utf8` on any host that compresses by default.
+        // not text, and many hosts compress by default.
         let encoding = headers
             .get("content-encoding")
             .map(|value| value.to_string())
@@ -1210,19 +1209,13 @@ pub fn names_a_secret(url: &str, options: &FetchOptions) -> bool {
 /// answers for `NAME`, and report which names were used.
 ///
 /// Substitution is **inline**: the template stands for a secret within the
-/// value rather than for the whole of it. That is what the requirement always
-/// said — `docs/engine-contributors/planning/REQUIREMENTS.md` gives
-/// `"Authorization": "Bearer {{secret:api_token}}"` as a worked example — and
-/// what the implementation did not do. It matched only a value that was
-/// nothing *but* a template, which put every bearer-token API, meaning most of
-/// them, out of reach of a stored secret. A script written from the published
-/// example sent the template text to the API as itself and got back a 401 that
-/// explained nothing.
+/// value rather than for the whole of it, so
+/// `"Authorization": "Bearer {{secret:api_token}}"` works — which is the shape
+/// most bearer-token APIs need.
 ///
 /// Three things are errors rather than text passed through, because passing
-/// them through is the failure this replaced: a request that looks right,
-/// carries a credential that is not one, and fails somewhere the script cannot
-/// see.
+/// them through makes a request that looks right, carries a credential that is
+/// not one, and fails somewhere the script cannot see.
 ///
 /// - a name nothing resolves ([`HttpError::SecretNotFound`]),
 /// - a template naming no secret at all (`{{secret:}}`),
@@ -1820,8 +1813,8 @@ mod tests {
             .expect_err("unclosed");
         let text = error.to_string();
         assert!(text.contains("the URL"), "got {}", text);
-        // Reported as a URL problem. It used to say "Invalid header", which
-        // sends somebody looking in the wrong place entirely.
+        // Reported as a URL problem, not a header one, so somebody looks in the
+        // right place.
         assert!(text.starts_with("Invalid URL"), "got {}", text);
     }
 

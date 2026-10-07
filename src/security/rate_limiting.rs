@@ -920,8 +920,8 @@ mod tests {
             limiter.check_rate_limit(key.clone(), 1).await;
         }
 
-        // Read back only this test's bucket. Wiping the whole table here used to
-        // knock the counters out from under any test running beside this one.
+        // Read back only this test's bucket; wiping the whole table would knock
+        // the counters out from under any test running beside this one.
         let stats = limiter.get_statistics().await;
         let (total, rejected, success_rate) = stats
             .get(&key.as_string())

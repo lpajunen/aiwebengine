@@ -1,12 +1,9 @@
 //! Running an ad hoc snippet against a deployed script's sandbox.
 //!
-//! The gap this closes: answering "what is actually in that table" or "what
-//! does this helper return for that input" used to mean authoring a test file,
-//! deploying it, running the suite, reading the answer out of an assertion
-//! message, and deleting the file again. The engine could already run
-//! caller-authored code in a script's sandbox — that is what
-//! [`crate::script_test`] does — so what was missing was a way to hand it one
-//! expression and get the value back.
+//! Answering "what is actually in that table" or "what does this helper return
+//! for that input" takes one expression and its value, not a test file. It
+//! runs caller-authored code in a script's sandbox the way
+//! [`crate::script_test`] does.
 //!
 //! An evaluation adds no authority. It runs with the *caller's*
 //! [`UserContext`], exactly as a test run does, so it can reach nothing the

@@ -11,7 +11,7 @@
 //! - Full authentication flow simulation
 //! - Concurrent user isolation
 
-// Integration tests for Phase 0.5 security modules
+// Integration tests for the security modules.
 // Tests session management, CSRF protection, and data encryption
 
 mod common;

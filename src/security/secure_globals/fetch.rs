@@ -158,8 +158,7 @@ impl SecureGlobalContext {
 
         // The Rust half is installed under a private name. `fetch()` itself is
         // defined by the prelude below, which wraps this envelope in something
-        // that can be awaited, read as an object, or parsed as the string this
-        // used to return.
+        // that can be awaited or read as an object.
         global.set("__hostFetch", fetch_fn)?;
 
         // `__hostFetchAll` — several requests in flight at once.

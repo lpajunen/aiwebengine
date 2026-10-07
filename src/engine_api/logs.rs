@@ -105,12 +105,10 @@ pub fn query_log_entries_authorized(
 /// Clear one script's logs; `DeleteLogs` and ownership of the script, or an
 /// administrator.
 ///
-/// Naming the script is required. This used to accept no `uri` as "prune every
-/// script back to its newest entries", which is now what the background pruner
-/// does on its own schedule — and which, reachable here, let anyone holding
-/// the editor-tier `DeleteLogs` truncate the logs of every script in the
-/// engine, on hosts they had nothing to do with. Acting on what you do not own
-/// is what `AdministerEngine` marks.
+/// Naming the script is required. Pruning every script is the background
+/// pruner's job; reachable here, it would let anyone holding the editor-tier
+/// `DeleteLogs` truncate the logs of scripts they do not own, which is what
+/// `AdministerEngine` marks.
 pub fn delete_logs_authorized(user: &UserContext, uri: &str) -> AppResult<Value> {
     user.require_capability(&Capability::DeleteLogs)?;
     if !is_admin_or_owner(user, uri) {

@@ -1,10 +1,8 @@
 // `Headers`, `URLSearchParams`, and the shape `context.request` presents.
 //
-// The response side of a script grew methods when `fetch` did: a response has
-// `.json()` and `.text()`, and reading one no longer depends on which call
-// produced it. The request side did not move, so the same script parsed a body
-// it received differently from a body it fetched, and read headers out of a
-// plain object where the case had to match exactly.
+// A request reads the way a fetched response does — `.json()`, `.text()`,
+// case-insensitive `Headers` — so a script parses a body it received the same
+// way as a body it fetched.
 //
 // What this adds to `context.request`:
 //
@@ -35,7 +33,7 @@
 
   function Headers(init) {
     // A plain object rather than a Map, so the instance can be handed to the
-    // proxy below and read as the object `request.headers` used to be.
+    // proxy below and also read as a plain object.
     // Configurable, because the proxy below hides this from `ownKeys` and a
     // proxy may only do that for a configurable property — `Object.keys` on the
     // headers throws otherwise.
@@ -332,9 +330,9 @@
   // context.request
   // ---------------------------------------------------------------------
 
-  // A `Headers` that also reads as the plain object it replaces. Without this,
-  // every `request.headers["content-type"]` already written would stop working;
-  // with it, they keep working and stop depending on the client's capitalisation.
+  // A `Headers` that also reads as a plain object, so
+  // `request.headers["content-type"]` works whatever the client's
+  // capitalisation.
   function headersView(headers) {
     return new Proxy(headers, {
       get: function (target, property, receiver) {

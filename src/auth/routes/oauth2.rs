@@ -1527,9 +1527,7 @@ pub async fn oauth2_token(
             let config = oauth2_state.auth_manager.config();
 
             // A refresh token is a different credential from the session it
-            // mints, which is the whole point: this endpoint used to answer
-            // with the session token in both fields, so rotation was impossible
-            // and a leaked refresh token was a leaked access token.
+            // mints, so it can rotate and a leaked one is not an access token.
             let refresh_token = match crate::auth::refresh_tokens::issue(
                 &oauth2_state.pool,
                 &code_data.user_id,

@@ -138,7 +138,7 @@ async fn the_options_object_reaches_the_host_call_as_json() {
 
     // The options are an object in the type declarations and in every example
     // in them, and JSON text at the host binding. The wrapper is what bridges
-    // the two; passing the object through is what used to throw.
+    // the two; passing the object through to the binding would throw.
     let report = eval_stubbed(
         "test://fetch-shape/options",
         r#"

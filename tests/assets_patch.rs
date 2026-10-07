@@ -686,10 +686,8 @@ async fn grep_locates_lines_without_returning_the_file() {
 
 /// The unscoped read is the older contract, and callers already parse it.
 /// A whole read answers with text when the file is text, and with base64
-/// when it is not. It used to answer with base64 for every file that was not
-/// a script's root, which made a module come back encoded whole and plain by
-/// the line — the same file, two spellings, depending on how much of it you
-/// asked for.
+/// when it is not — the same spelling as a ranged read, whatever file it
+/// is.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_whole_read_answers_with_text_when_the_file_is_text() {
     let _guard = test_mutex().lock().await;

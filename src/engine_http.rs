@@ -7,16 +7,14 @@
 //! (and `GET /engine/{name}?arg=...` for the ones that only read), and renders
 //! the same entries into `/engine/openapi.json`.
 //!
-//! Before it, each operation was also a hand-written axum handler with its own
-//! argument parsing, its own error mapping and its own response shape, plus a
-//! `#[utoipa::path]` annotation describing the handler a third time. Two
-//! callers of the same core disagreed about field names (`size` against
-//! `bytes`) and about what a refusal looks like.
+//! Generating it means no operation has a hand-written handler, argument
+//! parser, error mapping or OpenAPI annotation, so the surfaces cannot come to
+//! disagree about field names or about what a refusal looks like.
 //!
 //! What an operation answers is its result, as JSON. A failure is the
-//! `{ "error": ... }` object the operation already returns to MCP; the one
-//! thing this layer adds is the status line, chosen in [`status_for_error`]
-//! rather than at every call site.
+//! `{ "error": ... }` object the operation returns to MCP; the one thing this
+//! layer adds is the status line, chosen in [`status_of`] rather than at every
+//! call site.
 
 use std::time::Duration;
 

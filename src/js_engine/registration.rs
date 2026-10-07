@@ -89,12 +89,9 @@ pub fn execute_script_secure(
         return ScriptExecutionResult::failed(e, start_time.elapsed().as_millis() as u64);
     }
 
-    // Running a script does not store it. This used to write `content` back
-    // as the entrypoint on every execution, which since the tree merge meant
-    // writing a *file* named from the URI: every boot rewrote every script,
-    // a script with no entrypoint got an empty `main.js`, and one whose URI
-    // lacked `.ts` got its TypeScript copied into a second entry. Storing a
-    // script is what the write paths are for.
+    // Running a script does not store it; storing a script is what the write
+    // paths are for. Writing back here would rewrite every script on every
+    // boot.
 
     let registrations = Rc::new(RefCell::new(HashMap::new()));
     let uri_owned = uri.to_string();

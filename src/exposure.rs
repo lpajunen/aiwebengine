@@ -1,19 +1,11 @@
 //! Which of a script's files the world can reach, read off the tree.
 //!
-//! Exposure used to be a **side effect of an `init()` call**. A file became
-//! world-readable because some line of `init()` named it, and three things
-//! followed from that:
-//!
-//! - You could not look at a file and know whether it was public. You had to
-//!   read `init()` and mentally execute it.
-//! - The default was private and the failure mode was public. `try_serve_asset`
-//!   applies no authorization at all, so a mistyped
-//!   `registerAssetRoute("/config", "credentials.json")` published a file to
-//!   the world, with nothing in the write path, the revision manifest or a git
-//!   diff to show it.
-//! - Script data — system prompts, skill definitions, few-shot examples, the
-//!   most security-relevant category there is — was defined by the *absence*
-//!   of a registration. It was private because nobody happened to name it.
+//! Exposure is not a side effect of an `init()` call. If it were, you could not
+//! look at a file and know whether it was public; a mistyped registration would
+//! publish a file with nothing in the write path, the revision manifest or a
+//! git diff to show it; and script data — system prompts, skill definitions,
+//! the most security-relevant files there are — would be private only because
+//! nobody happened to name it.
 //!
 //! The directory says it instead:
 //!
@@ -27,13 +19,11 @@
 //!
 //! **Why a convention and not an `exposure` column.** `git_sync` already made
 //! this argument and refused a manifest: the directory structure already *is*
-//! the mapping. A column would be invisible in a repository, unmappable in
-//! both directions, and would reintroduce exactly the manifest that reasoning
-//! rejected. A directory is visible in `ls`, in a pull request and in a
+//! the mapping. A column would be invisible in a repository and unmappable in
+//! both directions. A directory is visible in `ls`, in a pull request and in a
 //! revision manifest, and it survives the round trip for free.
 //!
-//! Registration does not disappear. It stops carrying the security decision
-//! and carries only what is cosmetic: an HTTP path that should not mirror the
+//! Registration carries no security decision, only what is cosmetic: an HTTP path that should not mirror the
 //! file path, OpenAPI `summary`/`tags`, an MCP resource's
 //! `name`/`description`/`mimeType`. Publishing a file then means **moving**
 //! it, which is a reviewable act.
@@ -45,14 +35,10 @@
 //! `public/`, `registerResource` only from `resources/`; anything else is not registered and the script is
 //! told why.
 //!
-//! It landed as a report first, because a deployment's scripts were written
-//! when the registration was the whole of the decision and the set of files
-//! one actually serves is only knowable from the live registries. [`report`]
-//! is still that view, answering the question enforcement turns it into:
-//! what was refused, and where each file would have to move. Refusals are
-//! recorded per script and cleared when the script initialises again, so the
-//! report describes this instance as it now stands rather than accumulating
-//! history.
+//! [`report`] says what was refused, and where each file would have to move.
+//! Refusals are recorded per script and cleared when the script initialises
+//! again, so the report describes this instance as it stands rather than
+//! accumulating history.
 
 /// Where a file has to live to be served to the world.
 pub const PUBLIC_DIR: &str = "public/";
@@ -68,7 +54,7 @@ pub enum Exposure {
     /// Under `resources/`: readable by an MCP client that may reach the host.
     Resource,
     /// Everything else: reachable only to the linker and to the script
-    /// itself. The default, and the one that used to have no positive marker.
+    /// itself. The default.
     Private,
 }
 

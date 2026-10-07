@@ -59,7 +59,7 @@ pub struct GlobalSecurityConfig {
     /// Which invocation the script's `console` output is attributed to.
     ///
     /// Empty for contexts with no invocation to name; a line written under an
-    /// empty context is stored exactly as it was before this existed.
+    /// empty context is stored with no invocation.
     pub log_context: repository::LogContext,
     /// The address the request came from, as the edge judged it
     /// ([`crate::security::client_ip`]). `None` where there is no HTTP request
@@ -402,12 +402,10 @@ mod api_surface_tests {
 
     /// The arguments the type declarations type `any` reach the host as JSON.
     ///
-    /// Every one of these used to raise `TypeError: Error converting from js
-    /// 'object' into type 'string'`: the bindings took a `String`, QuickJS
-    /// does not coerce one, and the declarations — and every example in them —
-    /// passed an object. The tests are here rather than around the host
-    /// functions because what broke was the JavaScript surface, and that is
-    /// the only place it shows.
+    /// QuickJS does not coerce an object to a `String`, so a binding taking one
+    /// would raise `TypeError` on the objects the declarations pass. The tests
+    /// are here rather than around the host functions because it is the
+    /// JavaScript surface that would break.
     #[test]
     fn fetch_serializes_the_options_object_it_documents() {
         // `__hostFetch` is replaced so this tests the marshalling and not the

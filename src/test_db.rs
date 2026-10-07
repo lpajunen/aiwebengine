@@ -1,25 +1,12 @@
 //! One database per test process, recycled through a fixed set of slots.
 //!
-//! Every test in the suite used to run against whatever database
-//! `DATABASE_URL` named — in practice the developer's own — and almost none of
-//! them cleaned up after themselves. Two things followed, and between them
-//! they are most of why a run was neither repeatable nor tidy.
+//! Tests must not share a database. `execute_startup_scripts` runs every
+//! script it finds, so on a shared database each new test server would run
+//! what unrelated tests had left behind, and what a test saw in the route
+//! index, the MCP registry and the log table would depend on which tests had
+//! run before it.
 //!
-//! The database accumulated. Scripts, users, sessions, OAuth clients, logs,
-//! revisions and the per-script dynamic tables of every run ever made stayed
-//! where the test left them, mixed in with whatever `cargo run` had put there.
-//!
-//! And the leftovers were *executed*. `execute_startup_scripts` runs every
-//! script it finds, so each new test server ran the accumulated scripts of
-//! unrelated tests before the test under way had done anything. What a test
-//! saw in the route index, the MCP registry and the log table therefore
-//! depended on which tests had run before it — in this run and in every run
-//! before it. Several test comments already work around one face of this by
-//! hand: a rate-limit bucket keyed by a fixed string carries its drained state
-//! into the next run, and a script an earlier test left behind answers the
-//! route this one just registered.
-//!
-//! What replaces it: `DATABASE_URL` names a *server*, and the suite keeps its
+//! So `DATABASE_URL` names a *server*, and the suite keeps its
 //! own databases on it. A migrated template is built once; a process claims one
 //! of a small number of numbered slots and recreates that slot from the
 //! template, so it starts from a database holding nothing but the schema.
@@ -41,12 +28,9 @@
 //!
 //! Two suites reach this, which is why it lives in `src` rather than beside the
 //! integration tests: the `#[cfg(test)]` modules in this crate cannot see
-//! anything under `tests/`, and while they could not, they went on reaching a
-//! database the way the integration tests used to — `DATABASE_URL` directly, or
-//! a connection string written out longhand — and so assumed a schema somebody
-//! had migrated by hand. On a developer's machine that is true, because `cargo
-//! run` migrated it; on a freshly created database it is not, which is what CI
-//! is. `tests/common/mod.rs` compiles this same file into each integration test
+//! anything under `tests/`, and a unit test reaching `DATABASE_URL` directly
+//! would assume a schema somebody had migrated by hand — true on a developer's
+//! machine, false on the fresh database CI has. `tests/common/mod.rs` compiles this same file into each integration test
 //! binary with `#[path]`.
 
 use std::sync::OnceLock;

@@ -1,11 +1,9 @@
 //! What an operator can see when the database stops answering.
 //!
-//! A wedged table used to look, from inside the engine, exactly like a slow
-//! script: requests that never returned. Telling the two apart meant reaching
-//! for `psql` against the production database and knowing which catalogue views
-//! to join. These two facts — who is waiting on a lock, and who is in front of
-//! them — are what identify a wedge, and they now come back from the health
-//! check itself.
+//! A wedged table looks, from outside, exactly like a slow script: requests
+//! that never return. Who is waiting on a lock, and who is in front of them,
+//! is what tells the two apart, and the health check answers both without
+//! `psql`.
 
 mod common;
 

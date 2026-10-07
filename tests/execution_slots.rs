@@ -1,8 +1,7 @@
 //! `javascript.max_concurrent_executions`: how many scripts run at once.
 //!
-//! The ceiling used to be Tokio's default blocking pool — 512 threads, a
-//! number nobody chose — while the configured value was read by nothing. These
-//! tests pin the two properties that matter: executions past the limit wait
+//! The configured value is the ceiling, not Tokio's default blocking pool.
+//! These tests pin the two properties that matter: executions past the limit wait
 //! rather than being refused, and the slot is held for as long as the work is,
 //! not only for as long as the caller is still waiting for it.
 

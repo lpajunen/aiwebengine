@@ -2,28 +2,14 @@
 //! reaches them.
 //!
 //! This is where a connection's state lives, which is why opening one lives
-//! here too. It used to be split: `stream_manager.rs` held a
-//! `StreamConnectionManager` that tracked connections and enforced limits,
-//! while the connections themselves were stored here. That manager was
-//! constructed fresh at each call site, used once and dropped, so its maps
-//! were always empty — and two things followed from that.
+//! here too: limits checked anywhere else would be checked against a copy of
+//! the state, not the state.
 //!
-//! The limits never fired: `check_connection_limits` compared the length of a
-//! newly created map against `max_total_connections`, so it evaluated
-//! `0 >= limit` on every connection and those settings did nothing.
-//!
-//! And every disconnect leaked. `create_connection` discarded the id this
-//! registry assigned and returned an `ActiveConnection` carrying a second,
-//! unrelated `Uuid::new_v4()`. The SSE handler then removed by *that* id,
-//! which was never a key here, so the removal matched nothing and the
-//! connection stayed — holding a `broadcast::Sender` with a 1000-message
-//! buffer — until the process restarted. Nothing aged it out either:
-//! `cleanup_stale_connections` was only ever called from its own unit test.
-//!
-//! [`StreamRegistry::open_connection`] replaces both. It takes the registry
-//! lock once, so the limit check and the insert cannot race, and it returns
-//! the *same* id it stored, which is what makes [`Self::close_connection`]
-//! able to find it again.
+//! [`StreamRegistry::open_connection`] takes the registry lock once, so the
+//! limit check and the insert cannot race, and returns the *same* id it
+//! stored, which is what lets [`Self::close_connection`] find it again — a
+//! connection closed by any other id would stay, holding a
+//! `broadcast::Sender` with a 1000-message buffer, until restart.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -161,9 +147,8 @@ impl StreamLimits {
 
 /// A connection that has been accepted and inserted into the registry.
 ///
-/// `connection_id` is the registry's own key. Handing back anything else is
-/// what leaked connections before this existed, so the SSE handler closes
-/// with exactly this value.
+/// `connection_id` is the registry's own key, and the SSE handler closes with
+/// exactly this value; closing by anything else would leak the connection.
 #[derive(Debug)]
 pub struct OpenConnection {
     pub connection_id: String,

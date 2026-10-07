@@ -2,11 +2,10 @@
 //!
 //! The engine tells scripts to verify their own webhook signatures — Telegram
 //! signs a delivery with a shared secret it echoes in a header, Slack and
-//! GitHub sign the body with HMAC — and until now it handed them nothing to do
-//! it with. No HMAC, no constant-time comparison, no source of randomness. So
-//! every solution that followed the documentation wrote the same three
-//! mistakes: it fetched the secret into JavaScript, compared it with `===`,
-//! and invented its own webhook secret by typing one.
+//! GitHub sign the body with HMAC — and this is what they do it with, shaped
+//! around the three mistakes hand-written verification makes: fetching the
+//! secret into JavaScript, comparing it with `===`, and inventing a webhook
+//! secret by typing one.
 //!
 //! Each of those is the [`crate::repository`] `personalStorage` argument in a
 //! different costume. The engine owns the key, so the script cannot get it
@@ -16,10 +15,7 @@
 //!   `secretEquals` binding above it take the *name* of a secret and resolve
 //!   it host-side, exactly as `fetch` resolves `{{secret:...}}`. A script
 //!   cannot leak a value it is never given, which is the property
-//!   `secretStorage` has had since it shipped and which a hand-rolled
-//!   comparison threw away — the agent's own Telegram webhook keeps its shared
-//!   secret in `scriptStorage` rather than `secretStorage` for exactly this
-//!   reason, "because checking it means comparing it".
+//!   `secretStorage` has and a hand-rolled comparison throws away.
 //!
 //! - **The comparison is constant-time.** `===` on a secret leaks it a byte at
 //!   a time to anyone who can time the endpoint. This is the one mistake that

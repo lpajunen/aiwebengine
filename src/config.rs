@@ -290,13 +290,8 @@ pub struct LoggingConfig {
 
 /// Stack a script may use before QuickJS throws, when nothing says otherwise.
 ///
-/// `config.toml` ships 1 MB — about 1000 frames of recursion — and every
-/// document describing the engine says so, while this was 512 KB: what
-/// `js_engine` hardcoded back when `stack_size_bytes` was read by nothing, kept
-/// afterwards so that honouring the setting would not change what an engine
-/// that never set it did. But the shipped configuration does set it, so the
-/// only engine the old number described was one running without the file this
-/// repository ships, and the documented 1 MB was never true of it.
+/// 1 MB — about 1000 frames of recursion — the same as `config.toml` ships, so
+/// an engine without the file behaves as documented.
 pub const DEFAULT_STACK_SIZE_BYTES: usize = 1024 * 1024;
 
 /// Below this a script has too little stack to be worth running.
@@ -814,10 +809,8 @@ impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
             enable_cors: true,
-            // Same-origin only until an operator names somebody. The default
-            // used to be `["*"]`, which was harmless while nothing read it and
-            // would have become "any origin may read /engine/*" the moment
-            // something did.
+            // Same-origin only until an operator names somebody: a wildcard
+            // default would mean any origin may read /engine/*.
             cors_allowed_origins: Vec::new(),
             enable_security_headers: true,
             content_security_policy: Some(
@@ -1068,10 +1061,8 @@ impl AppConfig {
         // provisioned. Falling back to random per-boot keys invalidates
         // sessions and CSRF tokens across restarts and instances, and a missing
         // secret encryption key stores secrets as plaintext in the database.
-        //
-        // This used to be waived in development mode. There is no development
-        // mode now, so a local install provides keys like any other — the
-        // shipped local template carries throwaway ones, marked as such.
+        // A local install provides keys like any other; `.env-local` carries
+        // throwaway ones, marked as such.
         if let Some(auth) = &self.auth
             && auth.enabled
         {
@@ -1128,30 +1119,6 @@ impl AppConfig {
     /// Get JavaScript execution timeout as Duration
     pub fn js_execution_timeout(&self) -> Duration {
         Duration::from_millis(self.javascript.execution_timeout_ms)
-    }
-}
-
-// Keep backward compatibility with the old Config struct
-pub type Config = AppConfig;
-
-impl AppConfig {
-    /// Backward compatibility method - equivalent to load()
-    pub fn from_env() -> Self {
-        match Self::load() {
-            Ok(config) => {
-                // Debug: log if auth is configured
-                if config.auth.is_some() {
-                    eprintln!("DEBUG: Auth configuration loaded successfully");
-                } else {
-                    eprintln!("DEBUG: No auth configuration found in loaded config");
-                }
-                config
-            }
-            Err(e) => {
-                eprintln!("DEBUG: Failed to load config: {}. Using defaults.", e);
-                Self::default()
-            }
-        }
     }
 }
 
@@ -1355,8 +1322,7 @@ mod tests {
             ..Default::default()
         });
 
-        // Authentication with no keys must be rejected. There is no longer a
-        // mode that waives this.
+        // Authentication with no keys must be rejected; nothing waives this.
         assert!(config.validate().is_err());
 
         // Empty strings (e.g. from `${VAR:-}` docker-compose defaults) count
@@ -1392,17 +1358,6 @@ mod tests {
     fn test_timeout_conversions() {
         let config = AppConfig::default();
         assert_eq!(config.js_execution_timeout(), Duration::from_millis(10_000));
-    }
-
-    #[test]
-    fn test_environment_variable_override() {
-        // Test that environment loading doesn't panic
-        let config = AppConfig::from_env();
-        assert!(config.server.port > 0);
-
-        // This would test actual loading, but we need to be careful in tests
-        // as it affects other tests. In a real test, you'd use a separate process
-        // or mock the environment.
     }
 
     #[test]

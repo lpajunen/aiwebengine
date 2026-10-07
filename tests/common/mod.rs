@@ -15,18 +15,13 @@ static INIT: Once = Once::new();
 static DB_INIT: Once = Once::new();
 static DB_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
-/// Global semaphore (capacity = 1) used to serialize integration tests.
+/// One test server per process at a time.
 ///
-/// Because `execute_startup_scripts()` reads *all* scripts from the shared
-/// database and updates process-global state (`DYNAMIC_SCRIPTS`,
-/// per-script metadata), running multiple test servers
-/// concurrently causes race conditions: server A picks up scripts that were
-/// just inserted by test B, producing non-deterministic route registrations.
-///
-/// Holding a single permit for the full lifetime of each `TestServer`
-/// guarantees that only one server is starting, running, and shutting down at
-/// any given time, eliminating those races without requiring per-test database
-/// isolation.
+/// The engine keeps process-global state (`DYNAMIC_SCRIPTS`, per-script
+/// metadata, the route index), so two servers in one process would see each
+/// other's scripts. Holding a single permit for the full lifetime of each
+/// `TestServer` keeps that from happening; isolation *between* processes is
+/// the per-process database (`src/test_db.rs`).
 static TEST_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 /// The administrator the engine-API tests act as. Named in the test server's
@@ -71,10 +66,8 @@ pub fn init_tracing() {
 /// `Config::test_config_postgres` — `DATABASE_URL` when set, the default local
 /// connection string otherwise. Resolving it here rather than reading
 /// `DATABASE_URL` directly keeps the harness and the server pointed at the same
-/// database: previously an unset `DATABASE_URL` made this function return
-/// without initializing anything, while the server still came up on the default
-/// string, so a test that touched the repository *before* starting its server
-/// panicked in `get_repository()` with no hint of the real cause.
+/// database, so a test that touches the repository before starting its server
+/// sees the same database the server will.
 ///
 /// Uses a persistent global runtime so the pool maintenance tasks stay alive.
 /// Safe to call multiple times — only runs once per process.
@@ -119,12 +112,10 @@ pub fn init_test_db() {
 ///
 /// Every integration test needs the same three things standing before it can
 /// do anything: a pool, the global database, and the repository built on it.
-/// Each test file used to carry its own copy of that — twenty-seven of them,
-/// identical but for an import prefix — which made the way the suite reaches a
-/// database a thing declared in twenty-seven places rather than one.
+/// They are built here, once, rather than in each test file.
 ///
 /// Idempotent, and once per test binary: `mod common` is compiled into each
-/// one, so the cell below initialises exactly where the hand-rolled copies did.
+/// one.
 ///
 /// This is also the one place the suite names a backend. A second backend
 /// becomes a branch here and a `Repository` to construct, rather than an edit
@@ -144,13 +135,10 @@ static GLOBALS: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 /// guards: `lock_timeout`, `statement_timeout` and
 /// `idle_in_transaction_session_timeout` ride in the startup packet, and a
 /// pool assembled without them behaves differently under contention than the
-/// server does. Both entry points below used to build their own, one guarded
-/// and one not, and which a test got came down to which ran first.
+/// server does. Both entry points below share it.
 ///
 /// `None` when the database will not come up, which leaves the globals unset;
-/// the test then fails at whatever it does next, which is the point. The suite
-/// used to have a guard that turned a missing database into a test that
-/// returned at its first line and reported itself as passing — see
+/// the test then fails at whatever it does next, which is the point — see
 /// [`test_config`].
 async fn open_database() -> Option<sqlx::PgPool> {
     let config = test_config(0).await?;
@@ -169,15 +157,10 @@ async fn open_database() -> Option<sqlx::PgPool> {
 /// The server id is registered here and handed to the repository, so that the
 /// two agree. They are what tells an instance's own writes apart from a peer's:
 /// the repository stamps every notification with the id it was built with, and
-/// the listener drops the ones carrying its own. This used to register no id at
-/// all and build the repository with a fixed `"test"`, which was harmless right
-/// up until a test called `setup_env()` and *then* started a server — the
-/// server generates an id, finds the repository already built, and leaves it
-/// stamping notifications with `"test"`. Every write the instance made then
-/// came back looking like a peer's, so a script was re-initialised a second
-/// time concurrently with the initialisation its own write had already
-/// spawned, and the two passes raced over the same registrations. Which test
-/// saw it depended on which pass won.
+/// the listener drops the ones carrying its own. A repository stamping a
+/// different id from the server's would make every write the instance made come
+/// back looking like a peer's, so a script would be re-initialised a second
+/// time concurrently with the initialisation its own write had spawned.
 async fn build_globals() {
     let Some(pool) = open_database().await else {
         return;
@@ -250,18 +233,11 @@ fn free_port() -> anyhow::Result<u16> {
 /// per-process database — see [`testdb`] for why there is one.
 ///
 /// `None` when the database server will not answer, and a test that needs one
-/// then fails. There used to be a `should_skip_integration_tests` guard at the
-/// top of every integration test that turned that into an early `return`, so a
-/// suite with no database reported every one of them as passing. It asked
-/// whether `DATABASE_URL` was set rather than whether a database answered,
-/// which meant it also skipped on any machine running Postgres without that
-/// variable exported — the state in which `tests/scripts.rs` passed locally
-/// and failed on CI. The unit tests never had such a guard and panic without a
-/// database, so the guard never made the suite runnable without one; it only
-/// made half of it lie about having run.
+/// then fails rather than skipping: a skip reports a test that never ran as
+/// passing.
 #[allow(dead_code)]
-pub async fn test_config(port: u16) -> Option<config::Config> {
-    let mut config = config::Config::test_config_postgres(port);
+pub async fn test_config(port: u16) -> Option<config::AppConfig> {
+    let mut config = config::AppConfig::test_config_postgres(port);
     config.repository.connection_string = testdb::connection_string().await?.to_string();
     config.repository.max_connections = pool_size();
     Some(config)
@@ -286,7 +262,7 @@ pub async fn test_pool() -> sqlx::PgPool {
 /// The same, for a test that cannot proceed without one — which, with the
 /// skip guard gone, is every integration test.
 #[allow(dead_code)]
-pub async fn require_test_config(port: u16) -> config::Config {
+pub async fn require_test_config(port: u16) -> config::AppConfig {
     match test_config(port).await {
         Some(config) => config,
         None => panic!(
@@ -321,7 +297,7 @@ impl TestServer {
     /// an environment variable would not reach it.
     #[allow(dead_code)]
     pub async fn start_customized(
-        customize: impl FnOnce(&mut config::Config),
+        customize: impl FnOnce(&mut config::AppConfig),
     ) -> anyhow::Result<Self> {
         // Serialize: wait until no other test server is running.
         let permit = get_test_semaphore()
@@ -367,7 +343,7 @@ impl TestServer {
     /// The same, with a chance to change the configuration first.
     #[allow(dead_code)]
     pub async fn start_with_auth_customized(
-        customize: impl FnOnce(&mut config::Config),
+        customize: impl FnOnce(&mut config::AppConfig),
     ) -> anyhow::Result<Self> {
         use aiwebengine::auth::config::{AuthConfig, CookieConfig, InternalAuthConfig};
 
@@ -497,7 +473,7 @@ impl TestContext {
     #[allow(dead_code)]
     pub async fn start_server_customized(
         &self,
-        customize: impl FnOnce(&mut config::Config),
+        customize: impl FnOnce(&mut config::AppConfig),
     ) -> anyhow::Result<u16> {
         let server = TestServer::start_customized(customize).await?;
         let port = server.port();
@@ -557,14 +533,11 @@ pub async fn wait_for_server(port: u16, max_attempts: u32) -> anyhow::Result<()>
 /// `/engine/write_file` records the script and *spawns* its `init()`
 /// ([`engine_api::upsert_script_authorized`]), so the response comes back
 /// before the route the script registers exists. Deletion is the mirror image
-/// on the way out. Tests used to bridge that with a fixed sleep — 100ms in
-/// some places, 500ms in others for the same wait — which is a bet on how
-/// quickly a machine can spin up a QuickJS runtime, transpile a script and run
-/// its `init()`. The bet holds on a developer's machine and loses on a loaded
-/// CI runner, which is what made `tests/scripts.rs` fail intermittently while
-/// passing every time locally.
+/// on the way out. A fixed sleep would be a bet on how quickly a machine can
+/// spin up a QuickJS runtime, transpile a script and run its `init()` — one a
+/// loaded CI runner loses.
 ///
-/// Polling the condition instead makes the test wait exactly as long as the
+/// Polling the condition makes the test wait exactly as long as the
 /// engine takes, and turns "slower than I guessed" into "never happened".
 #[allow(dead_code)]
 pub async fn wait_for_status(
@@ -620,7 +593,7 @@ impl AdminServer {
     /// The same, with a chance to change the configuration first — for a test
     /// about a switch this server does not have in its default position.
     pub async fn start_customized(
-        customize: impl FnOnce(&mut config::Config),
+        customize: impl FnOnce(&mut config::AppConfig),
     ) -> anyhow::Result<Self> {
         let server = TestServer::start_with_auth_customized(customize).await?;
         let port = server.port();

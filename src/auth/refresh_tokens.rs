@@ -1,12 +1,7 @@
 //! Refresh tokens for this engine's OAuth2 authorization server.
 //!
-//! A refresh token used to be the session token itself — the token endpoint
-//! returned the same string in `access_token` and `refresh_token`. That made
-//! rotation impossible and made a leaked refresh token a leaked access token,
-//! carrying the same audience and the same roles for as long as the session
-//! lived.
-//!
-//! What lives here is a separate credential. It authenticates nothing on its
+//! A refresh token is a separate credential from the session token, so it can
+//! be rotated and a leaked one is not a leaked access token. It authenticates nothing on its
 //! own: it is presented only at the token endpoint, only by the client it was
 //! issued to, and only to mint a *fresh* session — which is also why refreshing
 //! re-reads roles and realm from the repository rather than copying them from
@@ -17,15 +12,15 @@
 //! and the whole family is revoked — the client has to go back through an
 //! authorization.
 //!
-//! With one exception, and it is the one that made this unusable for an agent
+//! With one exception, without which this would be unusable for an agent
 //! nobody is watching. "The client retried" and "someone else has a copy" are
 //! genuinely indistinguishable *in general*, but not in the first seconds after
 //! a redemption: a client that crashed between the server spending its token
 //! and the client storing the successor has no way back, and two jobs sharing
 //! one stored token race every time they start together. Both present the same
-//! token moments after it was spent, and both used to kill the family — so the
-//! cost of the rule fell entirely on unattended clients, which are the ones
-//! that cannot answer an authorization prompt.
+//! token moments after it was spent, and killing the family for that would put
+//! the whole cost of the rule on unattended clients, which are the ones that
+//! cannot answer an authorization prompt.
 //!
 //! So a spent token is forgiven for [`REPLAY_GRACE_SECS`] seconds, and only
 //! while the chain has not moved on: if any *later* token in the family has
@@ -384,7 +379,8 @@ mod tests {
         .expect("which hands out a successor the client never receives");
 
         // The client crashed before storing `successor` and comes back with
-        // the only token it has. This used to revoke the family.
+        // the only token it has. Within the grace window this must not revoke
+        // the family.
         let retried = redeem(&pool, &first, &client)
             .await
             .expect("a retry inside the window is not a replay");

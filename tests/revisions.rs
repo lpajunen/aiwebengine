@@ -328,9 +328,7 @@ async fn a_revision_holds_the_files_that_were_there() {
     let names =
         |files: &[revisions::RevisionFile]| files.iter().map(|f| f.uri.clone()).collect::<Vec<_>>();
     // The entrypoint is in the manifest beside the modules, because it is one
-    // of the script's files. It used to sit outside, in a column of the
-    // revision row, which is what made a manifest a description of only part
-    // of what a revision held.
+    // of the script's files.
     assert_eq!(
         names(&before),
         vec!["main.js", "server/gone.ts", "server/kept.ts"]
@@ -2162,8 +2160,7 @@ async fn a_revert_that_restores_only_the_entrypoint_says_something_happened() {
         outcome.assets_written,
         vec!["main.ts".to_string()],
         "the entrypoint is one of the files a revert restores, so it is in the \
-         list of them — it used to be reported only by a flag beside a list \
-         that was empty"
+         list of them"
     );
     assert!(outcome.assets_deleted.is_empty());
     assert!(outcome.changed_anything());

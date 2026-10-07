@@ -67,10 +67,8 @@ fn derived_programs() -> &'static Cache<String, CachedPrepared> {
 /// Which of the two program caches `key` belongs in.
 ///
 /// The separation is what makes "a burst of checks must not cost a script the
-/// program that serves it" structural. It used to be a policy inside one map's
-/// eviction pass — collect the derived keys, sort by insertion order, drop the
-/// oldest — which was correct but had to be re-read to be believed. Two caches
-/// cannot evict across each other at all.
+/// program that serves it" structural rather than a policy inside one map's
+/// eviction pass: two caches cannot evict across each other at all.
 fn program_cache(key: &str) -> &'static Cache<String, CachedPrepared> {
     if key.contains('\u{1}') {
         derived_programs()

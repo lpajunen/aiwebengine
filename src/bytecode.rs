@@ -1,8 +1,8 @@
 //! QuickJS bytecode compilation cache.
 //!
-//! Each request executes in a fresh QuickJS runtime, so an owner script was
-//! previously re-parsed from source on every invocation. Parsing the ~43KB
-//! `core.js` costs ~1ms; executing pre-compiled bytecode costs ~0.2ms.
+//! Each request executes in a fresh QuickJS runtime, so without a cache a
+//! script would be re-parsed from source on every invocation. Parsing ~43KB of
+//! source costs ~1ms; executing pre-compiled bytecode costs ~0.2ms.
 //!
 //! This module compiles a *global* script to QuickJS bytecode once, caches the
 //! serialized bytes keyed by (uri, source hash), and executes the bytecode on
@@ -38,10 +38,9 @@ struct CachedBytecode {
 
 /// Ceiling on the compiled bytecode held at once, in bytes.
 ///
-/// Keys are script URIs and test-module paths, so the map this replaced grew
-/// with the content of the database rather than without limit — but nothing
-/// bounded it, and an engine hosting many scripts kept every program it had
-/// ever run. Bytes rather than entries, because entries differ by two orders
+/// Keys are script URIs and test-module paths, so an unbounded map would keep
+/// every program an engine hosting many scripts had ever run. Bytes rather
+/// than entries, because entries differ by two orders
 /// of magnitude between a small handler and a bundled application.
 const MAX_BYTECODE_BYTES: u64 = 32 * 1024 * 1024;
 

@@ -533,7 +533,7 @@ mod tests {
     }
 
     /// The names a caller could actually ask for, in the message and in the
-    /// response, not the Rust variant `{:?}` used to print.
+    /// response, not the Rust variant `{:?}` would print.
     #[test]
     fn a_refusal_names_capabilities_the_way_callers_spell_them() {
         let error = AppError::InsufficientCapabilities {

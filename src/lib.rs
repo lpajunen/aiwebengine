@@ -73,7 +73,7 @@ pub mod transpiler;
 pub mod user_repository;
 pub mod worker_census;
 
-// Authentication module (Phase 1 - Core Infrastructure)
+// Authentication
 pub mod auth;
 
 // The per-process test database. Not compiled into a build that is not a test,
@@ -588,7 +588,7 @@ fn register_oauth_provider(
 }
 
 /// Helper: Initialize database and repository
-async fn initialize_database_and_repository(config: &config::Config) -> AppResult<()> {
+async fn initialize_database_and_repository(config: &config::AppConfig) -> AppResult<()> {
     info!("Initializing database connection...");
     info!("Initializing PostgreSQL repository");
 
@@ -1118,7 +1118,7 @@ async fn initialize_auth_manager(
 }
 
 /// Initialize all core components (database, scripts, assets)
-async fn initialize_components(config: &config::Config) -> AppResult<()> {
+async fn initialize_components(config: &config::AppConfig) -> AppResult<()> {
     // Initialize database connection and repository
     initialize_database_and_repository(config).await?;
 
@@ -1253,7 +1253,7 @@ async fn execute_startup_scripts() -> AppResult<()> {
 }
 
 /// Initialize script functions by calling their init() functions
-async fn initialize_script_functions(_config: &config::Config) -> AppResult<()> {
+async fn initialize_script_functions(_config: &config::AppConfig) -> AppResult<()> {
     info!("Initializing all scripts...");
     let initializer = script_init::ScriptInitializer::with_configured_timeout();
     info!("Calling initialize_all_scripts...");
@@ -1316,7 +1316,7 @@ async fn initialize_script_functions(_config: &config::Config) -> AppResult<()> 
 /// Authorized by holding the configuration file and the database it points at,
 /// which is the same authority `bootstrap_admins` already runs on.
 pub async fn grant_role_command(
-    config: &config::Config,
+    config: &config::AppConfig,
     account: &str,
     role: &str,
 ) -> AppResult<String> {
@@ -1398,7 +1398,7 @@ pub async fn grant_role_command(
 /// not a thing a password reset should do — `/auth/account` is where an account
 /// with no credential gets one.
 pub async fn set_password_command(
-    config: &config::Config,
+    config: &config::AppConfig,
     account: &str,
     new_password: &str,
 ) -> AppResult<String> {
@@ -1492,7 +1492,7 @@ pub async fn set_password_command(
 
 /// Starts the web server with custom configuration
 pub async fn start_server_with_config(
-    config: config::Config,
+    config: config::AppConfig,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> AppResult<u16> {
     // Apply configured JavaScript limits to every execution path (memory limit,
@@ -1753,7 +1753,7 @@ async fn health_handler() -> impl IntoResponse {
 /// initialized: silently continuing without auth would leave every endpoint
 /// open that the operator expects to be protected.
 async fn initialize_auth_if_enabled(
-    config: &config::Config,
+    config: &config::AppConfig,
     pool: Option<sqlx::PgPool>,
 ) -> AppResult<Option<Arc<auth::AuthManager>>> {
     if let Some(auth_config) = config.auth.clone()
@@ -1820,7 +1820,7 @@ async fn initialize_auth_if_enabled(
 
 /// Setup all routes and middleware for the application
 async fn setup_routes(
-    config: &config::Config,
+    config: &config::AppConfig,
     script_timeout_ms: u64,
     auth_enabled: bool,
     auth_manager: Option<&Arc<auth::AuthManager>>,
@@ -1987,10 +1987,8 @@ async fn setup_routes(
                 // `initialize`, and `serverInfo` already has a home here.
                 info!("MCP: Initialize request received");
 
-                // Answer with the client's own version when we speak it. This
-                // used to read the field into a discarded binding and reply
-                // `2024-11-05` whatever was asked, which told every client that
-                // the engine predated the transport it was talking over.
+                // Answer with the client's own version when we speak it, so a
+                // client is not told the engine predates its transport.
                 let params = rpc_request.params.unwrap_or(serde_json::json!({}));
                 let negotiated = mcp::negotiate_protocol_version(
                     params.get("protocolVersion").and_then(|v| v.as_str()),
@@ -2344,10 +2342,8 @@ async fn setup_routes(
                     Ok(mcp::ToolOutcome::Complete(result)) => {
                         debug!("MCP tool '{}' executed successfully", params.name);
 
-                        // Parsed and re-serialised rather than passed through,
-                        // which is what `execute_mcp_tool` used to do before it
-                        // started handing back the handler's own string: a
-                        // handler whose result is not JSON is a broken handler,
+                        // Parsed and re-serialised rather than passed through:
+                        // a handler whose result is not JSON is a broken handler,
                         // and it should fail here rather than put whatever it
                         // returned into content as though it were data.
                         let content = match serde_json::from_str::<serde_json::Value>(&result) {
@@ -3075,8 +3071,7 @@ async fn setup_routes(
         app = app.route("/mcp", axum::routing::post(mcp_handler));
     }
 
-    // Script and asset management endpoints (engine functionality,
-    // previously provided by the built-in core.js/cli.js scripts).
+    // Script and file management endpoints.
     // The configured request body limit applies, same as dynamic routes.
     // These paths live under the reserved /engine prefix, and are served only
     // on the hosts in `server.management_hosts` (see `management_host_guard`).
@@ -3142,13 +3137,10 @@ async fn setup_routes(
     /// Serve the type declarations, with the limits this engine enforces
     /// rendered into them.
     ///
-    /// The declarations are compiled into the binary and used to carry their
-    /// numbers as prose typed out by hand, which is how `init()`'s budget came
-    /// to be documented as 5 s, as 10 s and as 30 s — each true of some engine
-    /// at some point, none of them checked against the engine doing the
-    /// serving. They now hold `{{limits...}}` markers filled in from
-    /// `limits::snapshot`, the same source `/engine/openapi.json` publishes as
-    /// `x-aiwebengine-limits`.
+    /// The declarations are compiled into the binary with `{{limits...}}`
+    /// markers, filled in from `limits::snapshot` — the same source
+    /// `/engine/openapi.json` publishes as `x-aiwebengine-limits` — so the
+    /// numbers are the ones the serving engine enforces.
     async fn serve_type_defs(asset_name: &'static str) -> axum::response::Response {
         if let Some(asset) =
             repository::fetch_asset_async("https://example.com/core", asset_name).await
@@ -3763,7 +3755,7 @@ async fn handle_dynamic_request(
 
 /// Finds an available port starting from the given port.
 /// Returns the available port and the socket address.
-fn find_available_port(config: &config::Config) -> AppResult<(u16, std::net::SocketAddr)> {
+fn find_available_port(config: &config::AppConfig) -> AppResult<(u16, std::net::SocketAddr)> {
     let base_addr: std::net::SocketAddr = config
         .server_address()
         .map_err(|e| AppError::config(format!("Invalid server address: {}", e)))?;
@@ -3865,17 +3857,9 @@ fn start_server_instance(
     });
 }
 
-pub async fn start_server_without_shutdown() -> AppResult<u16> {
-    let mut config = config::Config::from_env();
-    config.server.port = 0; // Use port 0 for automatic port assignment
-    // Create a channel that will never receive a shutdown signal
-    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-    // Leak the sender so it never gets dropped and the channel never closes
-    Box::leak(Box::new(tx));
-    start_server_with_config(config, rx).await
-}
-
-pub async fn start_server_without_shutdown_with_config(config: config::Config) -> AppResult<u16> {
+pub async fn start_server_without_shutdown_with_config(
+    config: config::AppConfig,
+) -> AppResult<u16> {
     let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
     start_server_with_config(config, rx).await
 }

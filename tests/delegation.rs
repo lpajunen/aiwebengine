@@ -298,11 +298,10 @@ async fn an_undelegated_task_reaches_nobodys_storage() {
 /// delegated task belonging to an administrator is not *by itself* a way to
 /// get an administrative context.
 ///
-/// This used to hold for `Scope::all()` unconditionally. `Scope::Author` and
-/// `Scope::Administer` are the deliberate exception — a person may now consent
-/// to exactly this, on a page that says so in those words — and the invariant
-/// that replaced the old one is that nothing else confers it and no amount of
-/// asking does. Both halves are covered:
+/// `Scope::Author` and `Scope::Administer` are the deliberate exception — a
+/// person may consent to exactly this, on a page that says so in those words —
+/// and the invariant is that nothing else confers it and no amount of asking
+/// does. Both halves are covered:
 /// `an_administrator_can_delegate_administering_and_nobody_else_can` has the
 /// other one.
 #[tokio::test(flavor = "multi_thread")]
@@ -1414,11 +1413,9 @@ fn _uses_utc() -> chrono::DateTime<Utc> {
     Utc::now()
 }
 
-/// Administering the engine while the person is away, which the cap used to
-/// refuse outright.
+/// Administering the engine while the person is away.
 ///
-/// The change this covers is the one thing `delegation.rs` never allowed: a
-/// delegated run reaching past `authenticated`. It reaches only as far as the
+/// A delegated run reaching past `authenticated` reaches only as far as the
 /// account's own roles, and only because the person ticked the box — so this
 /// walks the whole path, storing roles on a real account and resolving a real
 /// grant, rather than asserting about `context_for` in isolation.

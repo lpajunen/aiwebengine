@@ -11,7 +11,7 @@ pub enum SearchScope {
     /// Root sources and assets alike — what "search my code" means, since a
     /// solution's code is mostly its modules.
     All,
-    /// Root sources only: what this search did before it could read assets.
+    /// Entrypoints only.
     Scripts,
     /// Assets only.
     Assets,
@@ -134,16 +134,14 @@ pub fn search_files_authorized(
         let may_read_assets = options.scope.reads_assets()
             && can_access_assets(user, &meta.uri, &Capability::ReadAssets);
 
-        // One pass over the tree. This used to be two — the root read off the
-        // metadata, the modules read from the asset rows — which is why a
-        // search over a merged tree reported the entrypoint twice.
+        // One pass over the tree, the entrypoint included, so it is reported
+        // once.
         let mut files: Vec<(String, Vec<u8>)> = repository::fetch_assets(&meta.uri)
             .into_iter()
             .map(|(name, asset)| (name, asset.content))
             .collect();
-        // A stable order, so the same search reports the same list twice.
-        // `fetch_assets` hands back a map, and the root used to come first
-        // because it came from somewhere else entirely.
+        // A stable order, so the same search reports the same list twice:
+        // `fetch_assets` hands back a map.
         files.sort_by(|(left, _), (right, _)| {
             let rank = |name: &str| u8::from(!crate::module_loader::is_root_module_name(name));
             rank(left).cmp(&rank(right)).then_with(|| left.cmp(right))

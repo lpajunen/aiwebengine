@@ -268,10 +268,7 @@ impl AuthManager {
     ///
     /// `state` is minted by the caller rather than here, because the only
     /// thing that makes it worth anything is the cookie the caller sets
-    /// alongside it — see [`crate::auth::oauth_state`]. This used to generate
-    /// the state itself, out of the client's IP address, which is what made a
-    /// login fail when the callback arrived over a different network path than
-    /// the request that started it.
+    /// alongside it — see [`crate::auth::oauth_state`].
     ///
     /// # Arguments
     /// * `provider_name` - Name of the OAuth2 provider

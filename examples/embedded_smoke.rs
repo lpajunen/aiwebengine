@@ -3,7 +3,7 @@
 //! No automated test covers this path: a first run downloads and extracts a
 //! PostgreSQL installation, which needs the network and takes minutes, and the
 //! test harness deliberately connects to a server it does not own (see
-//! `tests/common/testdb.rs`). This is the manual check in its place.
+//! `src/test_db.rs`). This is the manual check in its place.
 //!
 //! ```sh
 //! cargo run --features embedded-postgres --example embedded_smoke -- /tmp/pgdata

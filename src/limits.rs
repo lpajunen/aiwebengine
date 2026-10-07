@@ -7,11 +7,6 @@
 //! `x-aiwebengine-limits`, and [`render_placeholders`] is what fills the
 //! `{{limits...}}` markers in the type definitions as they are served.
 //!
-//! The prose half used to be typed out by hand, and it drifted the way a
-//! second copy of a number always does: `init()`'s budget has been documented
-//! as 5 s, as 10 s and as 30 s, each of them true of some engine at some
-//! point. There is now one number per limit, in the code that enforces it.
-//!
 //! Nothing here is a limit of its own. Every field either reads the constant
 //! that enforces it or the configuration captured at startup, because a second
 //! copy of a number is a number that will disagree with the first one — which
@@ -208,8 +203,8 @@ pub struct SchedulerLimits {
 pub struct SearchLimits {
     pub max_files: usize,
     pub max_matches_per_file: usize,
-    /// Matches one `grep` of a single file — `/engine/read_file?grep=` or
-    /// `/engine/write_file?grep=` — reports before it stops looking.
+    /// Matches one `grep` of a single file (`read_file` with `grep`) reports
+    /// before it stops looking.
     pub max_grep_matches_per_read: usize,
     pub max_pattern_chars: usize,
     /// A matching line longer than this comes back truncated, and says so.
@@ -421,12 +416,9 @@ fn rate_limit_budgets() -> Vec<RateLimitBudget> {
 /// Render `text` with every `{{limits...}}` placeholder replaced by the value
 /// this engine is running.
 ///
-/// The type declarations are the other document a solution developer reads,
-/// and they used to carry the numbers as prose typed out by hand — which is
-/// how `init()`'s budget came to be documented as 5 s, as 10 s and as 30 s,
-/// each of them true of some engine at some point. A placeholder cannot drift:
-/// there is one number, it lives in the code that enforces it, and both
-/// documents read it from here.
+/// The type declarations are the other document a solution developer reads.
+/// A placeholder cannot drift: there is one number, it lives in the code that
+/// enforces it, and both documents read it from here.
 ///
 /// An unrecognised placeholder is left as it stands rather than removed, so a
 /// typo shows up in the served file — and in the test below — instead of

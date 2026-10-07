@@ -28,11 +28,7 @@ pub(super) struct HmacVerifyOptions {
 impl SecureGlobalContext {
     /// `crypto` — the cryptography a solution should not be writing for itself.
     ///
-    /// The engine tells scripts to verify their own webhook signatures and
-    /// until now handed them nothing to do it with, so every solution that
-    /// followed the documentation fetched its secret into JavaScript and
-    /// compared it with `===`. See [`crate::security::script_crypto`] for why
-    /// each of these exists; what happens *here* is the part that makes them
+    /// See [`crate::security::script_crypto`] for why each of these exists; what happens *here* is the part that makes them
     /// worth having — the secret is resolved host-side and never crosses into
     /// the runtime.
     ///

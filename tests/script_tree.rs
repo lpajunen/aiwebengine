@@ -1,10 +1,8 @@
 //! A script and its assets are one tree.
 //!
-//! The root source used to be `scripts.content`, a column, while every other
-//! file of a script was a row of `assets`. These tests are about the seam that
-//! is no longer there: the entrypoint is the file named `main.*` in the tree,
-//! read, written, listed, versioned and invalidated by exactly the machinery
-//! that carries the modules beside it.
+//! The entrypoint is the file named `main.*` in the tree, read, written,
+//! listed, versioned and invalidated by exactly the machinery that carries the
+//! modules beside it.
 
 mod common;
 
@@ -248,11 +246,9 @@ async fn a_script_cannot_rewrite_its_own_entrypoint_through_asset_storage() {
     );
 }
 
-/// Running a script is not writing it. Execution used to store the source it
-/// was handed as the entrypoint, which after the merge meant writing a *file*
-/// named from the URI — so every boot rewrote every script, and a TypeScript
-/// script whose URI had no extension grew a second entrypoint, `main.js`,
-/// holding its TypeScript.
+/// Running a script is not writing it: execution storing the source it was
+/// handed would rewrite every script on every boot, and could give a TypeScript
+/// script a second entrypoint, `main.js`, holding its TypeScript.
 #[tokio::test(flavor = "multi_thread")]
 async fn executing_a_script_leaves_its_tree_alone() {
     let _guard = test_mutex().lock().await;
@@ -280,10 +276,9 @@ async fn executing_a_script_leaves_its_tree_alone() {
     );
 }
 
-/// A file written by name is that file. Writing `main.ts` used to go wherever
-/// the tree's existing entrypoint was, or to the name the URI implies — so on
-/// a script whose URI carries no extension the TypeScript landed in
-/// `main.js` and was run untranspiled.
+/// A file written by name is that file: writing `main.ts` must not land in
+/// whatever the tree's existing entrypoint is, where TypeScript in `main.js`
+/// would run untranspiled.
 #[tokio::test(flavor = "multi_thread")]
 async fn writing_an_entrypoint_by_name_is_how_its_language_changes() {
     let _guard = test_mutex().lock().await;
@@ -334,9 +329,7 @@ async fn writing_an_entrypoint_by_name_is_how_its_language_changes() {
 
 /// `files` answers in values, not in sentences: text out, `null` for nothing
 /// there, base64 when asked for, and a throw for a file that is not text.
-/// Each of these used to be a string the caller had to tell apart from
-/// content — `fetchAsset` answered a missing file with a sentence that was
-/// not base64, so the decode was the error check.
+/// None of them is a string the caller has to tell apart from content.
 #[tokio::test(flavor = "multi_thread")]
 async fn files_answers_in_values() {
     let _guard = test_mutex().lock().await;

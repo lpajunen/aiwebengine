@@ -13,11 +13,10 @@ pub(super) const DATABASE_PRELUDE: &str = include_str!("../../../assets/database
 /// repository runs it under.
 ///
 /// Every one of them is validated here rather than nearer the statement, so a
-/// query that cannot mean what it says is refused before anything runs. Two of
-/// those refusals are new: a sort direction that is neither `asc` nor `desc`
-/// used to sort ascending, and an unrecognised option key used to be dropped.
-/// Both handed back a query that read like the one the script asked for and
-/// was not.
+/// query that cannot mean what it says is refused before anything runs — a
+/// sort direction that is neither `asc` nor `desc`, or an unrecognised option
+/// key, would otherwise hand back a query that reads like the one asked for and
+/// is not.
 pub(super) fn build_query_options(
     limit: Option<i32>,
     order_by: Option<String>,
@@ -712,8 +711,8 @@ mod query_option_tests {
 
     #[test]
     fn a_sort_direction_that_is_neither_is_refused() {
-        // It used to sort ascending. A script asking for "descending" got the
-        // opposite of what it asked for, in silence.
+        // Not silently ascending: a script asking for "descending" must not get
+        // the opposite of what it asked for.
         let error = build_query_options(None, None, Some("descending".to_string()), None)
             .expect_err("'descending' is not a direction");
 

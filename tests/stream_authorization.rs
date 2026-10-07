@@ -3,15 +3,11 @@
 //! A stream's customization function is the only place per-resource
 //! authorization can live — whose order `/orders/1234/events` is, is a fact
 //! about the script's data model, and a capability names a verb the engine
-//! understands. But it could not refuse cleanly: it returned a map of filter
-//! criteria, so the only way to deny was to **throw**, which landed in
-//! `build_stream_error_response` as an HTTP 500 with the throw message in the
-//! body. A 500 tells the client to retry something that will be refused
-//! again, and it leaks whatever the script said.
+//! understands.
 //!
-//! A refusal is now a value: `{ deny: 401 | 403 | 404 | …, reason? }`. A
-//! throw still means the function itself failed, which is the distinction
-//! that was missing.
+//! A refusal is a value: `{ deny: 401 | 403 | 404 | …, reason? }`. A throw
+//! means the function itself failed and answers 500 — refusing by throwing
+//! would tell the client to retry something that will be refused again.
 
 mod common;
 

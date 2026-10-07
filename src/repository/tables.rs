@@ -46,9 +46,8 @@ pub struct EnsuredColumn {
 /// Which way a query orders its rows.
 ///
 /// An enum rather than a string because there are two answers and the caller
-/// has to pick one of them. The string form used to fall through to ascending
-/// for anything it did not recognise, so a misspelled `"descending"` sorted
-/// the wrong way without saying so.
+/// has to pick one of them; a misspelled `"descending"` must not sort the
+/// wrong way without saying so.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OrderDirection {
     #[default]
@@ -174,8 +173,7 @@ pub(super) static SCHEMA_SAVEPOINT_COUNTER: std::sync::atomic::AtomicU64 =
 /// Inside a transaction the operation is bracketed by a savepoint, so a failure
 /// — `table already exists`, an invalid column type — leaves the caller's
 /// transaction usable instead of aborting it. That is what a script wrapping an
-/// ensure-schema step in `try`/`catch` expects, and what running on a separate
-/// connection used to give it for free.
+/// ensure-schema step in `try`/`catch` expects.
 ///
 /// Outside one, the operation gets a transaction of its own. These are
 /// multi-statement units — `CREATE TABLE` plus the `script_tables` row that
@@ -1371,8 +1369,8 @@ pub(super) fn parse_filter_conditions(
 
 /// The columns of a script-owned table, with the physical name to address it by.
 ///
-/// Loaded in the one query that used to fetch the physical name alone, so
-/// typing a statement's parameters costs no extra round trip.
+/// Loaded in the same query as the physical name, so typing a statement's
+/// parameters costs no extra round trip.
 pub(super) struct TableColumns {
     pub(super) physical_name: String,
     /// Column name to declared type. Empty for a table that records no schema.

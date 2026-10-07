@@ -1,9 +1,7 @@
 //! The shape a `database` call answers in.
 //!
-//! The calls used to answer with JSON text — and, for a while, with a `String`
-//! object that could also `.json()` itself — and reported a failure as
-//! `{"error": ...}` inside that text, so every caller parsed and then checked.
-//! They answer with values now, and a failure throws.
+//! The calls answer with values, and a failure throws — not JSON text with an
+//! `{"error": ...}` inside it for every caller to parse and then check.
 
 mod common;
 
@@ -94,10 +92,8 @@ async fn a_write_answers_with_the_row_and_no_success_flag() {
 async fn a_failure_throws_with_the_driver_message_intact() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
-    // Postgres names the constraint it rejected in double quotes. The answer
-    // used to be assembled by formatting that into a JSON literal, so the
-    // errors worth reading were the ones that broke the envelope; the message
-    // has to reach the script whole.
+    // Postgres names the constraint it rejected in double quotes, and the
+    // message has to reach the script whole.
     let value = value_of(
         "test://db-shape/quoted-error",
         r#"

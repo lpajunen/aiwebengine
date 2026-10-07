@@ -808,7 +808,7 @@ async fn a_batch_notifies_the_cluster_once_where_single_writes_notify_each_time(
         "three files in one batch should announce one change"
     );
 
-    // The same three files written the old way, for contrast.
+    // The same three files written one at a time, for contrast.
     for (path, source) in [
         ("assets_batch_notify/a.ts", "export const a = 2;"),
         ("assets_batch_notify/b.ts", "export const b = 2;"),
@@ -969,10 +969,9 @@ async fn a_sync_writes_and_removes_as_one_act() {
     );
 }
 
-/// The whole of a change, not the assets of one. A change touching the root
-/// and the modules it imports used to be two writes — two revisions, two
-/// notifications, two init() runs — even though `/engine/check_script` would check
-/// exactly that change in one request.
+/// The whole of a change, not the assets of one: a change touching the root and
+/// the modules it imports is one write — one revision, one notification, one
+/// init() — as `check_script` checks it in one request.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_root_source_travels_with_the_modules_as_one_change() {
     let _guard = test_mutex().lock().await;

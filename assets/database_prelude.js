@@ -10,10 +10,9 @@
 //   database.query("notes", { where: { body: "hello" }, limit: 10 });  -> rows
 //   database.transaction(() => { ... });                    -> what the function returned
 //
-// Ten methods. The schema is described rather than built step by step —
-// `ensureTable` replaced `createTable`, seven `add*Column` calls and
-// `addUniqueIndex` — and the six transaction and savepoint calls are one
-// `transaction(fn)` that cannot be left open.
+// Ten methods. The schema is described (`ensureTable`) rather than built step
+// by step, and transactions are one `transaction(fn)` that cannot be left
+// open.
 
 (function () {
   function unwrap(raw, api) {

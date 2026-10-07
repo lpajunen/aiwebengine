@@ -9,9 +9,7 @@ pub(super) const ENGINE_PRELUDE: &str = include_str!("../../../assets/engine_pre
 impl SecureGlobalContext {
     /// `engine` — the engine's own management tools, reachable from a script.
     ///
-    /// Engine administration was deliberately not exposed to JavaScript: all
-    /// scripts are equal, so exposing it would have meant every script seeing
-    /// it. What answers that is not a privileged-script list but the thing the
+    /// All scripts are equal, so this is every script's. What makes that safe is not a privileged-script list but the thing the
     /// capability model already does — **every call is authorized against the
     /// calling `UserContext`, by the same function `/mcp` calls
     /// ([`crate::engine_api::execute_native_mcp_tool`])**. A script holding
@@ -27,9 +25,8 @@ impl SecureGlobalContext {
     /// [`Principal`] has the argument.
     ///
     /// What is *not* here is a second authorization model. This adds no
-    /// capability, no bypass and no special case; it adds a way to reach
-    /// functions that were previously only reachable over HTTP, with the
-    /// checks they already had.
+    /// capability, no bypass and no special case; it reaches the same
+    /// operations as `/engine/*` and `/mcp`, with the same checks.
     pub(super) fn setup_engine_object(
         &self,
         ctx: &rquickjs::Ctx<'_>,

@@ -536,7 +536,7 @@ mod tests {
 
     /// By the time a middleware runs, the edge has already decided which
     /// address to believe and left exactly that one behind. Reading a chain
-    /// here — which is what this used to do — is reading the claim again.
+    /// here would be reading the claim again.
     #[test]
     fn the_client_ip_is_whatever_the_edge_established() {
         let req = Request::builder()

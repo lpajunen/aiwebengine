@@ -795,11 +795,8 @@ pub const MODERN_PROTOCOL_VERSIONS: &[&str] = &["2026-07-28"];
 /// version appearing in the wrong one would be offered over a transport that
 /// cannot carry it.
 ///
-/// The server used to answer `2024-11-05` unconditionally and drop whatever the
-/// client had asked for, which is not a negotiation — a client speaking a later
-/// revision was told the server only knew the first one, and the engine's own
-/// MCP *client* meanwhile speaks [`crate::mcp_client`]'s version, so the two
-/// halves of the same codebase disagreed about what year it was.
+/// A client is answered in the newest version both sides speak, not told the
+/// server knows only the first one.
 pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
     "2026-07-28",
     "2025-11-25",

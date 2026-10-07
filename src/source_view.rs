@@ -132,10 +132,8 @@ impl SourceView {
     /// Which of the script's files is its root module under this view, or
     /// `None` when the view holds none of the root names.
     ///
-    /// The root used to be addressed by the script's URI, because it was not a
-    /// file: it was a column, and an overlay had to name it the way the module
-    /// loader guessed it. Now it is one entry of the tree like every other, so
-    /// the question is which entry — and the tree answers, in the order
+    /// The root is one entry of the tree like every other, so the question is
+    /// which entry — and the tree answers, in the order
     /// [`crate::module_loader::ROOT_MODULE_NAMES`] lists.
     ///
     /// `Live` asks the database for the one row rather than listing the tree,
@@ -173,9 +171,7 @@ impl SourceView {
 
     /// The script's root source under this view.
     ///
-    /// One file of the tree, read the way every other one is. What used to
-    /// stand here was a third arm per view, because the root lived in a column
-    /// and the rest lived in rows.
+    /// One file of the tree, read the way every other one is.
     pub fn root_content(&self, script_uri: &str) -> Option<String> {
         let path = self.root_path(script_uri)?;
         let file = self.fetch(script_uri, &path)?;

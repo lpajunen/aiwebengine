@@ -288,8 +288,8 @@ pub async fn change_password(
 
 /// Replace an account's password without presenting the one it has now.
 ///
-/// The break-glass half of [`change_password`], and the reason a forgotten
-/// password no longer means editing the database by hand. Nothing reachable
+/// The break-glass half of [`change_password`], so a forgotten password does
+/// not mean editing the database by hand. Nothing reachable
 /// over HTTP calls this: the only caller is `--set-password`, which runs with
 /// no server up and is authorized by holding the configuration file and the
 /// database it points at — the same authority `--grant-role` and

@@ -120,9 +120,8 @@ pub struct NewTask {
     /// What this must not run beside.
     ///
     /// At most one task per `(script, lane)` runs at a time; the rest stay
-    /// pending until it finishes. `None` is no lane, which is every task
-    /// that existed before this and is still the default for `scriptTasks`:
-    /// claimed and run alongside anything else.
+    /// pending until it finishes. `None` is no lane, the default for
+    /// `scriptTasks`: claimed and run alongside anything else.
     pub lane: Option<String>,
 }
 

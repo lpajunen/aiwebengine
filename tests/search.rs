@@ -152,9 +152,7 @@ async fn a_root_source_and_its_module_are_separate_hits() {
     assert_eq!(status, 200, "{}", body);
 
     // Two hits in two files, and the entrypoint is named like any other file
-    // of the tree. It used to come back with no name at all, because it was
-    // not a file — the result carried the script's URI and nothing to say
-    // which part of it matched.
+    // of the tree.
     let found = hits(&body);
     assert!(
         found.contains(&(uri.to_string(), Some("main.js".to_string()))),

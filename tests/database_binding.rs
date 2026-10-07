@@ -1,13 +1,11 @@
 //! What a script's value is bound as, and what happens when it does not fit.
 //!
-//! A parameter used to be typed by the shape of the JSON that carried it, so
-//! one SQL string could arrive with `int8` on one call and `float8` on the
-//! next. sqlx caches a prepared statement under that string alone, which meant
-//! the first call's types outlived it: a float bound against a parameter
-//! prepared as `int8` was reinterpreted rather than refused, and the same
-//! value that rounded to `2` on a fresh connection came back as "integer out
-//! of range" on a used one. Parameters are now typed by the column, and the
-//! type is pinned in the SQL, so a value can only be bound one way.
+//! Parameters are typed by the column, and the type is pinned in the SQL, so a
+//! value can only be bound one way. Typing by the shape of the JSON would let
+//! one SQL string arrive with `int8` on one call and `float8` on the next, and
+//! since sqlx caches a prepared statement under the string alone, the first
+//! call's types would outlive it: the same value could round to `2` on a fresh
+//! connection and fail as "integer out of range" on a used one.
 
 mod common;
 
@@ -28,7 +26,7 @@ async fn eval_against_table(uri: &str, source: &str) -> EvalReport {
 
     let prepared = format!(
         r#"
-        // A refusal throws; these read it back as the answer it used to be.
+        // A refusal throws; these read it back as an answer.
         function attempt(f) {{
             try {{ return f(); }} catch (e) {{ return {{ error: e.message }}; }}
         }}
@@ -108,9 +106,9 @@ async fn an_integer_bind_does_not_poison_a_later_fractional_one() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
-    // The original report. Both inserts are the same SQL text on the same
-    // connection, so the second one used to be bound against whatever the
-    // first one had the statement prepared as.
+    // Both inserts are the same SQL text on the same connection, so the
+    // second must not be bound against whatever the first had the statement
+    // prepared as.
     let report = eval_against_table(
         "test://db-binding/poisoning",
         r#"
@@ -189,8 +187,8 @@ async fn a_null_reaches_a_column_that_is_not_text() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
-    // A null used to be bound as `text` whatever it was going into, which
-    // Postgres refused for every column type but one.
+    // A null is bound as the column's type, not as `text`, which Postgres
+    // refuses for every column type but one.
     let report = eval_against_table(
         "test://db-binding/null",
         r#"
@@ -276,10 +274,9 @@ async fn a_failed_statement_no_longer_takes_the_transaction_with_it() {
 
     // Not every bad write can be caught before it is sent: a duplicate key is
     // only knowable at the server. Postgres aborts a transaction on any error,
-    // so this used to discard the writes either side of it — an unrelated
-    // tick's work included — and the script's `catch` ran with nothing left to
-    // save. Each statement is bracketed by a savepoint now, so the failure
-    // stops at the statement that caused it.
+    // so each statement is bracketed by a savepoint: the failure stops at the
+    // statement that caused it rather than discarding the writes either side
+    // of it.
     let report = eval_against_table(
         "test://db-binding/survives-a-real-error",
         r#"

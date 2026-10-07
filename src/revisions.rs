@@ -293,11 +293,10 @@ async fn record_in(
     // Touching the row locks it for the rest of this transaction and moves it
     // out of the collector's grace period.
     //
-    // The root used to need a statement of its own, because it was a column of
-    // `scripts` rather than a row of `assets`. One statement now covers the
-    // whole tree, which also means the two halves cannot be read against
-    // different snapshots — a file rewritten between them would have been
-    // described by a manifest row whose digest named a blob nothing stored.
+    // One statement covers the whole tree, the root included, so no two files
+    // can be read against different snapshots — a file rewritten between two
+    // reads would be described by a manifest row naming a blob nothing
+    // stored.
     let rows = sqlx::query(
         "WITH current_files AS (
              SELECT uri, name, mimetype, content, encode(sha256(content), 'hex') AS sha256
@@ -364,8 +363,8 @@ async fn record_in(
     let latest = match &previous {
         Some(row) => {
             let previous_id: i64 = row.get("id");
-            // The manifest is the whole answer now that the root is one of its
-            // entries. It used to be half of it, and the root digest the other.
+            // The manifest is the whole answer: the root is one of its
+            // entries.
             if manifest_matches(conn, previous_id, &files).await? {
                 return Ok(None);
             }
@@ -1018,12 +1017,10 @@ pub fn record_blocking_with_parent(
 /// Record how `init()` went, against the revision whose code ran.
 ///
 /// The revision is named by the caller rather than looked up here, and that is
-/// the whole point. This used to update whichever revision was newest, which
-/// is only the same thing when a script serves its newest revision. A pinned
-/// script runs one revision while its head accumulates others, and writing the
-/// outcome to head credited a revision nobody had executed — making it the
-/// answer to `lastGood`, the one place the engine claims to know something
-/// works.
+/// the whole point. A pinned script runs one revision while its head
+/// accumulates others, and writing the outcome to head would credit a revision
+/// nobody had executed — making it the answer to `lastGood`, the one place the
+/// engine claims to know something works.
 ///
 /// `None` records nothing. A script with no history yet has no revision the
 /// outcome belongs to, and inventing one is worse than leaving the question
@@ -1097,10 +1094,6 @@ async fn backfill_missing_inner(scope: Option<String>) -> AppResult<()> {
             // would rely on the order two CTEs happen to run in.
             //
             // One pass over `assets` covers the whole tree, the root included.
-            // It used to be a union of the `scripts.content` column with the
-            // asset rows, spelled that way so a root whose bytes matched an
-            // asset's became one blob rather than two inserts neither of which
-            // could see the other.
             sqlx::query(
                 "WITH missing AS (
                      SELECT s.uri FROM scripts s
@@ -1206,11 +1199,8 @@ impl RevertPlan {
 
     /// Whether restoring would change the script's entrypoint.
     ///
-    /// Derived rather than tracked. It used to be a field, because the root
-    /// was a column and comparing it was a second query beside the manifest
-    /// comparison; now it is one of the files, and this is a question about
-    /// the list rather than a separate fact about the plan. It is still worth
-    /// reporting, because "this revert rewrites the entrypoint" is what a
+    /// Derived from the file lists, since the entrypoint is one of the files.
+    /// It is worth reporting on its own, because "this revert rewrites the entrypoint" is what a
     /// person reads a dry run for.
     pub fn root_changes(&self) -> bool {
         let root_names = crate::module_loader::ROOT_MODULE_NAMES;
@@ -1228,11 +1218,6 @@ impl RevertPlan {
 /// the deployment already has is not rewritten. That keeps a revert to a
 /// nearby revision as small as the change that caused it, and keeps the
 /// revision it records honest about what moved.
-///
-/// The root needs no clause of its own here. It used to need two — a read of
-/// `scripts.content` beside the read of `assets`, and a digest compared
-/// separately — because it was stored apart from the files it is the
-/// entrypoint to.
 pub async fn plan_revert(script_uri: &str, target: i32) -> AppResult<Option<RevertPlan>> {
     let Some(files) = files(script_uri, target).await? else {
         return Ok(None);
@@ -1616,9 +1601,7 @@ pub struct RevisionDiff {
 /// render.
 ///
 /// The root is in the manifest, so it is diffed by the same loop as everything
-/// else. It used to be spliced into both sides afterwards, excluded from the
-/// bulk read, and then read one revision at a time by a helper that existed
-/// for it alone.
+/// else.
 pub async fn diff(
     script_uri: &str,
     from: i32,

@@ -4,12 +4,10 @@ use std::collections::HashMap;
 
 /// What a route points at.
 ///
-/// A script publishes three kinds of thing on a path, and they used to live
-/// in three registries with three invalidation paths and three ways of being
-/// looked up. They are one kind of registration differing in what the engine
-/// does once the path matches: run a handler, open a stream, or send a file.
-/// `routes_introspection_authorized` has always rendered them as one list —
-/// it was only the storage that was split.
+/// A script publishes three kinds of thing on a path, and they are one kind of
+/// registration — one index, one invalidation path — differing in what the
+/// engine does once the path matches: run a handler, open a stream, or send a
+/// file.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RouteKind {

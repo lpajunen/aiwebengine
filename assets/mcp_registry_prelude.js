@@ -27,10 +27,10 @@
     return envelope ? envelope.ok : null;
   }
 
-  // The spec, checked for shape: an object holding only known keys. The old
-  // positional form — a string where the spec goes — is named in the error,
-  // because every script written before the change makes exactly that call.
-  function spec(name, value, keys, api, oldForm) {
+  // The spec, checked for shape: an object holding only known keys. A string
+  // where the spec goes is answered with the call's correct shape, since that
+  // positional form is the commonest way to get it wrong.
+  function spec(name, value, keys, api, positionalForm) {
     if (typeof name !== "string" || name === "") {
       throw new TypeError(
         api + ": the first argument must be a non-empty string",
@@ -40,8 +40,8 @@
       throw new TypeError(
         api +
           "(" +
-          oldForm +
-          ") is now " +
+          positionalForm +
+          ") is not a valid call; use " +
           api +
           "(name, { " +
           keys.join(", ") +

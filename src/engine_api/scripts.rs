@@ -652,10 +652,9 @@ pub fn read_script_authorized(
 
 /// Whether `user` may read one file of `script_uri`'s tree.
 ///
-/// The two halves of a script used to be read under two different rules, and
-/// merging the storage must not quietly pick one of them. The entrypoint is
+/// Two rules, by file. The entrypoint is
 /// the script's source and is read under `ReadScripts`, which asks nothing
-/// about ownership — a solution's code has always been readable by any reader.
+/// about ownership — a solution's code is readable by any reader.
 /// Every other file is an asset and takes `ReadAssets` *plus* ownership.
 /// Collapsing to the first rule would publish every script's private files;
 /// collapsing to the second would make source unreadable to anyone but its

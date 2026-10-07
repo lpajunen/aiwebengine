@@ -765,9 +765,9 @@ async fn test_script_initializer_single_script() {
 }
 
 /// A redeploy must not take the script's routes down. Registrations live only
-/// in the in-memory metadata, so upserting new source — and a re-init that then
-/// fails or times out against it — used to leave the script with an empty route
-/// table, 404ing every one of its routes until some later init() succeeded.
+/// in the in-memory metadata, so upserting new source and a re-init that then
+/// fails or times out against it must not leave the script with an empty route
+/// table, 404ing every one of its routes until some later init() succeeds.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_redeploy_keeps_routes_when_reinit_fails() {
     setup_env().await;

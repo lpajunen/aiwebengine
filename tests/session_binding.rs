@@ -1,12 +1,10 @@
 //! What a session is bound to, and what a mismatch means.
 //!
-//! The rule used to unpick itself: a User-Agent mismatch was forgiven for a
-//! caller whose User-Agent *said* it was an editor or an MCP client, and any
-//! mismatch at all was forgiven once the address had changed — so the more of
-//! the fingerprint differed, the more likely the session was accepted. Both
-//! halves are set by whoever holds the token.
+//! Nothing the caller says about itself forgives a mismatch — a User-Agent
+//! claiming to be an editor or an MCP client, or a changed address, is set by
+//! whoever holds the token.
 //!
-//! What replaces it: a browser session is bound to its client, an API token is
+//! A browser session is bound to its client, an API token is
 //! bound by its audience and realm instead, and the address is binding for
 //! either when the operator says so.
 

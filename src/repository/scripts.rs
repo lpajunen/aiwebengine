@@ -134,8 +134,8 @@ where
 
 /// A root's stored bytes as source text.
 ///
-/// The root lives in `assets.content`, which is `BYTEA`, so unlike the `TEXT`
-/// column it replaced it can hold bytes that are not text — a caller may write
+/// The root lives in `assets.content`, which is `BYTEA`, so it can hold bytes
+/// that are not text — a caller may write
 /// anything to any path in the tree, including this one. That is reported
 /// rather than lost: a lossy decode would hand the bundler a root with
 /// replacement characters in it and blame the resulting syntax error on the
@@ -192,12 +192,12 @@ pub(super) async fn db_ensure_script_row(
 
 /// Database-backed upsert script.
 ///
-/// Two statements rather than one, because a script is now two things: the
+/// Two statements rather than one, because a script is two things: the
 /// `scripts` row that *is* the script — its identity, the row every foreign
 /// key points at — and the file in its tree that holds its source. The row has
 /// to exist before the file, since `assets.script_uri` references it.
 ///
-/// Each statement is an upsert for the reason the single one was: an UPDATE
+/// Each statement is an upsert because an UPDATE
 /// followed by an INSERT when it matched nothing are not a unit, and between
 /// them another instance creating the same script leaves a row where the
 /// UPDATE found none.

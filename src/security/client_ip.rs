@@ -2,9 +2,8 @@
 //!
 //! Every rate limit and every session fingerprint is keyed on a client
 //! address, and `X-Forwarded-For` is a header like any other: whoever connects
-//! writes it. Reading its leftmost value — which is what all four of this
-//! crate's extractors used to do — means an attacker rotating one header gets a
-//! fresh token bucket per request, and a session's binding to an address is
+//! writes it. Reading its leftmost value means an attacker rotating one header
+//! gets a fresh token bucket per request, and a session's binding to an address is
 //! whatever the holder of the token says it is.
 //!
 //! A forwarding header is evidence only about the hop that wrote it, so it is
@@ -172,8 +171,7 @@ pub async fn normalize_client_ip(
 
 /// The client's address, as established at the edge.
 ///
-/// One reader for what used to be four near-identical ones. By the time this
-/// runs, [`normalize_client_ip`] has replaced the forwarding headers with the
+/// The one reader. By the time this runs, [`normalize_client_ip`] has replaced the forwarding headers with the
 /// single address that survived the trust check, so there is nothing to walk
 /// and nothing to weigh.
 pub fn from_headers(headers: &HeaderMap) -> String {
@@ -309,8 +307,8 @@ mod tests {
     }
 
     /// A personal install with nothing in front of it: the socket is all there
-    /// is, and it is enough. Before this, every caller shared one bucket keyed
-    /// on the string "unknown".
+    /// is, and it is enough — callers do not all share one bucket keyed on the
+    /// string "unknown".
     #[test]
     fn a_direct_connection_is_named_by_its_socket() {
         let resolved = resolve(Some(ip("127.0.0.1")), &HeaderMap::new(), &trusted(&[]));

@@ -41,7 +41,7 @@ pub(super) fn setup_secure_global_functions(
 
     GLOBALS_BREAKDOWN.with(|b| b.set(Some((d_ctor, d_native, d_resp))));
 
-    // Auth is no longer set up as a global - it's attached to req.auth by the caller
+    // Auth is not a global: it is attached to req.auth by the caller
 
     Ok(())
 }

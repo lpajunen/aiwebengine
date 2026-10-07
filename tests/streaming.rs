@@ -66,7 +66,6 @@ async fn test_native_script_update_streaming() {
     info!("Testing script upsert through the native engine API...");
 
     // An administrator, because writing a script is administering the engine.
-    // This used to be an anonymous context that development mode elevated.
     let user = aiwebengine::security::UserContext::admin("streaming-test-admin".to_string());
     let upsert_result = aiwebengine::engine_api::upsert_script_authorized(
         &user,
@@ -477,7 +476,7 @@ async fn test_script_update_streaming_integration() {
 async fn test_script_update_message_format() {
     setup_env().await;
     // Test that the script update message format is correct via HTTP API
-    // This test verifies the core.js script properly formats broadcast messages
+    // This test verifies the engine formats broadcast messages properly
 
     let core_script_content = r#"
         // Register stream for message format testing

@@ -74,10 +74,9 @@ pub enum Capability {
     ManageMcp,
     /// Read rows from a script's tables.
     ///
-    /// Split from [`Capability::WriteScriptData`], which used to share one
-    /// name with it. While they were one capability a read-only execution was
-    /// not expressible at all: the same value gated `query` and `delete`, so
-    /// the narrowest context that could read a table could also empty it.
+    /// Separate from [`Capability::WriteScriptData`] so that a read-only
+    /// execution is expressible: the narrowest context that can read a table
+    /// cannot empty it.
     ReadScriptData,
     /// Insert, update, or delete rows in a script's tables.
     ///
@@ -90,9 +89,8 @@ pub enum Capability {
     /// tier, not to the people using the solution.
     ManageScriptDatabase,
     /// Administer the engine: act on scripts, assets, and users the caller does
-    /// not own. This is the administrator marker; `DeleteScripts` used to stand
-    /// in for it, which conflated deleting your own script with administering
-    /// everyone's.
+    /// not own. This is the administrator marker; `DeleteScripts` is not,
+    /// since deleting your own script is not administering everyone's.
     AdministerEngine,
 
     // The rest of this enum names what a *script* does while it runs, rather

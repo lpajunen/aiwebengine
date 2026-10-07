@@ -1,16 +1,16 @@
 //! What a script serves, when that is not simply its newest revision.
 //!
-//! Writing a script's files used to *be* deploying them. That is right for one
-//! person editing their own script and wrong as soon as an agent is editing
-//! modules other people are using: every experiment reaches production because
-//! there is nowhere else for it to go.
+//! Writing a script's files deploys them unless the script is pinned. That is
+//! right for one person editing their own script and wrong as soon as an agent
+//! is editing modules other people are using, where every experiment would
+//! reach production.
 //!
 //! A pin separates the two. Writes still record revisions and still advance
 //! head; they stop being deployments. What is served changes when somebody
 //! says so.
 //!
-//! No pin means follow head — what every script does today — so nothing
-//! changes for anyone who does not opt in.
+//! No pin means follow head, so nothing changes for anyone who does not opt
+//! in.
 
 use sqlx::Row;
 

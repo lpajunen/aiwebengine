@@ -320,7 +320,7 @@ mod tests {
     #[cfg(not(feature = "embedded-postgres"))]
     #[test]
     fn config_validation_refuses_embedded_without_the_feature() {
-        let mut config = crate::config::Config::default();
+        let mut config = crate::config::AppConfig::default();
         config.repository.embedded = true;
 
         let error = config

@@ -2,26 +2,15 @@
 //!
 //! The `state` parameter exists to tie the callback the engine receives back
 //! to the authorization request the engine sent (RFC 6749 §10.12), which takes
-//! something that is remembered between the two. What used to stand in for
-//! that memory was the client's address: the state was
-//! `provider:ip:random`, and the callback was accepted when the provider and
-//! the address in it matched the request carrying it.
+//! something that is remembered between the two.
 //!
-//! That is wrong in both directions. It rejects logins that are fine — an
-//! address is a property of the network path, not of the browser, so a client
-//! that reaches the callback over a different route than it reached the login
-//! page is refused. The clearest case is a dual-stack client, where the
-//! address is not even representable in that format: an IPv6 address contains
-//! colons, so `google:2001:db8::1:8134` splits into eight fields and the state
-//! is refused before anything is compared. Happy Eyeballs picks a family per
-//! connection, which is exactly the intermittent failure this replaces —
-//! retrying the login opens a new connection and often lands on the other
-//! family. And it accepts callbacks that are not: `random` was never checked
-//! against anything, so any address a caller could name was a valid state for
-//! it, and the whole parameter proved nothing.
+//! That memory is not the client's address. An address is a property of the
+//! network path, not of the browser: a dual-stack client reaches the callback
+//! over whichever family Happy Eyeballs picks for that connection, so binding
+//! to it refuses good logins intermittently, and proves nothing about who
+//! started the login.
 //!
-//! What is remembered instead is a cookie the engine sets when the login
-//! starts. The `state` sent to the provider is an opaque nonce, and the
+//! What is remembered is a cookie the engine sets when the login starts. The `state` sent to the provider is an opaque nonce, and the
 //! callback is accepted only when the browser presents a cookie holding that
 //! same nonce — a value an attacker cannot obtain, because it was never sent
 //! to them, and cannot write, because the cookie is `HttpOnly` and host-only.
@@ -29,11 +18,9 @@
 //! this work at all: the provider's redirect back is a top-level GET, which is
 //! the navigation Lax permits a cookie on.
 //!
-//! The redirect target travels in the cookie rather than in the state. It used
-//! to be base64 inside the state parameter, which meant a value the engine had
-//! handed nobody, arriving from the URL bar, decoded and followed — held to a
-//! local path only by [`super::routes::safe_redirect_target`]. In the cookie it
-//! is a value only the engine has ever written.
+//! The redirect target travels in the cookie rather than in the state, so it is
+//! a value only the engine has ever written rather than one arriving from the
+//! URL bar to be decoded and followed.
 //!
 //! Several logins may be in flight at once, because a person with a slow
 //! provider opens a second tab. The cookie holds up to [`MAX_PENDING`] of
@@ -97,7 +84,7 @@ impl PendingLogin {
 }
 
 /// A nonce with enough entropy that guessing it is not an attack: 256 bits,
-/// which is what the whole scheme rests on now that nothing else is checked.
+/// which is what the whole scheme rests on.
 fn new_nonce() -> String {
     let bytes: [u8; 32] = rand::random();
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)

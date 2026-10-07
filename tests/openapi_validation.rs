@@ -553,16 +553,11 @@ async fn test_openapi_javascript_routes_included() {
 async fn test_openapi_asset_and_stream_default_groups() {
     let engine = AdminServer::start().await.expect("server failed to start");
 
-    // core.js no longer registers asset routes; load a script that does.
-    // A file route requires the asset to exist and be owned by the
-    // registering script, so store the asset first.
-    // In this order, and the write of each is checked: an asset is keyed by the
-    // script that owns it, so the row has to exist before the asset can be
-    // stored, and the asset has to be stored before the `init()` that registers
-    // a route onto it can succeed. Both writes used to be made with their
-    // results discarded, and the asset's was failing for want of the script
-    // row — which the test could not notice, because it was reading an asset
-    // route that an earlier run had left registered.
+    // Load a script that registers a file route. In this order, and the
+    // write of each is checked: an asset is keyed by the script that owns it,
+    // so the row has to exist before the asset can be stored, and the asset
+    // has to be stored before the `init()` that registers a route onto it can
+    // succeed.
     let uri = "https://example.com/method_test";
     aiwebengine::repository::upsert_script(
         uri,

@@ -57,7 +57,7 @@ function init(context) {
 
         println!("✓ Script created successfully");
 
-        // Test 2: Verify that actual errors are now properly detected
+        // Test 2: Verify that actual errors are detected
         // When the error detection is working, error responses should have proper error fields
         // and appropriate status codes
 

@@ -1,9 +1,9 @@
 //! Cached index over script route registrations.
 //!
-//! Route matching previously fetched every script's metadata (a full database
-//! read including all script contents) twice per request. This module builds
-//! the lookup table once and serves matching from memory; script changes
-//! invalidate the index and the next request rebuilds it.
+//! Matching a request must not read every script's metadata from the
+//! database. This module builds the lookup table once and serves matching from
+//! memory; script changes invalidate the index and the next request rebuilds
+//! it.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -524,12 +524,9 @@ pub async fn script_serves_host(script_uri: &str, host: &str) -> bool {
 fn resolve(index: &IndexInner, host: &str, path: &str, method: &str) -> RouteLookup {
     // A file route answers GET and HEAD, and is keyed under its own
     // pseudo-method so it does not share a slot with a handler on the same
-    // path. Which of the two wins is stated here, once: the file does,
-    // because that is what three registries consulted in sequence used to
-    // add up to — `try_serve_asset` ran before route matching. It was an
-    // accident of ordering rather than a decision; now it is a decision, and
-    // §4's mount registration is where a collision gets refused outright
-    // rather than resolved.
+    // path. Which of the two wins is stated here, once: the file does. A
+    // collision between scripts is refused at registration rather than
+    // resolved here.
     if method == "GET" || method == "HEAD" {
         let as_file = match_index(index, host, path, repository::ASSET_METHOD);
         if let RouteLookup::Handler { strip_body, .. } = &as_file {

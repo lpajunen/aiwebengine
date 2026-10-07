@@ -111,7 +111,7 @@ async fn a_value_that_is_not_a_string_logs_instead_of_throwing() {
     );
 }
 
-/// `catch (e) { console.error(e) }` is the line this most affects: it used to
+/// `catch (e) { console.error(e) }` is the line this most affects: it must not
 /// throw a second error from inside the handler for the first.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_error_logs_with_its_name_message_and_stack() {

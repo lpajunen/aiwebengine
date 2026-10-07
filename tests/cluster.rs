@@ -254,10 +254,10 @@ fn test_stream_broadcast_payload_deserialization() {
     println!("✓ Stream broadcast payloads can be correctly deserialized");
 }
 
-/// The cluster diagnostics endpoint moved under `/engine` because it reports
+/// The cluster diagnostics endpoint lives under `/engine` because it reports
 /// internal topology (pool metrics, listener state, per-script job counts).
-/// The old unauthenticated `/health/cluster` path must be gone, and the new one
-/// must reject callers without administrator rights.
+/// No unauthenticated `/health/cluster` path serves it, and `/engine/health/cluster`
+/// rejects callers without administrator rights.
 #[tokio::test(flavor = "multi_thread")]
 async fn cluster_health_requires_admin_and_no_longer_serves_the_old_path() {
     let engine = AdminServer::start().await.expect("server failed to start");
@@ -287,7 +287,7 @@ async fn cluster_health_requires_admin_and_no_longer_serves_the_old_path() {
     assert_ne!(
         response.status(),
         200,
-        "the unauthenticated /health/cluster path must no longer serve diagnostics"
+        "the unauthenticated /health/cluster path must not serve diagnostics"
     );
 
     // The plain liveness probe stays public and unauthenticated.

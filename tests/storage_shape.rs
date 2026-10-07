@@ -1,14 +1,13 @@
 //! The shape `scriptStorage` and `personalStorage` present to a script.
 //!
-//! Both are the WHATWG `Storage` interface now, so what a browser teaches about
+//! Both are the WHATWG `Storage` interface, so what a browser teaches about
 //! `localStorage` holds here: a missing key is `null`, keys and values are
 //! coerced with `String()`, `length`/`key(i)`/named access work, and a write
 //! that cannot be done throws rather than answering with prose about it.
 //!
-//! The write path is what these tests are really for. `setItem` used to return
-//! `"Error: …"` while the type declaration said `void`, so a quota overflow —
-//! or writing to personal storage with nobody logged in — was invisible to a
-//! script that believed its own types.
+//! The write path is what these tests are really for: a quota overflow, or
+//! writing to personal storage with nobody signed in, must throw rather than
+//! answer `"Error: …"` from a method declared `void`.
 
 mod common;
 
@@ -89,7 +88,7 @@ async fn a_value_survives_a_round_trip() {
 }
 
 /// The spec coerces both, so `setItem("count", 1)` stores the string `"1"`.
-/// Reaching the host binding with a number used to be a TypeError.
+/// Reaching the host binding with a number must not be a TypeError.
 #[tokio::test(flavor = "multi_thread")]
 async fn keys_and_values_are_coerced_to_strings() {
     let _guard = test_mutex().lock().await;
@@ -142,8 +141,8 @@ async fn setting_a_value_answers_undefined_rather_than_a_status_string() {
     assert_eq!(out, json!(true));
 }
 
-/// The failure this whole change exists for: a write too large to store used to
-/// answer `"Error: Value too large (>1MB)"` from a method declared `void`.
+/// A write too large to store throws, rather than answering
+/// `"Error: Value too large (>1MB)"` from a method declared `void`.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_oversized_value_throws_quota_exceeded() {
     let _guard = test_mutex().lock().await;

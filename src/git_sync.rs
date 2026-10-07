@@ -905,10 +905,9 @@ fn fetch_and_write(
     // Two things have to hold, not one. That the remote has not moved is what
     // this check is usually about — but the base on record has to be the one
     // this pull would compose too, or the shortcut is answering about a mapping
-    // that no longer applies. That is not hypothetical: it is what made a pull
-    // silently do nothing after the URI composition changed underneath it. A
-    // row predating the column carries `None`, which matches nothing, so the
-    // first pull after that migration always does the work.
+    // that no longer applies and a pull silently does nothing. A row with no
+    // base on record carries `None`, which matches nothing, so its first pull
+    // does the work.
     if !request.force {
         let known = crate::database::run_blocking(last_synced(&repo.to_string(), &branch))
             .unwrap_or_default();
@@ -1072,9 +1071,7 @@ fn write_script(
 
     // The entry is written as a file of the tree under its own name, which is
     // one of `main.{ts,js,tsx,jsx}` — the same names the engine stores a root
-    // module under. The two sides used to disagree about what a root is: the
-    // repository had a file and the engine had a column, so a pull split them
-    // apart here and a push joined them back together further down.
+    // module under, so a pull and a push agree on what a root is.
     let mut writes: Vec<crate::engine_api::AssetWrite> = vec![crate::engine_api::AssetWrite {
         name: layout.entry_file_name().to_string(),
         mimetype: None,
@@ -1562,11 +1559,8 @@ fn check_divergence(
 
 /// The repository paths a script's files occupy, with their content.
 ///
-/// One pass over the tree, the entrypoint included. It used to be two, and the
-/// entry's repository path had to be *reconstructed* — `main` plus whatever
-/// extension the script URI happened to end in — because the engine held the
-/// root under no file name at all. The tree now carries its own name for it,
-/// which is the same name the repository uses, so the mapping is the prefix
+/// One pass over the tree, the entrypoint included. The tree's name for the
+/// entrypoint is the name the repository uses, so the mapping is the prefix
 /// and nothing else.
 fn engine_files(
     script_uri: &str,
@@ -2296,8 +2290,8 @@ mod tests {
         );
     }
 
-    /// The entry's extension is no longer part of a script's name, but it is
-    /// still how the entry file is written back.
+    /// The entry's extension is not part of a script's name, but it is how
+    /// the entry file is written back.
     #[test]
     fn the_extension_follows_the_entry() {
         assert_eq!(layout(Some("a"), "a/main.ts").entry_extension(), ".ts");

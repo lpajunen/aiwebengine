@@ -1,16 +1,9 @@
 //! What a person has authorised a script to do as them while they are away.
 //!
-//! Background work that acts as somebody is a grant, and until this the engine
-//! had no model for one. A scheduled handler runs as
-//! `UserContext::admin("scheduler")`, so `fetch` resolving `{{secret:...}}`
-//! looks for the person's key under a user literally named `scheduler`, misses,
-//! and falls back to the script-wide secret; `personalStorage` reads
-//! `context.request.auth.userId` and throws without one. So anything needing a
-//! person's credential or a person's storage could only run inside that
-//! person's request — an agent could work only while its owner's tab was open.
-//!
-//! The fix is not to widen the background context. It is to record what was
-//! consented to, and to hold the background work to exactly that.
+//! Background work that acts as somebody is a grant. Without one, anything
+//! needing a person's credential or storage can only run inside that person's
+//! request. Widening the background context would not do; this records what
+//! was consented to and holds the background work to exactly that.
 //!
 //! # The four things a grant has to answer
 //!
@@ -39,11 +32,11 @@
 //! than being copied forward. A task queued this morning and run this evening
 //! must not be the one place a withdrawn grant still holds.
 //!
-//! And the tier is capped at [`crate::security::UserContext::authenticated`]
-//! however much the person holds. Editing a solution is not something
-//! background work needs, so an administrator's delegated task runs with what
-//! an ordinary request has and nothing more. Narrowing is the safe direction
-//! and it is one sentence to state.
+//! And the tier defaults to [`crate::security::UserContext::authenticated`]
+//! however much the person holds: editing a solution is not something
+//! background work needs by default. `Scope::Author` and `Scope::Administer`
+//! raise it, only when ticked on the consent page and only as far as the
+//! account's own roles reach.
 
 use chrono::{DateTime, Duration, Utc};
 use sqlx::Row;
@@ -1233,11 +1226,9 @@ mod tests {
 
     /// The floor a delegated task starts from, and what it must not contain.
     ///
-    /// This used to be the ceiling as well — the tier was `authenticated`
-    /// whatever the person held. It is now the default rather than the
-    /// maximum: `Scope::Author` and `Scope::Administer` raise it, and only as
-    /// far as the account's roles already reach. What has not changed is that
-    /// a grant naming neither of them lands here.
+    /// It is the default rather than the maximum: `Scope::Author` and
+    /// `Scope::Administer` raise it, and only as far as the account's roles
+    /// already reach. A grant naming neither of them lands here.
     #[test]
     fn the_default_delegated_tier_is_no_more_than_an_ordinary_request_holds() {
         let delegated = UserContext::authenticated("u1".to_string());
@@ -1299,18 +1290,10 @@ mod tests {
         }
     }
 
-    /// And with the verb, it holds what a delegation held before the verb
-    /// existed — with one deliberate exception. This is the assertion the
-    /// migration rests on: adding `write` to a stored grant restores it to
-    /// what its owner agreed to rather than to something new.
-    ///
-    /// The exception is `WriteSecrets`, and it changes no behaviour. The
-    /// surface already refused credential management in a delegated
-    /// execution outright, whatever was granted — the consent page offers to
-    /// let an app *use* your keys, and rotating or deleting one while you are
-    /// away is not using it. So the old context held a capability that
-    /// nothing would honour, and now it does not hold it: the rule is stated
-    /// in one more place rather than in a different way.
+    /// With the verb, it holds everything a read-and-change delegation needs
+    /// except `WriteSecrets`: the consent page offers to let an app *use* your
+    /// keys, and rotating or deleting one while you are away is not using
+    /// it.
     #[test]
     fn a_grant_with_the_verb_holds_what_a_delegation_always_held() {
         let context = context_for("u1", &Scope::all(), &[]);

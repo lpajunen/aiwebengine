@@ -146,9 +146,8 @@ impl ColumnType {
 /// A column default, held as the value it means rather than the SQL that
 /// would produce it.
 ///
-/// Defaults used to leave this module as SQL text — `NOW()`, `'quoted'`,
-/// `true` — which made every caller that spliced one into a statement a place
-/// where a dialect had leaked. Keeping the value lets each backend write it
+/// Holding the value rather than SQL text (`NOW()`, `'quoted'`, `true`) keeps
+/// the dialect out of every caller that splices one into a statement, and lets each backend write it
 /// the way that backend spells it, and lets the engine compare two defaults
 /// without parsing SQL.
 #[derive(Debug, Clone, PartialEq)]
@@ -261,7 +260,7 @@ impl BindType {
     ///
     /// Tables predating the schema metadata — and lease tables, which record
     /// no columns — have nothing to look the column up in. The value's shape
-    /// is all that is left, which is the old behaviour; what keeps it safe is
+    /// is all that is left; what keeps it safe is
     /// that the guess is pinned by the cast the dialect writes, so two
     /// different guesses land on two different cached statements.
     pub fn infer(value: &serde_json::Value) -> Self {
@@ -573,7 +572,7 @@ mod tests {
             )
         );
 
-        // Previously anything at all was forwarded for the database to judge.
+        // A default that does not parse is refused here, not left to the database.
         assert!(ColumnType::Timestamp.parse_default("whenever").is_err());
     }
 

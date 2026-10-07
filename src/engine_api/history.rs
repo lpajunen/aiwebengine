@@ -136,9 +136,7 @@ impl RevertOutcome {
     /// Whether the revert moved anything at all.
     ///
     /// The file lists are the whole answer, because the entrypoint is one of
-    /// the files they list. They used to be only part of it — a revert that
-    /// restored nothing but the root reported two empty lists, and a caller
-    /// reading them would have concluded nothing happened.
+    /// the files they list.
     pub fn changed_anything(&self) -> bool {
         !self.assets_written.is_empty() || !self.assets_deleted.is_empty()
     }
@@ -287,9 +285,7 @@ pub(super) fn apply_revert(
         .map_err(|e| format!("Failed to open revert transaction: {}", e))?;
 
     let result = (|| -> Result<Option<i32>, String> {
-        // The entrypoint is one of the writes. It used to need a call of its
-        // own here, before them, because restoring it was a different kind of
-        // write to a different table.
+        // The entrypoint is one of the writes, restored like any other file.
         if !writes.is_empty() {
             let now = std::time::SystemTime::now();
             let assets = writes

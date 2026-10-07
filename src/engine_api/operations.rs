@@ -327,7 +327,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "read_file",
-            "Read one file of a script, or part of it with 'lines' or 'grep'. Text is 'content', anything else 'content_base64'; the reply carries the file's sha256 (edit_file's base_sha256). Reads head, which for a pinned script is not what it serves; a 'deployment' block says so.",
+            "Read one file of a script, or part of it with 'lines' or 'grep'. The bytes are 'content', with 'encoding' saying 'utf8' or 'base64'; the reply carries the file's sha256 (edit_file's base_sha256). Reads head, which for a pinned script is not what it serves; a 'deployment' block says so.",
             || {
                 json!({
                     "type": "object",

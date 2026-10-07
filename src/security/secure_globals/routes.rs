@@ -341,7 +341,7 @@ impl RouteRegistrar {
                 // could see — not the write path, not the revision manifest,
                 // not a git diff. Refused rather than warned about, which is
                 // what makes the directory the answer rather than a
-                // suggestion; publishing a file is now moving it, which is a
+                // suggestion: publishing a file is moving it, which is a
                 // reviewable act.
                 if !crate::exposure::is_publishable(&file) {
                     crate::exposure::note_refusal(&self.script_uri, false, path, &file);
@@ -522,14 +522,11 @@ impl SecureGlobalContext {
     /// `routeRegistry` over it.
     ///
     /// One registration call, `registerRoute(path, spec)`, whose spec says what
-    /// the path leads to: `{ handler }`, `{ stream: true }` or `{ file }`. The
-    /// three used to be three functions with three signatures, and the internals
-    /// had already become one record (`RouteMetadata` carries a `RouteKind`), so
-    /// the only thing three names still bought was three ways to answer.
+    /// the path leads to: `{ handler }`, `{ stream: true }` or `{ file }` — one
+    /// call because it is one record (`RouteMetadata` carries a `RouteKind`).
     ///
-    /// They answered with strings. A refusal, a success and a misuse were all a
-    /// sentence the script could not tell apart without parsing English. Now
-    /// misuse throws — a malformed spec, a reserved path, a capability the
+    /// A refusal, a success and a misuse are distinguishable without parsing
+    /// English: misuse throws — a malformed spec, a reserved path, a capability the
     /// caller lacks — and a *refusal* is a value, `{ ok: false, reason }`, so a
     /// script that gets one path wrong keeps the rest of its registrations.
     pub(super) fn setup_route_registry(

@@ -262,10 +262,9 @@ impl TestRunner {
     /// abandons the blocking task and every verdict with it. So the outer
     /// budget gets a grace period and serves as a last resort.
     ///
-    /// It used to be the only cover for a module blocked in a host call, where
-    /// no bytecode runs for the interrupt handler to stop. The host-call budget
-    /// now bounds those directly, which leaves this for what neither reaches:
-    /// a wait inside the engine itself.
+    /// A module blocked in a host call is bounded by the host-call budget,
+    /// which leaves this for what neither reaches: a wait inside the engine
+    /// itself.
     pub async fn run(&self, request: TestRunRequest) -> TestRunResult {
         let started = std::time::Instant::now();
         let script_uri = request.script_uri.clone();

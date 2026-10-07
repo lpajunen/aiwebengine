@@ -1,11 +1,9 @@
 //! What a column gives back is the type it was declared.
 //!
-//! A row used to be decoded by trying each Rust type in turn and keeping the
-//! first that succeeded. That works only where the wire format carries the
-//! column's own type — Postgres does, so a boolean fails the integer attempt
-//! and falls through to the right one. A backend that stores a boolean as 0 or
-//! 1 does not: the integer attempt succeeds first, and `true` comes back to
-//! the script as `1`. Nothing errors and nothing is logged.
+//! A row is decoded by the column's declared type, not by trying each Rust
+//! type in turn: that works only where the wire format carries the column's
+//! own type, and a backend storing a boolean as 0 or 1 would hand `true` back
+//! to the script as `1`, with nothing errored and nothing logged.
 //!
 //! So these are not Postgres tests. They are the contract every backend has to
 //! meet, written against the one that exists — what a script stores is what it
@@ -289,8 +287,8 @@ async fn a_timestamp_default_that_names_no_instant_is_refused() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
-    // This used to be forwarded to the database quoted, so what counted as a
-    // time was whatever that database's parser happened to take. A default is
+    // Not forwarded to the database to judge: what counts as a time must not
+    // be whatever one database's parser happens to take. A default is
     // read back by whichever engine holds the table later, so the set of
     // strings that mean a time has to be the engine's own.
     let report = eval_with_probe_table(

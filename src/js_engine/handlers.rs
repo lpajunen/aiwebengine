@@ -615,10 +615,9 @@ pub fn execute_task_handler(
         },
         // What the handler returned, kept rather than discarded.
         //
-        // Every task used to answer `()`, which was right while the only
-        // consumer was the queue — a task's effects are its output, and what it
-        // did is in the script's log. An MCP task is the case where somebody is
-        // waiting for a *value*: `tasks/get` has to answer with what the tool
+        // For a queued task the effects are the output and the log says what
+        // it did. An MCP task is the case where somebody is waiting for a
+        // *value*: `tasks/get` has to answer with what the tool
         // call would have returned synchronously, and the handler's return is
         // the only place that can come from. A conversion failure is not a task
         // failure, so it lands as `None` rather than poisoning the run.

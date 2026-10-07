@@ -456,12 +456,9 @@ pub(super) fn validate_asset(asset: &Asset) -> AppResult<()> {
         return Err(RepositoryError::InvalidData("Asset URI cannot be empty".to_string()).into());
     }
 
-    // The entrypoint is source rather than payload, so it meets the ceiling
-    // source has always met. The two used to apply to two different stores
-    // and could not disagree; now that the root is a file of the same tree,
-    // taking the file ceiling for it would have raised the limit on a
-    // script's source from 1MB to 10MB by way of a storage change nobody
-    // meant as a policy change.
+    // The entrypoint is source rather than payload, so it meets the 1MB source
+    // ceiling, not the 10MB file one, although it is a file of the same
+    // tree.
     let (ceiling, label) = if crate::module_loader::is_root_module_name(&asset.uri) {
         (MAX_SCRIPT_CONTENT_BYTES, "Script content too large (>1MB)")
     } else {

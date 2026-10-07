@@ -22,9 +22,8 @@ struct CachedTranspilation {
 
 /// Ceiling on the transpiled output held at once, in bytes.
 ///
-/// Entries are keyed by asset URI, so the map this replaced was bounded by how
-/// many TypeScript modules the database happened to hold — never by anything
-/// anyone chose — and nothing but an explicit invalidation ever took one out.
+/// Entries are keyed by asset URI, so without a ceiling the cache would be
+/// bounded only by how many TypeScript modules the database happens to hold.
 /// Output carries an inline source map and so runs several times its input;
 /// bytes are therefore the bound that means something, and this one sits far
 /// above what a deployment reaches while still being a number rather than

@@ -14,9 +14,9 @@ impl SecureGlobalContext {
         _script_uri: &str,
     ) -> JsResult<()> {
         // `__hostConvert` answers in the envelope `convert_prelude.js` unwraps.
-        // A conversion that fails used to answer `"Error: ..."` as its result,
-        // which for `markdown_to_html` is indistinguishable from a document
-        // that begins with those words.
+        // A failure answering `"Error: ..."` as its result would be, for
+        // `markdown_to_html`, indistinguishable from a document that begins
+        // with those words.
         let host = rquickjs::Object::new(ctx.clone())?;
 
         let markdown_to_html = Function::new(ctx.clone(), move |markdown: String| -> String {

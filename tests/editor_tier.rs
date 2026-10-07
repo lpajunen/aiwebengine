@@ -1,9 +1,9 @@
 //! Tests for the boundary between using a solution and authoring one.
 //!
 //! The engine has four principals: anonymous, authenticated, editor and
-//! administrator. The middle two are the ones that used to be collapsed —
-//! every signed-in user held `WriteScripts`, so anyone with an account could
-//! deploy server-side JavaScript. These tests pin the tiers apart:
+//! administrator. The middle two must stay apart — if every signed-in user
+//! held `WriteScripts`, anyone with an account could deploy server-side
+//! JavaScript. These tests pin the tiers apart:
 //!
 //! - an authenticated user gets what *serving their requests* needs and
 //!   nothing that edits the solution,

@@ -132,10 +132,10 @@ impl Grade {
 
 /// The bundles named in an OAuth2 `scope`.
 ///
-/// A token is a session, so until this existed the smallest credential the
-/// engine could mint carried its holder's whole authority — which is what made
-/// a stored `/mcp` token a way for a script to hold, through a credential,
-/// authority the capability model refuses to hand it directly.
+/// A token is a session, so without scoped elevation the smallest credential
+/// the engine could mint would carry its holder's whole authority — and a
+/// stored `/mcp` token would be a way for a script to hold, through a
+/// credential, authority the capability model refuses to hand it directly.
 ///
 /// Scope values that are not bundles are ignored rather than refused. A client
 /// sends `openid email profile` alongside whatever it wants, and an
