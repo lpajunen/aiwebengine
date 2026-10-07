@@ -329,20 +329,32 @@ async fn a_request_handler_can_enqueue_work_that_runs_after_it_answers() {
     .expect("script should store");
     repository::clear_log_messages(script_uri).expect("logs should clear");
 
-    let (status, body, _) = tokio::task::spawn_blocking(move || {
-        js_engine::execute_script_for_request(
-            script_uri,
-            "startWork",
-            "/start",
-            "GET",
-            Default::default(),
-            Default::default(),
-            None,
-        )
+    let response = tokio::task::spawn_blocking(move || {
+        js_engine::execute_script_for_request_secure(js_engine::RequestExecutionParams {
+            script_uri: script_uri.to_string(),
+            handler_name: "startWork".to_string(),
+            path: "/start".to_string(),
+            method: "GET".to_string(),
+            url: None,
+            query_params: None,
+            form_data: None,
+            raw_body: None,
+            headers: std::collections::HashMap::new(),
+            user_context: aiwebengine::security::UserContext::anonymous(),
+            route_params: None,
+            auth_context: None,
+            uploaded_files: None,
+            request_id: None,
+            route_pattern: None,
+        })
     })
     .await
     .expect("no panic")
     .expect("the handler should answer");
+    let (status, body) = (
+        response.status,
+        String::from_utf8(response.body).expect("utf-8 body"),
+    );
 
     assert_eq!(status, 202, "the handler answers before the work is done");
     let task_id: uuid::Uuid = body.trim().parse().expect("the handler returns a task id");

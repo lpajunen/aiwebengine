@@ -191,7 +191,11 @@ async fn test_basic_streaming_functionality() {
 
     // Store and execute the test script to register the stream
     let _ = aiwebengine::repository::upsert_script("test_basic_streaming.js", test_script);
-    let result = js_engine::execute_script("test_basic_streaming.js", test_script);
+    let result = js_engine::execute_script_secure(
+        "test_basic_streaming.js",
+        test_script,
+        aiwebengine::security::UserContext::admin("test".to_string()),
+    );
     assert!(
         result.success,
         "Test script execution failed: {:?}",
@@ -233,7 +237,11 @@ async fn test_basic_streaming_functionality() {
         }));
     "#;
 
-    let send_result = js_engine::execute_script("test_send.js", send_script);
+    let send_result = js_engine::execute_script_secure(
+        "test_send.js",
+        send_script,
+        aiwebengine::security::UserContext::admin("test".to_string()),
+    );
     assert!(
         send_result.success,
         "Failed to send message: {:?}",
@@ -302,7 +310,11 @@ async fn test_direct_stream_message() {
     // The connection might fail if the stream isn't registered yet, which is expected
 
     // Execute the script (this registers the stream and sends a message)
-    let result = js_engine::execute_script("test_direct.js", test_script);
+    let result = js_engine::execute_script_secure(
+        "test_direct.js",
+        test_script,
+        aiwebengine::security::UserContext::admin("test".to_string()),
+    );
     assert!(
         result.success,
         "Direct test script failed: {:?}",
@@ -324,7 +336,7 @@ async fn test_direct_stream_message() {
     info!("Created connection {} for direct test", connection_id);
 
     // Execute the script again to send another message
-    let result2 = js_engine::execute_script(
+    let result2 = js_engine::execute_script_secure(
         "test_direct2.js",
         r#"
         routeRegistry.sendStreamMessage('/direct_test', JSON.stringify({
@@ -333,6 +345,7 @@ async fn test_direct_stream_message() {
             timestamp: new Date().toISOString()
         }));
     "#,
+        aiwebengine::security::UserContext::admin("test".to_string()),
     );
     assert!(
         result2.success,
@@ -602,7 +615,11 @@ async fn test_stream_endpoints() {
         .expect("Failed to initialize stream test script");
 
     // Execute the script to register the endpoints
-    let result = js_engine::execute_script("stream-test", script_content);
+    let result = js_engine::execute_script_secure(
+        "stream-test",
+        script_content,
+        aiwebengine::security::UserContext::admin("test".to_string()),
+    );
     println!("Script execution result: {:?}", result);
     assert!(result.success, "Script should execute successfully");
 
@@ -755,13 +772,21 @@ async fn test_stream_messaging() {
         }
     "#;
 
-    let minimal_result = js_engine::execute_script("minimal-test", minimal_test);
+    let minimal_result = js_engine::execute_script_secure(
+        "minimal-test",
+        minimal_test,
+        aiwebengine::security::UserContext::admin("test".to_string()),
+    );
     println!("Minimal test result: {:?}", minimal_result);
     let minimal_logs = repository::fetch_log_messages("minimal-test");
     println!("Minimal test logs: {:?}", minimal_logs);
 
     // Execute the script to register the endpoints
-    let result = js_engine::execute_script("notification-test", script_content);
+    let result = js_engine::execute_script_secure(
+        "notification-test",
+        script_content,
+        aiwebengine::security::UserContext::admin("test".to_string()),
+    );
     println!("Notification script execution result: {:?}", result);
     assert!(result.success, "Script should execute successfully");
 
@@ -1048,7 +1073,11 @@ async fn test_simple_stream_registration() {
     println!("Testing simple stream registration");
 
     // Execute the test script
-    let result = js_engine::execute_script("simple_test.js", test_script);
+    let result = js_engine::execute_script_secure(
+        "simple_test.js",
+        test_script,
+        aiwebengine::security::UserContext::admin("test".to_string()),
+    );
 
     if !result.success {
         println!("Script execution failed: {:?}", result.error);
@@ -1087,7 +1116,11 @@ async fn test_simple_message_sending() {
     println!("Testing simple message sending");
 
     // Execute the test script
-    let result = js_engine::execute_script("simple_send.js", test_script);
+    let result = js_engine::execute_script_secure(
+        "simple_send.js",
+        test_script,
+        aiwebengine::security::UserContext::admin("test".to_string()),
+    );
 
     println!(
         "Script result: success={}, error={:?}",
@@ -1119,7 +1152,11 @@ async fn test_combined_functionality() {
 
     println!("Testing combined functionality");
 
-    let result = js_engine::execute_script("combined_test.js", test_script);
+    let result = js_engine::execute_script_secure(
+        "combined_test.js",
+        test_script,
+        aiwebengine::security::UserContext::admin("test".to_string()),
+    );
 
     println!(
         "Combined result: success={}, error={:?}",

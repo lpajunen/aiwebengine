@@ -9,6 +9,27 @@ mod common;
 use aiwebengine::script_limits::{self, Overrides};
 use aiwebengine::{js_engine, repository};
 use common::setup_env;
+use std::collections::HashMap;
+
+fn anonymous_get(script_uri: &str, handler: &str, path: &str) -> js_engine::RequestExecutionParams {
+    js_engine::RequestExecutionParams {
+        script_uri: script_uri.to_string(),
+        handler_name: handler.to_string(),
+        path: path.to_string(),
+        method: "GET".to_string(),
+        url: None,
+        query_params: None,
+        form_data: None,
+        raw_body: None,
+        headers: HashMap::new(),
+        user_context: aiwebengine::security::UserContext::anonymous(),
+        route_params: None,
+        auth_context: None,
+        uploaded_files: None,
+        request_id: None,
+        route_pattern: None,
+    }
+}
 
 /// The property that makes the feature safe to ship: nothing changes for a
 /// script nobody has overridden.
@@ -59,15 +80,7 @@ async fn a_lowered_timeout_actually_stops_a_slow_script() {
 
     let started = std::time::Instant::now();
     let result = tokio::task::spawn_blocking(move || {
-        js_engine::execute_script_for_request(
-            script_uri,
-            "spin",
-            "/spin",
-            "GET",
-            Default::default(),
-            Default::default(),
-            None,
-        )
+        js_engine::execute_script_for_request_secure(anonymous_get(script_uri, "spin", "/spin"))
     })
     .await
     .expect("no panic");

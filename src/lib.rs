@@ -2046,7 +2046,8 @@ async fn setup_routes(
                         "serverInfo": {
                             "name": "aiwebengine",
                             "version": env!("CARGO_PKG_VERSION")
-                        }
+                        },
+                        "instructions": mcp::instructions(native_tools_allowed)
                     }
                 }))
             }
@@ -4126,9 +4127,10 @@ mod tests {
         );
 
         // Test that test_editor script can be executed without errors
-        let test_editor_result = js_engine::execute_script(
+        let test_editor_result = js_engine::execute_script_secure(
             "https://example.com/test_editor",
             include_str!("../scripts/test_scripts/test_editor.js"),
+            crate::security::UserContext::admin("test".to_string()),
         );
         assert!(
             test_editor_result.success,

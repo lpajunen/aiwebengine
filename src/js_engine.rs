@@ -821,12 +821,7 @@ fn setup_secure_global_functions(
     setup_response_builders(ctx)?;
     let d_resp = t.elapsed();
 
-    // Add validation helpers
-    let t = Instant::now();
-    setup_validation_helpers(ctx)?;
-    let d_valid = t.elapsed();
-
-    GLOBALS_BREAKDOWN.with(|b| b.set(Some((d_ctor, d_native, d_resp, d_valid))));
+    GLOBALS_BREAKDOWN.with(|b| b.set(Some((d_ctor, d_native, d_resp))));
 
     // Auth is no longer set up as a global - it's attached to req.auth by the caller
 
@@ -835,9 +830,9 @@ fn setup_secure_global_functions(
 
 thread_local! {
     /// Carries the last globals-install sub-timings (ctor, native fns, response
-    /// builders, validation helpers) so the per-request profiler can log them
+    /// builders) so the per-request profiler can log them
     /// *outside* any timed window — logging inside would inflate the reading.
-    static GLOBALS_BREAKDOWN: std::cell::Cell<Option<(Duration, Duration, Duration, Duration)>> =
+    static GLOBALS_BREAKDOWN: std::cell::Cell<Option<(Duration, Duration, Duration)>> =
         const { std::cell::Cell::new(None) };
 }
 
@@ -909,116 +904,6 @@ fn setup_response_builders(ctx: &rquickjs::Ctx<'_>) -> Result<(), rquickjs::Erro
     Ok(())
 }
 
-/// Sets up validation helper functions for JavaScript execution contexts
-///
-/// This function provides convenient validation utilities for JavaScript handlers
-/// to validate query parameters, path parameters, and other input data.
-fn setup_validation_helpers(ctx: &rquickjs::Ctx<'_>) -> Result<(), rquickjs::Error> {
-    // Create the validation object with helper functions using JavaScript
-    ctx.eval::<(), _>(
-        r#"
-        globalThis.validate = {
-            requireQueryParam: function(context, paramName) {
-                if (!context.request || !context.request.query) {
-                    throw new Error("Request context or query parameters not available");
-                }
-                const value = context.request.query[paramName];
-                if (value === undefined || value === null || value === "") {
-                    throw new Error("Required query parameter '" + paramName + "' is missing or empty");
-                }
-                return value;
-            },
-
-            requirePathParam: function(context, paramName) {
-                if (!context.request || !context.request.params) {
-                    throw new Error("Request context or path parameters not available");
-                }
-                const value = context.request.params[paramName];
-                if (value === undefined || value === null || value === "") {
-                    throw new Error("Required path parameter '" + paramName + "' is missing or empty");
-                }
-                return value;
-            },
-
-            validateString: function(value, options) {
-                if (typeof value !== 'string') {
-                    throw new Error("Expected string, got " + typeof value);
-                }
-
-                const opts = options || {};
-                const minLength = opts.minLength || 0;
-                const maxLength = opts.maxLength || Infinity;
-                const pattern = opts.pattern;
-
-                if (value.length < minLength) {
-                    throw new Error("String too short: minimum length is " + minLength + ", got " + value.length);
-                }
-                if (value.length > maxLength) {
-                    throw new Error("String too long: maximum length is " + maxLength + ", got " + value.length);
-                }
-                if (pattern && !pattern.test(value)) {
-                    throw new Error("String does not match required pattern");
-                }
-
-                return value;
-            },
-
-            validateNumber: function(value, options) {
-                const num = Number(value);
-                if (isNaN(num)) {
-                    throw new Error("Expected number, got " + value);
-                }
-
-                const opts = options || {};
-                const min = opts.min;
-                const max = opts.max;
-
-                if (min !== undefined && num < min) {
-                    throw new Error("Number too small: minimum is " + min + ", got " + num);
-                }
-                if (max !== undefined && num > max) {
-                    throw new Error("Number too large: maximum is " + max + ", got " + num);
-                }
-
-                return num;
-            }
-        };
-
-        // Also expose as global functions for convenience
-        globalThis.requireQueryParam = function(paramName) {
-            return globalThis.validate.requireQueryParam(globalThis.context, paramName);
-        };
-
-        globalThis.requirePathParam = function(paramName) {
-            return globalThis.validate.requirePathParam(globalThis.context, paramName);
-        };
-
-        globalThis.validateString = function(value, minLength, maxLength) {
-            return globalThis.validate.validateString(value, { minLength: minLength, maxLength: maxLength });
-        };
-
-        globalThis.validateNumber = function(value, min, max) {
-            return globalThis.validate.validateNumber(value, { min: min, max: max });
-        };
-
-        globalThis.optionalQueryParam = function(paramName, defaultValue) {
-            try {
-                return globalThis.requireQueryParam(paramName);
-            } catch (e) {
-                return defaultValue;
-            }
-        };
-        "#,
-    )?;
-
-    Ok(())
-}
-
-/// Sets up common global functions for JavaScript execution contexts (LEGACY)
-///
-/// This function consolidates the repeated pattern of setting up global functions
-/// across different execution contexts (script registration, request handling, tests)
-///
 /// Represents the result of executing a JavaScript script
 #[derive(Debug, Clone)]
 pub struct ScriptExecutionResult {
@@ -1213,139 +1098,6 @@ pub fn execute_script_secure(
     }
 }
 
-/// Executes a JavaScript script (LEGACY - has security vulnerabilities).
-/// This function creates a QuickJS runtime, sets up the register function,
-/// executes the script, and returns information about the registrations made.
-pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
-    let start_time = Instant::now();
-
-    tracing::info!("execute_script called for URI: {}", uri);
-
-    // Validate script using configured limits
-    let limits = crate::script_limits::for_script(uri);
-    if let Err(e) = validate_script(content, &limits) {
-        return ScriptExecutionResult::failed(e, start_time.elapsed().as_millis() as u64);
-    }
-
-    let registrations = Rc::new(RefCell::new(HashMap::new()));
-    let uri_owned = uri.to_string();
-
-    // Bundle before arming the runtime's interrupt deadline (see
-    // `execute_script_secure`).
-    let executable_code = match transpile_if_needed(&uri_owned, content) {
-        Ok(code) => code,
-        Err(e) => {
-            return ScriptExecutionResult::failed(
-                format!("Transpilation failed: {}", e),
-                start_time.elapsed().as_millis() as u64,
-            );
-        }
-    };
-
-    match create_sandboxed_runtime(&limits) {
-        Ok((rt, _budget)) => {
-            match Context::full(&rt) {
-                Ok(ctx) => {
-                    let result =
-                        ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-                            // This entry point exists to run a script and
-                            // collect what it registers - it passes a real
-                            // register function below - so it is a
-                            // registration pass like startup and init().
-                            let config = GlobalSecurityConfig {
-                                registration_phase: true,
-                                log_context: HandlerInvocationKind::Init.log_context(
-                                    &uri_owned,
-                                    crate::middleware::generate_request_id(),
-                                    None,
-                                ),
-                                ..Default::default()
-                            };
-
-                            // Create the register function that captures registrations
-                            let regs_clone = Rc::clone(&registrations);
-                            let uri_clone = uri_owned.clone();
-                            let register_impl = std::rc::Rc::new(
-                        move |path: &str,
-                              route_metadata: &repository::RouteMetadata,
-                              method: Option<&str>|
-                              -> Result<(), rquickjs::Error> {
-                            let method = method.unwrap_or("GET");
-                            tracing::info!(
-                                "Registering route {} {} -> {} for script {}",
-                                method, path, route_metadata.handler_name, uri_clone
-                            );
-                            if let Ok(mut regs) = regs_clone.try_borrow_mut() {
-                                regs.insert(
-                                    (path.to_string(), method.to_string()),
-                                    route_metadata.clone(),
-                                );
-                            }
-                            Ok(())
-                        },
-                    );
-
-                            setup_secure_global_functions(
-                                &ctx,
-                                &uri_owned,
-                                UserContext::admin("route-discovery".to_string()),
-                                &config,
-                                Some(register_impl),
-                                None, // No auth context during script registration
-                            )?;
-
-                            // Execute the script (already bundled above)
-                            crate::bytecode::eval_program(&ctx, &uri_owned, &executable_code)?;
-                            Ok(())
-                        });
-
-                    let exec_result = match result {
-                        Ok(_) => {
-                            tracing::info!("Successfully executed script {}", uri_owned);
-                            let final_regs = registrations.borrow().clone();
-                            tracing::info!(
-                                "Script {} registered {} routes: {:?}",
-                                uri_owned,
-                                final_regs.len(),
-                                final_regs
-                            );
-                            let execution_time = start_time.elapsed().as_millis() as u64;
-                            ScriptExecutionResult::success(final_regs, execution_time)
-                        }
-                        Err(e) => {
-                            error!("Failed to execute script {}: {}", uri_owned, e);
-                            ScriptExecutionResult::failed(
-                                format!("Script evaluation error: {}", e),
-                                start_time.elapsed().as_millis() as u64,
-                            )
-                        }
-                    };
-
-                    // Ensure clean shutdown: drop Context before Runtime
-                    ensure_clean_shutdown(ctx, exec_result)
-                }
-                Err(e) => {
-                    error!(
-                        "Failed to create QuickJS context for script {}: {}",
-                        uri_owned, e
-                    );
-                    ScriptExecutionResult::failed(
-                        format!("Context creation error: {}", e),
-                        start_time.elapsed().as_millis() as u64,
-                    )
-                }
-            }
-        }
-        Err(e) => {
-            error!(
-                "Failed to create QuickJS runtime for script {}: {}",
-                uri_owned, e
-            );
-            ScriptExecutionResult::failed(e, start_time.elapsed().as_millis() as u64)
-        }
-    }
-}
-
 /// JavaScript HTTP response structure
 #[derive(Debug, Clone)]
 pub struct JsHttpResponse {
@@ -1508,13 +1260,12 @@ pub fn execute_script_for_request_secure(
             total_us = total.as_micros() as u64,
             "request phase profile"
         );
-        if let Some((ctor, native, resp, valid)) = GLOBALS_BREAKDOWN.with(|b| b.take()) {
+        if let Some((ctor, native, resp)) = GLOBALS_BREAKDOWN.with(|b| b.take()) {
             info!(
                 target: "request_profile",
                 ctor_us = ctor.as_micros() as u64,
                 native_fns_us = native.as_micros() as u64,
                 response_builders_us = resp.as_micros() as u64,
-                validation_helpers_us = valid.as_micros() as u64,
                 "globals install breakdown"
             );
         }
@@ -1782,137 +1533,6 @@ fn invoke_handler_and_build_response(
         |ctx| call_handler(ctx, params, auth_context),
         |_ctx, value| build_http_response(value),
     )
-}
-
-/// Executes a JavaScript script for an HTTP request (LEGACY - has security vulnerabilities)
-///
-/// This function creates a QuickJS runtime, sets up host functions,
-/// executes the script, calls the specified handler with request parameters,
-/// and returns the response.
-pub fn execute_script_for_request(
-    script_uri: &str,
-    handler_name: &str,
-    path: &str,
-    method: &str,
-    query_params: Option<&std::collections::HashMap<String, String>>,
-    form_data: Option<&std::collections::HashMap<String, String>>,
-    raw_body: Option<String>,
-) -> Result<(u16, String, Option<String>), String> {
-    let script_uri_owned = script_uri.to_string();
-    let auth_ctx = crate::auth::JsAuthContext::anonymous();
-    let invocation_id = crate::middleware::generate_request_id();
-    let log_context = HandlerInvocationKind::HttpRoute.log_context(
-        &script_uri_owned,
-        invocation_id.clone(),
-        Some(path.to_string()),
-    );
-
-    // Fetch and bundle before arming the runtime's interrupt deadline (see
-    // `execute_script_for_request_secure`).
-    let owner_script = repository::fetch_script(script_uri)
-        .ok_or_else(|| format!("no script for uri {}", script_uri))?;
-    let executable_code = transpile_if_needed(script_uri, &owner_script)?;
-
-    let (rt, _budget) = create_sandboxed_runtime(&crate::script_limits::for_script(script_uri))?;
-    let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
-
-    ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-        // Set up all global functions using the secure helper function
-        // For request handling, registrations are no-ops
-        let config = GlobalSecurityConfig {
-            enable_audit_logging: false, // Disable audit logging to avoid runtime conflicts
-            log_context: log_context.clone(),
-            ..Default::default()
-        };
-
-        // Always provide an anonymous auth context so scripts can safely check auth state
-        setup_secure_global_functions(
-            &ctx,
-            &script_uri_owned,
-            UserContext::anonymous(),
-            &config,
-            None,
-            Some(auth_ctx.clone()), // Provide anonymous auth context
-        )?;
-
-        Ok(())
-    })
-    .map_err(|e| format!("install host fns: {}", e))?;
-
-    ctx.with(|ctx| crate::bytecode::eval_program(&ctx, script_uri, &executable_code))
-        .map_err(|e| format!("owner eval: {}", e))?;
-
-    let (status, body, content_type) = call_and_settle(
-        &rt,
-        &ctx,
-        script_uri,
-        &format!("Handler '{}'", handler_name),
-        TransactionHandling::Auto,
-        |ctx| {
-            let global = ctx.globals();
-            let func: Function = global
-                .get::<_, Function>(handler_name)
-                .map_err(|e| format!("no handler {}: {}", handler_name, e))?;
-
-            let request_context = JsRequestContext {
-                path: Some(path.to_string()),
-                // Not an HTTP request: nothing arrived on a URL.
-                url: None,
-                method: Some(method.to_string()),
-                headers: HashMap::new(),
-                query_params: query_params.cloned().unwrap_or_default(),
-                form_data: form_data.cloned().unwrap_or_default(),
-                body: raw_body.clone(),
-                route_params: HashMap::new(),
-                uploaded_files: Vec::new(),
-            };
-
-            let mut context_builder =
-                JsHandlerContextBuilder::new(HandlerInvocationKind::HttpRoute)
-                    .with_script_metadata(script_uri, handler_name)
-                    .with_request(request_context)
-                    .with_invocation_id(invocation_id.clone());
-
-            context_builder = context_builder.with_auth_context(auth_ctx.clone());
-
-            let handler_context = context_builder
-                .build(ctx)
-                .map_err(|e| format!("build context: {}", e))?;
-
-            // Set context as a global variable so personalStorage and other APIs can access it
-            let global = ctx.globals();
-            global
-                .set("context", handler_context.clone())
-                .map_err(|e| format!("set context global: {}", e))?;
-
-            let val = func
-                .call::<_, Value>((handler_context,))
-                .map_err(|e| format!("call error: {}", e))?;
-
-            promise_resolve(ctx, val)
-        },
-        |_ctx, val| {
-            let obj = val
-                .as_object()
-                .ok_or_else(|| "expected object".to_string())?;
-
-            let status: i32 = obj
-                .get("status")
-                .map_err(|e| format!("missing status: {}", e))?;
-
-            let body: String = obj
-                .get("body")
-                .map_err(|e| format!("missing body: {}", e))?;
-
-            // Extract optional contentType field
-            let content_type: Option<String> = obj.get("contentType").ok(); // This will be None if the field doesn't exist
-
-            Ok((status as u16, body, content_type))
-        },
-    )?;
-
-    // Ensure clean shutdown: drop Context before Runtime
-    ensure_clean_shutdown(ctx, Ok((status, body, content_type)))
 }
 
 /// Executes a JavaScript handler for scheduler jobs
@@ -4306,23 +3926,6 @@ mod tests {
         crate::test_db::connection_string_blocking().is_none()
     }
 
-    // Shadow the super::execute_script with one that ensures setup
-    fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
-        if should_skip_db_tests() {
-            // Return a placeholder result when database is not available
-            return ScriptExecutionResult {
-                registrations: HashMap::new(),
-                success: false,
-                error: Some("Test skipped: no test database".to_string()),
-                execution_time_ms: 0,
-            };
-        }
-        let rt = get_runtime();
-        let _guard = rt.enter();
-        setup_db();
-        super::execute_script(uri, content)
-    }
-
     // Shadow execute_script_secure
     fn execute_script_secure(
         uri: &str,
@@ -4408,7 +4011,11 @@ mod tests {
             routeRegistry.registerRoute("/test", { handler: "handler_function", method: "GET" });
         "#;
 
-        let result = execute_script("test-script", content);
+        let result = execute_script_secure(
+            "test-script",
+            content,
+            UserContext::admin("test".to_string()),
+        );
 
         assert!(result.success, "Script execution should succeed");
         assert!(result.error.is_none(), "Should not have error");
@@ -4557,7 +4164,11 @@ mod tests {
             routeRegistry.registerRoute("/api/users/:id", { handler: "updateUser", method: "PUT" });
         "#;
 
-        let result = execute_script("multi-script", content);
+        let result = execute_script_secure(
+            "multi-script",
+            content,
+            UserContext::admin("test".to_string()),
+        );
 
         assert!(result.success);
         assert_eq!(result.registrations.len(), 3);
@@ -4587,7 +4198,11 @@ mod tests {
             routeRegistry.registerRoute("/default-method", { handler: "handler", method: "GET" });
         "#;
 
-        let result = execute_script("default-method-script", content);
+        let result = execute_script_secure(
+            "default-method-script",
+            content,
+            UserContext::admin("test".to_string()),
+        );
 
         if !result.success {
             println!("Default method test failed with error: {:?}", result.error);
@@ -4611,7 +4226,11 @@ mod tests {
             // Missing closing parenthesis - syntax error
         "#;
 
-        let result = execute_script("error-script", content);
+        let result = execute_script_secure(
+            "error-script",
+            content,
+            UserContext::admin("test".to_string()),
+        );
 
         assert!(!result.success, "Script with syntax error should fail");
         assert!(result.error.is_some(), "Should have error message");
@@ -4627,7 +4246,11 @@ mod tests {
             throw new Error("Runtime error test");
         "#;
 
-        let result = execute_script("runtime-error-script", content);
+        let result = execute_script_secure(
+            "runtime-error-script",
+            content,
+            UserContext::admin("test".to_string()),
+        );
 
         assert!(!result.success);
         assert!(result.error.is_some());
@@ -4648,7 +4271,11 @@ mod tests {
             setupRoutes();
         "#;
 
-        let result = execute_script("complex-script", content);
+        let result = execute_script_secure(
+            "complex-script",
+            content,
+            UserContext::admin("test".to_string()),
+        );
 
         assert!(
             result.success,
@@ -4673,7 +4300,8 @@ mod tests {
         if should_skip_db_tests() {
             return;
         }
-        let result = execute_script("empty-script", "");
+        let result =
+            execute_script_secure("empty-script", "", UserContext::admin("test".to_string()));
 
         assert!(result.success, "Empty script should succeed");
         assert!(result.error.is_none());
@@ -4689,7 +4317,11 @@ mod tests {
             routeRegistry.registerRoute("/logged", { handler: "loggedHandler", method: "GET" });
         "#;
 
-        let result = execute_script("console-script", content);
+        let result = execute_script_secure(
+            "console-script",
+            content,
+            UserContext::admin("test".to_string()),
+        );
 
         // Should succeed even with console.log (which may not be available)
         // The important thing is it doesn't crash
@@ -4817,7 +4449,11 @@ mod tests {
         "#;
 
         let _ = repository::upsert_script("stream-invalid-test", script_content);
-        let result = execute_script("stream-invalid-test", script_content);
+        let result = execute_script_secure(
+            "stream-invalid-test",
+            script_content,
+            UserContext::admin("test".to_string()),
+        );
 
         assert!(
             result.success,
@@ -4965,7 +4601,11 @@ mod tests {
             "// ".repeat(600_000) + "routeRegistry.registerRoute('/test', { handler: 'handler' });";
         assert!(large_script.len() > 1_000_000);
 
-        let result = execute_script("test-large-script", &large_script);
+        let result = execute_script_secure(
+            "test-large-script",
+            &large_script,
+            UserContext::admin("test".to_string()),
+        );
 
         assert!(!result.success);
         assert!(result.error.is_some());
@@ -5737,111 +5377,5 @@ function hello() {
         assert!(body_str.contains("123"));
         assert!(body_str.contains("456"));
         assert!(body_str.contains("object"));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_validation_helpers() {
-        if should_skip_db_tests() {
-            return;
-        }
-        let rt = get_runtime();
-        let _guard = rt.enter();
-        setup_db();
-        let script_content = r#"
-            function testHandler(context) {
-                try {
-                    // Test requireQueryParam with existing param
-                    const existingParam = requireQueryParam("existing");
-                    if (existingParam !== "value1") {
-                        throw new Error("requireQueryParam failed for existing param");
-                    }
-
-                    // Test requireQueryParam with missing param (should throw)
-                    try {
-                        requireQueryParam("missing");
-                        throw new Error("requireQueryParam should have thrown for missing param");
-                    } catch (e) {
-                        if (!e.message.includes("missing")) {
-                            throw new Error("Wrong error message for missing param: " + e.message);
-                        }
-                    }
-
-                    // Test requirePathParam
-                    const userId = requirePathParam("userId");
-                    if (userId !== "123") {
-                        throw new Error("requirePathParam failed");
-                    }
-
-                    // Test validateString
-                    const validStr = validateString("hello", 2, 10);
-                    if (validStr !== "hello") {
-                        throw new Error("validateString failed");
-                    }
-
-                    // Test validateString with invalid length
-                    try {
-                        validateString("a", 2, 10);
-                        throw new Error("validateString should have thrown for short string");
-                    } catch (e) {
-                        // Expected
-                    }
-
-                    // Test validateNumber
-                    const validNum = validateNumber("42", 0, 100);
-                    if (validNum !== 42) {
-                        throw new Error("validateNumber failed");
-                    }
-
-                    // Test optionalQueryParam
-                    const optionalExisting = optionalQueryParam("existing", "default");
-                    const optionalMissing = optionalQueryParam("missing", "default");
-
-                    return ResponseBuilder.json({
-                        success: true,
-                        existingParam: existingParam,
-                        userId: userId,
-                        validStr: validStr,
-                        validNum: validNum,
-                        optionalExisting: optionalExisting,
-                        optionalMissing: optionalMissing
-                    });
-                } catch (e) {
-                    return ResponseBuilder.error(400, e.message);
-                }
-            }
-        "#;
-
-        let _ = repository::upsert_script("validation-helpers-test", script_content);
-
-        let params = RequestExecutionParams {
-            script_uri: "validation-helpers-test".to_string(),
-            handler_name: "testHandler".to_string(),
-            path: "/test".to_string(),
-            method: "GET".to_string(),
-            query_params: Some(HashMap::from([(
-                "existing".to_string(),
-                "value1".to_string(),
-            )])),
-            url: None,
-            form_data: None,
-            raw_body: None,
-            headers: HashMap::new(),
-            user_context: UserContext::admin("test".to_string()),
-            auth_context: None,
-            uploaded_files: None,
-            route_params: Some(HashMap::from([("userId".to_string(), "123".to_string())])),
-            request_id: None,
-            route_pattern: None,
-        };
-
-        let result = execute_script_for_request_secure(params);
-        assert!(result.is_ok(), "Validation helpers test should succeed");
-
-        let response = result.unwrap();
-        assert_eq!(response.status, 200);
-        let body_str = String::from_utf8_lossy(&response.body);
-        assert!(body_str.contains("success"));
-        assert!(body_str.contains("value1"));
-        assert!(body_str.contains("123"));
     }
 }

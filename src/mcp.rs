@@ -980,6 +980,30 @@ pub fn complete(result: serde_json::Value) -> serde_json::Value {
     result
 }
 
+/// What a client is told about this server when it connects, in either era.
+///
+/// A host carrying the management tools is where scripts are written, and an
+/// agent there has no other way to find the API it writes against, so it is
+/// pointed at the primer and the type definitions.
+pub fn instructions(native_tools_allowed: bool) -> String {
+    let listing = "Call tools/list rather than caching a list across deployments; results \
+                   carry a ttlMs saying how long they stay good.";
+    if native_tools_allowed {
+        let version = env!("CARGO_PKG_VERSION");
+        format!(
+            "Scripts hosted by this engine register tools, prompts and resources at \
+             runtime, and this host also exposes the engine's own management tools. \
+             {listing} Before writing a script, read /engine/types/v{version}/script-primer.md \
+             on this host; the full JavaScript API is /engine/types/v{version}/aiwebengine.d.ts."
+        )
+    } else {
+        format!(
+            "Scripts hosted by this engine register tools, prompts and resources at \
+             runtime. {listing}"
+        )
+    }
+}
+
 /// The `server/discover` result: what we speak, what we can do, who we are.
 ///
 /// `supportedVersions` names the modern revisions only. The engine answers
@@ -1006,16 +1030,7 @@ pub fn discover_result(native_tools_allowed: bool) -> serde_json::Value {
                 crate::mcp_tasks::EXTENSION: {},
             },
         },
-        "instructions": if native_tools_allowed {
-            "Scripts hosted by this engine register tools, prompts and resources at \
-             runtime, and this host also exposes the engine's own management tools. \
-             Call tools/list rather than caching a list across deployments; results \
-             carry a ttlMs saying how long they stay good."
-        } else {
-            "Scripts hosted by this engine register tools, prompts and resources at \
-             runtime. Call tools/list rather than caching a list across deployments; \
-             results carry a ttlMs saying how long they stay good."
-        },
+        "instructions": instructions(native_tools_allowed),
         "ttlMs": LIST_CACHE_TTL_MS,
         "cacheScope": LIST_CACHE_SCOPE,
     }))
@@ -1227,5 +1242,19 @@ mod tests {
             !described.contains("management tools"),
             "instructions described tools this host does not serve: {described}"
         );
+
+        // A host where scripts are written says where the API they are
+        // written against is documented.
+        let managed = discovered["instructions"].as_str().unwrap_or_default();
+        for file in ["script-primer.md", "aiwebengine.d.ts"] {
+            assert!(
+                managed.contains(&format!(
+                    "/engine/types/v{}/{file}",
+                    env!("CARGO_PKG_VERSION")
+                )),
+                "instructions do not point at {file}: {managed}"
+            );
+        }
+        assert!(!described.contains("script-primer"));
     }
 }
