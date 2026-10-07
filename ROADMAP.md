@@ -3,7 +3,9 @@
 What is open, in one place. Each item says what is true today and what would
 change it; finished work leaves this file, and its reasoning lives in the topic
 docs (`docs/INDEX.md`) and the commit history. Ideas that are not commitments
-are in `docs/engine-contributors/planning/`.
+are in `docs/engine-contributors/planning/`. What a first closed pilot with
+outside users needs, as a checklist, is
+[`PILOT-READINESS.md`](docs/engine-contributors/planning/PILOT-READINESS.md).
 
 The order inside each section is the order they matter.
 

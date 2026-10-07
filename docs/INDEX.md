@@ -54,12 +54,13 @@ the `aiwebengine-dev` repository.
 
 ## Working on the engine
 
-| Document                                                     | What it covers                                 |
-| ------------------------------------------------------------ | ---------------------------------------------- |
-| [Contributing](../CONTRIBUTING.md)                           | Workflow, checks and commits                   |
-| [Architecture](engine-contributors/ARCHITECTURE.md)          | Why each module is shaped as it is             |
-| [Roadmap](../ROADMAP.md)                                     | What is open                                   |
-| [Haiku as a script author](HAIKU_AUTHORING.md)               | Building simple scripts with a small model     |
-| [Settings in the database](SETTINGS_IN_DATABASE.md)          | Design: which settings could move into a table |
-| [Engine ideas](engine-contributors/planning/ENGINE-IDEAS.md) | Ideas that are not commitments                 |
-| [Editor ideas](engine-contributors/planning/EDITOR-IDEAS.md) | Ideas for the editor in `aiwebengine-dev`      |
+| Document                                                           | What it covers                                 |
+| ------------------------------------------------------------------ | ---------------------------------------------- |
+| [Contributing](../CONTRIBUTING.md)                                 | Workflow, checks and commits                   |
+| [Architecture](engine-contributors/ARCHITECTURE.md)                | Why each module is shaped as it is             |
+| [Roadmap](../ROADMAP.md)                                           | What is open                                   |
+| [Pilot readiness](engine-contributors/planning/PILOT-READINESS.md) | Checklist before outside users                 |
+| [Haiku as a script author](HAIKU_AUTHORING.md)                     | Building simple scripts with a small model     |
+| [Settings in the database](SETTINGS_IN_DATABASE.md)                | Design: which settings could move into a table |
+| [Engine ideas](engine-contributors/planning/ENGINE-IDEAS.md)       | Ideas that are not commitments                 |
+| [Editor ideas](engine-contributors/planning/EDITOR-IDEAS.md)       | Ideas for the editor in `aiwebengine-dev`      |
