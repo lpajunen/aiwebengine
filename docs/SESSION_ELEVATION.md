@@ -149,7 +149,7 @@ remember.
 Today a session becomes a `UserContext` in four places, all spelling the same
 three-armed match:
 
-- `engine_api.rs:74` — `user_context_from`, for `/engine/*` and the native MCP tools
+- `engine_api::user_context_from`, for `/engine/*` and the native MCP tools
 - `lib.rs:657` — `create_user_context_from_session`, for `/mcp`
 - `lib.rs:4060` — inline, for a script serving a request
 - `auth/js_api.rs:71` — `JsAuthContext::to_user_context`
@@ -411,6 +411,6 @@ scripts, which is enough to ship.
 
 1. `src/security/capabilities.rs` — the tiers, `attenuated`, `Capability::parse`
 2. `src/security/session.rs` — `SessionData`, `validate_session`, `refresh_session`, `delete_sessions_for_user`
-3. `src/auth/routes.rs` — `delegate_page` and `delegate_route`, which this is a copy of
-4. `src/engine_api.rs:74` and `src/lib.rs:657` — two of the four sites that collapse
+3. `src/auth/routes/delegation.rs` — `delegate_page` and `delegate_route`, which this is a copy of
+4. `engine_api::user_context_from` and `src/lib.rs` — two of the four sites that collapse
 5. `docs/CAPABILITY_ATTENUATION.md` and `docs/DELEGATION.md` — the two narrowings that already exist

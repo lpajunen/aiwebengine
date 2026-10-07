@@ -5,7 +5,7 @@
 //! gap, and what it deliberately is *not* is a second storage backend. It
 //! starts a real PostgreSQL on loopback and hands [`crate::database`] a
 //! connection string; everything downstream of the connection string in
-//! `RepositoryConfig` — the `sqlx::query!` macros in `repository.rs`, the
+//! `RepositoryConfig` — the `sqlx::query!` macros in `repository/`, the
 //! advisory locks in `revisions.rs`, `LISTEN`/`NOTIFY`, `FOR UPDATE SKIP
 //! LOCKED` — is byte-for-byte the code a server deployment runs. That is the
 //! property worth protecting: a solution developed against a desktop install

@@ -142,7 +142,7 @@ mod admin_script_update_tests {
             "Regular user should NOT have DeleteScripts capability"
         );
 
-        // Note: The permission check happens in secure_globals.rs, not in repository layer
+        // Note: The permission check happens in secure_globals, not in repository layer
         // At the repository layer, the update would succeed
         // But in the actual application flow through secure_globals, it would be blocked
 

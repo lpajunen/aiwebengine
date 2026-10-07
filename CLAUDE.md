@@ -43,11 +43,11 @@ cargo run -- --validate-config     # check a config without starting the server
 | Area                                               | Where                                                                                                    |
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | Startup, dynamic routing, `handle_dynamic_request` | `lib.rs`                                                                                                 |
-| Scripts, files, logs, secrets, metadata cache      | `repository.rs`                                                                                          |
-| Script execution                                   | `js_engine.rs`; build: `module_loader.rs`, `transpiler.rs` (oxc)                                         |
-| Every JS global, and where it is authorized        | `security/secure_globals.rs` + `assets/*_prelude.js`                                                     |
+| Scripts, files, logs, secrets, metadata cache      | `repository/` — one file per topic; `postgres.rs` is the `Repository` trait                              |
+| Script execution                                   | `js_engine/` (`handlers.rs`: every handler path); build: `module_loader.rs`, `transpiler.rs` (oxc)       |
+| Every JS global, and where it is authorized        | `security/secure_globals/` (one file per global) + `assets/*_prelude.js`                                 |
 | Capabilities and `UserContext`                     | `security/capabilities.rs`                                                                               |
-| Engine operations (one table)                      | `engine_api.rs::native_tools`; HTTP from it in `engine_http.rs`                                          |
+| Engine operations (one table)                      | `engine_api/operations.rs::native_tools`; HTTP from it in `engine_http.rs`                               |
 | Routes, files, streams per host                    | `route_index.rs`, `hosts.rs`, `stream_registry.rs`                                                       |
 | MCP server / client / tasks / ask                  | `mcp.rs`, `mcp_client.rs`, `mcp_tasks.rs`, `mcp_elicitation.rs`                                          |
 | Auth: OAuth2/OIDC, local accounts, sessions        | `auth/`, `security/session.rs` — `docs/INTERNAL_AUTH.md`                                                 |

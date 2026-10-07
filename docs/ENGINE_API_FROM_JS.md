@@ -37,7 +37,7 @@ this makes the tools reachable without a credential to store.
 
 ## Where it is, and where it is not
 
-Every execution acts for a `Principal` (`security/secure_globals.rs`), and
+Every execution acts for a `Principal` (`security/secure_globals/context.rs`), and
 `engine` exists exactly when that principal came from a credential — a
 `Caller` or a `Delegated` person:
 

@@ -138,7 +138,7 @@ network.
 **It is one storage implementation, not two.** `src/embedded_db.rs` starts a
 real PostgreSQL on loopback and hands `database.rs` a connection string;
 everything downstream of `RepositoryConfig::connection_string` is byte-for-byte
-what a cluster runs — the `sqlx::query!` macros in `repository.rs`, the
+what a cluster runs — the `sqlx::query!` macros in `repository/`, the
 `pg_advisory_xact_lock` in `revisions.rs`, `LISTEN`/`NOTIFY`, the
 `FOR UPDATE SKIP LOCKED` in the pruners. That is what keeps the promise at the
 top of this document: a solution developed against a desktop install runs
