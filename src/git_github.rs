@@ -695,6 +695,8 @@ impl GitHubClient {
             method: method.to_string(),
             headers: Some(headers),
             body: Some(body.to_string()),
+            body_base64: None,
+            form: None,
             timeout_ms: None,
             // The binary path here is `fetch_bytes`, which this is not.
             binary: false,

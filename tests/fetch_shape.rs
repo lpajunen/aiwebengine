@@ -659,3 +659,48 @@ async fn a_binary_body_reaches_javascript() {
         "an ordinary response must not grow a base64 field it never had"
     );
 }
+
+/// `bodyBase64` and `form` reach the host as the script wrote them.
+///
+/// The prelude serializes the options object for the host call, so this is
+/// the seam: whether the host builds the right bytes from them is
+/// `http_fetch.rs`'s subject.
+#[tokio::test(flavor = "multi_thread")]
+async fn binary_and_form_bodies_reach_the_host() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let report = eval(
+        "test://fetch-shape/bodies",
+        r#"
+        globalThis.__sent = [];
+        globalThis.__hostFetch = function (url, optionsJson) {
+          globalThis.__sent.push(JSON.parse(optionsJson));
+          return JSON.stringify({ status: 200, ok: true, headers: {}, body: "" });
+        };
+        (function () {
+          fetch("https://example.test/a", { method: "POST", bodyBase64: "AAE=" });
+          fetch("https://example.test/b", {
+            method: "POST",
+            form: [
+              { name: "purpose", value: "vision" },
+              { name: "file", base64: "AAE=", filename: "a.png", contentType: "image/png" },
+            ],
+          });
+          return globalThis.__sent;
+        })()
+        "#,
+    )
+    .await;
+
+    assert!(report.ok, "{:?}", report.outcome.error);
+    let sent = report.outcome.value.expect("a value");
+    assert_eq!(sent[0]["bodyBase64"], json!("AAE="));
+    assert_eq!(
+        sent[1]["form"],
+        json!([
+            { "name": "purpose", "value": "vision" },
+            { "name": "file", "base64": "AAE=", "filename": "a.png", "contentType": "image/png" },
+        ])
+    );
+}

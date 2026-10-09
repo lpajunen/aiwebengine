@@ -146,6 +146,11 @@ if (!res.ok)
 const data = res.json();
 ```
 
+Binary data travels as base64. `{ binary: true }` returns a body as
+`bodyBase64`; `bodyBase64` in the options sends bytes; and
+`form: [{ name, value }, { name, base64, filename, contentType }]` sends
+`multipart/form-data` (leave `Content-Type` out — the engine sets it).
+
 Never write a key, token or password into a file. A person stores secrets
 separately; ask for the name and use it.
 

@@ -1484,8 +1484,44 @@ interface FetchOptions {
    */
   headers?: Record<string, string>;
 
-  /** Request body */
+  /**
+   * Request body as text. Give at most one of `body`, `bodyBase64` and `form`.
+   */
   body?: string;
+
+  /**
+   * Request body as base64, sent as the bytes it decodes to. For passing on a
+   * file the script holds as base64 — an upload from `req.files`, or a `fetch`
+   * answered with `binary`. Name the `Content-Type` in `headers` yourself.
+   *
+   * @example
+   * fetch(uploadUrl, {
+   *   method: "PUT",
+   *   headers: { "Content-Type": file.contentType },
+   *   bodyBase64: file.data,
+   * });
+   */
+  bodyBase64?: string;
+
+  /**
+   * A `multipart/form-data` body, built from its parts in order. The engine
+   * sets the `Content-Type` with the boundary, so a request giving its own
+   * `Content-Type` is refused.
+   *
+   * @example
+   * // Upload a file to the Anthropic Files API
+   * const uploaded = fetch("https://api.anthropic.com/v1/files", {
+   *   method: "POST",
+   *   headers: {
+   *     "x-api-key": "{{secret:anthropic_key}}",
+   *     "anthropic-version": "2023-06-01",
+   *   },
+   *   form: [
+   *     { name: "file", base64: file.data, filename: file.filename, contentType: file.contentType },
+   *   ],
+   * }).json();
+   */
+  form?: FormPart[];
 
   /**
    * Timeout in milliseconds (default: 30000).
@@ -1516,6 +1552,23 @@ interface FetchOptions {
    * };
    */
   binary?: boolean;
+}
+
+/** One part of a `form` body: a text field, or a file. */
+interface FormPart {
+  /** The field name. */
+  name: string;
+  /** The part's content as text. Exactly one of `value` and `base64`. */
+  value?: string;
+  /** The part's content as base64, sent as the bytes it decodes to. */
+  base64?: string;
+  /** The file name the receiver sees; what makes most servers treat the part as a file. */
+  filename?: string;
+  /**
+   * The part's media type. A part from `base64` or with a `filename` defaults
+   * to `application/octet-stream`; a text part sends none.
+   */
+  contentType?: string;
 }
 
 /**

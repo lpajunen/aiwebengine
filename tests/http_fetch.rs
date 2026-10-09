@@ -1029,3 +1029,184 @@ fn a_script_cannot_write_its_own_destination_scope() {
         "nothing a caller writes may reach this field"
     );
 }
+
+/// Bytes a script holds as base64 leave as those bytes.
+///
+/// A script receives a file as base64 — an upload in `req.files`, a `fetch`
+/// answered with `binary` — and a text `body` cannot pass it on. `bodyBase64`
+/// is the way out, and the bytes must arrive exactly, including the ones that
+/// are not UTF-8.
+#[tokio::test]
+async fn bytes_sent_as_base64_arrive_exactly() {
+    use base64::Engine as _;
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/echo-bytes");
+    let png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00];
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&png);
+
+    let response = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        let mut headers = HashMap::new();
+        headers.insert("Content-Type".to_string(), "image/png".to_string());
+        client.fetch(
+            url,
+            FetchOptions {
+                method: "POST".to_string(),
+                headers: Some(headers),
+                body_base64: Some(encoded),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+    })
+    .await
+    .expect("Task panicked")
+    .expect("a base64 body should be sent");
+
+    let echoed: serde_json::Value = response.json().expect("the echo is JSON");
+    assert_eq!(echoed["contentType"], "image/png");
+    let received = base64::engine::general_purpose::STANDARD
+        .decode(
+            echoed["base64"]
+                .as_str()
+                .expect("the echo carries the body"),
+        )
+        .expect("the echo is base64");
+    assert_eq!(received, png, "the bytes should arrive exactly");
+
+    mock.shutdown().await;
+}
+
+/// A form is built into a `multipart/form-data` body that a real parser reads
+/// back part for part: a text field, and a file with its name, type and bytes.
+///
+/// The file name carries a quote, which would end the quoted parameter it
+/// stands in. It arrives percent-encoded, which is what a browser sends.
+#[tokio::test]
+async fn a_form_arrives_as_multipart_a_parser_can_read() {
+    use base64::Engine as _;
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/multipart");
+    let png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00];
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&png);
+
+    let response = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        let options: FetchOptions = serde_json::from_value(serde_json::json!({
+            "method": "POST",
+            "form": [
+                { "name": "purpose", "value": "vision" },
+                {
+                    "name": "file",
+                    "base64": encoded,
+                    "filename": "photo \"1\".png",
+                    "contentType": "image/png"
+                },
+                { "name": "raw", "base64": "AAE=" }
+            ]
+        }))
+        .expect("options should parse");
+        client.fetch(url, options, None, None)
+    })
+    .await
+    .expect("Task panicked")
+    .expect("a form should be sent");
+
+    assert_eq!(
+        response.status, 200,
+        "the parser refused it: {}",
+        response.body
+    );
+    let parsed: serde_json::Value = response.json().expect("the answer is JSON");
+    let parts = parsed["parts"].as_array().expect("parts");
+    assert_eq!(parts.len(), 3, "every part, in order: {:?}", parts);
+
+    assert_eq!(parts[0]["name"], "purpose");
+    assert_eq!(parts[0]["filename"], serde_json::Value::Null);
+    assert_eq!(
+        parts[0]["contentType"],
+        serde_json::Value::Null,
+        "a text part names no type"
+    );
+    assert_eq!(parts[0]["base64"], "dmlzaW9u", "the text 'vision'");
+
+    assert_eq!(parts[1]["name"], "file");
+    assert_eq!(parts[1]["filename"], "photo %221%22.png");
+    assert_eq!(parts[1]["contentType"], "image/png");
+    let received = base64::engine::general_purpose::STANDARD
+        .decode(parts[1]["base64"].as_str().expect("content"))
+        .expect("base64");
+    assert_eq!(received, png, "the file's bytes should arrive exactly");
+
+    assert_eq!(
+        parts[2]["contentType"], "application/octet-stream",
+        "bytes with no named type are sent as octets"
+    );
+    assert_eq!(parts[2]["base64"], "AAE=");
+
+    mock.shutdown().await;
+}
+
+/// The refusals, each naming what to change. None of them reaches the network.
+#[test]
+fn a_body_that_cannot_be_sent_is_refused_before_it_is() {
+    let client = HttpClient::new_for_tests().expect("Failed to create client");
+    // Never contacted: every case below is refused while the request is built.
+    let url = "http://example.test/".to_string();
+    let refusal = |options: serde_json::Value| {
+        let options: FetchOptions = serde_json::from_value(options).expect("options parse");
+        client
+            .fetch(url.clone(), options, None, None)
+            .expect_err("should be refused")
+            .to_string()
+    };
+
+    let two = refusal(serde_json::json!({ "method": "POST", "body": "a", "bodyBase64": "YQ==" }));
+    assert!(two.contains("at most one"), "{}", two);
+
+    let not_base64 = refusal(serde_json::json!({ "method": "POST", "bodyBase64": "not base64!" }));
+    assert!(not_base64.contains("bodyBase64"), "{}", not_base64);
+
+    let own_type = refusal(serde_json::json!({
+        "method": "POST",
+        "headers": { "content-type": "multipart/form-data" },
+        "form": [{ "name": "a", "value": "b" }]
+    }));
+    assert!(own_type.contains("Content-Type"), "{}", own_type);
+
+    let both = refusal(serde_json::json!({
+        "method": "POST",
+        "form": [{ "name": "a", "value": "b", "base64": "YQ==" }]
+    }));
+    assert!(both.contains("exactly one of value and base64"), "{}", both);
+
+    let injected = refusal(serde_json::json!({
+        "method": "POST",
+        "form": [{ "name": "a", "value": "b", "contentType": "text/plain\r\nX-Evil: 1" }]
+    }));
+    assert!(injected.contains("line break"), "{}", injected);
+}
+
+/// The names a script writes. `bodyBase64` and `contentType` are camelCase,
+/// as everything else a script sees is; a misspelt part field is an error
+/// rather than a part sent without what was meant to be in it.
+#[test]
+fn the_body_options_read_the_names_scripts_write() {
+    let options: FetchOptions = serde_json::from_str(
+        r#"{"bodyBase64":"AA==","form":[{"name":"f","base64":"AA==","filename":"a.bin","contentType":"image/png"}]}"#,
+    )
+    .expect("options should parse");
+    assert_eq!(options.body_base64.as_deref(), Some("AA=="));
+    let part = &options.form.expect("form")[0];
+    assert_eq!(part.content_type.as_deref(), Some("image/png"));
+    assert_eq!(part.filename.as_deref(), Some("a.bin"));
+
+    let misspelt =
+        serde_json::from_str::<FetchOptions>(r#"{"form":[{"name":"f","value":"v","type":"x"}]}"#);
+    assert!(misspelt.is_err(), "an unknown part field should be refused");
+}

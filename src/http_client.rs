@@ -164,8 +164,14 @@ impl HttpClient {
         }
 
         // Process headers and inject secrets
-        let mut headers =
-            self.process_headers(options.headers, &resolved.display, script_uri, user_id)?;
+        let mut options = options;
+        let mut headers = self.process_headers(
+            options.headers.take(),
+            &resolved.display,
+            script_uri,
+            user_id,
+        )?;
+        let body = options.take_body(&mut headers)?;
 
         // Offer the codings we can undo. A caller that named its own is left
         // alone — some APIs answer `406` unless the request carries a
@@ -195,7 +201,7 @@ impl HttpClient {
                 method,
                 &resolved.target,
                 headers,
-                options.body,
+                body,
                 timeout,
                 RequestPolicy {
                     resolved: &resolved,
@@ -360,8 +366,14 @@ impl HttpClient {
             );
         }
 
-        let mut headers =
-            self.process_headers(options.headers, &resolved.display, script_uri, user_id)?;
+        let mut options = options;
+        let mut headers = self.process_headers(
+            options.headers.take(),
+            &resolved.display,
+            script_uri,
+            user_id,
+        )?;
+        let body = options.take_body(&mut headers)?;
         headers.insert(
             reqwest::header::ACCEPT_ENCODING,
             reqwest::header::HeaderValue::from_static("identity"),
@@ -382,7 +394,7 @@ impl HttpClient {
                 method,
                 &resolved.target,
                 headers,
-                options.body,
+                body,
                 timeout,
                 RequestPolicy {
                     resolved: &resolved,
@@ -433,7 +445,7 @@ impl HttpClient {
         method: Method,
         url: &str,
         headers: HeaderMap,
-        body: Option<String>,
+        body: Option<Vec<u8>>,
         timeout: Duration,
         policy: RequestPolicy<'_>,
     ) -> Result<reqwest::blocking::Response, HttpError> {
@@ -1501,9 +1513,28 @@ pub struct FetchOptions {
     #[serde(default)]
     pub headers: Option<HashMap<String, String>>,
 
-    /// Request body
+    /// Request body as text. At most one of `body`, `body_base64` and `form`.
     #[serde(default)]
     pub body: Option<String>,
+
+    /// Request body as base64, sent as the bytes it decodes to.
+    ///
+    /// A script holds bytes only as base64 — an upload in `req.files`, a
+    /// `fetch` answered with `binary` — and a text `body` cannot carry them, so
+    /// without this a script could receive a file and never pass it on. The
+    /// caller names the `Content-Type`; bytes do not say what they are.
+    #[serde(default, rename = "bodyBase64")]
+    pub body_base64: Option<String>,
+
+    /// A `multipart/form-data` body, built here from its parts.
+    ///
+    /// Built by the engine rather than by the script because the boundary has
+    /// to appear in the `Content-Type` header and nowhere in the parts, and a
+    /// script assembling the bytes itself would have to get both right in a
+    /// string that cannot hold binary. The engine therefore also sets the
+    /// `Content-Type`, and refuses a caller that set one.
+    #[serde(default)]
+    pub form: Option<Vec<FormPart>>,
 
     /// Timeout in milliseconds
     ///
@@ -1556,11 +1587,173 @@ impl Default for FetchOptions {
             method: default_method(),
             headers: None,
             body: None,
+            body_base64: None,
+            form: None,
             timeout_ms: None,
             binary: false,
             network_scope: None,
         }
     }
+}
+
+/// One part of a [`FetchOptions::form`] body: a text field, or a file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FormPart {
+    /// The field name.
+    pub name: String,
+
+    /// The part's content as text. Exactly one of `value` and `base64`.
+    #[serde(default)]
+    pub value: Option<String>,
+
+    /// The part's content as base64, sent as the bytes it decodes to.
+    #[serde(default)]
+    pub base64: Option<String>,
+
+    /// The file name the receiver sees. What makes most servers treat the part
+    /// as an uploaded file.
+    #[serde(default)]
+    pub filename: Option<String>,
+
+    /// The part's media type. A part sent from base64 or with a file name
+    /// defaults to `application/octet-stream`; a text part sends none.
+    #[serde(default, rename = "contentType")]
+    pub content_type: Option<String>,
+}
+
+impl FetchOptions {
+    /// The body to send, as bytes, whichever of the three ways it was given.
+    ///
+    /// Bytes rather than a string so that one path carries text and binary
+    /// alike through `fetch`, `fetchAll`, `fetchStream` and every redirect hop.
+    /// A form also sets the `Content-Type` it was built with, which is why the
+    /// headers are passed in.
+    fn take_body(&mut self, headers: &mut HeaderMap) -> Result<Option<Vec<u8>>, HttpError> {
+        let given = [
+            self.body.is_some(),
+            self.body_base64.is_some(),
+            self.form.is_some(),
+        ];
+        if given.iter().filter(|g| **g).count() > 1 {
+            return Err(HttpError::InvalidBody(
+                "give at most one of body, bodyBase64 and form".to_string(),
+            ));
+        }
+
+        if let Some(text) = self.body.take() {
+            return Ok(Some(text.into_bytes()));
+        }
+        if let Some(encoded) = self.body_base64.take() {
+            return decode_base64("bodyBase64", &encoded).map(Some);
+        }
+        let Some(parts) = self.form.take() else {
+            return Ok(None);
+        };
+
+        if headers.contains_key(reqwest::header::CONTENT_TYPE) {
+            return Err(HttpError::InvalidBody(
+                "a form sets its own Content-Type, which carries the boundary; leave the header out"
+                    .to_string(),
+            ));
+        }
+        let (body, content_type) = multipart_body(parts)?;
+        let value = reqwest::header::HeaderValue::from_str(&content_type)
+            .map_err(|e| HttpError::InvalidBody(format!("form Content-Type: {}", e)))?;
+        headers.insert(reqwest::header::CONTENT_TYPE, value);
+        Ok(Some(body))
+    }
+}
+
+fn decode_base64(what: &str, encoded: &str) -> Result<Vec<u8>, HttpError> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|e| HttpError::InvalidBody(format!("{} is not valid base64: {}", what, e)))
+}
+
+/// A `multipart/form-data` body (RFC 7578) and the `Content-Type` naming its
+/// boundary.
+fn multipart_body(parts: Vec<FormPart>) -> Result<(Vec<u8>, String), HttpError> {
+    let mut encoded: Vec<(String, Vec<u8>)> = Vec::with_capacity(parts.len());
+    for (index, part) in parts.into_iter().enumerate() {
+        let what = format!("form part {} ('{}')", index, part.name);
+        if part.name.is_empty() {
+            return Err(HttpError::InvalidBody(format!(
+                "form part {} has no name",
+                index
+            )));
+        }
+        let (content, binary) = match (part.value, part.base64) {
+            (Some(text), None) => (text.into_bytes(), false),
+            (None, Some(b64)) => (decode_base64(&what, &b64)?, true),
+            _ => {
+                return Err(HttpError::InvalidBody(format!(
+                    "{} needs exactly one of value and base64",
+                    what
+                )));
+            }
+        };
+
+        let mut head = format!(
+            "Content-Disposition: form-data; name=\"{}\"",
+            disposition_quote(&part.name)
+        );
+        if let Some(filename) = &part.filename {
+            head.push_str(&format!("; filename=\"{}\"", disposition_quote(filename)));
+        }
+        let content_type = match part.content_type {
+            Some(given) => Some(given),
+            None if binary || part.filename.is_some() => {
+                Some("application/octet-stream".to_string())
+            }
+            None => None,
+        };
+        if let Some(content_type) = content_type {
+            // A line break here would start a header of the caller's choosing.
+            if content_type.contains(['\r', '\n']) {
+                return Err(HttpError::InvalidBody(format!(
+                    "{} has a contentType with a line break",
+                    what
+                )));
+            }
+            head.push_str("\r\nContent-Type: ");
+            head.push_str(&content_type);
+        }
+        encoded.push((head, content));
+    }
+
+    // Random, and checked anyway: a boundary that occurs inside a part ends
+    // that part early, and the receiver reads the rest as something else.
+    let boundary = loop {
+        let candidate = format!("aiwebengine-{}", uuid::Uuid::new_v4().simple());
+        let needle = candidate.as_bytes();
+        let occurs = encoded.iter().any(|(head, content)| {
+            head.contains(&candidate) || content.windows(needle.len()).any(|w| w == needle)
+        });
+        if !occurs {
+            break candidate;
+        }
+    };
+
+    let mut body = Vec::new();
+    for (head, content) in encoded {
+        body.extend_from_slice(format!("--{}\r\n{}\r\n\r\n", boundary, head).as_bytes());
+        body.extend_from_slice(&content);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+    Ok((body, format!("multipart/form-data; boundary={}", boundary)))
+}
+
+/// A field or file name as it may stand inside a quoted `Content-Disposition`
+/// parameter. Percent-encoding the three characters that would end the quote
+/// or the line is what browsers do (the HTML form-submission algorithm), so a
+/// receiver reads these names the way it reads a browser's.
+fn disposition_quote(name: &str) -> String {
+    name.replace('"', "%22")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
 }
 
 /// Response from fetch request
@@ -1631,6 +1824,9 @@ pub enum HttpError {
 
     #[error("Invalid header: {0}")]
     InvalidHeader(String),
+
+    #[error("Invalid request body: {0}")]
+    InvalidBody(String),
 
     #[error("Secret not found: {0}")]
     SecretNotFound(String),

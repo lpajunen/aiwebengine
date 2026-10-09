@@ -608,6 +608,8 @@ impl McpClient {
                 method: "POST".to_string(),
                 headers: Some(headers),
                 body: Some(request_body.to_string()),
+                body_base64: None,
+                form: None,
                 timeout_ms: None,
                 // JSON-RPC over HTTP; a response that is not text is a protocol
                 // error rather than something to base64 and hand on.

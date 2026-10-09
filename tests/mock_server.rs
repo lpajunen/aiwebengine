@@ -82,6 +82,8 @@ impl MockServer {
             // U+FFFD.
             .route("/stream-split", axum::routing::get(handle_stream_split))
             .route("/binary", axum::routing::get(handle_binary))
+            .route("/echo-bytes", axum::routing::post(handle_echo_bytes))
+            .route("/multipart", axum::routing::post(handle_multipart))
             .route("/redirect-to", axum::routing::get(handle_redirect_to));
 
         // Bind to random port
@@ -273,6 +275,57 @@ async fn handle_binary() -> Response {
         .header(header::CONTENT_LENGTH, body.len())
         .body(Body::from(body))
         .expect("build binary response")
+}
+
+/// The body exactly as it arrived, as base64, with the `Content-Type` it came
+/// under — so a test can see the bytes a client sent rather than a decoding of
+/// them.
+async fn handle_echo_bytes(headers: HeaderMap, body: axum::body::Bytes) -> Json<Value> {
+    use base64::Engine as _;
+    Json(json!({
+        "contentType": headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        "base64": base64::engine::general_purpose::STANDARD.encode(&body),
+    }))
+}
+
+/// A `multipart/form-data` body as a real parser reads it: one entry per part,
+/// in order, with its content as base64.
+async fn handle_multipart(headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    use base64::Engine as _;
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let boundary = match multer::parse_boundary(content_type) {
+        Ok(boundary) => boundary,
+        Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    };
+    let stream = futures_util::stream::once(async move { Ok::<_, std::io::Error>(body) });
+    let mut multipart = multer::Multipart::new(stream, boundary);
+    let mut parts = Vec::new();
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                let name = field.name().map(str::to_string);
+                let filename = field.file_name().map(str::to_string);
+                let content_type = field.content_type().map(|m| m.to_string());
+                match field.bytes().await {
+                    Ok(bytes) => parts.push(json!({
+                        "name": name,
+                        "filename": filename,
+                        "contentType": content_type,
+                        "base64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+                    })),
+                    Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+                }
+            }
+            Ok(None) => break,
+            Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        }
+    }
+    Json(json!({ "parts": parts })).into_response()
 }
 
 async fn handle_headers(headers: HeaderMap) -> Json<HeadersResponse> {
