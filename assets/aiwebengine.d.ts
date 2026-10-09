@@ -2115,6 +2115,20 @@ interface Console {
 // Conversion Functions API
 // ============================================================================
 
+/** How {@link Convert.svg_to_png} sizes and backs its output. Unknown keys are refused. */
+interface SvgToPngOptions {
+  /** Output width in pixels. Alone, the height follows the drawing's aspect. */
+  width?: number;
+  /** Output height in pixels. Alone, the width follows the drawing's aspect. */
+  height?: number;
+  /**
+   * A CSS color painted under the drawing. Without one the PNG is
+   * transparent. With both `width` and `height`, the drawing keeps its aspect,
+   * is centred, and the rest is this color.
+   */
+  background?: string;
+}
+
 /**
  * Conversion utilities for data transformation
  */
@@ -2138,6 +2152,35 @@ interface Convert {
     template: string,
     data?: Record<string, unknown> | string,
   ): string;
+
+  /**
+   * Render an SVG to a PNG, answered as base64 — what `fetch` takes as
+   * `bodyBase64` or a `form` part's `base64`, and a route as `bodyBase64`.
+   *
+   * The SVG is drawn from its own text only: `<image>` elements are never
+   * loaded (a `data:` URI included), and text uses the engine's bundled Noto
+   * Sans and Noto Sans Mono whatever `font-family` names. With neither
+   * `width` nor `height` the PNG is the drawing's own size.
+   *
+   * Throws when the SVG cannot be rendered: over {{limits.size.maxSvg}},
+   * over {{limits.size.maxPngEdge}} px a side or {{limits.size.maxPngPixels}}
+   * pixels, more than {{limits.size.maxSvgNodes}} elements once `<use>` is
+   * expanded, or longer than {{limits.execution.svgRenderTimeout}} to draw
+   * (filters, masks and many translucent groups are the slow parts).
+   *
+   * @example
+   * // A diagram as a Telegram photo. Telegram flattens transparency to
+   * // black, so give a background.
+   * const png = convert.svg_to_png(svg, { width: 1200, background: "white" });
+   * fetch(`https://api.telegram.org/bot{{secret:bot_token}}/sendPhoto`, {
+   *   method: "POST",
+   *   form: [
+   *     { name: "chat_id", value: String(chatId) },
+   *     { name: "photo", base64: png, filename: "diagram.png", contentType: "image/png" },
+   *   ],
+   * });
+   */
+  svg_to_png(svg: string, options?: SvgToPngOptions): string;
 
   /** Base64-encode a string (as UTF-8). Throws on a value that is not a string. */
   btoa(data: string): string;

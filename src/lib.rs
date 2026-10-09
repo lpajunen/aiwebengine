@@ -68,6 +68,7 @@ pub mod slug;
 pub mod source_view;
 pub mod sql_dialect;
 pub mod stream_registry;
+pub mod svg_to_png;
 pub mod tasks;
 pub mod transpiler;
 pub mod user_repository;

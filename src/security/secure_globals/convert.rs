@@ -53,7 +53,28 @@ impl SecureGlobalContext {
             }
         })?;
 
+        // The options arrive as JSON text from the prelude, which has already
+        // made an omitted argument `{}`.
+        let svg_to_png =
+            Function::new(ctx.clone(), move |svg: String, options: String| -> String {
+                let options: crate::svg_to_png::SvgToPngOptions =
+                    match serde_json::from_str(&options) {
+                        Ok(options) => options,
+                        Err(e) => {
+                            return host_failure(
+                                "TypeError",
+                                &format!("convert.svg_to_png: options: {}", e),
+                            );
+                        }
+                    };
+                match crate::svg_to_png::svg_to_png(&svg, &options) {
+                    Ok(png) => host_ok(serde_json::Value::String(png)),
+                    Err(e) => host_failure("Error", &format!("convert.svg_to_png: {}", e)),
+                }
+            })?;
+
         host.set("markdown_to_html", markdown_to_html)?;
+        host.set("svg_to_png", svg_to_png)?;
         host.set("render_handlebars_template", render_handlebars_template)?;
         host.set("btoa", btoa)?;
         host.set("atob", atob)?;

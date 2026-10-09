@@ -108,6 +108,9 @@ pub struct ExecutionLimits {
     pub test_run_timeout_ms: u64,
     /// Ceiling a `/engine/check_script` caller's own `timeout_ms` is clamped to.
     pub check_max_timeout_ms: u64,
+    /// Longest `convert.svg_to_png` draws before its renderer is killed,
+    /// before the execution budget shortens it.
+    pub svg_render_timeout_ms: u64,
 }
 
 /// How large anything a script stores or is handed may be, in bytes.
@@ -140,6 +143,12 @@ pub struct SizeLimits {
     pub max_patch_edits: usize,
     pub max_markdown_bytes: usize,
     pub max_template_bytes: usize,
+    /// `convert.svg_to_png`: the SVG, the output's longest side and pixel
+    /// count, and the elements once `<use>` is expanded.
+    pub max_svg_bytes: usize,
+    pub max_png_edge: u32,
+    pub max_png_pixels: u64,
+    pub max_svg_nodes: usize,
     /// Bytes of diff `/engine/diff_revisions` will render before truncating.
     pub max_revision_diff_bytes: usize,
     /// Characters in an `import` specifier.
@@ -297,6 +306,7 @@ pub fn snapshot() -> Limits {
             test_module_timeout_ms,
             test_run_timeout_ms,
             check_max_timeout_ms: crate::script_check::MAX_CHECK_TIMEOUT_MS,
+            svg_render_timeout_ms: crate::svg_to_png::RENDER_TIMEOUT.as_millis() as u64,
         },
         size: SizeLimits {
             max_script_source_bytes: js.max_script_size_bytes,
@@ -316,6 +326,10 @@ pub fn snapshot() -> Limits {
             max_patch_edits: crate::engine_api::MAX_PATCH_EDITS,
             max_markdown_bytes: crate::conversion::MAX_MARKDOWN_SIZE,
             max_template_bytes: crate::conversion::MAX_TEMPLATE_SIZE,
+            max_svg_bytes: crate::svg_to_png::MAX_SVG_BYTES,
+            max_png_edge: crate::svg_to_png::MAX_PNG_EDGE,
+            max_png_pixels: crate::svg_to_png::MAX_PNG_PIXELS,
+            max_svg_nodes: crate::svg_to_png::MAX_SVG_NODES,
             max_revision_diff_bytes: crate::revisions::MAX_DIFF_BYTES,
             max_module_specifier_chars: crate::module_loader::MAX_MODULE_SPECIFIER_LENGTH,
         },
@@ -507,6 +521,10 @@ fn placeholder_values(limits: &Limits) -> Vec<(String, String)> {
             "execution.testRunTimeout",
             duration(execution.test_run_timeout_ms),
         ),
+        (
+            "execution.svgRenderTimeout",
+            duration(execution.svg_render_timeout_ms),
+        ),
         ("execution.maxMemory", bytes(execution.max_memory_bytes)),
         ("execution.stackSize", bytes(execution.stack_size_bytes)),
         (
@@ -531,6 +549,10 @@ fn placeholder_values(limits: &Limits) -> Vec<(String, String)> {
         ("size.maxPatchEdits", count(size.max_patch_edits)),
         ("size.maxMarkdown", bytes(size.max_markdown_bytes)),
         ("size.maxTemplate", bytes(size.max_template_bytes)),
+        ("size.maxSvg", bytes(size.max_svg_bytes)),
+        ("size.maxPngEdge", count(size.max_png_edge as usize)),
+        ("size.maxPngPixels", count(size.max_png_pixels as usize)),
+        ("size.maxSvgNodes", count(size.max_svg_nodes)),
         (
             "size.maxModuleSpecifierChars",
             count(size.max_module_specifier_chars),

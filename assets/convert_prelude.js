@@ -49,6 +49,23 @@
       );
     },
 
+    // svg_to_png(svg, { width, height, background }) — the PNG as base64.
+    svg_to_png: function (svg, options) {
+      var api = "convert.svg_to_png";
+      if (
+        options !== undefined &&
+        (options === null ||
+          typeof options !== "object" ||
+          Array.isArray(options))
+      ) {
+        throw new TypeError(api + ": options must be an object");
+      }
+      return unwrap(
+        host.svg_to_png(text(svg, api), JSON.stringify(options || {})),
+        api,
+      );
+    },
+
     btoa: function (data) {
       var api = "convert.btoa";
       return unwrap(host.btoa(text(data, api)), api);

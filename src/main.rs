@@ -3,8 +3,20 @@ use clap::{Arg, Command};
 use tokio::sync::oneshot;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+fn main() -> AppResult<()> {
+    // The SVG renderer is this binary run as a child process. It is checked
+    // before anything else so it starts no runtime, reads no configuration
+    // and opens no database.
+    if std::env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new(aiwebengine::svg_to_png::CHILD_FLAG))
+    {
+        std::process::exit(aiwebengine::svg_to_png::child_main());
+    }
+    serve()
+}
+
 #[tokio::main]
-async fn main() -> AppResult<()> {
+async fn serve() -> AppResult<()> {
     // Parse command line arguments
     let matches = Command::new("aiwebengine-server")
         .version("0.1.0")

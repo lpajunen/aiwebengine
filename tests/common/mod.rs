@@ -122,6 +122,9 @@ pub fn init_test_db() {
 /// to every file that touches a table.
 #[allow(dead_code)]
 pub async fn setup_env() {
+    // A test's executable is its harness, not the engine, so the SVG renderer
+    // has to be named.
+    aiwebengine::svg_to_png::use_renderer(env!("CARGO_BIN_EXE_aiwebengine").into());
     GLOBALS.get_or_init(build_globals).await;
 }
 

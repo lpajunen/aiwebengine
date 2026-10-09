@@ -93,6 +93,16 @@ postgresql_embedded = { version = "0.21.0", default-features = false, features =
   "tokio",
   "tls-rustls-ring",
 ], optional = true }
+# `convert.svg_to_png`. Text only: no system fonts (the output would depend on
+# the host and reveal what it has installed), no raster-image decoders (an
+# `<image>` is never loaded) and no svgz.
+resvg = { version = "0.48", default-features = false, features = ["text"] }
+# Parses `svg_to_png`'s `background` as a CSS color; the version usvg uses.
+svgtypes = "0.16"
+
+[target.'cfg(unix)'.dependencies]
+# `setrlimit` for the SVG renderer's child process (`svg_to_png.rs`).
+libc = "0.2"
 
 # Optimize test builds for faster compilation and execution
 [profile.test]
