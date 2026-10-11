@@ -96,7 +96,8 @@ another file set, and a case is always attributed to the file it came from.
 
 With `rollback` (the default), the run holds a transaction it never commits, so
 **database writes disappear** when it ends — storage, files and secrets
-included, since they are written through the same transaction. What the engine
+included, since they are written through the same transaction, and stream
+messages are never sent, since they wait for the commit. What the engine
 does not mediate is real: an outbound `fetch` has happened. A
 test's own `database.transaction(fn)` is a savepoint inside the run's
 transaction, so it cannot commit its way past the rollback.

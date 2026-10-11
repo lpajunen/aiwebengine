@@ -1174,6 +1174,77 @@ async fn test_combined_functionality() {
     println!("Combined test passed!");
 }
 
+/// A message sent inside a transaction goes out when the transaction commits,
+/// and not at all when it rolls back — a client must never be told about a
+/// write that did not happen. An inner transaction that throws drops only its
+/// own messages; outside a transaction a send is immediate.
+#[tokio::test(flavor = "multi_thread")]
+async fn stream_messages_inside_a_transaction_wait_for_the_commit() {
+    setup_env().await;
+    let path = "/tx_deferred_test";
+    GLOBAL_STREAM_REGISTRY
+        .register_stream(path, "tx_deferred_test.js", None)
+        .expect("stream should register");
+    let connection = GLOBAL_STREAM_REGISTRY
+        .open_connection(
+            path,
+            None,
+            aiwebengine::stream_registry::StreamLimits::default(),
+        )
+        .expect("connection should open");
+    let mut receiver = connection.receiver;
+
+    let script = r#"
+        const send = (m) => routeRegistry.sendStreamMessage('/tx_deferred_test', m);
+        const expect = (ok, what) => { if (!ok) throw new Error(what); };
+
+        try {
+            database.transaction(() => {
+                send('rolled back');
+                throw new Error('abort');
+            });
+        } catch (e) {}
+
+        database.transaction(() => {
+            const r = send('committed');
+            expect(r.deferred === true && r.delivered === 0, 'held: ' + JSON.stringify(r));
+        });
+
+        database.transaction(() => {
+            try {
+                database.transaction(() => {
+                    send('inner rolled back');
+                    throw new Error('inner');
+                });
+            } catch (e) {}
+            send('outer committed');
+        });
+
+        const r = send('outside');
+        expect(r.deferred === false && r.delivered === 1, 'immediate: ' + JSON.stringify(r));
+    "#;
+    let result = tokio::task::spawn_blocking(move || {
+        js_engine::execute_script_secure(
+            "tx_deferred_test.js",
+            script,
+            aiwebengine::security::Principal::Engine("test"),
+        )
+    })
+    .await
+    .expect("script thread should finish");
+    assert!(result.success, "script failed: {:?}", result.error);
+
+    let mut received = Vec::new();
+    while let Ok(Ok(message)) = timeout(Duration::from_millis(500), receiver.recv()).await {
+        received.push(message);
+    }
+    assert_eq!(received, ["committed", "outer committed", "outside"]);
+
+    GLOBAL_STREAM_REGISTRY
+        .unregister_stream(path)
+        .expect("stream should unregister");
+}
+
 /// Whether a run registered `path` as a stream.
 ///
 /// A stream is a registration of the script, reported the way its routes

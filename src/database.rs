@@ -172,12 +172,25 @@ where
     })
 }
 
+/// Work held until the transaction it was done in commits.
+type AfterCommit = Box<dyn FnOnce()>;
+
+/// An open savepoint, and how much after-commit work was queued before it.
+struct Savepoint {
+    name: String,
+    /// Rolling back to the savepoint drops what was queued after this.
+    after_commit_mark: usize,
+}
+
 /// Transaction state stored in thread-local storage
 pub struct TransactionState {
     /// The active PostgreSQL transaction
     transaction: Option<Transaction<'static, Postgres>>,
-    /// Stack of active savepoint names
-    savepoint_stack: Vec<String>,
+    /// Stack of active savepoints
+    savepoint_stack: Vec<Savepoint>,
+    /// Effects that would reveal the transaction's writes, run once it commits
+    /// and dropped if it rolls back. See [`defer_until_commit`].
+    after_commit: Vec<AfterCommit>,
     /// Counter for generating unique savepoint names
     savepoint_counter: usize,
     /// Timeout deadline for the transaction
@@ -196,6 +209,7 @@ impl TransactionState {
         Self {
             transaction: Some(transaction),
             savepoint_stack: Vec::new(),
+            after_commit: Vec::new(),
             savepoint_counter: 0,
             deadline,
             _start_time: start_time,
@@ -225,6 +239,29 @@ thread_local! {
 /// Get the current transaction state (if any)
 pub fn get_current_transaction_active() -> bool {
     CURRENT_TRANSACTION.with(|tx| tx.borrow().as_ref().is_some_and(|t| t.is_active()))
+}
+
+/// Holds `action` until the current transaction commits, or hands it back when
+/// there is none, for the caller to run now.
+///
+/// For an effect that outlives the transaction and can reveal what it wrote —
+/// a stream message — which must not be seen if the writes are then rolled
+/// back. A rollback drops the action; rolling back to a savepoint drops only
+/// what was queued inside it. Actions run in the order queued, on this thread,
+/// after the commit succeeds and the transaction state is cleared.
+pub fn defer_until_commit<F, R>(action: F) -> Result<(), F>
+where
+    F: FnOnce() -> R + 'static,
+{
+    CURRENT_TRANSACTION.with(|tx| match tx.borrow_mut().as_mut() {
+        Some(state) if state.is_active() => {
+            state.after_commit.push(Box::new(move || {
+                let _ = action();
+            }));
+            Ok(())
+        }
+        _ => Err(action),
+    })
 }
 
 /// Get a raw pointer to the current transaction for use in synchronous repository functions
@@ -654,7 +691,11 @@ impl Database {
                     Ok::<(), String>(())
                 })?;
 
-                state.savepoint_stack.push(savepoint_name);
+                let after_commit_mark = state.after_commit.len();
+                state.savepoint_stack.push(Savepoint {
+                    name: savepoint_name,
+                    after_commit_mark,
+                });
                 Ok(TransactionGuard::new())
             } else {
                 // No active transaction - start a new one
@@ -698,53 +739,62 @@ impl Database {
     /// If savepoints are active, this will release the most recent savepoint.
     /// Otherwise, it commits the entire transaction.
     pub fn commit_transaction() -> Result<(), String> {
-        CURRENT_TRANSACTION.with(|tx_cell| {
-            let mut tx_option = tx_cell.borrow_mut();
+        let after_commit =
+            CURRENT_TRANSACTION.with(|tx_cell| -> Result<Vec<AfterCommit>, String> {
+                let mut tx_option = tx_cell.borrow_mut();
 
-            let state = tx_option
-                .as_mut()
-                .ok_or("No active transaction to commit")?;
-
-            state.check_timeout()?;
-
-            if let Some(savepoint_name) = state.savepoint_stack.pop() {
-                // Release the savepoint
-                let tx_ref = state
-                    .transaction
+                let state = tx_option
                     .as_mut()
-                    .ok_or("Transaction not available")?;
+                    .ok_or("No active transaction to commit")?;
 
-                run_blocking(async {
-                    sqlx::query(sqlx::AssertSqlSafe(format!(
-                        "RELEASE SAVEPOINT {}",
-                        savepoint_name
-                    )))
-                    .execute(&mut **tx_ref)
-                    .await
-                    .map_err(|e| format!("Failed to release savepoint: {}", e))?;
-                    Ok::<(), String>(())
-                })?;
-            } else {
-                // Commit the entire transaction. The state is cleared whatever
-                // the commit answers: the transaction has been taken out of
-                // it, and a state left holding none reads to every later
-                // begin on this pooled thread as one still open — so the
-                // thread could never start a transaction again.
-                let tx = state.transaction.take();
-                state.finalized = true;
-                *tx_option = None;
-                let tx = tx.ok_or("Transaction not available")?;
+                state.check_timeout()?;
 
-                run_blocking(async {
-                    tx.commit()
+                if let Some(savepoint) = state.savepoint_stack.pop() {
+                    // Release the savepoint. What it queued now belongs to the
+                    // enclosing scope and waits for the outermost commit.
+                    let tx_ref = state
+                        .transaction
+                        .as_mut()
+                        .ok_or("Transaction not available")?;
+
+                    run_blocking(async {
+                        sqlx::query(sqlx::AssertSqlSafe(format!(
+                            "RELEASE SAVEPOINT {}",
+                            savepoint.name
+                        )))
+                        .execute(&mut **tx_ref)
                         .await
-                        .map_err(|e| format!("Failed to commit transaction: {}", e))?;
-                    Ok::<(), String>(())
-                })?;
-            }
+                        .map_err(|e| format!("Failed to release savepoint: {}", e))?;
+                        Ok::<(), String>(())
+                    })?;
+                    Ok(Vec::new())
+                } else {
+                    // Commit the entire transaction. The state is cleared whatever
+                    // the commit answers: the transaction has been taken out of
+                    // it, and a state left holding none reads to every later
+                    // begin on this pooled thread as one still open — so the
+                    // thread could never start a transaction again.
+                    let tx = state.transaction.take();
+                    let after_commit = std::mem::take(&mut state.after_commit);
+                    state.finalized = true;
+                    *tx_option = None;
+                    let tx = tx.ok_or("Transaction not available")?;
 
-            Ok(())
-        })
+                    run_blocking(async {
+                        tx.commit()
+                            .await
+                            .map_err(|e| format!("Failed to commit transaction: {}", e))?;
+                        Ok::<(), String>(())
+                    })?;
+                    Ok(after_commit)
+                }
+            })?;
+
+        // Outside the borrow: an action may itself touch the database.
+        for action in after_commit {
+            action();
+        }
+        Ok(())
     }
 
     /// Rollback the current transaction
@@ -759,8 +809,9 @@ impl Database {
                 .as_mut()
                 .ok_or("No active transaction to rollback")?;
 
-            if let Some(savepoint_name) = state.savepoint_stack.pop() {
-                // Rollback to the savepoint
+            if let Some(savepoint) = state.savepoint_stack.pop() {
+                // Rollback to the savepoint, and drop what was queued inside it
+                state.after_commit.truncate(savepoint.after_commit_mark);
                 let tx_ref = state
                     .transaction
                     .as_mut()
@@ -769,7 +820,7 @@ impl Database {
                 run_blocking(async {
                     sqlx::query(sqlx::AssertSqlSafe(format!(
                         "ROLLBACK TO SAVEPOINT {}",
-                        savepoint_name
+                        savepoint.name
                     )))
                     .execute(&mut **tx_ref)
                     .await

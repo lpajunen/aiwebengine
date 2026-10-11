@@ -494,7 +494,11 @@ type AuthorizeFunction = (
 /** What `registerRoute` answers. A refusal is a value, not an exception. */
 type RegisterRouteResult = { ok: true } | { ok: false; reason: string };
 
-/** What sending to a stream answers. */
+/**
+ * What sending to a stream answers. Sent inside `database.transaction(fn)`,
+ * the message goes out when the transaction commits and is dropped if it
+ * rolls back; it is then `deferred` and the counts are 0.
+ */
 interface StreamSendResult {
   /** Connections the message reached. */
   delivered: number;
@@ -502,6 +506,8 @@ interface StreamSendResult {
   connections: number;
   /** Connections that could not be written to. */
   failed: number;
+  /** Held until the open transaction commits. */
+  deferred: boolean;
 }
 
 /**

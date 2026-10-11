@@ -449,6 +449,9 @@ impl RouteRegistrar {
 /// (`engine_api::broadcast_script_update`), which never passes through here,
 /// so exempting it would only let a script forge engine notifications to
 /// every subscriber.
+///
+/// Inside a transaction the send waits for the commit and is dropped by a
+/// rollback ([`crate::database::defer_until_commit`]).
 pub(super) fn send_stream_message(
     user_context: &UserContext,
     auditor: &SecurityAuditor,
@@ -497,18 +500,39 @@ pub(super) fn send_stream_message(
         api,
     );
 
-    let registry = &crate::stream_registry::GLOBAL_STREAM_REGISTRY;
-    let result = match filter {
-        Some((filter, mode)) => {
-            registry.broadcast_to_stream_with_filter_mode(path, message, filter, mode)
+    let send = {
+        let path = path.to_string();
+        let message = message.to_string();
+        let filter = filter.map(|(filter, mode)| (filter.clone(), mode));
+        move || {
+            let registry = &crate::stream_registry::GLOBAL_STREAM_REGISTRY;
+            match filter {
+                Some((filter, mode)) => {
+                    registry.broadcast_to_stream_with_filter_mode(&path, &message, &filter, mode)
+                }
+                None => registry.broadcast_to_stream(&path, &message),
+            }
         }
-        None => registry.broadcast_to_stream(path, message),
     };
-    match result {
+    // Sent inside a transaction, the message goes out when it commits: one
+    // sent now could announce a write that is then rolled back.
+    let send = match crate::database::defer_until_commit(send) {
+        Ok(()) => {
+            return host_ok(serde_json::json!({
+                "delivered": 0,
+                "connections": 0,
+                "failed": 0,
+                "deferred": true,
+            }));
+        }
+        Err(send) => send,
+    };
+    match send() {
         Ok(sent) => host_ok(serde_json::json!({
             "delivered": sent.successful_sends,
             "connections": sent.total_connections,
             "failed": sent.failed_connections.len(),
+            "deferred": false,
         })),
         Err(e) => host_failure(
             "Error",

@@ -63,7 +63,7 @@
       return unwrap(host.register(path, JSON.stringify(spec)), api);
     },
 
-    // sendStreamMessage(path, data) -> { delivered, connections, failed }
+    // sendStreamMessage(path, data) -> { delivered, connections, failed, deferred }
     sendStreamMessage: function (path, data) {
       return unwrap(
         host.send(String(path), data),
@@ -72,7 +72,7 @@
     },
 
     // sendStreamMessageFiltered(path, data, filter, matchMode)
-    //   -> { delivered, connections, failed }
+    //   -> { delivered, connections, failed, deferred }
     // `filter` is an object of string values, matched against what each
     // connection's authorize function returned.
     sendStreamMessageFiltered: function (path, data, filter, matchMode) {

@@ -123,6 +123,27 @@ racing first `insert` fail rather than both callers believing they won. Work
 that has to run one at a time per key is often better as `scriptTasks` with a
 `lane`, which the queue serialises for you.
 
+## Stream messages wait for the commit
+
+A stream message sent inside a transaction is held until the transaction
+commits, so no client is told about a write that is then rolled back. A
+rollback drops it, and an inner `transaction(fn)` that throws drops only the
+messages sent inside it. Held messages go out in the order they were sent.
+`sendStreamMessage` answers `{ deferred: true }` with zero counts, since nothing
+has been delivered yet.
+
+```javascript
+database.transaction(() => {
+  const msg = database.insert("messages", { body });
+  routeRegistry.sendStreamMessage("/chat", msg); // sent at commit
+  if (!valid(msg)) throw new Error("rejected"); // never sent
+});
+```
+
+A transaction that never commits never sends: the rollback that wraps an
+evaluation or a test run drops their stream messages with their writes.
+Effects the engine does not mediate — an outbound `fetch` — are not held.
+
 ## Errors inside a transaction
 
 A refused value — a fraction in an `integer` column, say — is refused before
@@ -147,7 +168,9 @@ invocation, so every `database` call made inside `fn` joins it without being
 passed anything. The host half is three calls the prelude hides —
 `beginTransaction`, `commitTransaction`, `rollbackTransaction` — where a begin
 inside an open transaction is a `SAVEPOINT` and its commit or rollback
-releases or rolls back to it. `src/database.rs` holds the state;
+releases or rolls back to it. Held stream messages are queued on the same
+state by `database::defer_until_commit`, with each savepoint recording where
+its part of the queue starts. `src/database.rs` holds the state;
 `assets/database_prelude.js` holds `transaction(fn)`.
 
 ## See also
