@@ -662,14 +662,14 @@ impl SecureGlobalContext {
                 // the specification requires: a client holding a `taskId` that
                 // names nothing is worse than a slow answer.
                 let task_id = uuid::Uuid::new_v4();
-                let created = crate::database::run_blocking(crate::mcp_tasks::create(
+                let created = crate::mcp_tasks::create_blocking(
                     task_id,
                     queued.task_id,
                     &script_uri_task,
                     &method,
                     &target,
                     status_message.as_deref(),
-                ))
+                )
                 .map_err(|e| {
                     // The work is queued and the handle is not, so the client
                     // would have no way to reach it. Cancelling is the honest

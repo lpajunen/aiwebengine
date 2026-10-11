@@ -52,6 +52,22 @@ That is why this is a separate table rather than a relaxation of
 `scheduler_jobs`. Relaxing the uniqueness would let you enqueue two of the same
 work; keeping it means you cannot.
 
+## Enqueued inside a transaction
+
+`scriptTasks.enqueue`, `get` and `cancel` join an open `database.transaction(fn)`
+as every `database` call does. A task enqueued there commits with the writes it
+was queued about: no worker can see it before the commit, so it never runs
+ahead of the rows it reads, and a rollback leaves no task behind. The
+transaction sees its own task. `mcp.task` writes its handle the same way, so the
+handle and the work it names commit or roll back together.
+
+```javascript
+database.transaction(() => {
+  const order = database.insert("orders", { item });
+  scriptTasks.enqueue({ handler: "fulfil", payload: { id: order.id } });
+});
+```
+
 ## What a handler gets
 
 `context.meta.task` carries the payload, the attempt number and the ceiling.

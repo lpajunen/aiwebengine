@@ -434,3 +434,62 @@ async fn a_request_handler_can_enqueue_work_that_runs_after_it_answers() {
         "a completed task keeps no row"
     );
 }
+
+/// Work enqueued inside a transaction is part of it: invisible to workers
+/// until the commit, so it cannot run ahead of the rows it was queued about,
+/// and gone if the transaction rolls back. The transaction itself sees it.
+#[tokio::test(flavor = "multi_thread")]
+async fn work_enqueued_inside_a_transaction_commits_and_rolls_back_with_it() {
+    use aiwebengine::database::Database;
+    setup_env().await;
+
+    let script_uri = "test://tasks/transactional";
+    repository::upsert_script(script_uri, "function handleWork() {}").expect("script should store");
+    // Due later, so no worker claims the committed one before it is looked at.
+    let later = move || NewTask {
+        run_at: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+        ..new_task(script_uri, "handleWork")
+    };
+
+    let runtime = tokio::runtime::Handle::current();
+    let (rolled_back, committed) = tokio::task::spawn_blocking(move || {
+        Database::begin_transaction(None)
+            .expect("transaction should open")
+            .release();
+        let rolled_back = tasks::blocking::enqueue(later()).expect("enqueue should succeed");
+        assert!(
+            tasks::blocking::get(rolled_back.task_id)
+                .expect("lookup")
+                .is_some(),
+            "the transaction should see its own work"
+        );
+        Database::rollback_transaction().expect("rollback should succeed");
+
+        Database::begin_transaction(None)
+            .expect("transaction should open")
+            .release();
+        let committed = tasks::blocking::enqueue(later()).expect("enqueue should succeed");
+        assert!(
+            runtime
+                .block_on(tasks::get(committed.task_id))
+                .expect("lookup")
+                .is_none(),
+            "no other connection should see the work before the commit"
+        );
+        Database::commit_transaction().expect("commit should succeed");
+
+        (rolled_back.task_id, committed.task_id)
+    })
+    .await
+    .expect("no panic");
+
+    assert!(
+        tasks::get(rolled_back).await.expect("lookup").is_none(),
+        "rolled-back work should leave no row"
+    );
+    let queued = tasks::get(committed)
+        .await
+        .expect("lookup")
+        .expect("committed work should be queued");
+    assert_eq!(queued.state, "pending");
+}

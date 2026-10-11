@@ -259,12 +259,22 @@ fn validate(task: &NewTask) -> Result<(i32, String), EnqueueError> {
 
 /// Accept a piece of work.
 pub async fn enqueue(task: NewTask) -> Result<Task, EnqueueError> {
-    let (max_attempts, handler) = validate(&task)?;
-    let lane = normalize_lane(task.lane.as_deref());
-
     let Some(db) = crate::database::get_global_database() else {
         return Err(EnqueueError::Unavailable);
     };
+    let task = insert(db.pool(), task).await?;
+    // Work that is due now should not wait out a poll interval.
+    wake_signal().notify_waiters();
+    Ok(task)
+}
+
+/// Write the row for a piece of work, on whichever connection is given.
+async fn insert<'e, E>(executor: E, task: NewTask) -> Result<Task, EnqueueError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let (max_attempts, handler) = validate(&task)?;
+    let lane = normalize_lane(task.lane.as_deref());
 
     let task_id = Uuid::new_v4();
     let run_at = task.run_at.unwrap_or_else(Utc::now);
@@ -287,12 +297,9 @@ pub async fn enqueue(task: NewTask) -> Result<Task, EnqueueError> {
     .bind(task.enqueued_by.as_deref())
     .bind(task.run_as.as_deref())
     .bind(lane.as_deref())
-    .fetch_one(db.pool())
+    .fetch_one(executor)
     .await
     .map_err(|e| EnqueueError::Storage(e.to_string()))?;
-
-    // Work that is due now should not wait out a poll interval.
-    wake_signal().notify_waiters();
 
     debug!(
         script = %task.script_uri,
@@ -334,7 +341,13 @@ pub async fn get(task_id: Uuid) -> Result<Option<Task>, sqlx::Error> {
     let Some(db) = crate::database::get_global_database() else {
         return Ok(None);
     };
+    get_on(db.pool(), task_id).await
+}
 
+async fn get_on<'e, E>(executor: E, task_id: Uuid) -> Result<Option<Task>, sqlx::Error>
+where
+    E: sqlx::PgExecutor<'e>,
+{
     let row = sqlx::query(
         r#"
         SELECT task_id, script_uri, handler_name, payload, state, attempts, max_attempts,
@@ -344,7 +357,7 @@ pub async fn get(task_id: Uuid) -> Result<Option<Task>, sqlx::Error> {
         "#,
     )
     .bind(task_id)
-    .fetch_optional(db.pool())
+    .fetch_optional(executor)
     .await?;
 
     Ok(row.as_ref().map(Task::from_row))
@@ -360,7 +373,13 @@ pub async fn cancel(task_id: Uuid) -> Result<bool, sqlx::Error> {
     let Some(db) = crate::database::get_global_database() else {
         return Ok(false);
     };
+    cancel_on(db.pool(), task_id).await
+}
 
+async fn cancel_on<'e, E>(executor: E, task_id: Uuid) -> Result<bool, sqlx::Error>
+where
+    E: sqlx::PgExecutor<'e>,
+{
     let result = sqlx::query(
         r#"
         UPDATE script_tasks
@@ -373,7 +392,7 @@ pub async fn cancel(task_id: Uuid) -> Result<bool, sqlx::Error> {
         "#,
     )
     .bind(task_id)
-    .execute(db.pool())
+    .execute(executor)
     .await?;
 
     Ok(result.rows_affected() > 0)
@@ -1009,19 +1028,58 @@ pub fn to_json(task: &Task) -> Value {
 /// A host call is synchronous — the script is stopped inside QuickJS while it
 /// runs — so these drive the async work the way every other sandboxed database
 /// call does.
+///
+/// Inside a script's transaction they join it, as every `database` call does.
+/// A task enqueued there commits with the writes it was queued about and is
+/// gone if they roll back; no worker can see it before the commit, so it never
+/// runs ahead of the data it reads. The async functions above stay on the
+/// pool: they run on runtime threads, where the thread's transaction is not
+/// theirs.
 pub mod blocking {
     use super::*;
+    use crate::database::{TransactionExecutor, get_current_executor};
 
     pub fn enqueue(task: NewTask) -> Result<Task, EnqueueError> {
-        crate::database::run_blocking(super::enqueue(task))
+        let Some(db) = crate::database::get_global_database() else {
+            return Err(EnqueueError::Unavailable);
+        };
+        let task = crate::database::run_blocking(async {
+            match get_current_executor(db.pool()) {
+                TransactionExecutor::Transaction(tx) => insert(&mut **tx, task).await,
+                TransactionExecutor::Pool(pool) => insert(pool, task).await,
+            }
+        })?;
+        // A worker woken before the commit would find nothing and wait out a
+        // poll interval.
+        let wake = || wake_signal().notify_waiters();
+        if let Err(wake) = crate::database::defer_until_commit(wake) {
+            wake();
+        }
+        Ok(task)
     }
 
     pub fn cancel(task_id: Uuid) -> Result<bool, sqlx::Error> {
-        crate::database::run_blocking(super::cancel(task_id))
+        let Some(db) = crate::database::get_global_database() else {
+            return Ok(false);
+        };
+        crate::database::run_blocking(async {
+            match get_current_executor(db.pool()) {
+                TransactionExecutor::Transaction(tx) => cancel_on(&mut **tx, task_id).await,
+                TransactionExecutor::Pool(pool) => cancel_on(pool, task_id).await,
+            }
+        })
     }
 
     pub fn get(task_id: Uuid) -> Result<Option<Task>, sqlx::Error> {
-        crate::database::run_blocking(super::get(task_id))
+        let Some(db) = crate::database::get_global_database() else {
+            return Ok(None);
+        };
+        crate::database::run_blocking(async {
+            match get_current_executor(db.pool()) {
+                TransactionExecutor::Transaction(tx) => get_on(&mut **tx, task_id).await,
+                TransactionExecutor::Pool(pool) => get_on(pool, task_id).await,
+            }
+        })
     }
 }
 

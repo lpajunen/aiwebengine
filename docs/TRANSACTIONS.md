@@ -144,6 +144,10 @@ A transaction that never commits never sends: the rollback that wraps an
 evaluation or a test run drops their stream messages with their writes.
 Effects the engine does not mediate — an outbound `fetch` — are not held.
 
+Tasks need no holding: `scriptTasks.enqueue` writes its row in the transaction,
+so it commits or rolls back with everything else
+([Script Tasks](./SCRIPT_TASKS.md#enqueued-inside-a-transaction)).
+
 ## Errors inside a transaction
 
 A refused value — a fraction in an `integer` column, say — is refused before

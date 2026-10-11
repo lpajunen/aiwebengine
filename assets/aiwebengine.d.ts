@@ -1002,7 +1002,8 @@ interface ScriptTask {
  */
 interface ScriptTasks {
   /**
-   * Accept a piece of work.
+   * Accept a piece of work. Inside `database.transaction(fn)` the task commits
+   * with the transaction and is gone if it rolls back; no worker sees it first.
    *
    * @param options.handler - Name of the function to call. 1-{{limits.scheduler.maxJobNameChars}} characters.
    * @param options.payload - A JSON object describing the work. At most 64KB;

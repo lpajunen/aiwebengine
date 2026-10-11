@@ -208,7 +208,74 @@ pub async fn create(
 ) -> Result<McpTask, sqlx::Error> {
     let db = crate::database::get_global_database()
         .ok_or_else(|| sqlx::Error::Configuration("no database".into()))?;
+    create_on(
+        db.pool(),
+        task_id,
+        script_task_id,
+        script_uri,
+        method,
+        target,
+        status_message,
+    )
+    .await
+}
 
+/// [`create`] from a script's host call, joining the script's transaction when
+/// one is open — where `tasks::blocking::enqueue` put the work it names, so
+/// the handle and the work commit or roll back together.
+pub fn create_blocking(
+    task_id: Uuid,
+    script_task_id: Uuid,
+    script_uri: &str,
+    method: &str,
+    target: &str,
+    status_message: Option<&str>,
+) -> Result<McpTask, sqlx::Error> {
+    use crate::database::{TransactionExecutor, get_current_executor};
+    let db = crate::database::get_global_database()
+        .ok_or_else(|| sqlx::Error::Configuration("no database".into()))?;
+    crate::database::run_blocking(async {
+        match get_current_executor(db.pool()) {
+            TransactionExecutor::Transaction(tx) => {
+                create_on(
+                    &mut **tx,
+                    task_id,
+                    script_task_id,
+                    script_uri,
+                    method,
+                    target,
+                    status_message,
+                )
+                .await
+            }
+            TransactionExecutor::Pool(pool) => {
+                create_on(
+                    pool,
+                    task_id,
+                    script_task_id,
+                    script_uri,
+                    method,
+                    target,
+                    status_message,
+                )
+                .await
+            }
+        }
+    })
+}
+
+async fn create_on<'e, E>(
+    executor: E,
+    task_id: Uuid,
+    script_task_id: Uuid,
+    script_uri: &str,
+    method: &str,
+    target: &str,
+    status_message: Option<&str>,
+) -> Result<McpTask, sqlx::Error>
+where
+    E: sqlx::PgExecutor<'e>,
+{
     let expires_at = Utc::now() + TASK_TTL;
     let row = sqlx::query(
         r#"
@@ -226,7 +293,7 @@ pub async fn create(
     .bind(target)
     .bind(status_message)
     .bind(expires_at)
-    .fetch_one(db.pool())
+    .fetch_one(executor)
     .await?;
 
     debug!(task = %task_id, script = %script_uri, "MCP task created");
