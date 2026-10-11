@@ -624,6 +624,26 @@ impl SecureGlobalContext {
                     .and_then(|value| value.as_str())
                     .map(str::to_string);
 
+                // The work and its handle are written together. Committed
+                // separately, a worker could claim and finish the work before
+                // the handle existed, settle nothing, and leave the client
+                // polling a handle that says `working` for good. Inside the
+                // script's own transaction this joins it instead, and commits
+                // with it.
+                let own_transaction = if crate::database::get_current_transaction_active() {
+                    None
+                } else {
+                    Some(
+                        crate::database::Database::begin_transaction(None).map_err(|e| {
+                            rquickjs::Error::new_from_js_message(
+                                "mcp.task",
+                                "enqueue",
+                                &format!("mcp.task: could not queue the work: {}", e),
+                            )
+                        })?,
+                    )
+                };
+
                 let queued = crate::tasks::blocking::enqueue(crate::tasks::NewTask {
                     script_uri: script_uri_task.clone(),
                     handler_name: handler,
@@ -672,9 +692,10 @@ impl SecureGlobalContext {
                 )
                 .map_err(|e| {
                     // The work is queued and the handle is not, so the client
-                    // would have no way to reach it. Cancelling is the honest
-                    // unwind: better nothing ran than something ran that
-                    // nobody can collect.
+                    // would have no way to reach it. Better nothing ran than
+                    // something ran that nobody can collect: our own
+                    // transaction rolls the work back as the guard drops, and
+                    // the cancel covers the script's.
                     let _ = crate::tasks::blocking::cancel(queued.task_id);
                     rquickjs::Error::new_from_js_message(
                         "mcp.task",
@@ -682,6 +703,17 @@ impl SecureGlobalContext {
                         &format!("mcp.task: could not record the task handle: {}", e),
                     )
                 })?;
+
+                if let Some(mut guard) = own_transaction {
+                    crate::database::Database::commit_transaction().map_err(|e| {
+                        rquickjs::Error::new_from_js_message(
+                            "mcp.task",
+                            "record",
+                            &format!("mcp.task: could not queue the work: {}", e),
+                        )
+                    })?;
+                    guard.commit();
+                }
 
                 let create_result = created.create_result();
                 elicitation::record_handoff(create_result.clone());
