@@ -690,9 +690,10 @@ async fn imported_asset_module_executes_in_scheduled_path() {
         interval_seconds: None,
         interval_milliseconds: None,
         attempts: 0,
+        claim_epoch: 0,
     };
 
-    execute_scheduled_handler(script_uri, "runImportedSchedule", &invocation)
+    execute_scheduled_handler(script_uri, "runImportedSchedule", &invocation, None)
         .expect("scheduled handler should execute");
 
     let logs = repository::fetch_log_messages(script_uri);

@@ -55,9 +55,10 @@ async fn a_task_runs_its_handler_with_the_payload_it_carried() {
         attempts: 0,
         max_attempts: task.max_attempts,
         run_as: None,
+        claim_epoch: 0,
     };
 
-    tokio::task::spawn_blocking(move || js_engine::execute_task_handler(&invocation, None))
+    tokio::task::spawn_blocking(move || js_engine::execute_task_handler(&invocation, None, None))
         .await
         .expect("no panic")
         .expect("the handler should run");
@@ -109,9 +110,10 @@ async fn an_undelegated_task_cannot_reach_the_management_tools() {
         attempts: 0,
         max_attempts: task.max_attempts,
         run_as: None,
+        claim_epoch: 0,
     };
 
-    tokio::task::spawn_blocking(move || js_engine::execute_task_handler(&invocation, None))
+    tokio::task::spawn_blocking(move || js_engine::execute_task_handler(&invocation, None, None))
         .await
         .expect("no panic")
         .expect("the handler should run");
@@ -492,4 +494,61 @@ async fn work_enqueued_inside_a_transaction_commits_and_rolls_back_with_it() {
         .expect("lookup")
         .expect("committed work should be queued");
     assert_eq!(queued.state, "pending");
+}
+
+/// A run whose claim is lost stops at its next operation rather than going on
+/// beside whoever holds the task now, well inside its own budget. The handler
+/// sees the claim it runs under as its fencing token.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fenced_run_stops_and_a_handler_sees_its_fencing_token() {
+    setup_env().await;
+
+    let script_uri = "test://tasks/fenced";
+    repository::upsert_script(
+        script_uri,
+        r#"
+        function token(context) { return context.meta.task.fencingToken; }
+        function spin(context) { while (true) {} }
+        "#,
+    )
+    .expect("script should store");
+
+    let invocation = |handler: &str| tasks::TaskInvocation {
+        task_id: uuid::Uuid::new_v4(),
+        invocation_id: "test-invocation".to_string(),
+        script_uri: script_uri.to_string(),
+        handler_name: handler.to_string(),
+        payload: json!({}),
+        attempts: 0,
+        max_attempts: 1,
+        run_as: None,
+        claim_epoch: 7,
+    };
+
+    let fence = aiwebengine::lease::Fence::default();
+    let for_token = (invocation("token"), fence.clone());
+    let token = tokio::task::spawn_blocking(move || {
+        js_engine::execute_task_handler(&for_token.0, None, Some(for_token.1))
+    })
+    .await
+    .expect("no panic")
+    .expect("an unfenced run should finish");
+    assert_eq!(token, Some(json!(7)));
+
+    let spinning = invocation("spin");
+    let for_spin = fence.clone();
+    let started = std::time::Instant::now();
+    let run = tokio::task::spawn_blocking(move || {
+        js_engine::execute_task_handler(&spinning, None, Some(for_spin))
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    fence.raise();
+    let outcome = run.await.expect("no panic");
+
+    assert!(outcome.is_err(), "a fenced run should not succeed");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "the run should stop when fenced, not at its budget ({:?})",
+        started.elapsed()
+    );
 }

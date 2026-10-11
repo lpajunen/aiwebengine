@@ -25,6 +25,16 @@ use tracing::warn;
 pub(crate) fn create_sandboxed_runtime(
     limits: &ExecutionLimits,
 ) -> Result<(Runtime, crate::database::HostCallBudget), String> {
+    create_fenced_runtime(limits, None)
+}
+
+/// [`create_sandboxed_runtime`] for a run held under a claim, which also stops
+/// once `fence` is raised ([`crate::lease`]).
+#[must_use = "the host-call budget ends when its guard is dropped"]
+pub(crate) fn create_fenced_runtime(
+    limits: &ExecutionLimits,
+    fence: Option<crate::lease::Fence>,
+) -> Result<(Runtime, crate::database::HostCallBudget), String> {
     let rt = Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
     rt.set_memory_limit(limits.max_memory_mb * 1024 * 1024);
     rt.set_max_stack_size(limits.stack_size_bytes);
@@ -35,7 +45,9 @@ pub(crate) fn create_sandboxed_runtime(
     // that started it, one handler at a time.
     let budget = crate::database::within_host_budget(Duration::from_millis(limits.timeout_ms));
     let deadline = Instant::now() + budget;
-    rt.set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)));
+    rt.set_interrupt_handler(Some(Box::new(move || {
+        Instant::now() >= deadline || fence.as_ref().is_some_and(|fence| fence.is_raised())
+    })));
     Ok((rt, crate::database::bound_host_calls(deadline)))
 }
 

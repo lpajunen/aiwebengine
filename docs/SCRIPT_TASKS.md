@@ -194,6 +194,15 @@ with the scheduler). A worker that dies stops renewing, and its tasks become
 claimable again once the lease lapses — which is how work survives the instance
 that was running it.
 
+Every claim increments the row's epoch, and how a run ended is recorded only
+under the epoch it was claimed with. A run that lost its claim — whoever took
+the task, including its own worker on a later tick — writes nothing and settles
+no MCP handle. It is also stopped: once its renewal finds the claim gone, or
+cannot show it is held before it would lapse, the script ends at its next
+operation (a host call already in flight finishes first). The handler reads its
+epoch as `context.meta.task.fencingToken`; pass it to a system outside the
+engine that should refuse a write from an earlier token than one it has seen.
+
 Lanes hold across instances too, and that takes four separate pieces of the
 claim rather than one. A lane already holding a live run is excluded by a
 `NOT EXISTS`. Two tasks of one lane falling in a single batch are cut to one

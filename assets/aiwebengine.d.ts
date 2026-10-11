@@ -395,6 +395,12 @@ interface TaskContext {
   /** Counts from one. A value above one means this is a retry. */
   attempt: number;
   maxAttempts: number;
+  /**
+   * Increases with every claim of the task. A run whose claim was taken by a
+   * later one is stopped; pass this to an outside system so it can refuse a
+   * write carrying an older token than one it has seen.
+   */
+  fencingToken: number;
 }
 
 // ============================================================================

@@ -156,6 +156,9 @@ pub struct ScheduledInvocation {
     /// first run, and the basis for both the retry delay and the decision to
     /// stop retrying.
     pub attempts: i32,
+    /// The claim this run holds the row under ([`crate::lease`]). Zero on the
+    /// in-memory path, which claims nothing.
+    pub claim_epoch: i64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -615,6 +618,7 @@ impl Scheduler {
             // written, and it drops a one-off as it comes due rather than
             // retrying it at all.
             attempts: 0,
+            claim_epoch: 0,
         }
     }
 
@@ -728,10 +732,11 @@ impl Scheduler {
             SET locked_by = $3,
                 locked_at = $1,
                 lock_expires_at = $1 + make_interval(secs => $4),
+                claim_epoch = jobs.claim_epoch + 1,
                 updated_at = NOW()
             FROM candidates
             WHERE jobs.job_id = candidates.job_id
-            RETURNING jobs.job_id, jobs.script_uri, jobs.handler_name, jobs.job_key, jobs.kind, jobs.run_at, jobs.interval_ms, jobs.attempts
+            RETURNING jobs.job_id, jobs.script_uri, jobs.handler_name, jobs.job_key, jobs.kind, jobs.run_at, jobs.interval_ms, jobs.attempts, jobs.claim_epoch
             "#,
         )
         .bind(now)
@@ -779,6 +784,7 @@ impl Scheduler {
                 interval_seconds,
                 interval_milliseconds,
                 attempts: row.get("attempts"),
+                claim_epoch: row.get("claim_epoch"),
             });
         }
 
@@ -795,10 +801,10 @@ impl Scheduler {
             ScheduledInvocationKind::OneOff => {
                 if succeeded {
                     if let Err(e) = sqlx::query(
-                        "DELETE FROM scheduler_jobs WHERE job_id = $1 AND locked_by = $2",
+                        "DELETE FROM scheduler_jobs WHERE job_id = $1 AND claim_epoch = $2",
                     )
                     .bind(invocation.job_id)
-                    .bind(&self.worker_id)
+                    .bind(invocation.claim_epoch)
                     .execute(db.pool())
                     .await
                     {
@@ -812,10 +818,10 @@ impl Scheduler {
                     // not a job that is still scheduled.
                     if attempts >= MAX_ONE_OFF_ATTEMPTS {
                         if let Err(e) = sqlx::query(
-                            "DELETE FROM scheduler_jobs WHERE job_id = $1 AND locked_by = $2",
+                            "DELETE FROM scheduler_jobs WHERE job_id = $1 AND claim_epoch = $2",
                         )
                         .bind(invocation.job_id)
-                        .bind(&self.worker_id)
+                        .bind(invocation.claim_epoch)
                         .execute(db.pool())
                         .await
                         {
@@ -856,13 +862,13 @@ impl Scheduler {
                             locked_at = NULL,
                             lock_expires_at = NULL,
                             updated_at = NOW()
-                        WHERE job_id = $3 AND locked_by = $4
+                        WHERE job_id = $3 AND claim_epoch = $4
                         "#,
                     )
                     .bind(retry_at)
                     .bind(attempts)
                     .bind(invocation.job_id)
-                    .bind(&self.worker_id)
+                    .bind(invocation.claim_epoch)
                     .execute(db.pool())
                     .await
                     {
@@ -897,12 +903,12 @@ impl Scheduler {
                         locked_at = NULL,
                         lock_expires_at = NULL,
                         updated_at = NOW()
-                    WHERE job_id = $2 AND locked_by = $3
+                    WHERE job_id = $2 AND claim_epoch = $3
                     "#,
                 )
                 .bind(next_run)
                 .bind(invocation.job_id)
-                .bind(&self.worker_id)
+                .bind(invocation.claim_epoch)
                 .execute(db.pool())
                 .await
                 {
@@ -954,29 +960,42 @@ impl Scheduler {
 
         // Before the slot wait, not after: waiting for a slot is unbounded and
         // is as much a part of holding the job as running it is.
-        let renewal = if Self::has_database() {
+        let lease = if Self::has_database() {
             Some(crate::lease::spawn_renewal(
                 crate::lease::Leased::SchedulerJob,
                 invocation.job_id,
-                self.worker_id.clone(),
+                invocation.claim_epoch,
                 invocation.key.clone(),
             ))
         } else {
             None
         };
+        let fence = lease.as_ref().map(|lease| lease.fence());
 
         let permit = crate::execution_slots::acquire().await;
+        let fence_for_engine = fence.clone();
         let execution = tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            js_engine::execute_scheduled_handler(&script_uri, &handler_name, &invocation_for_engine)
+            js_engine::execute_scheduled_handler(
+                &script_uri,
+                &handler_name,
+                &invocation_for_engine,
+                fence_for_engine,
+            )
         })
         .await;
 
         // The run is over either way, so the claim stops being extended before
         // anything is written about how it ended.
-        if let Some(renewal) = renewal {
-            renewal.abort();
-        }
+        drop(lease);
+        // Whatever a run answered, one whose claim was lost was cut short or
+        // overtaken, so it is a failure.
+        let execution = match execution {
+            _ if fence.as_ref().is_some_and(|fence| fence.is_raised()) => Ok(Err(
+                "the run lost its claim on the job and was stopped".to_string(),
+            )),
+            execution => execution,
+        };
 
         let mut succeeded = false;
         match execution {
@@ -1278,8 +1297,8 @@ mod tests {
                 r#"
                 INSERT INTO scheduler_jobs
                     (job_id, script_uri, handler_name, job_key, kind, run_at, attempts,
-                     locked_by, locked_at, lock_expires_at)
-                VALUES ($1, $2, 'handler', $3, 'one_off', NOW(), $4, $5, NOW(), NOW() + INTERVAL '1 minute')
+                     locked_by, locked_at, lock_expires_at, claim_epoch)
+                VALUES ($1, $2, 'handler', $3, 'one_off', NOW(), $4, $5, NOW(), NOW() + INTERVAL '1 minute', 1)
                 "#,
             )
             .bind(job_id)
@@ -1302,6 +1321,7 @@ mod tests {
                 interval_seconds: None,
                 interval_milliseconds: None,
                 attempts,
+                claim_epoch: 1,
             }
         }
 
@@ -1360,21 +1380,27 @@ mod tests {
             );
         }
 
-        /// The completing worker names itself in the WHERE clause. Another
-        /// instance's row is not this worker's to retry or to drop.
+        /// The completing run names its claim's epoch in the WHERE clause. A
+        /// row claimed again since — even by the same worker — is not the
+        /// earlier run's to retry or to drop.
         #[tokio::test]
-        async fn a_job_claimed_by_another_worker_is_left_alone() {
+        async fn a_job_claimed_again_is_left_alone_by_the_earlier_run() {
             let pool = use_the_test_database();
-            let owner = Scheduler::new();
-            let stranger = Scheduler::new();
-            let invocation = claimed_job(&pool, &owner, "not-yours", 0).await;
+            let scheduler = Scheduler::new();
+            let current = claimed_job(&pool, &scheduler, "not-yours", 0).await;
+            // The same worker, finishing a run under an earlier claim.
+            let earlier = ScheduledInvocation {
+                claim_epoch: current.claim_epoch - 1,
+                ..current.clone()
+            };
 
-            stranger.finalize_db_job_execution(&invocation, false).await;
+            scheduler.finalize_db_job_execution(&earlier, false).await;
+            scheduler.finalize_db_job_execution(&earlier, true).await;
 
-            let (attempts, _) = row_of(&pool, invocation.job_id)
+            let (attempts, _) = row_of(&pool, current.job_id)
                 .await
-                .expect("the row should survive a stranger finalizing it");
-            assert_eq!(attempts, 0, "a stranger should not count an attempt");
+                .expect("the row should survive an earlier claim finishing");
+            assert_eq!(attempts, 0, "an earlier claim should not count an attempt");
         }
 
         /// How long a renewal is given to land before the test calls it a
@@ -1410,7 +1436,7 @@ mod tests {
             let renewal = crate::lease::spawn_renewal(
                 crate::lease::Leased::SchedulerJob,
                 invocation.job_id,
-                scheduler.worker_id.clone(),
+                invocation.claim_epoch,
                 invocation.key.clone(),
             );
 
@@ -1439,8 +1465,10 @@ mod tests {
                 }
                 tokio::time::sleep(StdDuration::from_millis(250)).await;
             };
-            renewal.abort();
+            let fenced = renewal.fence().is_raised();
+            drop(renewal);
 
+            assert!(!fenced, "a renewed claim should not fence its run");
             assert!(
                 pushed_out,
                 "the claim should have been pushed out within {}s, not left to lapse",
@@ -1448,19 +1476,20 @@ mod tests {
             );
         }
 
-        /// Renewal is scoped to the worker holding the claim, so a job that has
-        /// genuinely moved on is not taken back by the worker that lost it.
+        /// Renewal is scoped to the claim's epoch, so a job claimed again —
+        /// even by the same worker — is not taken back by the run that lost
+        /// it, and that run is fenced.
         #[tokio::test]
         async fn renewal_stops_once_the_claim_has_moved_on() {
             let pool = use_the_test_database();
             let owner = Scheduler::new();
-            let stranger = Scheduler::new();
             let invocation = claimed_job(&pool, &owner, "moved-on", 0).await;
 
+            // The same worker, holding an earlier claim on the row.
             let renewal = crate::lease::spawn_renewal(
                 crate::lease::Leased::SchedulerJob,
                 invocation.job_id,
-                stranger.worker_id.clone(),
+                invocation.claim_epoch - 1,
                 invocation.key.clone(),
             );
             // Waited for rather than slept past, for the reason its sibling
@@ -1475,11 +1504,13 @@ mod tests {
             }
 
             let stopped = renewal.is_finished();
-            renewal.abort();
+            let fenced = renewal.fence().is_raised();
+            drop(renewal);
 
+            assert!(fenced, "losing the claim should fence the run holding it");
             assert!(
                 stopped,
-                "a worker that does not hold the claim should stop renewing it, \
+                "a run that no longer holds the claim should stop renewing it, \
                  and should have within {}s",
                 RENEWAL_WAIT_SECONDS
             );

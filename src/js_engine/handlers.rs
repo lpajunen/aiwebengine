@@ -69,13 +69,14 @@ impl JsHttpResponse {
 }
 
 /// Which execution budget a handler runs under.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) enum Budget {
     /// `javascript.execution_timeout_ms`, or the script's own override.
     Request,
     /// `javascript.job_timeout_ms`, or the script's own override: background
-    /// work, which nobody is waiting on.
-    Job,
+    /// work, which nobody is waiting on. Run under a claim, it also stops once
+    /// the claim's fence is raised.
+    Job(Option<crate::lease::Fence>),
 }
 
 /// How long each step of [`HandlerExecution::prepare`] took, for the request
@@ -135,11 +136,11 @@ impl HandlerExecution {
         phases.transpile = phase.elapsed();
 
         let phase = Instant::now();
-        let limits = match budget {
-            Budget::Request => crate::script_limits::for_script(script_uri),
-            Budget::Job => crate::script_limits::for_script_job(script_uri),
+        let (limits, fence) = match budget {
+            Budget::Request => (crate::script_limits::for_script(script_uri), None),
+            Budget::Job(fence) => (crate::script_limits::for_script_job(script_uri), fence),
         };
-        let (rt, host_budget) = create_sandboxed_runtime(&limits)?;
+        let (rt, host_budget) = create_fenced_runtime(&limits, fence)?;
         let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
         phases.runtime = phase.elapsed();
 
@@ -477,6 +478,7 @@ pub fn execute_scheduled_handler(
     script_uri: &str,
     handler_name: &str,
     invocation: &ScheduledInvocation,
+    fence: Option<crate::lease::Fence>,
 ) -> Result<(), String> {
     let script_uri_owned = script_uri.to_string();
     // The scheduler generated this id when it claimed the run, so the lines the
@@ -492,7 +494,7 @@ pub fn execute_scheduled_handler(
     // number — but this is still what bounds the run. A job acts for nobody.
     let execution = HandlerExecution::prepare(
         script_uri,
-        Budget::Job,
+        Budget::Job(fence),
         GlobalSecurityConfig::new(Principal::Engine("scheduler"), log_context),
     )?;
 
@@ -506,6 +508,7 @@ pub fn execute_scheduled_handler(
                 "scheduledFor": invocation.scheduled_for.to_rfc3339(),
                 "intervalSeconds": invocation.interval_seconds,
                 "intervalMilliseconds": invocation.interval_milliseconds,
+                "fencingToken": invocation.claim_epoch,
             });
 
             let handler_context = JsHandlerContextBuilder::new(HandlerInvocationKind::Scheduled)
@@ -535,6 +538,7 @@ pub fn execute_scheduled_handler(
 pub fn execute_task_handler(
     invocation: &crate::tasks::TaskInvocation,
     delegated: Option<&crate::delegation::Delegated>,
+    fence: Option<crate::lease::Fence>,
 ) -> Result<Option<serde_json::Value>, String> {
     let script_uri = invocation.script_uri.as_str();
     let handler_name = invocation.handler_name.as_str();
@@ -565,7 +569,7 @@ pub fn execute_task_handler(
     // A queued task is background work, so it takes the job budget.
     let execution = HandlerExecution::prepare(
         script_uri,
-        Budget::Job,
+        Budget::Job(fence),
         GlobalSecurityConfig::new(principal, log_context),
     )?;
 
@@ -580,6 +584,7 @@ pub fn execute_task_handler(
                 "attempt": invocation.attempts + 1,
                 "maxAttempts": invocation.max_attempts,
                 "payload": invocation.payload,
+                "fencingToken": invocation.claim_epoch,
             });
 
             // `personalStorage` reads `context.request.auth.userId`, so a

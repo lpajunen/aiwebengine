@@ -341,7 +341,21 @@ pub async fn finish(
     let Some(db) = crate::database::get_global_database() else {
         return Ok(false);
     };
+    finish_on(db.pool(), script_task_id, status, result, error).await
+}
 
+/// [`finish`] on a given connection, for a caller that settles the handle in
+/// the same transaction as the work it names.
+pub(crate) async fn finish_on<'e, E>(
+    executor: E,
+    script_task_id: Uuid,
+    status: &str,
+    result: Option<Value>,
+    error: Option<Value>,
+) -> Result<bool, sqlx::Error>
+where
+    E: sqlx::PgExecutor<'e>,
+{
     let updated = sqlx::query(
         r#"
         UPDATE mcp_tasks
@@ -357,7 +371,7 @@ pub async fn finish(
     .bind(result)
     .bind(error)
     .bind(script_task_id)
-    .execute(db.pool())
+    .execute(executor)
     .await?
     .rows_affected();
 

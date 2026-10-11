@@ -183,6 +183,9 @@ pub struct TaskInvocation {
     /// Who this runs as, as *recorded*. Never trusted on its own: what it may
     /// do is worked out by `delegation::resolve` when the task runs.
     pub run_as: Option<String>,
+    /// The claim this run holds the row under ([`crate::lease`]). Every write
+    /// about how the run ended is guarded by it.
+    pub claim_epoch: i64,
 }
 
 /// How long to wait before the attempt after `attempts` failures.
@@ -644,6 +647,7 @@ pub async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocatio
             locked_by = $3,
             locked_at = $1,
             lock_expires_at = $1 + make_interval(secs => $4),
+            claim_epoch = tasks.claim_epoch + 1,
             updated_at = NOW()
         WHERE tasks.task_id = ANY($2)
           AND (
@@ -658,7 +662,7 @@ pub async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocatio
             )
           )
         RETURNING tasks.task_id, tasks.script_uri, tasks.handler_name, tasks.payload,
-                  tasks.attempts, tasks.max_attempts, tasks.run_as
+                  tasks.attempts, tasks.max_attempts, tasks.run_as, tasks.claim_epoch
         "#,
     )
     .bind(now)
@@ -690,6 +694,7 @@ pub async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocatio
             attempts: row.get("attempts"),
             max_attempts: row.get("max_attempts"),
             run_as: row.get("run_as"),
+            claim_epoch: row.get("claim_epoch"),
         })
         .collect()
 }
@@ -700,7 +705,7 @@ pub async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocatio
 /// account that is gone. Retrying those would be the engine repeatedly asking
 /// to act as somebody who has said no, and the attempts would only delay the
 /// row reaching the state that explains itself.
-async fn abandon(worker_id: &str, invocation: &TaskInvocation, reason: &str) {
+async fn abandon(invocation: &TaskInvocation, reason: &str) {
     let Some(db) = crate::database::get_global_database() else {
         return;
     };
@@ -714,12 +719,12 @@ async fn abandon(worker_id: &str, invocation: &TaskInvocation, reason: &str) {
             locked_at = NULL,
             lock_expires_at = NULL,
             updated_at = NOW()
-        WHERE task_id = $2 AND locked_by = $3
+        WHERE task_id = $2 AND claim_epoch = $3
         "#,
     )
     .bind(truncate_error(reason))
     .bind(invocation.task_id)
-    .bind(worker_id)
+    .bind(invocation.claim_epoch)
     .execute(db.pool())
     .await
     {
@@ -745,37 +750,56 @@ async fn abandon(worker_id: &str, invocation: &TaskInvocation, reason: &str) {
 
 /// Record how a run ended.
 ///
-/// Every statement names this worker in `locked_by`, so a claim that has since
-/// moved on writes nothing rather than overwriting whatever took it.
-async fn finalize(
-    worker_id: &str,
-    invocation: &TaskInvocation,
-    outcome: Result<Option<Value>, String>,
-) {
+/// Every statement names the claim's epoch, so a claim that has since moved on
+/// writes nothing rather than overwriting whatever took it — even when what
+/// took it is this same worker. The MCP handle a client may be polling is
+/// settled in the same transaction, and only once the guarded write has
+/// matched: a run that lost its claim tells nobody anything.
+async fn finalize(invocation: &TaskInvocation, outcome: Result<Option<Value>, String>) {
     let Some(db) = crate::database::get_global_database() else {
         return;
     };
 
+    let mut tx = match db.pool().begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            warn!(task = %invocation.task_id, error = %e, "Failed opening a transaction to record a task's outcome");
+            return;
+        }
+    };
+
     let error = match outcome {
         Ok(value) => {
-            // An MCP client polling for this is waiting on a value, so the
-            // handle is settled before the queue row goes. Ordered this way
-            // round deliberately: a crash between the two leaves the task
-            // `working` against a row that no longer exists, which the lease
-            // reaper reports as a failure — where the reverse leaves a client
-            // told "completed" by a row that had not finished.
-            let _ = crate::mcp_tasks::finish(invocation.task_id, "completed", value, None).await;
             // Succeeded: the row goes. What it did is in the script's log under
             // this invocation id, and a row per success would grow this table
             // for the one outcome nobody needs to look up.
-            if let Err(e) =
-                sqlx::query("DELETE FROM script_tasks WHERE task_id = $1 AND locked_by = $2")
+            let deleted =
+                sqlx::query("DELETE FROM script_tasks WHERE task_id = $1 AND claim_epoch = $2")
                     .bind(invocation.task_id)
-                    .bind(worker_id)
-                    .execute(db.pool())
+                    .bind(invocation.claim_epoch)
+                    .execute(&mut *tx)
+                    .await;
+            match deleted {
+                Ok(result) if result.rows_affected() == 0 => {
+                    let _ = tx.rollback().await;
+                    claim_moved_on(invocation);
+                    return;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    warn!(task = %invocation.task_id, error = %e, "Failed clearing a completed task");
+                    return;
+                }
+            }
+            if let Err(e) =
+                crate::mcp_tasks::finish_on(&mut *tx, invocation.task_id, "completed", value, None)
                     .await
             {
-                warn!(task = %invocation.task_id, error = %e, "Failed clearing a completed task");
+                warn!(task = %invocation.task_id, error = %e, "Failed settling a completed task's handle");
+                return;
+            }
+            if let Err(e) = tx.commit().await {
+                warn!(task = %invocation.task_id, error = %e, "Failed recording a completed task");
             }
             return;
         }
@@ -784,23 +808,6 @@ async fn finalize(
 
     let attempts = invocation.attempts.saturating_add(1);
     let exhausted = attempts >= invocation.max_attempts;
-
-    // Only once there is nothing left to try. A client polling a task that is
-    // being retried should go on seeing `working`, because that is what is
-    // happening — reporting each attempt's failure would make a task that
-    // eventually succeeds look like one that failed several times.
-    if exhausted {
-        let _ = crate::mcp_tasks::finish(
-            invocation.task_id,
-            "failed",
-            None,
-            Some(serde_json::json!({
-                "code": -32603,
-                "message": truncate_error(&error),
-            })),
-        )
-        .await;
-    }
 
     // Kept rather than deleted, unlike a success: a failed task is the one
     // somebody needs to read, and `last_error` is what saves them correlating
@@ -815,7 +822,7 @@ async fn finalize(
             locked_at = NULL,
             lock_expires_at = NULL,
             updated_at = NOW()
-        WHERE task_id = $3 AND locked_by = $4
+        WHERE task_id = $3 AND claim_epoch = $4
         "#
     } else {
         r#"
@@ -828,7 +835,7 @@ async fn finalize(
             locked_at = NULL,
             lock_expires_at = NULL,
             updated_at = NOW()
-        WHERE task_id = $3 AND locked_by = $4
+        WHERE task_id = $3 AND claim_epoch = $4
         "#
     };
 
@@ -837,12 +844,46 @@ async fn finalize(
         .bind(attempts)
         .bind(truncate_error(&error))
         .bind(invocation.task_id)
-        .bind(worker_id);
+        .bind(invocation.claim_epoch);
     if !exhausted {
         query = query.bind(delay.num_seconds());
     }
 
-    if let Err(e) = query.execute(db.pool()).await {
+    match query.execute(&mut *tx).await {
+        Ok(result) if result.rows_affected() == 0 => {
+            let _ = tx.rollback().await;
+            claim_moved_on(invocation);
+            return;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            warn!(task = %invocation.task_id, error = %e, "Failed recording a task failure");
+            return;
+        }
+    }
+
+    // Only once there is nothing left to try. A client polling a task that is
+    // being retried should go on seeing `working`, because that is what is
+    // happening — reporting each attempt's failure would make a task that
+    // eventually succeeds look like one that failed several times.
+    if exhausted
+        && let Err(e) = crate::mcp_tasks::finish_on(
+            &mut *tx,
+            invocation.task_id,
+            "failed",
+            None,
+            Some(serde_json::json!({
+                "code": -32603,
+                "message": truncate_error(&error),
+            })),
+        )
+        .await
+    {
+        warn!(task = %invocation.task_id, error = %e, "Failed settling a failed task's handle");
+        return;
+    }
+
+    if let Err(e) = tx.commit().await {
         warn!(task = %invocation.task_id, error = %e, "Failed recording a task failure");
         return;
     }
@@ -875,6 +916,18 @@ async fn finalize(
     }
 }
 
+/// A run finished after its claim was taken from it, so what it reports is
+/// not recorded: the row belongs to the claim that took it.
+fn claim_moved_on(invocation: &TaskInvocation) {
+    warn!(
+        script = %invocation.script_uri,
+        handler = %invocation.handler_name,
+        task = %invocation.task_id,
+        epoch = invocation.claim_epoch,
+        "Task run lost its claim before it finished; its outcome is not recorded"
+    );
+}
+
 /// `last_error` is read by a person, not matched on, so a runaway message is
 /// trimmed rather than stored whole.
 fn truncate_error(error: &str) -> String {
@@ -898,15 +951,16 @@ fn invocation_log_context(invocation: &TaskInvocation) -> repository::LogContext
 }
 
 /// Run one claimed task, keeping the claim alive for as long as it takes.
-async fn run(worker_id: String, invocation: TaskInvocation) {
+async fn run(invocation: TaskInvocation) {
     // Before the slot wait, not after: waiting for a slot is unbounded and is
     // as much a part of holding the task as running it is.
-    let renewal = crate::lease::spawn_renewal(
+    let lease = crate::lease::spawn_renewal(
         crate::lease::Leased::ScriptTask,
         invocation.task_id,
-        worker_id.clone(),
+        invocation.claim_epoch,
         invocation.handler_name.clone(),
     );
+    let fence = lease.fence();
 
     // Who this may act as, worked out now rather than read from the row.
     //
@@ -923,8 +977,8 @@ async fn run(worker_id: String, invocation: TaskInvocation) {
                     // condition that clears on its own, and going on trying
                     // would be the engine repeatedly asking to act as somebody
                     // who has said no.
-                    renewal.abort();
-                    abandon(&worker_id, &invocation, &refusal.to_string()).await;
+                    drop(lease);
+                    abandon(&invocation, &refusal.to_string()).await;
                     return;
                 }
             }
@@ -934,15 +988,20 @@ async fn run(worker_id: String, invocation: TaskInvocation) {
 
     let permit = crate::execution_slots::acquire().await;
     let for_engine = invocation.clone();
+    let fence_for_engine = fence.clone();
     let execution = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        js_engine::execute_task_handler(&for_engine, delegated.as_ref())
+        js_engine::execute_task_handler(&for_engine, delegated.as_ref(), Some(fence_for_engine))
     })
     .await;
 
-    renewal.abort();
+    drop(lease);
 
     let outcome = match execution {
+        // Whatever the run answered, it was cut short or overtaken.
+        _ if fence.is_raised() => {
+            Err("the run lost its claim on the task and was stopped".to_string())
+        }
         Ok(result) => result,
         Err(join_error) => Err(format!("task panicked: {}", join_error)),
     };
@@ -957,7 +1016,7 @@ async fn run(worker_id: String, invocation: TaskInvocation) {
         );
     }
 
-    finalize(&worker_id, &invocation, outcome).await;
+    finalize(&invocation, outcome).await;
 }
 
 /// Claim every task that is due now and run them to completion.
@@ -972,7 +1031,7 @@ pub async fn run_due_now(worker_id: &str) -> usize {
     let claimed = claim_due(worker_id, Utc::now()).await;
     let count = claimed.len();
     for invocation in claimed {
-        run(worker_id.to_string(), invocation).await;
+        run(invocation).await;
     }
     count
 }
@@ -984,7 +1043,7 @@ pub async fn worker(worker_id: String, mut shutdown: oneshot::Receiver<()>) {
 
     loop {
         for invocation in claim_due(&worker_id, Utc::now()).await {
-            tokio::spawn(run(worker_id.clone(), invocation));
+            tokio::spawn(run(invocation));
         }
 
         tokio::select! {
@@ -1209,5 +1268,101 @@ mod tests {
     #[test]
     fn a_short_error_is_kept_as_it_is() {
         assert_eq!(truncate_error("no such handler"), "no such handler");
+    }
+
+    /// The claim's epoch, against the database: a run whose task was claimed
+    /// again — by the same worker, which is what `locked_by` could not tell
+    /// apart — records nothing about how it ended, and settles nothing a
+    /// client is polling.
+    mod claims {
+        use super::*;
+
+        fn use_the_test_database() -> sqlx::PgPool {
+            let pool = crate::test_db::pool();
+            // One process per test under nextest, so claiming the global is
+            // this test's own business.
+            crate::database::initialize_global_database(std::sync::Arc::new(
+                crate::database::Database::from_pool(pool.clone()),
+            ));
+            pool
+        }
+
+        async fn state_of(pool: &sqlx::PgPool, task_id: Uuid) -> Option<(String, i32, i64)> {
+            sqlx::query("SELECT state, attempts, claim_epoch FROM script_tasks WHERE task_id = $1")
+                .bind(task_id)
+                .fetch_optional(pool)
+                .await
+                .expect("the lookup should run")
+                .map(|row| {
+                    (
+                        row.get("state"),
+                        row.get("attempts"),
+                        row.get("claim_epoch"),
+                    )
+                })
+        }
+
+        async fn handle_status(pool: &sqlx::PgPool, task_id: Uuid) -> String {
+            sqlx::query_scalar("SELECT status FROM mcp_tasks WHERE script_task_id = $1")
+                .bind(task_id)
+                .fetch_one(pool)
+                .await
+                .expect("the handle should be there")
+        }
+
+        #[tokio::test]
+        async fn a_run_that_lost_its_claim_records_nothing() {
+            let pool = use_the_test_database();
+            let script_uri = "test://tasks/claims";
+            sqlx::query("INSERT INTO scripts (uri, name) VALUES ($1, $1) ON CONFLICT DO NOTHING")
+                .bind(script_uri)
+                .execute(&pool)
+                .await
+                .expect("the script row should insert");
+
+            let task = enqueue(NewTask {
+                script_uri: script_uri.to_string(),
+                ..a_task()
+            })
+            .await
+            .expect("the task should be accepted");
+            crate::mcp_tasks::create(
+                Uuid::new_v4(),
+                task.task_id,
+                script_uri,
+                "tools/call",
+                "work",
+                None,
+            )
+            .await
+            .expect("the handle should be recorded");
+
+            let stale = claim_due("worker", Utc::now()).await.remove(0);
+
+            // The claim lapses, and the same worker takes the task again.
+            sqlx::query(
+                "UPDATE script_tasks SET lock_expires_at = NOW() - INTERVAL '1 second' \
+                 WHERE task_id = $1",
+            )
+            .bind(task.task_id)
+            .execute(&pool)
+            .await
+            .expect("the lease should lapse");
+            let current = claim_due("worker", Utc::now()).await.remove(0);
+            assert!(current.claim_epoch > stale.claim_epoch);
+
+            finalize(&stale, Ok(None)).await;
+            finalize(&stale, Err("too late".to_string())).await;
+            assert_eq!(
+                state_of(&pool, task.task_id).await,
+                Some(("running".to_string(), 0, current.claim_epoch)),
+                "the stale run should neither delete nor requeue the task"
+            );
+            assert_eq!(handle_status(&pool, task.task_id).await, "working");
+
+            finalize(&current, Ok(Some(serde_json::json!(42)))).await;
+            assert_eq!(state_of(&pool, task.task_id).await, None);
+            assert_eq!(handle_status(&pool, task.task_id).await, "completed");
+        }
     }
 }
