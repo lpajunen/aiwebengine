@@ -284,7 +284,7 @@ pub(super) fn tool_check_script(args: &Value, user: &UserContext) -> Value {
 
     let base = match crate::database::run_blocking(resolve_view(uri, arg_str(args, "revision"))) {
         Ok(view) => view,
-        Err(message) => return refuse_text(message),
+        Err(refused) => return refused.answer(),
     };
 
     let (view, candidate_files) = if files.is_empty() {
@@ -292,7 +292,7 @@ pub(super) fn tool_check_script(args: &Value, user: &UserContext) -> Value {
     } else {
         match candidate_overlay(files, base) {
             Ok(built) => built,
-            Err(message) => return refuse_text(message),
+            Err(message) => return refuse(Refusal::BadRequest, message),
         }
     };
 
@@ -356,7 +356,7 @@ pub(super) fn tool_run_tests(args: &Value, user: &UserContext) -> Value {
 
     let view = match crate::database::run_blocking(resolve_view(uri, arg_str(args, "revision"))) {
         Ok(view) => view,
-        Err(message) => return refuse_text(message),
+        Err(refused) => return refused.answer(),
     };
 
     let (timeout_ms, run_timeout_ms) = crate::script_test::configured_test_timeouts();

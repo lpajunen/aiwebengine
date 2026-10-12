@@ -100,7 +100,7 @@ avoids it by prefixing every task.
 ### 7. Verified in a browser
 
 - [ ] The editor's and administrator's flows after the operation-table and
-      slug changes (ROADMAP: Engine internals 5).
+      slug changes (ROADMAP: Engine internals 4).
 - [ ] Git sync against a real repository.
 - [ ] One end-to-end smoke run: sign in, prompt the agent, approve the deploy,
       reach the result.
@@ -152,7 +152,6 @@ In the order they would widen what people can build.
 Matters to contributors more than to pilot users; all on the roadmap.
 
 - [ ] Split the `/mcp` dispatch out of `lib.rs` (ROADMAP: Engine internals 1).
-- [ ] Error types below the operations, so no refusal is read from its text
-      (ROADMAP: Engine internals 2).
+- [x] Error types below the operations, so no refusal is read from its text.
 - [x] Delete the unused security scaffolding.
 - [x] No unit test skips without a database.

@@ -1044,13 +1044,8 @@ pub fn write_script_files_authorized(
                     script_uri, root.name
                 )));
             }
-            let existed = authorize_script_write(user, script_uri).map_err(|message| {
-                let message = message
-                    .strip_prefix("Error: ")
-                    .unwrap_or(&message)
-                    .to_string();
-                AssetWriteError::AccessDenied(message)
-            })?;
+            let existed = authorize_script_write(user, script_uri)
+                .map_err(|refused| AssetWriteError::AccessDenied(refused.message))?;
             repository::ensure_script(script_uri, user.user_id.as_deref())
                 .map_err(|e| AssetWriteError::Storage(format!("Error storing script: {}", e)))?;
             Some(if existed {
@@ -1414,7 +1409,7 @@ pub(super) fn tool_read_file(args: &Value, user: &UserContext) -> Value {
         arg_str(args, "grep").map(str::to_string),
     ) {
         Ok(options) => options,
-        Err(message) => return refuse_text(message),
+        Err(message) => return refuse(Refusal::BadRequest, message),
     };
     match read_file_authorized(user, script, path, &options) {
         Ok(read) => {
@@ -1468,7 +1463,7 @@ pub(super) fn write_one_file(args: &Value, user: &UserContext, if_absent: bool) 
         arg_str(args, "content").map(str::to_string),
     ) {
         Ok(content) => content,
-        Err(message) => return refuse_text(message),
+        Err(message) => return refuse(Refusal::BadRequest, message),
     };
 
     match write_file_bytes_authorized(user, script, path, &mimetype, content, if_absent) {
@@ -1534,7 +1529,7 @@ pub(super) fn tool_write_files(args: &Value, user: &UserContext) -> Value {
     };
     let reinit = match ReinitMode::parse(arg_str(args, "reinit")) {
         Ok(reinit) => reinit,
-        Err(message) => return refuse_text(message),
+        Err(message) => return refuse(Refusal::BadRequest, message),
     };
 
     let mut writes = Vec::with_capacity(files.len());
@@ -1556,7 +1551,7 @@ pub(super) fn tool_write_files(args: &Value, user: &UserContext) -> Value {
                 .map(str::to_string),
         ) {
             Ok(content) => content,
-            Err(message) => return refuse_text(message),
+            Err(message) => return refuse(Refusal::BadRequest, message),
         };
         writes.push(AssetWrite {
             name: name.to_string(),
@@ -1636,12 +1631,12 @@ pub(super) fn tool_edit_file(args: &Value, user: &UserContext) -> Value {
     };
     let reinit = match ReinitMode::parse(arg_str(args, "reinit")) {
         Ok(reinit) => reinit,
-        Err(message) => return refuse_text(message),
+        Err(message) => return refuse(Refusal::BadRequest, message),
     };
 
     let prepared = match parse_tool_edits(edits) {
         Ok(prepared) => prepared,
-        Err(message) => return refuse_text(message),
+        Err(message) => return refuse(Refusal::BadRequest, message),
     };
 
     match patch_file_authorized(

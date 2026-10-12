@@ -69,51 +69,6 @@ pub enum Refusal {
 }
 
 impl Refusal {
-    /// The kind a refusal's *text* implies, for the errors the layers below
-    /// still report as strings (`authorize_script_write`, the revision
-    /// resolvers). It is the one place the engine reads a message to decide a
-    /// status, kept so that the typed refusals around it can say what they are
-    /// and this can shrink as those layers do.
-    pub fn from_message(message: &str) -> Self {
-        let lower = message.to_ascii_lowercase();
-        let has = |needle: &str| lower.contains(needle);
-        if has("access denied")
-            || has("permission denied")
-            || has("this takes an administrator")
-            || has("administrator privileges")
-            || has("insufficient permissions")
-        {
-            Refusal::Forbidden
-        } else if has("already exists")
-            || has("cannot remove the last")
-            || has("has changed since")
-            || has("are already held")
-        {
-            Refusal::Conflict
-        } else if has("old_string")
-            || has("edits[")
-            || has("would leave")
-            || has("missing required")
-            || has("is required")
-            || has("must be")
-            || has("invalid")
-            || has("is not")
-            || has("not a ")
-            || has("escapes")
-            || has("does not match")
-        {
-            Refusal::BadRequest
-        } else if has("not found") || has("no such") || has("no revision") {
-            Refusal::NotFound
-        } else if has("timed out") {
-            Refusal::TimedOut
-        } else if has("failed to") {
-            Refusal::Failed
-        } else {
-            Refusal::BadRequest
-        }
-    }
-
     pub fn status(self) -> u16 {
         match self {
             Refusal::BadRequest => 400,
@@ -127,6 +82,35 @@ impl Refusal {
     }
 }
 
+/// A refusal that has not become a result yet: what kind it is, and what to
+/// say. The layers below the operations return this, so the kind is decided
+/// where the refusal is made rather than read back from its words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refused {
+    pub kind: Refusal,
+    pub message: String,
+}
+
+impl Refused {
+    pub fn new(kind: Refusal, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    /// The operation's result: `{ "error": message, "status": code }`.
+    pub fn answer(self) -> Value {
+        refuse(self.kind, self.message)
+    }
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
 /// A refusal as an operation's result: `{ "error": message, "status": code }`.
 pub fn refuse(kind: Refusal, message: impl Into<String>) -> Value {
     json!({ "error": message.into(), "status": kind.status() })
@@ -135,12 +119,6 @@ pub fn refuse(kind: Refusal, message: impl Into<String>) -> Value {
 /// A refusal from an [`AppError`], whose own status says what kind it is.
 pub fn refuse_app(error: &crate::error::AppError, message: impl Into<String>) -> Value {
     json!({ "error": message.into(), "status": error.status_code() })
-}
-
-/// A refusal whose kind is read from its text; see [`Refusal::from_message`].
-pub(super) fn refuse_text(message: impl Into<String>) -> Value {
-    let message = message.into();
-    refuse(Refusal::from_message(&message), message)
 }
 
 /// A refusal from a git operation, by what kind of failure it was.

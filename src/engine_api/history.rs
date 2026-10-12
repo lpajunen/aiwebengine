@@ -188,7 +188,10 @@ pub async fn revert_authorized(
 
     let target = resolve_revision(script_uri, spec)
         .await
-        .map_err(RevertRefusal::NotFound)?;
+        .map_err(|refused| match refused.kind {
+            Refusal::Failed => RevertRefusal::Storage(refused.message),
+            _ => RevertRefusal::NotFound(refused.message),
+        })?;
 
     let plan = revisions::plan_revert(script_uri, target)
         .await
@@ -433,13 +436,13 @@ pub(super) fn tool_diff_revisions(args: &Value, user: &UserContext) -> Value {
         arg_str(args, "to").unwrap_or("head"),
     )) {
         Ok(revision) => revision,
-        Err(message) => return refuse_text(message),
+        Err(refused) => return refused.answer(),
     };
 
     let from = match arg_str(args, "from") {
         Some(spec) => match crate::database::run_blocking(resolve_revision(script, spec)) {
             Ok(revision) => revision,
-            Err(message) => return refuse_text(message),
+            Err(refused) => return refused.answer(),
         },
         None => match crate::database::run_blocking(revisions::get(script, to)) {
             Ok(Some(revision)) => match revision.parent {
@@ -518,7 +521,7 @@ pub(super) fn tool_deploy_script(args: &Value, user: &UserContext) -> Value {
     };
     let revision = match crate::database::run_blocking(resolve_revision(script, spec)) {
         Ok(revision) => revision,
-        Err(message) => return refuse_text(message),
+        Err(refused) => return refused.answer(),
     };
 
     let deployment = match crate::database::run_blocking(crate::deployments::deploy(
@@ -595,7 +598,7 @@ pub(super) fn tool_label_revision(args: &Value, user: &UserContext) -> Value {
 
     let revision = match crate::database::run_blocking(resolve_revision(script, spec)) {
         Ok(revision) => revision,
-        Err(message) => return refuse_text(message),
+        Err(refused) => return refused.answer(),
     };
     let label = arg_str(args, "label").filter(|label| !label.trim().is_empty());
 
@@ -623,7 +626,7 @@ pub(super) fn tool_revert_script(args: &Value, user: &UserContext) -> Value {
     let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
     let reinit = match ReinitMode::parse(arg_str(args, "reinit")) {
         Ok(reinit) => reinit,
-        Err(message) => return refuse_text(message),
+        Err(message) => return refuse(Refusal::BadRequest, message),
     };
 
     let outcome = match crate::database::run_blocking(revert_authorized(

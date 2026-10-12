@@ -411,8 +411,8 @@ async fn moving_a_script_onto_a_host_that_holds_its_path_is_refused() {
 
     let error = set_script_hosts_authorized(&admin(), &mover, &["world.softagen.com".to_string()])
         .expect_err("the move would collide");
-    let ScriptHostError::Validation(message) = error else {
-        panic!("expected the conflict to be reported as a validation error");
+    let ScriptHostError::Conflict(message) = error else {
+        panic!("expected the move to be reported as a conflict");
     };
     assert!(
         message.contains(&path) && message.contains(&holder),

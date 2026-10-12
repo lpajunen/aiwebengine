@@ -68,20 +68,17 @@ pub fn is_read_only(name: &str) -> bool {
 /// The status line for an operation that answered `{ "error": message }`.
 ///
 /// A refusal says what kind it is in a `status` field, set where it is made
-/// ([`engine_api::refuse`]). A result without one — an error a layer below
-/// still reports as a string — falls back to what the text implies
-/// ([`engine_api::Refusal::from_message`]).
-pub fn status_of(result: &Value, message: &str) -> StatusCode {
+/// ([`engine_api::refuse`], [`engine_api::Refused`]). The words are never
+/// read for it. A result without one is a refusal somebody forgot to give a
+/// kind, answered as a bad request — the fix is at the operation.
+pub fn status_of(result: &Value) -> StatusCode {
     result
         .get("status")
         .and_then(Value::as_u64)
         .and_then(|code| u16::try_from(code).ok())
         .and_then(|code| StatusCode::from_u16(code).ok())
         .filter(|status| status.is_client_error() || status.is_server_error())
-        .unwrap_or_else(|| {
-            StatusCode::from_u16(engine_api::Refusal::from_message(message).status())
-                .unwrap_or(StatusCode::BAD_REQUEST)
-        })
+        .unwrap_or(StatusCode::BAD_REQUEST)
 }
 
 /// Query-string arguments as the JSON object the operation expects.
@@ -219,10 +216,7 @@ pub async fn call_operation(
         .and_then(Value::as_str)
         .filter(|_| !is_report)
     {
-        Some(message) => json_response(
-            status_of(&result, message),
-            &result_with_error(&result, message),
-        ),
+        Some(message) => json_response(status_of(&result), &result_with_error(&result, message)),
         None => json_response(StatusCode::OK, &result),
     }
 }
@@ -376,39 +370,25 @@ mod tests {
         ] {
             // The text is a decoy: the kind decides, not what the message says.
             let result = refuse(kind, "not found, access denied, already exists");
-            assert_eq!(status_of(&result, "not found"), status);
+            assert_eq!(status_of(&result), status);
         }
     }
 
+    /// The words decide nothing: a result without a kind is a bad request,
+    /// whatever it says.
     #[test]
-    fn a_result_with_no_kind_is_read_from_its_text() {
+    fn a_result_with_no_kind_is_a_bad_request() {
         let bare = |message: &str| json!({ "error": message });
-        assert_eq!(
-            status_of(
-                &bare("Failed to deploy: Access denied"),
-                "Failed to deploy: Access denied"
-            ),
-            StatusCode::FORBIDDEN
-        );
-        assert_eq!(
-            status_of(&bare("Script not found: x"), "Script not found: x"),
-            StatusCode::NOT_FOUND
-        );
-        assert_eq!(
-            status_of(&bare("File already exists: a"), "File already exists: a"),
-            StatusCode::CONFLICT
-        );
-        assert_eq!(
-            status_of(&bare("Failed to list: db down"), "Failed to list: db down"),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
+        for message in ["Script not found: x", "Access denied", "already exists"] {
+            assert_eq!(status_of(&bare(message)), StatusCode::BAD_REQUEST);
+        }
     }
 
     /// A `status` that is not an error status is not trusted to be one.
     #[test]
     fn a_status_that_is_not_a_refusal_is_ignored() {
         let result = json!({ "error": "x is required", "status": 200 });
-        assert_eq!(status_of(&result, "x is required"), StatusCode::BAD_REQUEST);
+        assert_eq!(status_of(&result), StatusCode::BAD_REQUEST);
     }
 
     #[test]

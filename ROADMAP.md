@@ -78,20 +78,16 @@ The order inside each section is the order they matter.
 
 1. **`lib.rs` is the largest file left** (4.3k lines): startup, the dynamic
    router and the `/mcp` dispatch in one module. The MCP dispatch is the seam.
-2. **Some refusals are still read from their text.** The layers below the
-   operations (`authorize_script_write`, the revision resolvers, git and
-   storage helpers) return `Result<_, String>`, so `Refusal::from_message`
-   classifies them. It shrinks as those layers get error types.
-3. **No capability column on the operation table.** Each operation authorizes
+2. **No capability column on the operation table.** Each operation authorizes
    inside its core, and most checks are not one capability. Worth doing only
    together with moving the checks out of the cores.
-4. **`mcp.ask` has no user.** No script in the four repositories calls it, so
+3. **`mcp.ask` has no user.** No script in the four repositories calls it, so
    `mcp_elicitation.rs` buys conformance and its tests, not a user. It stays
    because nothing else does its job: an ask reaches the person driving the
    client, and a stream cannot carry an answer back into a tool call.
    Reconsider with the next MCP revision; removing it is one module and one
    prelude, with no storage.
-5. **Not verified in a browser:** the editor's and admin's own flows after the
+4. **Not verified in a browser:** the editor's and admin's own flows after the
    operation-table and slug changes, and git sync against a real repository.
 
 ## Operations

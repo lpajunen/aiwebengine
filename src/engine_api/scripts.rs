@@ -59,43 +59,50 @@ pub(super) fn spawn_script_init(script_uri: String) {
 /// whose write left `init()` succeeding, which is the target an operator means
 /// by "back to when it worked" and a number they would otherwise have to find
 /// by reading the history themselves.
-pub(super) async fn resolve_revision(script_uri: &str, spec: &str) -> Result<i32, String> {
+pub(super) async fn resolve_revision(script_uri: &str, spec: &str) -> Result<i32, Refused> {
+    let failed = |e: crate::error::AppError| {
+        Refused::new(
+            Refusal::Failed,
+            format!("Failed to read revision history: {}", e),
+        )
+    };
+    let missing = |message: String| Refused::new(Refusal::NotFound, message);
     match spec {
         "head" => revisions::head(script_uri)
             .await
-            .map_err(|e| format!("Failed to read revision history: {}", e))?
-            .ok_or_else(|| format!("Script '{}' has no revisions yet", script_uri)),
+            .map_err(failed)?
+            .ok_or_else(|| missing(format!("Script '{}' has no revisions yet", script_uri))),
         "last-good" => revisions::last_good(script_uri)
             .await
-            .map_err(|e| format!("Failed to read revision history: {}", e))?
+            .map_err(failed)?
             .ok_or_else(|| {
-                format!(
+                missing(format!(
                     "Script '{}' has no revision whose init() succeeded",
                     script_uri
-                )
+                ))
             }),
         _ => match spec.parse::<i32>() {
             Ok(number) => {
                 if revisions::get(script_uri, number)
                     .await
-                    .map_err(|e| format!("Failed to read revision history: {}", e))?
+                    .map_err(failed)?
                     .is_none()
                 {
-                    return Err(format!(
+                    return Err(missing(format!(
                         "Script '{}' has no revision {}",
                         script_uri, number
-                    ));
+                    )));
                 }
                 Ok(number)
             }
             Err(_) => revisions::by_label(script_uri, spec)
                 .await
-                .map_err(|e| format!("Failed to resolve revision label: {}", e))?
+                .map_err(failed)?
                 .ok_or_else(|| {
-                    format!(
+                    missing(format!(
                         "Script '{}' has no revision labelled '{}'",
                         script_uri, spec
-                    )
+                    ))
                 }),
         },
     }
@@ -108,7 +115,7 @@ pub(super) async fn resolve_revision(script_uri: &str, spec: &str) -> Result<i32
 pub(super) async fn resolve_view(
     script_uri: &str,
     revision: Option<&str>,
-) -> Result<crate::source_view::SourceView, String> {
+) -> Result<crate::source_view::SourceView, Refused> {
     use crate::source_view::SourceView;
 
     let Some(spec) = revision.map(str::trim).filter(|spec| !spec.is_empty()) else {
@@ -191,19 +198,22 @@ impl UpsertAction {
 /// The rule it encodes is the engine's rule everywhere: `WriteScripts` to write
 /// at all, and ownership or `AdministerEngine` to write over something that is
 /// already there.
-pub(super) fn authorize_script_write(user: &UserContext, uri: &str) -> Result<bool, String> {
+pub(super) fn authorize_script_write(user: &UserContext, uri: &str) -> Result<bool, Refused> {
     if let Err(e) = user.require_capability(&Capability::WriteScripts) {
-        return Err(format!("Error: {}", e));
+        return Err(Refused::new(Refusal::Forbidden, e.to_string()));
     }
     if uri.is_empty() {
-        return Err("Error: Script name cannot be empty".to_string());
+        return Err(Refused::new(
+            Refusal::BadRequest,
+            "Script name cannot be empty",
+        ));
     }
 
     let exists = repository::fetch_script(uri).is_some();
     // A name is checked where a script comes into being. Every script that
     // already exists keeps the identifier it has, whatever its shape.
     if !exists {
-        crate::slug::validate(uri).map_err(|e| format!("Error: {}", e))?;
+        crate::slug::validate(uri).map_err(|e| Refused::new(Refusal::BadRequest, e.to_string()))?;
     }
     if exists {
         let is_admin = user.has_capability(&Capability::AdministerEngine);
@@ -213,9 +223,12 @@ pub(super) fn authorize_script_write(user: &UserContext, uri: &str) -> Result<bo
                 script_name = %uri,
                 "Permission denied: user is neither admin nor owner"
             );
-            return Err(format!(
-                "Error: Permission denied. You must be an administrator or owner to modify script '{}'",
-                uri
+            return Err(Refused::new(
+                Refusal::Forbidden,
+                format!(
+                    "Permission denied. You must be an administrator or owner to modify script '{}'",
+                    uri
+                ),
             ));
         }
     }
@@ -258,7 +271,7 @@ pub fn upsert_root_authorized(
     if content.is_empty() {
         return Err("Error: Script name and content cannot be empty".to_string());
     }
-    let exists = authorize_script_write(user, uri)?;
+    let exists = authorize_script_write(user, uri).map_err(|r| format!("Error: {}", r))?;
 
     if let Err(e) = repository::upsert_root_with_owner(uri, root, content, user.user_id.as_deref())
     {
@@ -352,16 +365,8 @@ pub fn patch_file_authorized(
     // both: the same rule a whole write applies, and a file to apply the
     // edits to.
     if is_root {
-        let exists = authorize_script_write(user, script_uri).map_err(|message| {
-            // Its refusals are phrased for callers that render them as they
-            // stand; a patch's are wrapped, so the prefix would be said twice.
-            PatchError::AccessDenied(
-                message
-                    .strip_prefix("Error: ")
-                    .unwrap_or(&message)
-                    .to_string(),
-            )
-        })?;
+        let exists = authorize_script_write(user, script_uri)
+            .map_err(|refused| PatchError::AccessDenied(refused.message))?;
         if !exists {
             return Err(PatchError::NotFound);
         }
@@ -520,25 +525,40 @@ pub fn patch_file_authorized(
 /// files, history, secrets, tables, queue and settings are the same script's
 /// under another name. The new name has to be a slug even when the old one was
 /// not, which is the point of renaming.
-pub fn rename_script_authorized(user: &UserContext, uri: &str, to: &str) -> Result<(), String> {
+pub fn rename_script_authorized(user: &UserContext, uri: &str, to: &str) -> Result<(), Refused> {
     let exists = authorize_script_write(user, uri)?;
     if !exists {
-        return Err(format!("Script not found: {}", uri));
+        return Err(Refused::new(
+            Refusal::NotFound,
+            format!("Script not found: {}", uri),
+        ));
     }
-    crate::slug::validate(to).map_err(|e| format!("Error: {}", e))?;
+    crate::slug::validate(to).map_err(|e| Refused::new(Refusal::BadRequest, e.to_string()))?;
     if uri == to {
-        return Err("Error: the script already has that name".to_string());
+        return Err(Refused::new(
+            Refusal::Conflict,
+            "the script already has that name",
+        ));
     }
     match repository::rename_script(uri, to) {
         Ok(()) => {}
         Err(repository::RenameError::NotFound) => {
-            return Err(format!("Script not found: {}", uri));
+            return Err(Refused::new(
+                Refusal::NotFound,
+                format!("Script not found: {}", uri),
+            ));
         }
         Err(repository::RenameError::Taken) => {
-            return Err(format!("Script already exists: {}", to));
+            return Err(Refused::new(
+                Refusal::Conflict,
+                format!("Script already exists: {}", to),
+            ));
         }
         Err(repository::RenameError::Storage(e)) => {
-            return Err(format!("Failed to rename: {}", e));
+            return Err(Refused::new(
+                Refusal::Failed,
+                format!("Failed to rename: {}", e),
+            ));
         }
     }
     info!(user_id = ?user.user_id, from = %uri, to = %to, "Script renamed");
@@ -964,7 +984,7 @@ pub(super) fn tool_rename_script(args: &Value, user: &UserContext) -> Value {
             "renamedFrom": uri,
             "timestamp": iso_timestamp(),
         }),
-        Err(message) => refuse_text(message),
+        Err(refused) => refused.answer(),
     }
 }
 

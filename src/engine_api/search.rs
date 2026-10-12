@@ -191,7 +191,7 @@ pub(super) fn tool_search_files(args: &Value, user: &UserContext) -> Value {
     };
     let scope = match SearchScope::parse(arg_str(args, "scope")) {
         Ok(scope) => scope,
-        Err(message) => return refuse_text(message),
+        Err(message) => return refuse(Refusal::BadRequest, message),
     };
     let options = SearchOptions {
         case_insensitive: args
@@ -204,8 +204,9 @@ pub(super) fn tool_search_files(args: &Value, user: &UserContext) -> Value {
 
     match search_files_authorized(user, query, &options) {
         Ok(body) => body,
+        // Every refusal here is about the pattern the caller sent.
         Err(message) => refuse(
-            Refusal::from_message(&message),
+            Refusal::BadRequest,
             format!("Failed to search files: {}", message),
         ),
     }

@@ -110,7 +110,8 @@ async fn a_rename_is_refused_where_it_would_do_harm() {
     store(&b);
 
     let taken = rename_script_authorized(&admin(), &a, &b).expect_err("that name is taken");
-    assert!(taken.contains("already exists"), "{taken}");
+    assert_eq!(taken.kind, aiwebengine::engine_api::Refusal::Conflict);
+    assert!(taken.message.contains("already exists"), "{taken}");
 
     for bad in [
         "https://example.com/shop",
@@ -128,7 +129,8 @@ async fn a_rename_is_refused_where_it_would_do_harm() {
 
     let missing = rename_script_authorized(&admin(), &name("nope"), &name("x"))
         .expect_err("there is nothing to rename");
-    assert!(missing.contains("not found"), "{missing}");
+    assert_eq!(missing.kind, aiwebengine::engine_api::Refusal::NotFound);
+    assert!(missing.message.contains("not found"), "{missing}");
 
     assert!(
         repository::fetch_script(&a).is_some(),

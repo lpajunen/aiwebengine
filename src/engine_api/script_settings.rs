@@ -48,6 +48,8 @@ pub enum ScriptHostError {
     AccessDenied,
     ScriptNotFound(String),
     Validation(String),
+    /// A requested host already holds one of the script's paths.
+    Conflict(String),
     Storage(String),
 }
 
@@ -154,7 +156,7 @@ pub fn set_script_hosts_authorized(
                     )
                 })
                 .collect();
-            return Err(ScriptHostError::Validation(format!(
+            return Err(ScriptHostError::Conflict(format!(
                 "Not bound: {} registration(s) of {} are already held on those hosts: {}{}",
                 conflicts.len(),
                 uri,
@@ -269,9 +271,8 @@ pub(super) fn script_host_error_json(error: ScriptHostError) -> Value {
         ScriptHostError::ScriptNotFound(uri) => {
             (Refusal::NotFound, format!("Script not found: {}", uri))
         }
-        // Includes the refusal to move a script onto a host that already
-        // holds one of its paths, which is a conflict with what is stored.
-        ScriptHostError::Validation(details) => (Refusal::from_message(&details), details),
+        ScriptHostError::Validation(details) => (Refusal::BadRequest, details),
+        ScriptHostError::Conflict(details) => (Refusal::Conflict, details),
         ScriptHostError::Storage(details) => (Refusal::Failed, details),
     };
     let mut body = refuse(kind, message);
