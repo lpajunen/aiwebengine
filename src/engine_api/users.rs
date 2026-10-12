@@ -239,6 +239,44 @@ pub fn remove_user_role_authorized(
     Ok(role_names(&lookup_user(user_id)?))
 }
 
+/// Delete an account and erase what the engine keeps about the person
+/// (`user_repository::delete_user`).
+///
+/// Refused for the last administrator, for the reason removing the role is:
+/// an engine nobody can administer is recovered only from the command line.
+pub fn delete_user_authorized(actor: &UserContext, user_id: &str) -> Result<(), UserAdminError> {
+    use crate::user_repository::UserRole;
+
+    if !is_user_admin(actor) {
+        audit_user_admin_denied(actor, "delete_user");
+        return Err(UserAdminError::AccessDenied);
+    }
+    let target = lookup_user(user_id)?;
+    if target.has_role(&UserRole::Administrator) && count_administrators()? <= 1 {
+        return Err(UserAdminError::LastAdministrator);
+    }
+
+    crate::user_repository::delete_user(user_id)
+        .map_err(|e| UserAdminError::Storage(format!("{}", e)))?;
+    audit_role_change(actor, user_id, "*", "delete_user");
+    Ok(())
+}
+
+pub(super) fn tool_delete_user(args: &Value, user: &UserContext) -> Value {
+    let Some(user_id) = arg_str(args, "user_id") else {
+        return missing_arg("user_id");
+    };
+    match delete_user_authorized(user, user_id) {
+        Ok(()) => json!({
+            "success": true,
+            "userId": user_id,
+            "deleted": true,
+            "timestamp": iso_timestamp(),
+        }),
+        Err(error) => user_admin_error_json(error),
+    }
+}
+
 pub(super) fn count_administrators() -> Result<usize, UserAdminError> {
     use crate::user_repository::UserRole;
     crate::user_repository::list_users()

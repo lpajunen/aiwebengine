@@ -46,7 +46,7 @@ function addNote(context) {
 
 ## Describing a table: `ensureTable`
 
-`ensureTable(name, { columns, uniqueIndexes? })` brings a table to the shape
+`ensureTable(name, { columns, uniqueIndexes?, person? })` brings a table to the shape
 described, whatever shape it is in now: it creates the table if it is missing,
 adds the columns it lacks, and makes the unique indexes. A table that is
 already right costs one query and changes nothing, so the call belongs at the
@@ -73,6 +73,34 @@ is the point of the call. `default` is SQL text (`"0"`, `"true"`, `"NOW()"`).
 
 A column already present is left as it is — `ensureTable` never changes a
 column's type. Changing one is `dropColumn` and then `ensureTable` again.
+
+Deleting a row another row refers to follows the reference: an optional
+reference (nullable, the default) is emptied, and a row whose required
+reference (`nullable: false`) points at it is deleted with it.
+
+### Rows about a person: `person`
+
+`person` names the text column holding a person's account id
+(`context.request.auth.userId`). When an administrator deletes that account
+(`delete_user`), the engine deletes the person's rows from every table that
+names one, in the same transaction as the account — so erasing a person is the
+engine's guarantee rather than each solution's promise. A row elsewhere that
+refers to an erased row follows its reference, as above, so nobody else's data
+can block an erasure. Name it for any table whose rows belong to someone; a
+table that names none keeps its rows when an account goes.
+
+```javascript
+database.ensureTable("notes", {
+  columns: [
+    { name: "owner", type: "text" },
+    { name: "body", type: "text" },
+  ],
+  person: "owner",
+});
+```
+
+The column has to be a text column the table has, or the call throws. Omitting
+`person` later leaves the declaration as it was, as an omitted column is left.
 
 ```javascript
 database.ensureTable("authors", { columns: [{ name: "name", type: "text" }] });

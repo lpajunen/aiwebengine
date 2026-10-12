@@ -374,23 +374,6 @@ async fn db_upsert_user(pool: &PgPool, user: UpsertUser<'_>) -> AppResult<String
     Ok(user_id)
 }
 
-/// Database-backed delete user
-async fn db_delete_user(pool: &PgPool, user_id: &str) -> AppResult<bool> {
-    let result = sqlx::query("DELETE FROM users WHERE user_id = $1")
-        .bind(user_id)
-        .execute(pool)
-        .await
-        .map_err(|e| {
-            error!("Database error deleting user: {}", e);
-            AppError::Database {
-                message: format!("Database error: {}", e),
-                source: None,
-            }
-        })?;
-
-    Ok(result.rows_affected() > 0)
-}
-
 /// Database-backed get user
 async fn db_get_user(pool: &PgPool, user_id: &str) -> AppResult<User> {
     let row = sqlx::query(
@@ -1206,7 +1189,96 @@ pub fn get_user_count() -> AppResult<usize> {
     })
 }
 
-/// Delete a user (for testing/admin purposes)
+/// What the engine keeps about a person, by table and the column naming them.
+///
+/// Erased with the account, because each is the person's data or authority
+/// they gave: their storage and secrets in every script, the chats linked to
+/// them, the consents and delegations they granted, the scripts they own, and
+/// the work queued to run as them, whose payloads are written for them.
+///
+/// Not here, deliberately: the tables that record who *did* something —
+/// `script_revisions.created_by`, `script_deployments.deployed_by`,
+/// `script_git_sync.synced_by`, `script_limits.set_by`,
+/// `script_tasks.enqueued_by` on somebody else's task,
+/// `script_audit_events.actor_id`. They hold an opaque id that names nobody
+/// once the account is gone, and a history that loses its entries when an
+/// author leaves is not a history. `failed_auth_attempts`,
+/// `suspicious_activity` and `rate_limits` age out by themselves.
+/// `sessions` and `oauth_refresh_tokens` go with `delete_sessions_for_user`,
+/// `user_git_credentials` with `git_credentials::forget_all`, and
+/// `local_credentials` and `local_recovery_codes` cascade from `users`.
+const PERSONAL_ROWS: [(&str, &str); 8] = [
+    ("user_properties", "user_id"),
+    ("user_secrets", "user_id"),
+    ("script_channel_identities", "user_id"),
+    ("oauth_client_grants", "user_id"),
+    ("oauth_authorization_codes", "user_id"),
+    ("script_delegations", "user_id"),
+    ("script_owners", "user_id"),
+    ("script_tasks", "run_as"),
+];
+
+/// Erase what the engine keeps about a person, and then the account, in one
+/// transaction: an account that is gone with its data left behind is the
+/// failure this exists to prevent, so a failure part way leaves both.
+///
+/// That includes the rows scripts keep about them, in every table that names
+/// its person column (`ensureTable({ person })`). A row elsewhere that refers
+/// to one of those is emptied or removed by its foreign key's own rule, so
+/// nobody else's data can stand in the way of an erasure.
+async fn erase_user(pool: &PgPool, user_id: &str) -> AppResult<bool> {
+    let database = |e: sqlx::Error| {
+        error!("Database error erasing user: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    };
+    let mut tx = pool.begin().await.map_err(database)?;
+
+    // The rows scripts keep about the person, in every table that says which
+    // column names them. First, so a reference from one of these rows to
+    // something below is still there to follow.
+    let person_tables: Vec<(String, String)> = sqlx::query_as(
+        "SELECT physical_table_name, person_column FROM script_tables \
+         WHERE person_column IS NOT NULL",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(database)?;
+    for (table, column) in &person_tables {
+        let statement = format!(
+            "DELETE FROM {} WHERE {} = $1",
+            crate::db_schema_utils::quote_identifier(table),
+            crate::db_schema_utils::quote_identifier(column)
+        );
+        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(database)?;
+    }
+
+    for (table, column) in PERSONAL_ROWS {
+        let statement = format!("DELETE FROM {table} WHERE {column} = $1");
+        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(database)?;
+    }
+    let deleted = sqlx::query("DELETE FROM users WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(database)?
+        .rows_affected()
+        > 0;
+    tx.commit().await.map_err(database)?;
+    Ok(deleted)
+}
+
+/// Delete an account and erase what the engine keeps about the person.
 pub fn delete_user(user_id: &str) -> AppResult<bool> {
     let db = get_db_pool()?;
     let deleted = tokio::task::block_in_place(|| {
@@ -1232,7 +1304,7 @@ pub fn delete_user(user_id: &str) -> AppResult<bool> {
                 );
             }
 
-            db_delete_user(db.pool(), user_id).await
+            erase_user(db.pool(), user_id).await
         })
     })?;
     if deleted {

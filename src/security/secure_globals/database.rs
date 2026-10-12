@@ -69,7 +69,7 @@ pub(super) fn build_query_options(
 /// Reads the schema a script wants a table to have.
 ///
 /// `{ "columns": [{ "name", "type", "nullable"?, "default"?, "references"? }],
-/// "uniqueIndexes"?: [["col"]] }`. A `"reference"` column names the table it
+/// "uniqueIndexes"?: [["col"]], "person"?: "col" }`. A `"reference"` column names the table it
 /// points at in `references`. `nullable` defaults to true,
 /// because a column added to a table that already has rows cannot be `NOT NULL`
 /// without a default, and the whole point of this call is that it is safe to
@@ -149,6 +149,13 @@ pub(super) fn parse_table_spec(schema_json: &str) -> Result<crate::repository::T
                 .collect::<Result<Vec<_>, _>>()?;
             spec.unique_indexes.push(columns);
         }
+    }
+
+    if let Some(person) = parsed.get("person") {
+        let person = person
+            .as_str()
+            .ok_or("\"person\" must be the name of the column holding a person's account id")?;
+        spec.person = Some(person.to_string());
     }
 
     Ok(spec)

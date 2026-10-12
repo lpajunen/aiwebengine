@@ -106,6 +106,10 @@ pub struct TableSpec {
     /// Column groups that must each carry a unique index — what `upsert` needs
     /// before it can use them as a conflict target.
     pub unique_indexes: Vec<Vec<String>>,
+    /// The text column holding a person's account id. A person's rows are
+    /// erased with their account (`user_repository::erase_user`). `None`
+    /// leaves whatever the table already names, as an omitted column is left.
+    pub person: Option<String>,
 }
 
 /// What converging a table to a [`TableSpec`] actually changed.
@@ -580,7 +584,84 @@ pub(super) async fn db_ensure_script_table(
         outcome.unique_indexes_ensured.push(columns.clone());
     }
 
+    if let Some(person) = &spec.person {
+        db_name_person_column(&mut *conn, script_uri, logical_table_name, person).await?;
+    }
+
     Ok(outcome)
+}
+
+/// Record which column of a table holds a person's account id.
+///
+/// It has to be a text column the table has: an account id is text, and a
+/// declaration naming a column that is not there would promise an erasure
+/// that deletes nothing.
+async fn db_name_person_column(
+    conn: &mut PgConnection,
+    script_uri: &str,
+    logical_table_name: &str,
+    person: &str,
+) -> AppResult<()> {
+    let database = |e: sqlx::Error| AppError::Database {
+        message: format!("Database error: {}", e),
+        source: None,
+    };
+    let schema_json: serde_json::Value = sqlx::query_scalar(
+        "SELECT schema_json FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(database)?;
+
+    let column_type = schema_json
+        .get("columns")
+        .and_then(|columns| columns.as_array())
+        .and_then(|columns| {
+            columns
+                .iter()
+                .find(|column| column.get("name").and_then(|n| n.as_str()) == Some(person))
+        })
+        .and_then(|column| {
+            column
+                .get("type")
+                .and_then(|t| t.as_str())
+                .map(str::to_string)
+        });
+    match column_type.as_deref() {
+        Some(kind) if kind == ColumnType::Text.canonical() => {}
+        Some(kind) => {
+            return Err(AppError::Validation {
+                field: "person".to_string(),
+                reason: format!(
+                    "\"person\" names \"{}\", a {} column; it must be a text column holding an account id",
+                    person, kind
+                ),
+            });
+        }
+        None => {
+            return Err(AppError::Validation {
+                field: "person".to_string(),
+                reason: format!(
+                    "\"person\" names \"{}\", which table \"{}\" does not have",
+                    person, logical_table_name
+                ),
+            });
+        }
+    }
+
+    sqlx::query(
+        "UPDATE script_tables SET person_column = $3, updated_at = NOW() \
+         WHERE script_uri = $1 AND logical_table_name = $2",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .bind(person)
+    .execute(&mut *conn)
+    .await
+    .map_err(database)?;
+    Ok(())
 }
 
 /// Database-backed add column to script-owned table
@@ -807,14 +888,19 @@ pub(super) async fn db_add_reference_column(
         ),
     })?;
 
-    // Create the foreign key constraint
+    // Create the foreign key constraint. What a delete of the referenced row
+    // does follows from whether the reference may be empty: an optional one is
+    // emptied, a required one goes with the row it needs. Without a rule the
+    // delete is refused, and then anybody's reference to a row could stop that
+    // row's owner from being erased (`user_repository::erase_user`).
     let constraint_name = format!("fk_{}_{}", logical_table_name.replace("_", ""), column_name);
     let alter_sql = format!(
-        "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} (id)",
+        "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} (id) ON DELETE {}",
         quote_identifier(&source_table),
         quote_identifier(&constraint_name),
         quote_identifier(column_name),
-        quote_identifier(&referenced_table)
+        quote_identifier(&referenced_table),
+        if nullable { "SET NULL" } else { "CASCADE" }
     );
 
     sqlx::query(sqlx::AssertSqlSafe(alter_sql.as_str()))

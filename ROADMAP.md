@@ -11,11 +11,11 @@ The order inside each section is the order they matter.
 
 ## Security
 
-1. **Account erasure stops at the engine's tables.** `delete_user` takes
-   sessions, grants and git credentials; a person's rows in a script's own
-   tables stay. Make `personalStorage` and a per-person table namespace the
-   attractive place for personal data, so erasure is an engine guarantee
-   rather than each solution's promise.
+1. **A person cannot delete their own account.** `delete_user` erases an
+   account and what the engine and every `person`-declaring table keep about
+   it, but only an administrator can call it. A deletion from `/auth/account`,
+   behind a fresh sign-in, would let a person erase their account themselves
+   rather than asking an administrator to.
 2. **Native tool calls have no budget.** `GitSync` and `ChannelTrigger` are
    bounded; an agent loop calling `write_file` is not. A `RateLimitKey` per
    account for the operation table.

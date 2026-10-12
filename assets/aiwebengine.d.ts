@@ -1838,7 +1838,10 @@ interface ColumnSpec {
   nullable?: boolean;
   /** SQL default, as text. */
   default?: string;
-  /** For a `reference`: the table it points at. */
+  /**
+   * For a `reference`: the table it points at. Deleting that row empties an
+   * optional reference and deletes a row whose required one points at it.
+   */
   references?: string;
 }
 
@@ -1847,6 +1850,12 @@ interface TableSchema {
   columns: ColumnSpec[];
   /** Each entry is the column list of one unique index — what `upsert` needs as its key. */
   uniqueIndexes?: string[][];
+  /**
+   * The text column holding a person's account id. Deleting that account
+   * deletes the person's rows from every table that names one. Throws when
+   * the table has no such text column; omitted, the declaration stays as it was.
+   */
+  person?: string;
 }
 
 /** What `ensureTable` changed. */

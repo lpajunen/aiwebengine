@@ -116,8 +116,11 @@ avoids it by prefixing every task.
 
 ### 9. Personal data
 
-- [ ] Account erasure reaches personal data in scripts' own tables
-      (ROADMAP: Security 1), or the pilot says plainly that it does not.
+- [x] Account erasure reaches personal data in scripts' own tables:
+      `delete_user` erases the engine's rows and every table that declares
+      `person` (`docs/DATABASE_SCHEMA_API.md`).
+- [x] The agent's tables declare `person`.
+- [ ] A person can delete their own account (ROADMAP: Security 1).
 - [ ] A short privacy statement: what is stored, where, for how long, and how
       to have it deleted.
 - [ ] Decide whether AGPL-3.0 is the license the pilot's users should meet.

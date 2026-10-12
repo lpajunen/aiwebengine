@@ -632,6 +632,20 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
             tool_remove_user_role,
         ),
         (
+            "delete_user",
+            "Delete an account and erase what the engine and scripts keep about the person. Administrator privileges required; the last administrator cannot be deleted.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "user_id": { "type": "string", "description": "Id of the account to delete" }
+                    },
+                    "required": ["user_id"]
+                })
+            },
+            tool_delete_user,
+        ),
+        (
             "get_script_hosts",
             "Read which hostnames a script's registrations are published on. Administrator privileges required.",
             || {
