@@ -200,6 +200,7 @@ impl Scope {
             Scope::Write => &[
                 Capability::WriteScriptData,
                 Capability::WriteStorage,
+                Capability::WriteScriptStorage,
                 // Queueing and dispatching are both "set something in motion
                 // that outlives this run". Neither can escalate — a queued
                 // personal task re-resolves this same grant, and a listener
@@ -1188,6 +1189,7 @@ mod tests {
         let context = context_for("u1", &[Scope::Author], &[UserRole::Editor]);
 
         assert!(!context.has_capability(&Capability::WriteStorage));
+        assert!(!context.has_capability(&Capability::WriteScriptStorage));
         assert!(!context.has_capability(&Capability::EnqueueTasks));
         assert!(context.has_capability(&Capability::WriteScripts));
     }
@@ -1293,6 +1295,7 @@ mod tests {
         for denied in [
             Capability::WriteScriptData,
             Capability::WriteStorage,
+            Capability::WriteScriptStorage,
             Capability::EnqueueTasks,
         ] {
             assert!(

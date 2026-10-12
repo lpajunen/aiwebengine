@@ -15,7 +15,7 @@ pub(super) const TOOLS_PRELUDE: &str = include_str!("../../../assets/tools_prelu
 /// later stays with a read-only call until somebody decides it is a write —
 /// the cost of that mistake is a refusal, where the other way round it would
 /// be a write nobody approved.
-const WRITES: [Capability; 12] = [
+const WRITES: [Capability; 13] = [
     Capability::WriteScripts,
     Capability::DeleteScripts,
     Capability::WriteAssets,
@@ -27,6 +27,7 @@ const WRITES: [Capability; 12] = [
     Capability::AdministerEngine,
     Capability::WriteSecrets,
     Capability::WriteStorage,
+    Capability::WriteScriptStorage,
     Capability::EnqueueTasks,
 ];
 

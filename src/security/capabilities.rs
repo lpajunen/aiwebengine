@@ -138,6 +138,7 @@ impl Capability {
             Capability::WriteSecrets => "write_secrets",
             Capability::ReadStorage => "read_storage",
             Capability::WriteStorage => "write_storage",
+            Capability::WriteScriptStorage => "write_script_storage",
             Capability::EnqueueTasks => "enqueue_tasks",
             Capability::CallTools => "call_tools",
         }
@@ -153,7 +154,7 @@ impl Capability {
             .find(|capability| capability.as_str() == value.trim())
     }
 
-    pub fn all() -> [Capability; 21] {
+    pub fn all() -> [Capability; 22] {
         [
             Capability::ReadScripts,
             Capability::WriteScripts,
@@ -174,6 +175,7 @@ impl Capability {
             Capability::WriteSecrets,
             Capability::ReadStorage,
             Capability::WriteStorage,
+            Capability::WriteScriptStorage,
             Capability::EnqueueTasks,
             Capability::CallTools,
         ]
@@ -384,6 +386,7 @@ impl UserContext {
             Capability::WriteSecrets,
             Capability::ReadStorage,
             Capability::WriteStorage,
+            Capability::WriteScriptStorage,
             Capability::EnqueueTasks,
         ]
         .into_iter()
@@ -699,7 +702,7 @@ mod tests {
     ///
     /// "Change nothing" is about the *solution* — its scripts, its assets,
     /// its schema. The script-side capabilities this tier also holds
-    /// (`WriteStorage`, `WriteSecrets`) are what a script route does while
+    /// (`WriteStorage`, `WriteScriptStorage`, `WriteSecrets`) are what a script route does while
     /// serving this visitor, and each is separately bounded: the two personal
     /// stores need an authenticated user before they touch anything, which an
     /// anonymous caller by definition does not have.
@@ -839,6 +842,7 @@ mod tests {
             Capability::WriteSecrets,
             Capability::ReadStorage,
             Capability::WriteStorage,
+            Capability::WriteScriptStorage,
             Capability::EnqueueTasks,
         ] {
             assert!(

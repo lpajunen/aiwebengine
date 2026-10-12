@@ -77,6 +77,11 @@
     // reads through a property are how the language pokes at any object, and
     // answer as if the store were empty. Nothing probes an object by writing
     // to it, so every write throws whichever way it was spelled.
+    // Writes do not ask: the host refuses a write by its own rules — the write
+    // capability, and for the personal store a person to write for — so code
+    // holding the write and not the read can still keep a note it cannot read
+    // back.
+    //
     // A store can be unavailable for two different reasons, and telling a
     // script the wrong one costs it the fix. With nobody signed in, logging
     // in is the answer and the wording below says so. When the execution was
@@ -121,18 +126,15 @@
 
       setItem: function (key, value) {
         arity("setItem", 2, arguments.length);
-        requireAvailable();
         check(host.setItem(String(key), String(value)));
       },
 
       removeItem: function (key) {
         arity("removeItem", 1, arguments.length);
-        requireAvailable();
         check(host.removeItem(String(key)));
       },
 
       clear: function () {
-        requireAvailable();
         check(host.clear());
       },
 
@@ -185,7 +187,6 @@
         if (isInterface(property)) {
           return Reflect.set(target, property, value, receiver);
         }
-        requireAvailable();
         check(host.setItem(String(property), String(value)));
         return true;
       },
@@ -205,7 +206,6 @@
         if (isInterface(property)) {
           return Reflect.deleteProperty(target, property);
         }
-        requireAvailable();
         check(host.removeItem(String(property)));
         return true;
       },

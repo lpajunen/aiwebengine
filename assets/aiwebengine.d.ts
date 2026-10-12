@@ -2231,9 +2231,9 @@ type Capability =
   | "write_secrets"
   | "read_storage"
   | "write_storage"
+  | "write_script_storage"
   | "enqueue_tasks"
-  | "call_tools"
-  | "send_messages";
+  | "call_tools";
 
 /** One line the sub-execution wrote through `console`. */
 interface SandboxConsoleLine {

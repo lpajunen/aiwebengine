@@ -67,11 +67,12 @@ makes **read-only** expressible.
 | `read_secrets`           | `secretStorage.exists`, `{{secret:…}}` in a `fetch`, and every `McpClient` call |
 | `write_secrets`          | `setSecret`, `removeSecret`, `clear`                                            |
 | `read_storage`           | Reading `scriptStorage` and `personalStorage`                                   |
-| `write_storage`          | Writing or clearing either                                                      |
+| `write_storage`          | Writing or clearing `personalStorage`                                           |
+| `write_script_storage`   | Writing or clearing `scriptStorage`, which every caller of the script reads     |
 | `enqueue_tasks`          | `scriptTasks` and `personalTasks` — enqueue and cancel                          |
 | `call_tools`             | `tools.list` and `tools.call` — another script's MCP tools, as the caller       |
 
-The seven script-side names from `use_network` to `enqueue_tasks` are new, and **adding
+The eight script-side names from `use_network` to `enqueue_tasks` are new, and **adding
 them took nothing away from anybody**. Every tier that could already do the
 thing holds the name for it, including the anonymous tier, which could always
 `fetch` and reach `scriptStorage`. They exist to be taken away.

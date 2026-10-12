@@ -119,8 +119,16 @@ pub enum Capability {
     WriteSecrets,
     /// Read a person's `personalStorage`, or the script's own `scriptStorage`.
     ReadStorage,
-    /// Write or clear either of those.
+    /// Write or clear the person's `personalStorage`.
     WriteStorage,
+    /// Write or clear the script's own `scriptStorage`.
+    ///
+    /// Apart from [`Capability::WriteStorage`] because the two stores belong
+    /// to different people: `personalStorage` is the caller's, `scriptStorage`
+    /// is state every caller of the script reads. A narrowing that lets code
+    /// keep a note for the person it runs for must not let that code change
+    /// what every other person's request reads.
+    WriteScriptStorage,
     /// Enqueue and cancel durable tasks (`scriptTasks`, `personalTasks`).
     ///
     /// Queueing work is how an execution outlives itself, so a context that

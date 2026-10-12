@@ -127,7 +127,7 @@ async fn a_read_only_call_cannot_write() {
     assert!(
         read_only["why"]
             .as_str()
-            .is_some_and(|why| why.contains("write_storage")),
+            .is_some_and(|why| why.contains("write_script_storage")),
         "the refusal should name what was withheld: {read_only}"
     );
 

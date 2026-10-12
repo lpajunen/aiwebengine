@@ -101,7 +101,9 @@ impl SecureGlobalContext {
         // answering the envelope the prelude throws, so a refused write fails
         // where it was written rather than silently doing nothing.
         let may_read_storage = self.user_context.has_capability(&Capability::ReadStorage);
-        let may_write_storage = self.user_context.has_capability(&Capability::WriteStorage);
+        let may_write_storage = self
+            .user_context
+            .has_capability(&Capability::WriteScriptStorage);
         let read_denial = capability_refusal(
             "scriptStorage",
             &Capability::ReadStorage,
@@ -111,7 +113,7 @@ impl SecureGlobalContext {
             "SecurityError",
             &capability_refusal(
                 "scriptStorage",
-                &Capability::WriteStorage,
+                &Capability::WriteScriptStorage,
                 &self.user_context,
             ),
         );
@@ -273,11 +275,15 @@ impl SecureGlobalContext {
         // mode for a script to learn.
         // Two narrowings again, as in `setup_secrets_functions`: what the
         // absent person authorised, and what this execution holds. A
-        // delegated *and* attenuated task is subject to each.
-        let storage_allowed = self
+        // delegated *and* attenuated task is subject to each. Reading and
+        // writing are held separately, so a write does not need the read: code
+        // may keep a note for the person without being able to read the
+        // others back.
+        let in_scope = self
             .config
-            .allows_delegated(crate::delegation::Scope::PersonalStorage)
-            && self.user_context.has_capability(&Capability::ReadStorage);
+            .allows_delegated(crate::delegation::Scope::PersonalStorage);
+        let storage_allowed =
+            in_scope && self.user_context.has_capability(&Capability::ReadStorage);
         let may_write_personal = self.user_context.has_capability(&Capability::WriteStorage);
         let read_denial = capability_refusal(
             "personalStorage",
@@ -337,10 +343,10 @@ impl SecureGlobalContext {
                     return Ok(Some(write_denial_set.clone()));
                 }
 
-                let Some(user_id) = Self::delegated_user_id(&ctx, storage_allowed) else {
+                let Some(user_id) = Self::delegated_user_id(&ctx, in_scope) else {
                     return Ok(Some(Self::storage_failure(
                         "SecurityError",
-                        "Personal storage requires an authenticated user",
+                        "personalStorage requires an authenticated user",
                     )));
                 };
 
@@ -375,10 +381,10 @@ impl SecureGlobalContext {
                 if !may_write_personal {
                     return Ok(Some(write_denial_remove.clone()));
                 }
-                let Some(user_id) = Self::delegated_user_id(&ctx, storage_allowed) else {
+                let Some(user_id) = Self::delegated_user_id(&ctx, in_scope) else {
                     return Ok(Some(Self::storage_failure(
                         "SecurityError",
-                        "Personal storage requires an authenticated user",
+                        "personalStorage requires an authenticated user",
                     )));
                 };
                 crate::repository::remove_user_properties_item(&script_uri_remove, &user_id, &key);
@@ -398,10 +404,10 @@ impl SecureGlobalContext {
                 if !may_write_personal {
                     return Ok(Some(write_denial_clear.clone()));
                 }
-                let Some(user_id) = Self::delegated_user_id(&ctx, storage_allowed) else {
+                let Some(user_id) = Self::delegated_user_id(&ctx, in_scope) else {
                     return Ok(Some(Self::storage_failure(
                         "SecurityError",
-                        "Personal storage requires an authenticated user",
+                        "personalStorage requires an authenticated user",
                     )));
                 };
                 match crate::repository::clear_user_properties(&script_uri_clear, &user_id) {

@@ -145,6 +145,79 @@ async fn a_planning_turn_reads_and_cannot_write() {
     );
 }
 
+/// The two stores belong to different people, so writing one does not write
+/// the other. A turn approved to keep a note for the person it runs for must
+/// not change `scriptStorage`, which every other person's request reads — and
+/// keeping a note does not need reading the store, so code holding the write
+/// alone can leave one without being able to read the rest back.
+#[tokio::test(flavor = "multi_thread")]
+async fn writing_personal_storage_does_not_write_the_scripts() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let out = value(
+        "test://attenuation/stores",
+        r#"
+        scriptStorage.setItem("shared", "before");
+
+        const note = sandbox.run(`
+            personalStorage.setItem("note", "kept");
+            let refused = null;
+            try {
+                scriptStorage.setItem("shared", "during");
+            } catch (e) {
+                refused = e.message;
+            }
+            let unread = null;
+            try {
+                personalStorage.getItem("note");
+            } catch (e) {
+                unread = e.message;
+            }
+            ({ refused, unread })
+        `, { capabilities: ["write_storage"] });
+
+        const shared = sandbox.run(
+            `scriptStorage.setItem("shared", "granted"); true`,
+            { capabilities: ["write_script_storage"] },
+        );
+
+        ({
+            refused: note.value && note.value.refused,
+            unread: note.value && note.value.unread,
+            error: note.error,
+            note: personalStorage.getItem("note"),
+            granted: shared.ok,
+            shared: scriptStorage.getItem("shared"),
+        })
+        "#,
+    )
+    .await;
+
+    assert_eq!(out["error"], Value::Null, "the turn should run: {out}");
+    assert_eq!(out["note"], json!("kept"), "the person's note is written");
+    assert!(
+        out["refused"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("write_script_storage"),
+        "the script's store should refuse, naming what it wanted: {out}"
+    );
+    assert!(
+        out["unread"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("read_storage"),
+        "writing a note does not make the store readable: {out}"
+    );
+    assert_eq!(out["granted"], json!(true), "{out}");
+    assert_eq!(
+        out["shared"],
+        json!("granted"),
+        "only the turn holding write_script_storage changed the script's store"
+    );
+}
+
 /// `fetch` was gated by nothing at all before this, which made every other
 /// restriction decorative: code that could call out could spend tokens, post
 /// anywhere, and carry whatever it had been shown with it.

@@ -272,6 +272,7 @@ mod tests {
         for denied in [
             Capability::WriteScriptData,
             Capability::WriteStorage,
+            Capability::WriteScriptStorage,
             Capability::UseNetwork,
             Capability::ReadSecrets,
             Capability::EnqueueTasks,
