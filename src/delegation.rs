@@ -1180,6 +1180,19 @@ mod tests {
         );
     }
 
+    /// A delegated context is a narrowed one, which is what keeps it from
+    /// sending a stored credential to this engine (`HttpClient`): a token
+    /// would otherwise carry authority the grant did not give.
+    #[test]
+    fn a_delegated_context_is_marked_as_narrowed() {
+        use crate::user_repository::UserRole;
+
+        for scopes in [&[][..], &[Scope::Write], &[Scope::Administer]] {
+            let context = context_for("u1", scopes, &[UserRole::Administrator]);
+            assert!(context.attenuated, "{scopes:?}");
+        }
+    }
+
     /// Writes to a person's own things are still the `write` scope's, and a
     /// management scope does not smuggle them in.
     #[test]

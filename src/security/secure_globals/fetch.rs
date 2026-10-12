@@ -98,6 +98,7 @@ impl SecureGlobalContext {
                 // could have set it — this is the only way it is ever filled.
                 let mut options = options;
                 options.network_scope = user_ctx_fetch.network_scope.clone();
+                options.narrowed = user_ctx_fetch.attenuated;
 
                 // A template this execution may not resolve is refused, not
                 // sent as itself: a request carrying the literal
@@ -219,6 +220,7 @@ impl SecureGlobalContext {
                             // options object and a batch that bounded only the
                             // first would bound nothing.
                             network_scope: user_ctx_all.network_scope.clone(),
+                            narrowed: user_ctx_all.attenuated,
                             ..request.options
                         },
                     })
@@ -290,6 +292,7 @@ impl SecureGlobalContext {
                 };
                 let mut options = options;
                 options.network_scope = user_ctx_stream.network_scope.clone();
+                options.narrowed = user_ctx_stream.attenuated;
 
                 if !may_read_secrets && crate::http_client::names_a_secret(&url, &options) {
                     return Err(capability_error(

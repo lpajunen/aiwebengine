@@ -87,6 +87,22 @@ impl HostConfig {
         self.all_hosts.iter().any(|h| h == host)
     }
 
+    /// Whether a URL's host names this engine, whatever the port.
+    ///
+    /// By hostname rather than authority: a port distinguishes services, and
+    /// the question is whether a request would reach this engine's own
+    /// authorization — `/mcp`, `/engine/*`, a session cookie — not which
+    /// listener answers it.
+    pub fn names_engine(&self, url_host: &str) -> bool {
+        let wanted = url_host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_ascii_lowercase();
+        self.all_hosts
+            .iter()
+            .any(|authority| hostname_of(authority) == wanted)
+    }
+
     /// Map a request's Host header onto one of the configured hosts.
     ///
     /// Anything unrecognised — a direct IP, a port-forward, a tunnel hostname,
@@ -177,6 +193,24 @@ pub fn all_hosts() -> Vec<String> {
     config().all_hosts.clone()
 }
 
+/// Whether a URL's host names this engine. See [`HostConfig::names_engine`].
+pub fn names_engine(url_host: &str) -> bool {
+    config().names_engine(url_host)
+}
+
+/// The hostname of a Host-header authority, lower-cased, without its port.
+fn hostname_of(authority: &str) -> String {
+    let authority = authority.to_ascii_lowercase();
+    if let Some(rest) = authority.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or_default().to_string();
+    }
+    authority
+        .rsplit_once(':')
+        .filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit()))
+        .map(|(host, _)| host.to_string())
+        .unwrap_or(authority)
+}
+
 /// The scheme and authority of `base_url`, falling back to `https://{authority}`
 /// for a base URL that does not parse.
 fn origin_of(base_url: &str, authority: &str) -> String {
@@ -255,6 +289,21 @@ mod tests {
                 "world.softagen.com".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn the_engine_is_named_by_hostname_whatever_the_port() {
+        let cfg = test_config();
+        assert!(cfg.names_engine("softagen.com"));
+        assert!(cfg.names_engine("MANAGE.softagen.com"));
+        assert!(!cfg.names_engine("evil-softagen.com"));
+        assert!(!cfg.names_engine("api.example.com"));
+
+        let local = HostConfig::new("http://localhost:3000", &[]);
+        assert!(local.names_engine("localhost"));
+        let v6 = HostConfig::new("http://[::1]:3000", &[]);
+        assert!(v6.names_engine("[::1]"));
+        assert!(v6.names_engine("::1"));
     }
 
     #[test]

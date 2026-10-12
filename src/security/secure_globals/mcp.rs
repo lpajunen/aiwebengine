@@ -799,7 +799,7 @@ impl SecureGlobalContext {
                 let _client = crate::mcp_client::McpClient::scoped(
                     server_url.clone(),
                     secret_identifier.clone(),
-                    user_ctx_new.network_scope.clone(),
+                    &user_ctx_new,
                 )
                 .map_err(|e| {
                     rquickjs::Error::new_from_js_message(
@@ -863,7 +863,7 @@ impl SecureGlobalContext {
                 let client = crate::mcp_client::McpClient::scoped(
                     server_url.to_string(),
                     secret_identifier.to_string(),
-                    user_ctx_list.network_scope.clone(),
+                    &user_ctx_list,
                 )
                 .map_err(|e| {
                     rquickjs::Error::new_from_js_message(
@@ -948,7 +948,7 @@ impl SecureGlobalContext {
                 let client = crate::mcp_client::McpClient::scoped(
                     server_url.to_string(),
                     secret_identifier.to_string(),
-                    user_ctx_call.network_scope.clone(),
+                    &user_ctx_call,
                 )
                 .map_err(|e| {
                     rquickjs::Error::new_from_js_message(

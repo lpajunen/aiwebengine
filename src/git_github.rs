@@ -704,6 +704,9 @@ impl GitHubClient {
             // set, not one a script chose, so a script's destination scope is
             // not what bounds it.
             network_scope: None,
+            // Nor is this a narrowed execution: it is the engine's own call,
+            // and GitHub is not this engine.
+            narrowed: false,
         };
 
         let response = self

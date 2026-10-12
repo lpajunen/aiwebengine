@@ -294,7 +294,10 @@ secrets you do not own._
 They exist because an agent that manages scripts and users is work people
 actually ask for while they are away, and the alternative was a stored `/mcp`
 token: the same authority reached through a credential, past every check in
-this file rather than through one.
+this file rather than through one. That alternative is closed, not just
+unneeded: a delegated task may not send an `Authorization` or `Cookie` header
+to this engine's own hosts (`HttpClient`), so a stored token cannot carry it
+past its grant.
 
 Three rules keep them honest.
 

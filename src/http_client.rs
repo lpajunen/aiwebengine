@@ -206,6 +206,7 @@ impl HttpClient {
                 RequestPolicy {
                     resolved: &resolved,
                     scope: options.network_scope.as_ref(),
+                    narrowed: options.narrowed,
                 },
             )
             .map_err(|e| resolved.scrub_error(e))?;
@@ -244,6 +245,47 @@ impl HttpClient {
             } else {
                 allowed.join(", ")
             }
+        )))
+    }
+
+    /// Refuse a narrowed execution sending credentials to this engine.
+    ///
+    /// Every narrowing — a delegation, `sandbox.run` — goes through
+    /// `UserContext::attenuated`, which bounds what the execution may do *in
+    /// process*. A credential in a header is authority from outside that
+    /// bound: a person's token stored as a secret or in their storage, sent to
+    /// this engine's own `/mcp` or `/engine/*`, would act with whatever the
+    /// token carries, and the narrowing would bound nothing. So a narrowed
+    /// execution may still call this engine, as anybody may, but not as
+    /// somebody.
+    ///
+    /// The credential is recognised by where it travels — `Authorization` and
+    /// `Cookie`, the two headers the engine authenticates — rather than by
+    /// where it came from, since a token held in storage is as good as one
+    /// resolved from `{{secret:...}}`.
+    fn check_credentials_to_self(
+        url: &Url,
+        headers: &HeaderMap,
+        narrowed: bool,
+    ) -> Result<(), HttpError> {
+        if !narrowed {
+            return Ok(());
+        }
+        let carries_credentials = headers.contains_key(reqwest::header::AUTHORIZATION)
+            || headers.contains_key(reqwest::header::COOKIE);
+        if !carries_credentials {
+            return Ok(());
+        }
+        let Some(host) = url.host_str() else {
+            return Ok(());
+        };
+        if !crate::hosts::names_engine(host) {
+            return Ok(());
+        }
+        Err(HttpError::BlockedUrl(format!(
+            "This execution was narrowed and may not send credentials to this engine ('{}'): \
+             a token would act with authority the narrowing took away",
+            host
         )))
     }
 
@@ -297,6 +339,7 @@ impl HttpClient {
                 // git binding an administrator set, not a script reaching a
                 // host it chose. `fetch` is where destinations are bounded.
                 scope: None,
+                narrowed: false,
             },
         )?;
 
@@ -399,6 +442,7 @@ impl HttpClient {
                 RequestPolicy {
                     resolved: &resolved,
                     scope: options.network_scope.as_ref(),
+                    narrowed: options.narrowed,
                 },
             )
             .map_err(|e| resolved.scrub_error(e))?;
@@ -449,11 +493,16 @@ impl HttpClient {
         timeout: Duration,
         policy: RequestPolicy<'_>,
     ) -> Result<reqwest::blocking::Response, HttpError> {
-        let RequestPolicy { resolved, scope } = policy;
+        let RequestPolicy {
+            resolved,
+            scope,
+            narrowed,
+        } = policy;
         if !self.manual_redirects {
             // Test mode: single request through the redirect-following client
             let parsed_url = self.validate(url)?;
             Self::check_scope(&parsed_url, scope)?;
+            Self::check_credentials_to_self(&parsed_url, &headers, narrowed)?;
             let mut request = shared_test_client()?
                 .request(method, parsed_url.as_str())
                 .headers(headers)
@@ -474,6 +523,11 @@ impl HttpClient {
         let mut current_headers = headers;
 
         for _ in 0..=MAX_REDIRECTS {
+            // Every hop, not only the first: a redirect that stays on one host
+            // keeps its credentials, and one onto this engine from elsewhere
+            // has had them stripped below, which this then lets through.
+            Self::check_credentials_to_self(&current_url, &current_headers, narrowed)?;
+
             // Recomputed per hop rather than once: the budget is what bounds
             // the whole fetch, and a chain of redirects each given the full
             // timeout could outlast the script by several multiples of it.
@@ -817,6 +871,9 @@ struct RequestPolicy<'a> {
     resolved: &'a ResolvedUrl,
     /// Where this execution may go. `None` is unrestricted.
     scope: Option<&'a std::sync::Arc<crate::security::NetworkScope>>,
+    /// Whether the execution was narrowed from its caller's authority, in
+    /// which case it may not send credentials to this engine.
+    narrowed: bool,
 }
 
 /// Whether a `Content-Encoding` means "nothing was applied".
@@ -1575,6 +1632,13 @@ pub struct FetchOptions {
     /// `None` means unrestricted, which is every context built from a tier.
     #[serde(skip)]
     pub network_scope: Option<std::sync::Arc<crate::security::NetworkScope>>,
+
+    /// Whether the execution was narrowed from its caller's authority
+    /// (`UserContext::attenuated`). Such an execution may not send
+    /// credentials to this engine. Written by the engine and skipped by serde
+    /// for the reason `network_scope` is.
+    #[serde(skip)]
+    pub narrowed: bool,
 }
 
 fn default_method() -> String {
@@ -1592,6 +1656,7 @@ impl Default for FetchOptions {
             timeout_ms: None,
             binary: false,
             network_scope: None,
+            narrowed: false,
         }
     }
 }

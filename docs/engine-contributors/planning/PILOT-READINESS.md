@@ -68,7 +68,7 @@ avoids it by prefixing every task.
 
 ### 4. Quotas
 
-- [ ] A per-account budget on the operation table (ROADMAP: Security 3).
+- [ ] A per-account budget on the operation table (ROADMAP: Security 2).
 - [ ] Low default script limits for scripts the agent creates, and a storage
       cap per account.
 - [ ] Each person sees what their runs cost, on every channel (the agent's
@@ -78,12 +78,12 @@ avoids it by prefixing every task.
 
 - [x] `run_js` passes a `hosts` allowlist: what the person, their
       instructions, the deployment and its skills named (agent `hosts.ts`).
-- [ ] Decide whether a delegated execution may send a bearer token to this
-      engine's own `/mcp` (ROADMAP: Security 1).
-- [ ] The Telegram webhook secret moves to `secretStorage`, compared with
+- [x] A delegated or sandboxed execution may not send credentials to this
+      engine's own hosts (`HttpClient`, `docs/DELEGATION.md`).
+- [x] The Telegram webhook secret is a script secret, compared with
       `crypto.secretEquals`.
 - [ ] The audit line says when an agent acted rather than the person
-      (ROADMAP: Security 4).
+      (ROADMAP: Security 3).
 
 ### 6. Documents that agree with the engine
 
@@ -117,7 +117,7 @@ avoids it by prefixing every task.
 ### 9. Personal data
 
 - [ ] Account erasure reaches personal data in scripts' own tables
-      (ROADMAP: Security 2), or the pilot says plainly that it does not.
+      (ROADMAP: Security 1), or the pilot says plainly that it does not.
 - [ ] A short privacy statement: what is stored, where, for how long, and how
       to have it deleted.
 - [ ] Decide whether AGPL-3.0 is the license the pilot's users should meet.

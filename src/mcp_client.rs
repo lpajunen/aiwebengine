@@ -268,6 +268,9 @@ pub struct McpClient {
     /// has one. Carried rather than consulted at the call, so that the scope
     /// which applies is the one in force when the script named the server.
     network_scope: Option<std::sync::Arc<crate::security::NetworkScope>>,
+    /// Whether that execution was narrowed, in which case the bearer this
+    /// client sends may not go to this engine (`HttpClient`'s rule).
+    narrowed: bool,
     request_id_counter: std::sync::atomic::AtomicU64,
 }
 
@@ -287,19 +290,37 @@ impl McpClient {
     /// Refusing here rather than at the first call is what keeps a blocked
     /// address from reaching a secret lookup on the way to being refused.
     pub fn new(server_url: String, secret_identifier: String) -> Result<Self, McpClientError> {
-        Self::scoped(server_url, secret_identifier, None)
+        Self::build(server_url, secret_identifier, None, false)
     }
 
-    /// The same client, bounded to the destinations an execution may reach.
+    /// The same client, bounded as the calling execution is: to the
+    /// destinations it may reach, and — when it was narrowed — away from
+    /// sending its bearer to this engine.
     ///
     /// Separate from [`McpClient::new`] rather than an extra argument on it,
     /// because most callers here are the engine reaching a server nobody
     /// narrowed; the ones that matter are in `secure_globals`, where a script's
-    /// own execution may be carrying a scope.
+    /// own execution may be carrying a narrowing. Taking the context rather
+    /// than its parts keeps a bound added later from being forgotten at one of
+    /// them.
     pub fn scoped(
         server_url: String,
         secret_identifier: String,
+        caller: &crate::security::UserContext,
+    ) -> Result<Self, McpClientError> {
+        Self::build(
+            server_url,
+            secret_identifier,
+            caller.network_scope.clone(),
+            caller.attenuated,
+        )
+    }
+
+    fn build(
+        server_url: String,
+        secret_identifier: String,
         network_scope: Option<std::sync::Arc<crate::security::NetworkScope>>,
+        narrowed: bool,
     ) -> Result<Self, McpClientError> {
         crate::http_client::validate_public_url(&server_url)?;
 
@@ -308,6 +329,7 @@ impl McpClient {
             secret_identifier,
             http: HttpClient::new()?,
             network_scope,
+            narrowed,
             request_id_counter: std::sync::atomic::AtomicU64::new(1),
         })
     }
@@ -327,6 +349,7 @@ impl McpClient {
             secret_identifier,
             http: HttpClient::new_for_tests()?,
             network_scope: None,
+            narrowed: false,
             request_id_counter: std::sync::atomic::AtomicU64::new(1),
         })
     }
@@ -618,6 +641,7 @@ impl McpClient {
                 // execution that may reach two hosts must not be able to reach
                 // a third by calling it an MCP server.
                 network_scope: self.network_scope.clone(),
+                narrowed: self.narrowed,
             },
             Some(script_uri),
             user_id,

@@ -148,6 +148,15 @@ It is deliberately **not spelled as a capability**. Names like
 of verbs and every `has_capability` call a parse. A capability is held or not
 held; this is an argument to one.
 
+**Nor does a credential reach past it.** A narrowed execution — a
+sub-execution, or a delegated task — may not send an `Authorization` or
+`Cookie` header to one of this engine's own hosts (`server.base_url` and
+`additional_base_urls`), checked on every hop. Without that, a person's token
+held as a secret or in storage, sent to `/mcp`, would act with whatever the
+token carries and the narrowing would bound nothing. Calling the engine
+without credentials is still anybody's, and an execution nobody narrowed
+acts with its own authority anyway.
+
 Two things are not capabilities and cannot be narrowed by this. **Ownership**
 is a separate check (`user_owns_script`) — a narrowed turn owns exactly what
 its caller owned. And **computing** is not a capability: a sub-execution given

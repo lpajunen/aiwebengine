@@ -218,6 +218,80 @@ async fn writing_personal_storage_does_not_write_the_scripts() {
     );
 }
 
+/// A narrowing bounds what code may do in process; a credential sent to this
+/// engine's own `/mcp` would act with whatever the token carries instead. So a
+/// narrowed turn may call this engine as anybody may, but not as somebody —
+/// and an unnarrowed one is not affected.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_narrowed_turn_cannot_send_credentials_to_this_engine() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+    // `.invalid` never resolves, so each request gets as far as the engine's
+    // own checks and no further: what comes back is either this refusal or a
+    // failure to connect.
+    aiwebengine::hosts::init(aiwebengine::hosts::HostConfig::new(
+        "https://engine.invalid",
+        &[],
+    ));
+
+    let out = value(
+        "test://attenuation/self-credentials",
+        r#"
+        function attempt(headers) {
+            try {
+                fetch("https://engine.invalid/mcp", { method: "POST", headers });
+                return "sent";
+            } catch (e) {
+                return String(e.message || e);
+            }
+        }
+        const narrowed = sandbox.run(`
+            const attempt = ${attempt.toString()};
+            ({
+                bearer: attempt({ authorization: "Bearer stolen" }),
+                cookie: attempt({ cookie: "session=stolen" }),
+                anonymous: attempt({}),
+                elsewhere: (() => {
+                    try {
+                        fetch("https://api.invalid/", { headers: { authorization: "Bearer x" } });
+                        return "sent";
+                    } catch (e) {
+                        return String(e.message || e);
+                    }
+                })(),
+            })
+        `, { capabilities: ["use_network"] });
+        ({
+            narrowed: narrowed.value,
+            error: narrowed.error,
+            outer: attempt({ authorization: "Bearer mine" }),
+        })
+        "#,
+    )
+    .await;
+
+    let refused = |v: &Value| {
+        v.as_str()
+            .unwrap_or_default()
+            .contains("may not send credentials to this engine")
+    };
+    assert_eq!(out["error"], Value::Null, "the turn should run: {out}");
+    assert!(refused(&out["narrowed"]["bearer"]), "a bearer: {out}");
+    assert!(refused(&out["narrowed"]["cookie"]), "a cookie: {out}");
+    assert!(
+        !refused(&out["narrowed"]["anonymous"]),
+        "calling this engine without credentials is anybody's: {out}"
+    );
+    assert!(
+        !refused(&out["narrowed"]["elsewhere"]),
+        "credentials to another host are the host list's business: {out}"
+    );
+    assert!(
+        !refused(&out["outer"]),
+        "an execution nobody narrowed acts with its own authority anyway: {out}"
+    );
+}
+
 /// `fetch` was gated by nothing at all before this, which made every other
 /// restriction decorative: code that could call out could spend tokens, post
 /// anywhere, and carry whatever it had been shown with it.
