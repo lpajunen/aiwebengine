@@ -93,8 +93,3 @@ The order inside each section is the order they matter.
 1. **Settings in the database.** A proposal, with two decisions to take first —
    precedence with provenance, and a `--reset-settings` recovery path:
    [`docs/SETTINGS_IN_DATABASE.md`](docs/SETTINGS_IN_DATABASE.md).
-
-## Contributor tooling
-
-1. A shared `.claude/settings.json` allowlist in place of per-person entries,
-   and project skills for the repeated workflows (run locally, run one test).
