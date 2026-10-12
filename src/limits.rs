@@ -384,7 +384,7 @@ pub fn snapshot() -> Limits {
 /// document cannot describe a budget nothing enforces. Before startup has set
 /// one — a unit test — the list is empty rather than invented.
 fn rate_limit_budgets() -> Vec<RateLimitBudget> {
-    const SURFACES: [(&str, &str, &str); 4] = [
+    const SURFACES: [(&str, &str, &str); 5] = [
         (
             "ip",
             "client address",
@@ -405,6 +405,12 @@ fn rate_limit_budgets() -> Vec<RateLimitBudget> {
             "git_sync",
             "account",
             "Git pull and push: each is an archive transfer and a tree rewrite.",
+        ),
+        (
+            "operation",
+            "account",
+            "Engine operations that change something, from /engine/*, /mcp and engine.call \
+             alike. Reads are not counted; a refusal is a 429 saying when to try again.",
         ),
     ];
 

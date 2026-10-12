@@ -64,6 +64,8 @@ pub enum Refusal {
     TimedOut,
     /// Something went wrong that was not the caller's doing.
     Failed,
+    /// The caller's budget for this is spent for now.
+    RateLimited,
 }
 
 impl Refusal {
@@ -120,6 +122,7 @@ impl Refusal {
             Refusal::Conflict => 409,
             Refusal::TimedOut => 504,
             Refusal::Failed => 500,
+            Refusal::RateLimited => 429,
         }
     }
 }
@@ -147,7 +150,7 @@ pub(super) fn refuse_sync(error: &crate::git_sync::SyncError) -> Value {
         SyncError::AccessDenied(_) => Refusal::Forbidden,
         SyncError::Diverged(_) | SyncError::WouldOverwrite(_) => Refusal::Conflict,
         SyncError::Layout(_) | SyncError::TooLarge(_) => Refusal::BadRequest,
-        SyncError::RateLimited(_) => Refusal::Forbidden,
+        SyncError::RateLimited(_) => Refusal::RateLimited,
         SyncError::Archive(_) | SyncError::Remote(_) | SyncError::Storage(_) => Refusal::Failed,
     };
     refuse(kind, error.to_string())
@@ -1122,5 +1125,43 @@ pub fn execute_native_mcp_tool(
         .iter()
         .find(|(name, _, _, _)| *name == tool_name)
         .map(|(_, _, _, handler)| *handler)?;
+    if !crate::engine_http::is_read_only(tool_name)
+        && let Some(refusal) = spend_operation_budget(user_context)
+    {
+        return Some(refusal);
+    }
     Some(handler(arguments, user_context))
+}
+
+/// Spend one unit of the caller's budget for operations that write.
+///
+/// Here, at the one place every operation passes through, so `/engine/*`,
+/// `/mcp` and `engine.call` share a budget and none of them is the way round
+/// it. A caller with no account holds no write capability and is not
+/// counted. Without a limiter (a unit test) or with its database unreachable
+/// the call goes ahead, as every other budget here does: refusing work for
+/// want of a count is failing closed on something that is not a security
+/// decision.
+fn spend_operation_budget(user: &UserContext) -> Option<Value> {
+    use crate::security::rate_limiting::{self, RateLimitKey};
+
+    let user_id = user.user_id.clone()?;
+    let limiter = rate_limiting::shared()?;
+    let result = crate::database::run_bounded(async move {
+        Ok(limiter
+            .check_rate_limit(RateLimitKey::Operation(user_id), 1)
+            .await)
+    })
+    .ok()?;
+    if result.allowed {
+        return None;
+    }
+    let wait = result.retry_after.unwrap_or(5.0).ceil().max(1.0);
+    Some(refuse(
+        Refusal::RateLimited,
+        format!(
+            "Too many changes from this account. The budget refills one every five \
+             seconds; try again in {wait} seconds."
+        ),
+    ))
 }

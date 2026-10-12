@@ -68,7 +68,7 @@ avoids it by prefixing every task.
 
 ### 4. Quotas
 
-- [ ] A per-account budget on the operation table (ROADMAP: Security 1).
+- [x] A per-account budget on the operation table (`RateLimitKey::Operation`).
 - [ ] Low default script limits for scripts the agent creates, and a storage
       cap per account.
 - [ ] Each person sees what their runs cost, on every channel (the agent's
@@ -83,7 +83,7 @@ avoids it by prefixing every task.
 - [x] The Telegram webhook secret is a script secret, compared with
       `crypto.secretEquals`.
 - [ ] The audit line says when an agent acted rather than the person
-      (ROADMAP: Security 2).
+      (ROADMAP: Security 1).
 
 ### 6. Documents that agree with the engine
 

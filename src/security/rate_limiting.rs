@@ -155,6 +155,14 @@ pub enum RateLimitKey {
     /// this way at least keeps the damage to the one channel rather than
     /// stopping every other way that person's agent runs.
     ChannelTrigger(String),
+    /// Engine operations that change something, by one account.
+    ///
+    /// Every write through the operation table — `write_file`, `deploy_script`,
+    /// `delete_user` — whether it came from `/engine/*`, `/mcp` or
+    /// `engine.call`. Reads are not counted. An agent working for somebody
+    /// writes in bursts and then reads; one stuck in a loop writes without
+    /// stopping, and this is what stops it. Keyed by account, as `GitSync` is.
+    Operation(String),
     /// One of a script's own budgets (`rateLimit.consume`).
     ///
     /// The script names the bucket and its size; the engine decides whose it
@@ -186,6 +194,7 @@ impl RateLimitKey {
             RateLimitKey::ClientRegistration(ip) => format!("client_registration:{}", ip),
             RateLimitKey::GitSync(user) => format!("git_sync:{}", user),
             RateLimitKey::ChannelTrigger(binding) => format!("channel_trigger:{}", binding),
+            RateLimitKey::Operation(user) => format!("operation:{}", user),
             RateLimitKey::Script {
                 script,
                 bucket,
@@ -341,6 +350,22 @@ impl RateLimiter {
             RateLimitConfig {
                 max_tokens: 30,
                 refill_rate: 1.0 / 30.0,
+                window_duration: Duration::hours(1),
+                burst_allowance: 0,
+                enabled: true,
+            },
+        );
+
+        // Engine operations that write, per account. Two hundred to start
+        // with, then one every five seconds: an author working through a
+        // solution — write, check, test, deploy — stays well inside it, and a
+        // loop that never stops writing is held to twelve a minute once the
+        // burst is spent.
+        configs.insert(
+            "operation".to_string(),
+            RateLimitConfig {
+                max_tokens: 200,
+                refill_rate: 1.0 / 5.0,
                 window_duration: Duration::hours(1),
                 burst_allowance: 0,
                 enabled: true,
@@ -596,6 +621,7 @@ impl RateLimiter {
             RateLimitKey::ClientRegistration(_) => "client_registration",
             RateLimitKey::GitSync(_) => "git_sync",
             RateLimitKey::ChannelTrigger(_) => "channel_trigger",
+            RateLimitKey::Operation(_) => "operation",
             // Sized by the script on every call; see `consume_script_budget`.
             RateLimitKey::Script { .. } => "script",
             RateLimitKey::Endpoint(_) => "endpoint",
