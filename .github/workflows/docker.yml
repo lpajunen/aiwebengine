@@ -85,6 +85,24 @@ jobs:
       - name: Compile-check the embedded database supervisor
         run: make check-embedded
 
+  # The dependency tree against deny.toml. Its own job: it reads Cargo.lock and
+  # the RustSec database, and needs no build.
+  deny:
+    name: Dependency advisories and licenses
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Check dependencies
+        run: make deny
+
   test:
     name: Integration tests
     runs-on: ubuntu-latest
@@ -144,7 +162,7 @@ jobs:
 
   build-and-test:
     name: Build and push image
-    needs: [lint, test]
+    needs: [lint, deny, test]
     runs-on: ubuntu-latest
     permissions:
       contents: read

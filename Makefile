@@ -1,6 +1,6 @@
 # Makefile for aiwebengine development
 
-.PHONY: help deps upgrade-deps test dev build clean lint format coverage check ci typecheck
+.PHONY: help deps upgrade-deps test dev build clean lint format coverage check ci typecheck deny
 .PHONY: check-embedded build-desktop run-desktop init-desktop
 .PHONY: docker-build docker-local docker-staging docker-prod docker-stop docker-stop-local
 .PHONY: docker-logs docker-logs-local docker-logs-staging docker-logs-all
@@ -16,7 +16,7 @@ help:
 	@echo "Available commands:"
 	@echo ""
 	@echo "Development:"
-	@echo "  make deps         - Install development tools (cargo-watch, cargo-nextest, cargo-llvm-cov)"
+	@echo "  make deps         - Install development tools (cargo-watch, cargo-nextest, cargo-llvm-cov, cargo-deny)"
 	@echo "  make upgrade-deps - Upgrade npm packages to latest versions"
 	@echo "  make dev       - Run development server with auto-reload"
 	@echo "  make dev-local - Run development server with localhost OAuth (http://localhost:3000)"
@@ -25,6 +25,7 @@ help:
 	@echo "  make perf-test   - Run performance/load test against production server"
 	@echo "  make lint        - Run clippy linter"
 	@echo "  make typecheck   - Run TypeScript declaration checks"
+	@echo "  make deny        - Check dependencies: advisories, licenses, sources (deny.toml)"
 	@echo "  make format    - Format code with rustfmt"
 	@echo "  make format-check - Check code formatting without modifying"
 	@echo "  make coverage  - Generate test coverage report"
@@ -33,7 +34,7 @@ help:
 	@echo "  make run-desktop   - Run it; creates its config and keys on first launch"
 	@echo "  make init-desktop  - Create that config without starting anything"
 	@echo "  make clean     - Clean build artifacts"
-	@echo "  make check     - Every gate CI runs (format, lint, typecheck, embedded, test)"
+	@echo "  make check     - Every gate CI runs (format, lint, typecheck, deny, embedded, test)"
 	@echo "  make ci        - make check, plus coverage"
 	@echo ""
 	@echo "Docker, server environments (ENV=production by default; ENV=staging for the other):"
@@ -79,6 +80,7 @@ deps:
 	cargo install cargo-watch
 	cargo install cargo-nextest
 	cargo install cargo-llvm-cov
+	cargo install --locked cargo-deny
 	@if [ ! -d "node_modules" ]; then \
 		echo "Installing npm dependencies..."; \
 		npm install; \
@@ -157,6 +159,11 @@ lint:
 typecheck:
 	npm run typecheck
 
+# Check the dependency tree against deny.toml: RustSec advisories, licenses
+# compatible with MIT OR Apache-2.0, and crates from crates.io only.
+deny:
+	cargo deny check
+
 # Format all code
 format: format-markdown format-javascript
 	cargo fmt --all
@@ -219,11 +226,11 @@ clean:
 # The same gates CI runs, in the same order. check-embedded is one of them:
 # the supervisor is compiled by no other target, so a change that breaks it is
 # invisible until a desktop build.
-check: format-check lint typecheck check-embedded test
+check: format-check lint typecheck deny check-embedded test
 	@echo "✓ All checks passed!"
 
 # CI pipeline (format check, lint, test, coverage)
-ci: format-check lint typecheck test check-embedded coverage
+ci: format-check lint typecheck deny test check-embedded coverage
 	@echo "✓ CI pipeline completed!"
 
 # ==================== Docker Commands ====================

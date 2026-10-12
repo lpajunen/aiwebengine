@@ -27,7 +27,7 @@ source .env-local && cargo run     # http://localhost:3000
 ## Before a pull request
 
 ```bash
-make check     # format-check, lint, typecheck and the test suite
+make check     # format-check, lint, typecheck, deny and the test suite
 ```
 
 CI runs the same commands. Tests are run with `cargo nextest` (`make test`);

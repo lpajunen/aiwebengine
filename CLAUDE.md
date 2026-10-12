@@ -16,7 +16,8 @@ cargo nextest run <filter>         # one test;  --test <file_stem> for one file
 make lint                          # clippy -D warnings + markdownlint
 make format                        # cargo fmt + prettier
 make typecheck                     # tsc over scripts/** against assets/*.d.ts
-make check                         # format-check + lint + typecheck + test; run before committing
+make deny                          # cargo-deny: advisories, licenses, sources (deny.toml)
+make check                         # format-check + lint + typecheck + deny + test; run before committing
 cargo run -- --validate-config     # check a config without starting the server
 ```
 
