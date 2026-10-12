@@ -59,6 +59,10 @@ pub struct AuthorizationServerMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_indicators_supported: Option<bool>,
 
+    /// Whether a client may be identified by the HTTPS URL of its metadata
+    /// document (draft-ietf-oauth-client-id-metadata-document).
+    pub client_id_metadata_document_supported: bool,
+
     /// Service documentation URL
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_documentation: Option<String>,
@@ -188,6 +192,7 @@ impl MetadataConfig {
             // else would be describing a server this is not.
             code_challenge_methods_supported: Some(vec!["S256".to_string()]),
             resource_indicators_supported: Some(self.resource_indicators_supported),
+            client_id_metadata_document_supported: true,
             service_documentation: None,
             ui_locales_supported: Some(vec!["en".to_string()]),
             introspection_endpoint: None, // TODO: Add when implemented

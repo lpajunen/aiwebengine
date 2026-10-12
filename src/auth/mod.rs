@@ -1,6 +1,7 @@
 // Authentication Module
 // Provides OAuth2/OIDC authentication with session management
 
+pub mod client_metadata;
 pub mod client_registration;
 pub mod config;
 pub mod error;

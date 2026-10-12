@@ -11,12 +11,13 @@ The order inside each section is the order they matter.
 
 ## Security
 
-1. **The 2026-07-28 authorization hardening, the rest of it.** The `iss`
-   half of RFC 9207 is done. Left: Client ID Metadata Documents in place of
-   open Dynamic Client Registration (a `client_id` that carries provenance,
-   where today only the per-user consent in `oauth_client_grants` does),
-   `application_type` on registration, and stored remote credentials keyed by
-   issuer.
+1. **Open client registration is still on.** Client ID Metadata Documents and
+   `application_type` are in (`auth/client_metadata.rs`), and the consent page
+   marks a self-registered client's name as its own claim. Turning
+   `registration_endpoint` off — so every new client carries provenance — waits
+   on the clients in use identifying themselves by document. Stored remote
+   credentials keyed by issuer have nothing to key yet: the engine runs no
+   OAuth flow as a client (Agents and MCP 2 is where that would start).
 2. **Consent as a primitive.** `/auth/delegate` is a page the engine renders and
    a record it keeps. Generalised, a script needing approval for anything gets
    an auditable record instead of a boolean in its own table. Design it with the

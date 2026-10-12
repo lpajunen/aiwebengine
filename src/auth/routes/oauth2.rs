@@ -348,25 +348,28 @@ pub(super) async fn validate_authorize_request(
         ));
     }
 
-    let client =
-        match crate::auth::client_registration::lookup_client(pool, &params.client_id).await {
-            Ok(Some(client)) => client,
-            Ok(None) => {
-                return Err(direct(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_client",
-                    "Unknown client_id. Register the client before requesting authorization.",
-                ));
-            }
-            Err(e) => {
-                tracing::error!("Client lookup failed: {}", e);
-                return Err(direct(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "server_error",
-                    "Could not read the client registry",
-                ));
-            }
-        };
+    let client = match crate::auth::client_metadata::resolve_client(pool, &params.client_id).await {
+        Ok(Some(client)) => client,
+        Ok(None) => {
+            return Err(direct(
+                StatusCode::BAD_REQUEST,
+                "invalid_client",
+                "Unknown client_id. Register the client, or identify it by the HTTPS URL of \
+                     its metadata document.",
+            ));
+        }
+        Err(crate::auth::client_metadata::ResolveError::Document(reason)) => {
+            return Err(direct(StatusCode::BAD_REQUEST, "invalid_client", &reason));
+        }
+        Err(crate::auth::client_metadata::ResolveError::Storage(e)) => {
+            tracing::error!("Client lookup failed: {}", e);
+            return Err(direct(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Could not read the client registry",
+            ));
+        }
+    };
 
     let redirect_uri = params
         .redirect_uri
@@ -757,6 +760,29 @@ pub(super) fn render_consent_page(
         hidden_fields.push_str(&hidden("resource", resource));
     }
 
+    // Who vouches for the name. A client identified by its metadata document
+    // is whoever serves that document, so the origin is shown beside the name
+    // and is the part to check. A client that registered itself named itself,
+    // and the page says so.
+    let (publisher_block, provenance_notice) = match validated.client.publisher() {
+        Some(publisher) => (
+            format!(
+                r#"<div class="aw-detail">
+            <span class="aw-detail-label">Published by</span>
+            <code>{}</code>
+        </div>"#,
+                html_escape::encode_text(&publisher)
+            ),
+            r#"<p class="aw-notice aw-notice--warn">The name above is what <code>Published by</code> says about itself. Approve this only if you started it yourself and recognise that site.</p>"#
+                .to_string(),
+        ),
+        None => (
+            String::new(),
+            r#"<p class="aw-notice aw-notice--warn">This application registered itself, so its name is its own claim: anyone can register an application with this engine. Approve this only if you started it yourself and recognise where it sends you.</p>"#
+                .to_string(),
+        ),
+    };
+
     let body = format!(
         r#"<h1>Authorize {client_title}</h1>
         <p class="aw-identity">Signed in as {user_label}</p>
@@ -765,6 +791,7 @@ pub(super) fn render_consent_page(
             <span class="aw-detail-label">Application</span>
             <strong>{client_title}</strong>
         </div>
+        {publisher_block}
         <div class="aw-detail">
             <span class="aw-detail-label">Will be sent to</span>
             <code>{redirect_uri}</code>
@@ -772,7 +799,7 @@ pub(super) fn render_consent_page(
         {scope_block}
         {resource_block}
 
-        <p class="aw-notice aw-notice--warn">Anyone can register an application with this engine. Approve this only if you started it yourself and recognise where it sends you.</p>
+        {provenance_notice}
 
         <form method="post" action="{consent_path}">
             {hidden_fields}
@@ -782,6 +809,8 @@ pub(super) fn render_consent_page(
             </div>
         </form>"#,
         client_title = html_escape::encode_text(validated.client.display_name()),
+        publisher_block = publisher_block,
+        provenance_notice = provenance_notice,
         user_label = html_escape::encode_text(user_label),
         redirect_uri = html_escape::encode_text(&validated.redirect_uri),
         scope_block = scope_block,
@@ -1194,7 +1223,7 @@ pub(super) async fn authenticate_client(
     };
 
     let client =
-        match crate::auth::client_registration::lookup_client(pool, &presented_client_id).await {
+        match crate::auth::client_metadata::resolve_client(pool, &presented_client_id).await {
             Ok(Some(client)) => client,
             Ok(None) => {
                 return Err(oauth_error(
@@ -1203,7 +1232,14 @@ pub(super) async fn authenticate_client(
                     "Unknown client_id",
                 ));
             }
-            Err(e) => {
+            Err(crate::auth::client_metadata::ResolveError::Document(reason)) => {
+                return Err(oauth_error(
+                    StatusCode::UNAUTHORIZED,
+                    "invalid_client",
+                    &reason,
+                ));
+            }
+            Err(crate::auth::client_metadata::ResolveError::Storage(e)) => {
                 tracing::error!("Client lookup failed: {}", e);
                 return Err(oauth_error(
                     StatusCode::INTERNAL_SERVER_ERROR,

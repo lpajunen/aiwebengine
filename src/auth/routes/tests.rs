@@ -165,6 +165,7 @@ async fn register_test_client(redirect_uris: Vec<String>) -> String {
             grant_types: vec!["authorization_code".to_string()],
             response_types: vec!["code".to_string()],
             scope: None,
+            application_type: None,
         })
         .await
         .expect("registration should succeed");
@@ -364,6 +365,7 @@ async fn a_client_without_the_authorization_code_grant_is_refused() {
             grant_types: vec!["refresh_token".to_string()],
             response_types: vec!["code".to_string()],
             scope: None,
+            application_type: None,
         })
         .await
         .expect("registration should succeed")

@@ -60,6 +60,10 @@ pub struct ClientRegistrationRequest {
     /// OAuth 2.0 scopes the client may request
     #[serde(default)]
     pub scope: Option<String>,
+
+    /// `web` or `native`. Read from the redirect URIs when absent.
+    #[serde(default)]
+    pub application_type: Option<String>,
 }
 
 /// Successful client registration response (RFC 7591 Section 3.2.1)
@@ -105,6 +109,20 @@ pub struct RegisteredClientMetadata {
 
     /// Time at which the client was registered (Unix timestamp, seconds)
     pub client_id_issued_at: i64,
+
+    /// `web` or `native` (OpenID Connect Dynamic Client Registration §2),
+    /// declared or read from the redirect URIs
+    /// ([`crate::auth::client_metadata::application_type_for`]). `None` on a
+    /// client registered before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_type: Option<String>,
+
+    /// When the client's metadata document was last fetched (Unix seconds).
+    /// Set only for a client identified by one
+    /// ([`crate::auth::client_metadata`]); never part of a registration
+    /// response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_fetched_at: Option<i64>,
 }
 
 /// Stored client information in the database
@@ -139,6 +157,13 @@ impl RegisteredClient {
 
     /// A name to show a person on the consent page. Falls back to the
     /// identifier, which is at least honest about there being nothing else.
+    /// The origin that published this client's metadata document, when it
+    /// is identified by one: the part of its identity nobody else can claim.
+    pub fn publisher(&self) -> Option<String> {
+        crate::auth::client_metadata::document_url(&self.client_id)
+            .and_then(|url| url.host_str().map(str::to_string))
+    }
+
     pub fn display_name(&self) -> &str {
         match self.metadata.client_name.as_deref() {
             Some(name) if !name.trim().is_empty() => name,
@@ -240,6 +265,14 @@ impl ClientRegistrationManager {
     ) -> Result<ClientRegistrationResponse, AuthError> {
         // Validate request
         self.validate_registration_request(&request)?;
+        let application_type = Some(
+            crate::auth::client_metadata::application_type_for(
+                request.application_type.as_deref(),
+                &request.redirect_uris,
+            )
+            .map_err(AuthError::ConfigError)?
+            .to_string(),
+        );
 
         // Generate client_id
         let client_id = format!("client_{}", Uuid::new_v4());
@@ -287,6 +320,8 @@ impl ClientRegistrationManager {
             response_types,
             scope: request.scope,
             client_id_issued_at: Utc::now().timestamp(),
+            application_type,
+            document_fetched_at: None,
         };
 
         // A public client holds no secret. Storing one anyway would be a
@@ -341,27 +376,17 @@ impl ClientRegistrationManager {
         &self,
         request: &ClientRegistrationRequest,
     ) -> Result<(), AuthError> {
-        // Validate redirect_uris for authorization_code grant
-        if request.grant_types.is_empty()
+        // The authorization_code grant needs somewhere to send the code. What
+        // each URI may be is `application_type`'s question, which
+        // `register_client` asks.
+        let uses_code = request.grant_types.is_empty()
             || request
                 .grant_types
-                .contains(&"authorization_code".to_string())
-        {
-            if request.redirect_uris.is_empty() {
-                return Err(AuthError::ConfigError(
-                    "redirect_uris required for authorization_code grant".to_string(),
-                ));
-            }
-
-            // Validate URI format
-            for uri in &request.redirect_uris {
-                if !uri.starts_with("http://") && !uri.starts_with("https://") {
-                    return Err(AuthError::ConfigError(format!(
-                        "Invalid redirect_uri: {}",
-                        uri
-                    )));
-                }
-            }
+                .contains(&"authorization_code".to_string());
+        if uses_code && request.redirect_uris.is_empty() {
+            return Err(AuthError::ConfigError(
+                "redirect_uris required for authorization_code grant".to_string(),
+            ));
         }
 
         // Validate token_endpoint_auth_method
@@ -501,6 +526,7 @@ mod tests {
             grant_types: vec![],
             response_types: vec![],
             scope: Some("read write".to_string()),
+            application_type: None,
         };
 
         let response = manager.register_client(request).await.unwrap();
@@ -532,6 +558,7 @@ mod tests {
             grant_types: vec![],
             response_types: vec![],
             scope: None,
+            application_type: None,
         };
 
         let result = manager.register_client(request).await;
@@ -557,6 +584,7 @@ mod tests {
             ],
             response_types: vec!["code".to_string()],
             scope: None,
+            application_type: None,
         };
 
         let response = manager.register_client(request).await.unwrap();
