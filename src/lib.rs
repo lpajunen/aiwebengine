@@ -435,28 +435,36 @@ fn sanitize_connection_string(conn_str: &str) -> String {
 /// Helper: Create JsAuthContext from optional AuthUser
 fn create_js_auth_context(auth_user: Option<&auth::AuthUser>) -> auth::JsAuthContext {
     match auth_user {
-        Some(user) => auth::JsAuthContext::authenticated(
-            user.user_id.clone(),
-            user.email.clone(),
-            user.name.clone(),
-            user.provider.clone(),
-            user.is_admin,
-            user.is_editor,
-        ),
+        Some(user) => auth::JsAuthContext {
+            elevation: user.elevation.clone(),
+            via_token: user.via_token,
+            ..auth::JsAuthContext::authenticated(
+                user.user_id.clone(),
+                user.email.clone(),
+                user.name.clone(),
+                user.provider.clone(),
+                user.is_admin,
+                user.is_editor,
+            )
+        },
         None => auth::JsAuthContext::anonymous(),
     }
 }
 
 fn create_js_auth_context_from_session(session: Option<&auth::AuthSession>) -> auth::JsAuthContext {
     match session {
-        Some(session) => auth::JsAuthContext::authenticated(
-            session.user_id.clone(),
-            session.email.clone(),
-            session.name.clone(),
-            session.provider.clone(),
-            session.is_admin,
-            session.is_editor,
-        ),
+        Some(session) => auth::JsAuthContext {
+            elevation: session.elevation.clone(),
+            via_token: session.via_token,
+            ..auth::JsAuthContext::authenticated(
+                session.user_id.clone(),
+                session.email.clone(),
+                session.name.clone(),
+                session.provider.clone(),
+                session.is_admin,
+                session.is_editor,
+            )
+        },
         None => auth::JsAuthContext::anonymous(),
     }
 }

@@ -65,17 +65,17 @@ pub(super) fn audit_file_change(
         return;
     };
     let auditor = auditor.clone();
-    let user_id = user.user_id.clone();
+    let actor = crate::security::audit::Actor::of(user);
     let action = action.to_string();
     let script_uri = script_uri.to_string();
     let path = path.to_string();
     rt.spawn(async move {
         let _ = auditor
             .log_event(
-                crate::security::SecurityEvent::new(
+                crate::security::SecurityEvent::by(
                     SecurityEventType::SystemSecurityEvent,
                     severity,
-                    user_id,
+                    actor,
                 )
                 .with_resource("asset".to_string())
                 .with_action(action)
@@ -266,11 +266,11 @@ impl SecureGlobalContext {
             if let Err(e) = user_delete.require_capability(&Capability::DeleteAssets) {
                 if let Ok(rt) = tokio::runtime::Handle::try_current() {
                     let auditor = auditor_delete.clone();
-                    let user_id = user_delete.user_id.clone();
+                    let actor = crate::security::audit::Actor::of(&user_delete);
                     rt.spawn(async move {
                         let _ = auditor
                             .log_authz_failure(
-                                user_id,
+                                actor,
                                 "asset".to_string(),
                                 "delete".to_string(),
                                 "DeleteAssets".to_string(),

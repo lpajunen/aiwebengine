@@ -292,6 +292,7 @@ impl SecureGlobalContext {
             // code could see. `sandbox.run` narrows; it has never widened, and
             // this is where widening would have had to come from.
             elevation: None,
+            via_token: false,
         })
     }
 }

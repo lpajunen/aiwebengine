@@ -42,6 +42,11 @@ pub struct JsAuthContext {
     /// `UserContext` anyway, so the floor is what they should get rather than
     /// an elevation nobody granted.
     pub elevation: Option<crate::security::elevation::Elevation>,
+
+    /// Whether the credential is an OAuth client's bearer token rather than a
+    /// browser's session, for the audit. Set, like `elevation`, only by code
+    /// with the session in hand.
+    pub via_token: bool,
 }
 
 impl JsAuthContext {
@@ -56,6 +61,7 @@ impl JsAuthContext {
             is_admin: false,
             is_editor: false,
             elevation: None,
+            via_token: false,
         }
     }
 
@@ -77,6 +83,7 @@ impl JsAuthContext {
             is_admin,
             is_editor,
             elevation: None,
+            via_token: false,
         }
     }
 
@@ -92,6 +99,7 @@ impl JsAuthContext {
             is_admin: self.is_admin,
             is_editor: self.is_editor,
             elevation: self.elevation.as_ref(),
+            via_token: self.via_token,
         }
     }
 

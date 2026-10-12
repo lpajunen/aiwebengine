@@ -88,11 +88,11 @@ impl SecureGlobalContext {
                         if let Ok(_rt) = rt {
                             // Only attempt async logging if we're in a runtime
                             let auditor_clone = auditor_write.clone();
-                            let user_id = user_ctx_write.user_id.clone();
+                            let actor = crate::security::audit::Actor::of(&user_ctx_write);
                             tokio::spawn(async move {
                                 let _ = auditor_clone
                                     .log_authz_failure(
-                                        user_id,
+                                        actor,
                                         "log".to_string(),
                                         "write".to_string(),
                                         "ViewLogs".to_string(),
@@ -113,16 +113,16 @@ impl SecureGlobalContext {
                     let rt = tokio::runtime::Handle::try_current();
                     if let Ok(_rt) = rt {
                         let auditor_clone = auditor_write.clone();
-                        let user_id = user_ctx_write.user_id.clone();
+                        let actor = crate::security::audit::Actor::of(&user_ctx_write);
                         let script_uri_clone = script_uri_write.clone();
                         let message_len = message.len();
                         tokio::spawn(async move {
                             let _ = auditor_clone
                                 .log_event(
-                                    crate::security::SecurityEvent::new(
+                                    crate::security::SecurityEvent::by(
                                         SecurityEventType::SystemSecurityEvent,
                                         SecuritySeverity::Low,
-                                        user_id,
+                                        actor,
                                     )
                                     .with_resource("log".to_string())
                                     .with_action("write".to_string())

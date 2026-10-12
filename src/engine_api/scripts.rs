@@ -450,17 +450,17 @@ pub fn patch_file_authorized(
     }
 
     let auditor = auditor();
-    let user_id = user.user_id.clone();
+    let actor = crate::security::audit::Actor::of(user);
     let script_uri_owned = script_uri.to_string();
     let path_owned = path.to_string();
     let edit_count = edits.len();
     tokio::task::spawn(async move {
         let _ = auditor
             .log_event(
-                SecurityEvent::new(
+                SecurityEvent::by(
                     SecurityEventType::SystemSecurityEvent,
                     SecuritySeverity::Medium,
-                    user_id,
+                    actor,
                 )
                 .with_resource("file".to_string())
                 .with_action("patch_for_uri".to_string())
@@ -551,11 +551,11 @@ pub fn rename_script_authorized(user: &UserContext, uri: &str, to: &str) -> Resu
 pub fn delete_script_authorized(user: &UserContext, uri: &str, via: Option<&str>) -> bool {
     if let Err(e) = user.require_capability(&Capability::DeleteScripts) {
         let auditor = auditor();
-        let user_id = user.user_id.clone();
+        let actor = crate::security::audit::Actor::of(user);
         tokio::task::spawn(async move {
             let _ = auditor
                 .log_authz_failure(
-                    user_id,
+                    actor,
                     "script".to_string(),
                     "delete".to_string(),
                     "DeleteScripts".to_string(),
@@ -576,11 +576,11 @@ pub fn delete_script_authorized(user: &UserContext, uri: &str, via: Option<&str>
     // editor could delete every script in the engine.
     if !is_admin_or_owner(user, uri) {
         let auditor = auditor();
-        let user_id = user.user_id.clone();
+        let actor = crate::security::audit::Actor::of(user);
         tokio::task::spawn(async move {
             let _ = auditor
                 .log_authz_failure(
-                    user_id,
+                    actor,
                     "script".to_string(),
                     "delete".to_string(),
                     "AdministerEngine".to_string(),
@@ -596,15 +596,15 @@ pub fn delete_script_authorized(user: &UserContext, uri: &str, via: Option<&str>
     }
 
     let auditor = auditor();
-    let user_id = user.user_id.clone();
+    let actor = crate::security::audit::Actor::of(user);
     let uri_owned = uri.to_string();
     tokio::task::spawn(async move {
         let _ = auditor
             .log_event(
-                SecurityEvent::new(
+                SecurityEvent::by(
                     SecurityEventType::SystemSecurityEvent,
                     SecuritySeverity::High,
-                    user_id,
+                    actor,
                 )
                 .with_resource("script".to_string())
                 .with_action("delete".to_string())

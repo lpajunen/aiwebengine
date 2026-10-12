@@ -394,6 +394,7 @@ async fn editing_a_script_takes_what_writing_one_takes() {
         .collect(),
         attenuated: false,
         network_scope: None,
+        acting: Default::default(),
     };
     assert!(
         patch_script_authorized(&reader, uri, &edits, None, None).is_err(),

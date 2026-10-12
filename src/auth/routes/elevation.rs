@@ -540,7 +540,7 @@ pub async fn elevate_route(
         .security_context()
         .auditor
         .log_event(
-            crate::security::SecurityEvent::new(
+            crate::security::SecurityEvent::by(
                 // The vocabulary has no "granted" note — every authorization
                 // event in it is a refusal — so this is a system security
                 // event rather than a new variant invented for one caller.
@@ -548,7 +548,7 @@ pub async fn elevate_route(
                 // decision of its own and not one to make in passing.
                 crate::security::SecurityEventType::SystemSecurityEvent,
                 crate::security::SecuritySeverity::High,
-                Some(session.user_id.clone()),
+                crate::security::audit::Actor::of_session(&session),
             )
             .with_detail("event", "session_elevated")
             .with_detail(

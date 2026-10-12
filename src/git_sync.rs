@@ -662,14 +662,14 @@ fn audit_sync(
     let auditor = crate::security::audit::SecurityAuditor::new(
         crate::database::get_global_database().map(|db| db.pool().clone()),
     );
-    let user_id = user.user_id.clone();
+    let actor = crate::security::audit::Actor::of(user);
     let script = script.to_string();
     let remote = remote.to_string();
 
     tokio::task::spawn(async move {
         let _ = auditor
             .log_event(
-                SecurityEvent::new(SecurityEventType::SystemSecurityEvent, severity, user_id)
+                SecurityEvent::by(SecurityEventType::SystemSecurityEvent, severity, actor)
                     .with_resource("git".to_string())
                     .with_action(action.to_string())
                     .with_detail("script_uri", &script)

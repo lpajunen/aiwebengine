@@ -100,11 +100,11 @@ impl SecureGlobalContext {
                     user_ctx_register.require_capability(&crate::security::Capability::ManageMcp)
                 {
                     let auditor_clone = auditor_register.clone();
-                    let user_id = user_ctx_register.user_id.clone();
+                    let actor = crate::security::audit::Actor::of(&user_ctx_register);
                     tokio::task::spawn(async move {
                         let _ = auditor_clone
                             .log_authz_failure(
-                                user_id,
+                                actor,
                                 "mcp".to_string(),
                                 "register_tool".to_string(),
                                 "ManageMcp".to_string(),
@@ -152,16 +152,16 @@ impl SecureGlobalContext {
 
                 // Log the operation attempt
                 let auditor_clone = auditor_register.clone();
-                let user_id = user_ctx_register.user_id.clone();
+                let actor = crate::security::audit::Actor::of(&user_ctx_register);
                 let name_clone = name.clone();
                 let script_uri_clone = script_uri_register.clone();
                 tokio::task::spawn(async move {
                     let _ = auditor_clone
                         .log_event(
-                            crate::security::SecurityEvent::new(
+                            crate::security::SecurityEvent::by(
                                 crate::security::SecurityEventType::SystemSecurityEvent,
                                 crate::security::SecuritySeverity::Medium,
-                                user_id,
+                                actor,
                             )
                             .with_resource("mcp".to_string())
                             .with_action("register_tool".to_string())
@@ -225,11 +225,11 @@ impl SecureGlobalContext {
                     user_ctx_prompt.require_capability(&crate::security::Capability::ManageMcp)
                 {
                     let auditor_clone = auditor_prompt.clone();
-                    let user_id = user_ctx_prompt.user_id.clone();
+                    let actor = crate::security::audit::Actor::of(&user_ctx_prompt);
                     tokio::task::spawn(async move {
                         let _ = auditor_clone
                             .log_authz_failure(
-                                user_id,
+                                actor,
                                 "mcp".to_string(),
                                 "register_prompt".to_string(),
                                 "ManageMcp".to_string(),
@@ -269,17 +269,17 @@ impl SecureGlobalContext {
 
                 // Log the operation attempt
                 let auditor_clone = auditor_prompt.clone();
-                let user_id = user_ctx_prompt.user_id.clone();
+                let actor = crate::security::audit::Actor::of(&user_ctx_prompt);
                 let name_clone = name.clone();
                 let script_uri_clone = script_uri_prompt.clone();
                 let handler_clone = handler_function.clone();
                 tokio::task::spawn(async move {
                     let _ = auditor_clone
                         .log_event(
-                            crate::security::SecurityEvent::new(
+                            crate::security::SecurityEvent::by(
                                 crate::security::SecurityEventType::SystemSecurityEvent,
                                 crate::security::SecuritySeverity::Medium,
-                                user_id,
+                                actor,
                             )
                             .with_resource("mcp".to_string())
                             .with_action("register_prompt".to_string())
@@ -353,11 +353,11 @@ impl SecureGlobalContext {
                     user_ctx_resource.require_capability(&crate::security::Capability::ManageMcp)
                 {
                     let auditor_clone = auditor_resource.clone();
-                    let user_id = user_ctx_resource.user_id.clone();
+                    let actor = crate::security::audit::Actor::of(&user_ctx_resource);
                     tokio::task::spawn(async move {
                         let _ = auditor_clone
                             .log_authz_failure(
-                                user_id,
+                                actor,
                                 "mcp".to_string(),
                                 "register_resource".to_string(),
                                 "ManageMcp".to_string(),

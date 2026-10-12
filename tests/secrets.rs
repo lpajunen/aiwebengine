@@ -115,6 +115,7 @@ fn user_without_capabilities(user_id: &str) -> UserContext {
         capabilities: HashSet::<Capability>::new(),
         attenuated: false,
         network_scope: None,
+        acting: Default::default(),
     }
 }
 

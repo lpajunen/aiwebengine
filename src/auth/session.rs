@@ -49,6 +49,11 @@ pub struct AuthSession {
     pub elevation: Option<crate::security::elevation::Elevation>,
     /// When the person last proved they were at the keyboard.
     pub reauthenticated_at: Option<DateTime<Utc>>,
+    /// Whether this is a bearer token issued to an OAuth client — an agent or
+    /// tool — rather than a browser's session. The token endpoint names an
+    /// audience on everything it issues and a browser login names none.
+    #[serde(default)]
+    pub via_token: bool,
 }
 
 impl AuthSession {
@@ -60,6 +65,7 @@ impl AuthSession {
             is_admin: self.is_admin,
             is_editor: self.is_editor,
             elevation: self.elevation.as_ref(),
+            via_token: self.via_token,
         }
     }
 }
@@ -76,6 +82,7 @@ impl From<SessionData> for AuthSession {
             is_editor: data.is_editor,
             created_at: data.created_at,
             expires_at: data.expires_at,
+            via_token: data.audience.is_some(),
             elevation: data.elevation,
             reauthenticated_at: data.reauthenticated_at,
         }

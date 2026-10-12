@@ -35,6 +35,7 @@ fn create_user_with_capabilities(user_id: &str, caps: Vec<Capability>) -> UserCo
         capabilities: caps.into_iter().collect(),
         attenuated: false,
         network_scope: None,
+        acting: Default::default(),
     }
 }
 

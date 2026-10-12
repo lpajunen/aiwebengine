@@ -279,6 +279,7 @@ async fn an_elevation_cannot_lift_an_account_past_its_roles() {
             is_admin: session.is_admin,
             is_editor: session.is_editor,
             elevation: session.elevation.as_ref(),
+            via_token: false,
         },
         now,
     );

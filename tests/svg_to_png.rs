@@ -61,6 +61,7 @@ fn anyone() -> Principal {
         capabilities: Default::default(),
         attenuated: false,
         network_scope: None,
+        acting: Default::default(),
     })
 }
 

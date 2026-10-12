@@ -154,6 +154,7 @@ async fn deleting_the_entrypoint_takes_more_than_deleting_a_module() {
         .collect(),
         attenuated: false,
         network_scope: None,
+        acting: Default::default(),
     };
 
     let removed =
@@ -208,6 +209,7 @@ async fn a_script_cannot_rewrite_its_own_entrypoint_through_asset_storage() {
         .collect(),
         attenuated: false,
         network_scope: None,
+        acting: Default::default(),
     };
 
     let attempt = r#"

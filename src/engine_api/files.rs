@@ -519,7 +519,7 @@ pub fn write_file_bytes_authorized(
     }
 
     let auditor = auditor();
-    let user_id = user.user_id.clone();
+    let actor = crate::security::audit::Actor::of(user);
     let script_uri_owned = script_uri.to_string();
     let path_owned = path.to_string();
     let content_len = content.len();
@@ -527,10 +527,10 @@ pub fn write_file_bytes_authorized(
     tokio::task::spawn(async move {
         let _ = auditor
             .log_event(
-                SecurityEvent::new(
+                SecurityEvent::by(
                     SecurityEventType::SystemSecurityEvent,
                     SecuritySeverity::Medium,
-                    user_id,
+                    actor,
                 )
                 .with_resource("file".to_string())
                 .with_action("upsert_for_uri".to_string())
@@ -854,7 +854,7 @@ pub fn upsert_assets_synced(
 
     // One audit event for the batch, not one per file: the batch is the act.
     let auditor = auditor();
-    let user_id = user.user_id.clone();
+    let actor = crate::security::audit::Actor::of(user);
     let script_uri_owned = script_uri.to_string();
     let names = results
         .iter()
@@ -865,10 +865,10 @@ pub fn upsert_assets_synced(
     tokio::task::spawn(async move {
         let _ = auditor
             .log_event(
-                SecurityEvent::new(
+                SecurityEvent::by(
                     SecurityEventType::SystemSecurityEvent,
                     SecuritySeverity::Medium,
-                    user_id,
+                    actor,
                 )
                 .with_resource("asset".to_string())
                 .with_action("batch_upsert_for_uri".to_string())
@@ -1255,11 +1255,11 @@ pub fn delete_asset_authorized(
     };
     if !can_access_assets(user, script_uri, &required) {
         let auditor = auditor();
-        let user_id = user.user_id.clone();
+        let actor = crate::security::audit::Actor::of(user);
         tokio::task::spawn(async move {
             let _ = auditor
                 .log_authz_failure(
-                    user_id,
+                    actor,
                     "asset".to_string(),
                     "delete_for_uri".to_string(),
                     format!("{:?}", required),
@@ -1270,16 +1270,16 @@ pub fn delete_asset_authorized(
     }
 
     let auditor = auditor();
-    let user_id = user.user_id.clone();
+    let actor = crate::security::audit::Actor::of(user);
     let script_uri_owned = script_uri.to_string();
     let asset_uri_owned = asset_uri.to_string();
     tokio::task::spawn(async move {
         let _ = auditor
             .log_event(
-                SecurityEvent::new(
+                SecurityEvent::by(
                     SecurityEventType::SystemSecurityEvent,
                     SecuritySeverity::High,
-                    user_id,
+                    actor,
                 )
                 .with_resource("asset".to_string())
                 .with_action("delete_for_uri".to_string())

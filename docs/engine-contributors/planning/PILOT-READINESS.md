@@ -82,8 +82,8 @@ avoids it by prefixing every task.
       engine's own hosts (`HttpClient`, `docs/DELEGATION.md`).
 - [x] The Telegram webhook secret is a script secret, compared with
       `crypto.secretEquals`.
-- [ ] The audit line says when an agent acted rather than the person
-      (ROADMAP: Security 1).
+- [x] The audit line says when an agent acted rather than the person
+      (`acting`, `narrowed`, `elevation`; `docs/WHAT_NARROWS_WHAT.md`).
 
 ### 6. Documents that agree with the engine
 

@@ -304,7 +304,12 @@ pub fn context_for(
         keep.extend(grade.capabilities());
     }
 
-    tier_for(user_id, &allowed).attenuated(keep)
+    let mut context = tier_for(user_id, &allowed).attenuated(keep);
+    context.acting = crate::security::Acting {
+        kind: crate::security::ActingKind::Delegated,
+        elevation: None,
+    };
+    context
 }
 
 /// Which management bundles this grant actually reaches.
@@ -1190,6 +1195,11 @@ mod tests {
         for scopes in [&[][..], &[Scope::Write], &[Scope::Administer]] {
             let context = context_for("u1", scopes, &[UserRole::Administrator]);
             assert!(context.attenuated, "{scopes:?}");
+            assert_eq!(
+                context.acting.kind,
+                crate::security::ActingKind::Delegated,
+                "the audit should say nobody was at the keyboard: {scopes:?}"
+            );
         }
     }
 

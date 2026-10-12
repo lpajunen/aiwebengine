@@ -72,6 +72,7 @@ async fn list_users_denied_for_unauthenticated_holder_of_the_admin_capability() 
             .collect(),
         attenuated: false,
         network_scope: None,
+        acting: Default::default(),
     };
 
     assert!(matches!(

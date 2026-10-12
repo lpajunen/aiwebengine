@@ -42,6 +42,10 @@ pub struct AuthUser {
     /// of the session and an elevation looked up again per handler would be a
     /// second answer to a question already settled at the edge.
     pub elevation: Option<crate::security::elevation::Elevation>,
+
+    /// Whether the credential is an OAuth client's bearer token rather than a
+    /// browser's session, for the audit.
+    pub via_token: bool,
 }
 
 impl AuthUser {
@@ -53,6 +57,7 @@ impl AuthUser {
             is_admin: self.is_admin,
             is_editor: self.is_editor,
             elevation: self.elevation.as_ref(),
+            via_token: self.via_token,
         }
     }
 
@@ -74,19 +79,20 @@ impl AuthUser {
             email,
             name,
             elevation: None,
+            via_token: false,
         }
     }
 
-    /// The same credential, carrying what the session had switched on.
+    /// The same credential, carrying what its session says about how it is
+    /// being used: what it has switched on, and whether it is a client's
+    /// bearer token.
     ///
-    /// Separate from [`Self::new`] so that the four construction sites which
-    /// have a session say so, and the ones that do not cannot silently claim
-    /// an elevation by forgetting an argument.
-    pub fn with_elevation(
-        mut self,
-        elevation: Option<crate::security::elevation::Elevation>,
-    ) -> Self {
-        self.elevation = elevation;
+    /// Separate from [`Self::new`] so that the construction sites which have a
+    /// session say so, and one that does not cannot silently claim an
+    /// elevation by forgetting an argument.
+    pub fn with_session(mut self, session: &crate::auth::AuthSession) -> Self {
+        self.elevation = session.elevation.clone();
+        self.via_token = session.via_token;
         self
     }
 }
@@ -222,7 +228,8 @@ pub async fn optional_auth_middleware(
                     session.is_editor,
                     session.email.clone(),
                     session.name.clone(),
-                );
+                )
+                .with_session(&session);
                 req.extensions_mut().insert(auth_user);
                 tracing::debug!("✅ AuthUser injected into request extensions for {}", path);
                 let mut response = next.run(req).await;
@@ -273,7 +280,8 @@ pub async fn required_auth_middleware(
         session.is_editor,
         session.email.clone(),
         session.name.clone(),
-    );
+    )
+    .with_session(&session);
     req.extensions_mut().insert(auth_user);
 
     let mut response = next.run(req).await;
@@ -324,7 +332,8 @@ pub async fn redirect_to_login_middleware(
                     session.is_editor,
                     session.email.clone(),
                     session.name.clone(),
-                );
+                )
+                .with_session(&session);
                 req.extensions_mut().insert(auth_user);
                 let mut response = next.run(req).await;
                 attach_session_cookie(&mut response, auth_manager.as_ref(), &session_token);
@@ -398,7 +407,8 @@ pub async fn require_editor_or_admin_middleware(
                         session.is_editor,
                         session.email.clone(),
                         session.name.clone(),
-                    );
+                    )
+                    .with_session(&session);
                     req.extensions_mut().insert(auth_user);
                     let mut response = next.run(req).await;
                     attach_session_cookie(&mut response, auth_manager.as_ref(), &session_token);
@@ -511,6 +521,49 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
+
+    /// The request's credential carries what its session switched on and
+    /// whether it is a client's token. Without the elevation, an elevated
+    /// session reaching `/engine/*` or a script's handler would be refused
+    /// what it had just been granted.
+    #[test]
+    fn a_credential_carries_its_sessions_elevation_and_kind() {
+        use crate::security::elevation::{Elevation, Grade, Method};
+        let now = chrono::Utc::now();
+        let session = crate::auth::AuthSession {
+            user_id: "u1".to_string(),
+            provider: "internal".to_string(),
+            email: None,
+            name: None,
+            picture: None,
+            is_admin: true,
+            is_editor: false,
+            created_at: now,
+            expires_at: now + chrono::Duration::hours(1),
+            elevation: Some(Elevation::grant(
+                &[Grade::Administer],
+                Method::Password,
+                30,
+                now,
+            )),
+            reauthenticated_at: None,
+            via_token: true,
+        };
+        let user = AuthUser::new(
+            "u1".to_string(),
+            "internal".to_string(),
+            "token".to_string(),
+            true,
+            false,
+            None,
+            None,
+        )
+        .with_session(&session);
+
+        let roles = user.roles();
+        assert!(roles.elevation.is_some());
+        assert!(roles.via_token);
+    }
 
     #[test]
     fn test_extract_session_from_bearer() {

@@ -182,6 +182,50 @@ impl Capability {
     }
 }
 
+/// How the account behind a context is acting, for the audit.
+///
+/// Authorization never reads this — the capability set is the whole of that
+/// answer. It is what an audit line needs beside the account's id, because the
+/// same person can act at a keyboard, through a client holding their token, or
+/// through a script working while they are away, and "who" alone reads all
+/// three as the first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Acting {
+    pub kind: ActingKind,
+    /// How the person proved they were present, when the context carries a
+    /// live elevation.
+    pub elevation: Option<super::elevation::Method>,
+}
+
+/// Through what the account is acting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActingKind {
+    /// A browser session: somebody signed in.
+    #[default]
+    Session,
+    /// A bearer token an OAuth client holds: an agent or tool the person
+    /// consented to.
+    Token,
+    /// Background work under a delegation, with nobody at the keyboard.
+    Delegated,
+    /// The engine itself: startup, `init()`, a scheduled job.
+    Engine,
+    /// Nobody signed in.
+    Anonymous,
+}
+
+impl ActingKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ActingKind::Session => "session",
+            ActingKind::Token => "token",
+            ActingKind::Delegated => "delegated",
+            ActingKind::Engine => "engine",
+            ActingKind::Anonymous => "anonymous",
+        }
+    }
+}
+
 /// The roles a credential carries, as every carrier of one spells them.
 ///
 /// [`crate::auth::AuthUser`], [`crate::auth::AuthSession`] and
@@ -209,6 +253,9 @@ pub struct SessionRoles<'a> {
     /// `UserContext` that carried one would be a second place to ask the same
     /// question.
     pub elevation: Option<&'a super::elevation::Elevation>,
+    /// Whether the credential is a bearer token an OAuth client was issued,
+    /// rather than a browser's session. Recorded, never authorized on.
+    pub via_token: bool,
 }
 
 impl SessionRoles<'_> {
@@ -241,6 +288,8 @@ pub struct UserContext {
     /// cloned into every global closure at install time and the list is read
     /// rather than written.
     pub network_scope: Option<Arc<NetworkScope>>,
+    /// How the account is acting, for the audit. See [`Acting`].
+    pub acting: Acting,
 }
 
 impl UserContext {
@@ -251,6 +300,10 @@ impl UserContext {
             capabilities: Self::anonymous_capabilities(),
             attenuated: false,
             network_scope: None,
+            acting: Acting {
+                kind: ActingKind::Anonymous,
+                elevation: None,
+            },
         }
     }
 
@@ -261,6 +314,7 @@ impl UserContext {
             capabilities: Self::authenticated_capabilities(),
             attenuated: false,
             network_scope: None,
+            acting: Acting::default(),
         }
     }
 
@@ -274,6 +328,7 @@ impl UserContext {
             capabilities: Self::editor_capabilities(),
             attenuated: false,
             network_scope: None,
+            acting: Acting::default(),
         }
     }
 
@@ -284,6 +339,7 @@ impl UserContext {
             capabilities: Self::admin_capabilities(),
             attenuated: false,
             network_scope: None,
+            acting: Acting::default(),
         }
     }
 
@@ -302,6 +358,10 @@ impl UserContext {
             capabilities: Self::script_capabilities(),
             attenuated: false,
             network_scope: None,
+            acting: Acting {
+                kind: ActingKind::Engine,
+                elevation: None,
+            },
         }
     }
 
@@ -328,11 +388,22 @@ impl UserContext {
     /// [`Self::for_session`] as of a given moment, so that a test can describe
     /// an elevation that has run out without waiting for one to.
     pub fn for_session_at(roles: SessionRoles<'_>, now: chrono::DateTime<chrono::Utc>) -> Self {
-        let tier = match roles.user_id {
+        let mut tier = match roles.user_id {
             Some(user_id) if roles.is_admin => Self::admin(user_id.to_string()),
             Some(user_id) if roles.is_editor => Self::editor(user_id.to_string()),
             Some(user_id) => Self::authenticated(user_id.to_string()),
             None => return Self::anonymous(),
+        };
+        tier.acting = Acting {
+            kind: if roles.via_token {
+                ActingKind::Token
+            } else {
+                ActingKind::Session
+            },
+            elevation: roles
+                .elevation
+                .filter(|elevation| elevation.is_live(now))
+                .map(|elevation| elevation.method),
         };
 
         // Nothing gated is the default and by far the common path, and it is
@@ -492,6 +563,8 @@ impl UserContext {
             // verbs has said nothing about the destinations — so the answer to
             // "which hosts" is whatever it already was.
             network_scope: self.network_scope.clone(),
+            // Nor does narrowing change who is acting or how.
+            acting: self.acting,
         }
     }
 
@@ -584,6 +657,60 @@ impl UserContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn roles(
+        via_token: bool,
+        elevation: Option<&super::super::elevation::Elevation>,
+    ) -> SessionRoles<'_> {
+        SessionRoles {
+            user_id: Some("u"),
+            is_admin: true,
+            is_editor: false,
+            elevation,
+            via_token,
+        }
+    }
+
+    /// The audit says how an account acted, because the account alone reads a
+    /// change made through a client's token as one made at a keyboard.
+    #[test]
+    fn a_context_says_how_its_account_is_acting() {
+        assert_eq!(
+            UserContext::for_session(roles(false, None)).acting.kind,
+            ActingKind::Session
+        );
+        assert_eq!(
+            UserContext::for_session(roles(true, None)).acting.kind,
+            ActingKind::Token
+        );
+        assert_eq!(UserContext::anonymous().acting.kind, ActingKind::Anonymous);
+        assert_eq!(
+            UserContext::engine_actor("init".to_string()).acting.kind,
+            ActingKind::Engine
+        );
+
+        let narrowed = UserContext::for_session(roles(true, None)).attenuated([]);
+        assert_eq!(
+            narrowed.acting.kind,
+            ActingKind::Token,
+            "narrowing does not change how the account is acting"
+        );
+    }
+
+    /// A live elevation's proof is recorded; one that has run out is not.
+    #[test]
+    fn the_elevation_method_is_recorded_while_it_is_live() {
+        use super::super::elevation::{Elevation, Grade, Method};
+        let now = chrono::Utc::now();
+        let elevation = Elevation::grant(&[Grade::Administer], Method::Password, 30, now);
+
+        let live = UserContext::for_session_at(roles(false, Some(&elevation)), now);
+        assert_eq!(live.acting.elevation, Some(Method::Password));
+
+        let later = now + chrono::Duration::minutes(31);
+        let lapsed = UserContext::for_session_at(roles(false, Some(&elevation)), later);
+        assert_eq!(lapsed.acting.elevation, None);
+    }
 
     /// The engine running a script with nobody behind it holds what the script
     /// may do to its own things, and nothing that acts on the engine or on
@@ -902,18 +1029,21 @@ mod tests {
             is_admin: true,
             is_editor: false,
             elevation: None,
+            via_token: false,
         });
         let editor = UserContext::for_session(SessionRoles {
             user_id: Some("u"),
             is_admin: false,
             is_editor: true,
             elevation: None,
+            via_token: false,
         });
         let ordinary = UserContext::for_session(SessionRoles {
             user_id: Some("u"),
             is_admin: false,
             is_editor: false,
             elevation: None,
+            via_token: false,
         });
 
         assert!(administrator.has_capability(&Capability::AdministerEngine));
@@ -934,6 +1064,7 @@ mod tests {
             is_admin: true,
             is_editor: true,
             elevation: None,
+            via_token: false,
         });
 
         assert!(both.has_capability(&Capability::AdministerEngine));
@@ -953,6 +1084,7 @@ mod tests {
             is_admin: true,
             is_editor: true,
             elevation: None,
+            via_token: false,
         });
 
         for context in [&nobody, &nobody_claiming_otherwise] {
@@ -984,6 +1116,7 @@ mod tests {
             is_admin: false,
             is_editor: true,
             elevation: None,
+            via_token: false,
         });
 
         assert!(!editor.attenuated);
@@ -999,6 +1132,7 @@ mod tests {
             is_admin: true,
             is_editor: true,
             elevation: None,
+            via_token: false,
         });
 
         assert!(administrator.has_capability(&Capability::AdministerEngine));
@@ -1028,6 +1162,7 @@ mod tests {
                 is_admin: false,
                 is_editor: false,
                 elevation: Some(&overreaching),
+                via_token: false,
             },
             now,
         );
@@ -1055,6 +1190,7 @@ mod tests {
                 is_admin: true,
                 is_editor: true,
                 elevation: Some(&elevation),
+                via_token: false,
             },
             now,
         );

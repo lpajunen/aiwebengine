@@ -420,16 +420,16 @@ impl RouteRegistrar {
             && let Ok(rt) = tokio::runtime::Handle::try_current()
         {
             let auditor = self.auditor.clone();
-            let user_id = self.user_context.user_id.clone();
+            let actor = crate::security::audit::Actor::of(&self.user_context);
             let resource = resource.to_string();
             let path = path.to_string();
             rt.spawn(async move {
                 let _ = auditor
                     .log_event(
-                        crate::security::SecurityEvent::new(
+                        crate::security::SecurityEvent::by(
                             crate::security::SecurityEventType::AuthorizationFailure,
                             crate::security::SecuritySeverity::Medium,
-                            user_id,
+                            actor,
                         )
                         .with_resource(resource)
                         .with_action("register".to_string())
@@ -466,14 +466,14 @@ pub(super) fn send_stream_message(
     let audit = |event_type, severity, action: &str| {
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             let auditor = auditor.clone();
-            let user_id = user_context.user_id.clone();
+            let actor = crate::security::audit::Actor::of(user_context);
             let action = action.to_string();
             let path = path.to_string();
             let length = message.len().to_string();
             rt.spawn(async move {
                 let _ = auditor
                     .log_event(
-                        crate::security::SecurityEvent::new(event_type, severity, user_id)
+                        crate::security::SecurityEvent::by(event_type, severity, actor)
                             .with_resource("stream".to_string())
                             .with_action(action)
                             .with_detail("path", &path)

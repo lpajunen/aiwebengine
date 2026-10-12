@@ -132,6 +132,23 @@ script, every field optional, absence meaning "follow the engine", values
 clamped rather than refused. It can be set in both directions; lowering is the
 one that gets used, to contain a script without a restart.
 
+## What the audit records
+
+The layers above decide what may be done; the security audit says afterwards
+how it was done. Every event raised for a `UserContext` carries, beside the
+account, how that account was acting (`UserContext.acting`):
+
+- `acting` — `session` (a browser), `token` (an OAuth client's bearer token: an
+  agent or tool the person consented to), `delegated` (a script working while
+  they are away), `engine` (startup, `init()`, a scheduled job) or `anonymous`.
+- `narrowed` — whether the execution was narrowed from the account's own
+  authority (`UserContext::attenuated`): a `sandbox.run` or a delegation.
+- `elevation` — how the person proved they were present, when a live
+  elevation was in force: `password`, `provider` or `consent`.
+
+So a change an agent made with somebody's token reads as that, not as one they
+made by hand. Authorization never reads these; they are the record.
+
 ## Things that look similar and are not
 
 - **Exposure by directory** says which of a script's _files_ the world can reach

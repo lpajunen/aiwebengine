@@ -40,6 +40,16 @@ pub struct SecurityEvent {
     pub action: Option<String>,
     pub details: HashMap<String, String>,
     pub error_message: Option<String>,
+    /// How `user_id` was acting: `session`, `token`, `delegated`, `engine` or
+    /// `anonymous` ([`crate::security::ActingKind`]). `None` for an event that
+    /// is not an account acting — a sign-in attempt, a session's lifecycle.
+    pub acting: Option<&'static str>,
+    /// Whether the execution was narrowed from the account's own authority —
+    /// a `sandbox.run` or a delegation — when it did this.
+    pub narrowed: bool,
+    /// How the person proved they were present, when the context carried a
+    /// live elevation.
+    pub elevation: Option<&'static str>,
 }
 
 impl SecurityEvent {
@@ -60,9 +70,79 @@ impl SecurityEvent {
             action: None,
             details: HashMap::new(),
             error_message: None,
+            acting: None,
+            narrowed: false,
+            elevation: None,
         }
     }
 
+    /// An event raised on behalf of `actor`: its account, and how it was
+    /// acting.
+    pub fn by(event_type: SecurityEventType, severity: SecuritySeverity, actor: Actor) -> Self {
+        let mut event = Self::new(event_type, severity, actor.user_id.clone());
+        event.acting = Some(actor.acting);
+        event.narrowed = actor.narrowed;
+        event.elevation = actor.elevation;
+        event
+    }
+
+    /// Record how the account was acting, from the context that acted.
+    pub fn with_actor(self, actor: &crate::security::UserContext) -> Self {
+        let actor = Actor::of(actor);
+        Self {
+            acting: Some(actor.acting),
+            narrowed: actor.narrowed,
+            elevation: actor.elevation,
+            ..self
+        }
+    }
+}
+
+/// Who acted, as an audit line records it: the account, and how it was acting.
+///
+/// The person alone reads a change an agent made with their token, or a
+/// script made while they were away, as one they made by hand. Owned and
+/// small, so it can be taken from a `UserContext` and moved into the task
+/// that writes the line.
+#[derive(Debug, Clone)]
+pub struct Actor {
+    pub user_id: Option<String>,
+    pub acting: &'static str,
+    pub narrowed: bool,
+    pub elevation: Option<&'static str>,
+}
+
+impl Actor {
+    pub fn of(context: &crate::security::UserContext) -> Self {
+        Self {
+            user_id: context.user_id.clone(),
+            acting: context.acting.kind.as_str(),
+            narrowed: context.attenuated,
+            elevation: context.acting.elevation.map(|method| method.as_str()),
+        }
+    }
+
+    /// The same, for a page that has the session rather than a context: a
+    /// browser's, or a client's bearer token.
+    pub fn of_session(session: &crate::auth::AuthSession) -> Self {
+        Self {
+            user_id: Some(session.user_id.clone()),
+            acting: if session.via_token {
+                crate::security::ActingKind::Token.as_str()
+            } else {
+                crate::security::ActingKind::Session.as_str()
+            },
+            narrowed: false,
+            elevation: session
+                .elevation
+                .as_ref()
+                .filter(|elevation| elevation.is_live(Utc::now()))
+                .map(|elevation| elevation.method.as_str()),
+        }
+    }
+}
+
+impl SecurityEvent {
     pub fn with_request_context(
         mut self,
         user_agent: Option<String>,
@@ -127,6 +207,9 @@ impl SecurityAuditor {
                     event_id = %event.id,
                     event_type = ?event.event_type,
                     user_id = ?event.user_id,
+                    acting = ?event.acting,
+                    narrowed = event.narrowed,
+                    elevation = ?event.elevation,
                     resource = ?event.resource,
                     action = ?event.action,
                     threat_level = ?threat_assessment.threat_level,
@@ -139,6 +222,9 @@ impl SecurityAuditor {
                     event_id = %event.id,
                     event_type = ?event.event_type,
                     user_id = ?event.user_id,
+                    acting = ?event.acting,
+                    narrowed = event.narrowed,
+                    elevation = ?event.elevation,
                     resource = ?event.resource,
                     action = ?event.action,
                     error = ?event.error_message,
@@ -154,6 +240,9 @@ impl SecurityAuditor {
                     event_type = ?event.event_type,
                     severity = ?effective_severity,
                     user_id = ?event.user_id,
+                    acting = ?event.acting,
+                    narrowed = event.narrowed,
+                    elevation = ?event.elevation,
                     ip_address = ?event.ip_address,
                     user_agent = ?event.user_agent,
                     resource = ?event.resource,
@@ -260,15 +349,15 @@ impl SecurityAuditor {
     /// Log authorization failure
     pub async fn log_authz_failure(
         &self,
-        user_id: Option<String>,
+        actor: Actor,
         resource: String,
         action: String,
         required_capability: String,
     ) {
-        let event = SecurityEvent::new(
+        let event = SecurityEvent::by(
             SecurityEventType::AuthorizationFailure,
             SecuritySeverity::Medium,
-            user_id,
+            actor,
         )
         .with_resource(resource)
         .with_action(action)
@@ -481,6 +570,23 @@ macro_rules! log_authz_failure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_event_raised_for_a_context_says_how_it_acted() {
+        let mut context = crate::security::UserContext::authenticated("u1".to_string());
+        context.acting.kind = crate::security::ActingKind::Delegated;
+        let narrowed = context.attenuated([]);
+
+        let event = SecurityEvent::by(
+            SecurityEventType::SystemSecurityEvent,
+            SecuritySeverity::High,
+            Actor::of(&narrowed),
+        );
+        assert_eq!(event.user_id.as_deref(), Some("u1"));
+        assert_eq!(event.acting, Some("delegated"));
+        assert!(event.narrowed);
+        assert_eq!(event.elevation, None);
+    }
 
     #[test]
     fn test_security_event_creation() {

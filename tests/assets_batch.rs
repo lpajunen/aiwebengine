@@ -582,6 +582,7 @@ async fn read_access_alone_cannot_write_a_batch() {
             .collect(),
         attenuated: false,
         network_scope: None,
+        acting: Default::default(),
     };
 
     let result = aiwebengine::engine_api::upsert_assets_authorized(
@@ -1153,6 +1154,7 @@ async fn writing_the_root_in_a_batch_takes_script_write_rights() {
         .collect(),
         attenuated: false,
         network_scope: None,
+        acting: Default::default(),
     };
 
     // `main.js` is the script's entrypoint, so writing it is writing the

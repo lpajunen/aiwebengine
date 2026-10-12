@@ -290,10 +290,10 @@ pub async fn delete_account_route(
         .security_context()
         .auditor
         .log_event(
-            crate::security::SecurityEvent::new(
+            crate::security::SecurityEvent::by(
                 crate::security::SecurityEventType::SystemSecurityEvent,
                 crate::security::SecuritySeverity::High,
-                Some(session.user_id.clone()),
+                crate::security::audit::Actor::of_session(&session),
             )
             .with_detail("event", "account_deleted_by_owner")
             .with_detail("method", method.as_str())

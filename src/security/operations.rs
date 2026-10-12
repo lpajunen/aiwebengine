@@ -230,6 +230,7 @@ mod tests {
             capabilities: std::collections::HashSet::new(), // No capabilities
             attenuated: false,
             network_scope: None,
+            acting: Default::default(),
         };
 
         let request = UpsertScriptRequest {
@@ -256,6 +257,7 @@ mod tests {
                 .collect(),
             attenuated: false,
             network_scope: None,
+            acting: Default::default(),
         };
         let request2 = UpsertScriptRequest {
             script_name: "test2".to_string(),

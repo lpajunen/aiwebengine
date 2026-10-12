@@ -35,12 +35,12 @@ pub(super) fn is_user_admin(user: &UserContext) -> bool {
 /// Record an authorization failure against the user-administration surface.
 pub(super) fn audit_user_admin_denied(user: &UserContext, action: &str) {
     let auditor = auditor();
-    let user_id = user.user_id.clone();
+    let actor = crate::security::audit::Actor::of(user);
     let action = action.to_string();
     tokio::task::spawn(async move {
         let _ = auditor
             .log_authz_failure(
-                user_id,
+                actor,
                 "user".to_string(),
                 action,
                 "Administrator".to_string(),
@@ -58,7 +58,7 @@ pub(super) fn audit_role_change(
     action: &str,
 ) {
     let auditor = auditor();
-    let actor_id = actor.user_id.clone();
+    let actor = crate::security::audit::Actor::of(actor);
     let (target, role, action) = (
         target_user_id.to_string(),
         role.to_string(),
@@ -67,10 +67,10 @@ pub(super) fn audit_role_change(
     tokio::task::spawn(async move {
         let _ = auditor
             .log_event(
-                SecurityEvent::new(
+                SecurityEvent::by(
                     SecurityEventType::SystemSecurityEvent,
                     SecuritySeverity::High,
-                    actor_id,
+                    actor,
                 )
                 .with_resource("user".to_string())
                 .with_action(action)
