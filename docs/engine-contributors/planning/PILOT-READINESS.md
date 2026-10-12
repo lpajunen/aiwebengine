@@ -76,8 +76,8 @@ avoids it by prefixing every task.
 
 ### 5. The agent's open security items
 
-- [ ] `run_js` passes a `hosts` allowlist (agent `TODO-improvements.md`:
-      "Where `run_js` may send").
+- [x] `run_js` passes a `hosts` allowlist: what the person, their
+      instructions, the deployment and its skills named (agent `hosts.ts`).
 - [ ] Decide whether a delegated execution may send a bearer token to this
       engine's own `/mcp` (ROADMAP: Security 1).
 - [ ] The Telegram webhook secret moves to `secretStorage`, compared with
