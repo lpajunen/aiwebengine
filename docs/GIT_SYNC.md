@@ -79,7 +79,7 @@ and every later pull and push finds the script by that, so renaming it
 ## Telling it what not to take
 
 The built-in exclusions cover what is always junk: dotfiles, `node_modules`,
-and a `README.md` or `LICENSE` beside a script's entry. They cannot cover what
+and a `README.md` or license file (`LICENSE`, `LICENSE-MIT`, …) beside a script's entry. They cannot cover what
 is junk in _your_ repository, so name it in `.aiwebengineignore` at the root:
 
 ```gitignore

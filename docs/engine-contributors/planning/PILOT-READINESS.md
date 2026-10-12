@@ -123,7 +123,8 @@ avoids it by prefixing every task.
 - [x] A person can delete their own account (`/auth/account/delete`).
 - [ ] A short privacy statement: what is stored, where, for how long, and how
       to have it deleted.
-- [ ] Decide whether AGPL-3.0 is the license the pilot's users should meet.
+- [x] A license that puts no terms on the pilot's own apps: every
+      repository is MIT OR Apache-2.0.
 
 ## After the first pilot: more kinds of app
 

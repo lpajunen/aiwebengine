@@ -1,6 +1,6 @@
 # aiwebengine
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT_OR_Apache--2.0-blue.svg)](#license)
 [![Rust Edition](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org)
 
 An engine for JavaScript/TypeScript solutions — websites, HTTP APIs, web apps,
@@ -75,4 +75,4 @@ every setting in `config.toml`.
 
 ## License
 
-AGPL-3.0; see [LICENSE](LICENSE).
+Either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

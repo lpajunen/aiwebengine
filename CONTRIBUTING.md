@@ -42,6 +42,12 @@ CI runs the same commands. Tests are run with `cargo nextest` (`make test`);
 - Commit messages follow Conventional Commits: `feat:`, `fix:`, `refactor:`,
   `test:`, `docs:`, `perf:`, `chore:`, with `!` for a breaking change.
 
+## License
+
+The engine is licensed under either of [MIT](LICENSE-MIT) or
+[Apache-2.0](LICENSE-APACHE), at your option. Unless you say otherwise, a
+contribution you submit is licensed the same way, with no additional terms.
+
 ## Security
 
 Changes under `src/security/`, `src/auth/` and `src/delegation.rs` are

@@ -73,13 +73,22 @@ pub const MAPPING_VERSION: i32 = 3;
 ///
 /// Only at the top level: a `README.md` beside the entry is repository
 /// furniture, while one inside `docs/` may well be content the solution serves.
-const TOP_LEVEL_SKIP: [&str; 5] = [
-    "readme.md",
-    "license",
-    "license.md",
-    "license.txt",
-    "aiwebengine.json",
-];
+/// License files are matched by [`is_license_file`] instead, since their names
+/// vary (`LICENSE`, `LICENSE.md`, `LICENSE-MIT`, `LICENSE-APACHE`).
+const TOP_LEVEL_SKIP: [&str; 2] = ["readme.md", "aiwebengine.json"];
+
+/// `LICENSE` or `LICENSE-{name}`, optionally `.md` or `.txt`, ignoring case.
+fn is_license_file(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let Some(rest) = lower.strip_prefix("license") else {
+        return false;
+    };
+    let rest = rest
+        .strip_suffix(".md")
+        .or_else(|| rest.strip_suffix(".txt"))
+        .unwrap_or(rest);
+    rest.is_empty() || (rest.len() > 1 && rest.starts_with('-') && !rest.contains('.'))
+}
 
 // ============================================================================
 // What not to take
@@ -480,7 +489,9 @@ fn is_excluded(repo_path: &str, script_relative: &str, ignore: &IgnoreRules) -> 
 
     let mut segments = script_relative.split('/');
     match (segments.next(), segments.next()) {
-        (Some(only), None) => TOP_LEVEL_SKIP.contains(&only.to_ascii_lowercase().as_str()),
+        (Some(only), None) => {
+            TOP_LEVEL_SKIP.contains(&only.to_ascii_lowercase().as_str()) || is_license_file(only)
+        }
         _ => false,
     }
 }
@@ -2397,12 +2408,15 @@ mod tests {
             ("main.ts", "x"),
             ("README.md", "repo readme"),
             ("LICENSE", "MIT"),
+            ("LICENSE-MIT", "MIT"),
+            ("LICENSE-APACHE", "Apache-2.0"),
+            ("license.ts", "x"),
             ("docs/README.md", "served content"),
         ]);
         let scripts = infer_scripts(&files).expect("should infer");
         assert_eq!(
             scripts[0].assets.keys().collect::<Vec<_>>(),
-            vec!["docs/README.md"]
+            vec!["docs/README.md", "license.ts"]
         );
     }
 
