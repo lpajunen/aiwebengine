@@ -10,9 +10,6 @@ use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[cfg(test)]
-use crate::security::ThreatDetectionConfig;
-
 /// User information after successful authentication
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUser {
@@ -1168,7 +1165,6 @@ mod tests {
     use crate::auth::OAuth2ProviderConfig;
     use crate::security::{
         CsrfProtection, DataEncryption, RateLimiter, SecureSessionManager, SecurityAuditor,
-        ThreatDetector,
     };
     use std::collections::HashMap;
 
@@ -1180,8 +1176,6 @@ mod tests {
         let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let rate_limiter =
             Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
-        let threat_config = ThreatDetectionConfig::default();
-        let _threat_detector = Arc::new(ThreatDetector::new(Some(pool.clone()), threat_config));
         let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
         let csrf = Arc::new(CsrfProtection::new(csrf_key, 3600));
         let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";

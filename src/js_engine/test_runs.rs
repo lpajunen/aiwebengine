@@ -275,8 +275,11 @@ pub(super) fn run_test_module(
     let mut timed_out = false;
 
     for (name, body) in collected {
+        // A case's own name or its file: `filter: "hosts"` reaching every
+        // case in `hosts.test.ts` is what a caller naming a file means.
         if let Some(filter) = &params.filter
             && !name.contains(filter.as_str())
+            && !module_path.contains(filter.as_str())
         {
             continue;
         }

@@ -377,13 +377,24 @@ pub(super) fn tool_run_tests(args: &Value, user: &UserContext) -> Value {
     let mut report = result.to_json();
     if let Some(object) = report.as_object_mut() {
         object.insert("timestamp".to_string(), json!(iso_timestamp()));
+        // Two different empties, and the message says which: nothing to run
+        // is a discovery question, nothing matched is a filter question, and
+        // naming the wrong one sends the caller looking in the wrong place.
         if result.is_empty() && result.error().is_none() {
-            object.insert(
-                "message".to_string(),
-                json!(
-                    "No test modules found. Tests are assets named '*.test.ts' (or .js/.jsx/.tsx)."
+            let message = match arg_str(args, "filter") {
+                Some(filter) if !modules.is_empty() => format!(
+                    "No case matched filter '{}' in {} test module{}. The filter is matched \
+                     against each case's name ('describe > test') and its file.",
+                    filter,
+                    modules.len(),
+                    if modules.len() == 1 { "" } else { "s" }
                 ),
-            );
+                _ => {
+                    "No test modules found. Tests are assets named '*.test.ts' (or .js/.jsx/.tsx)."
+                        .to_string()
+                }
+            };
+            object.insert("message".to_string(), json!(message));
         }
     }
     report

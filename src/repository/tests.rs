@@ -7,9 +7,7 @@ static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 fn setup_db() {
     INIT.call_once(|| {
         // Skip when the database server will not answer.
-        let Some(url) = crate::test_db::connection_string_blocking() else {
-            return;
-        };
+        let url = crate::test_db::require_connection_string();
 
         let pool = sqlx::PgPool::connect_lazy(url).unwrap();
         let db = Arc::new(crate::database::Database::from_pool(pool.clone()));
@@ -27,11 +25,6 @@ fn setup_db() {
 
 fn get_runtime() -> &'static tokio::runtime::Runtime {
     RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
-}
-
-// Helper to check if we should skip database-dependent tests
-fn should_skip_db_tests() -> bool {
-    crate::test_db::connection_string_blocking().is_none()
 }
 
 fn initialized_metadata_with_route(uri: &str, content: &str) -> ScriptMetadata {
@@ -199,9 +192,6 @@ fn update_content_on_never_initialized_script_registers_nothing() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_operations() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -222,9 +212,6 @@ async fn test_script_operations() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_properties_operations() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -260,9 +247,6 @@ async fn test_script_properties_operations() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_properties_validation() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -279,9 +263,6 @@ async fn test_script_properties_validation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_user_properties_operations() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -342,9 +323,6 @@ async fn test_user_properties_operations() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_user_properties_validation() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -367,9 +345,6 @@ async fn test_user_properties_validation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_user_properties_user_isolation() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -408,9 +383,6 @@ async fn test_user_properties_user_isolation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_secrets_operations() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -452,9 +424,6 @@ async fn test_script_secrets_operations() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_secrets_validation() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -484,9 +453,6 @@ async fn test_script_secrets_validation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_user_secrets_operations() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -549,9 +515,6 @@ async fn test_user_secrets_operations() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_user_secrets_validation() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -574,9 +537,6 @@ async fn test_user_secrets_validation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_user_secrets_user_isolation() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -615,9 +575,6 @@ async fn test_user_secrets_user_isolation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_ownership_assignment() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -660,9 +617,6 @@ async fn test_script_ownership_assignment() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_ownership_backfill() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -702,9 +656,6 @@ async fn test_script_ownership_backfill() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_ownership_no_duplicate() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -730,9 +681,6 @@ async fn test_script_ownership_no_duplicate() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_ownership_add_remove() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -776,9 +724,6 @@ async fn test_script_ownership_add_remove() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_ownership_without_user() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();

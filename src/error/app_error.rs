@@ -526,7 +526,7 @@ mod tests {
     /// Every other security violation is prose by nature and still is.
     #[test]
     fn other_security_errors_are_still_security_errors() {
-        let error = AppError::from(SecurityError::PathTraversal);
+        let error = AppError::from(SecurityError::CsrfValidationFailed);
 
         assert!(matches!(error, AppError::Security { .. }));
         assert_eq!(error.status_code(), 403);

@@ -950,6 +950,29 @@ async fn the_mcp_tool_reports_verdicts_and_refuses_the_unauthorized() {
     assert_eq!(filtered["total"], serde_json::json!(1));
     assert_eq!(filtered["success"], serde_json::json!(true));
 
+    // A file name reaches every case in it.
+    let by_file = execute_native_mcp_tool(
+        "run_tests",
+        &serde_json::json!({ "script": script_uri, "filter": "mcp.test" }),
+        &UserContext::admin("test-admin".to_string()),
+    )
+    .expect("native tool");
+    assert_eq!(by_file["total"], serde_json::json!(2));
+
+    // A filter that matches nothing says so, rather than that there are no
+    // tests — which sent callers looking for a discovery problem.
+    let unmatched = execute_native_mcp_tool(
+        "run_tests",
+        &serde_json::json!({ "script": script_uri, "filter": "nothing-is-called-this" }),
+        &UserContext::admin("test-admin".to_string()),
+    )
+    .expect("native tool");
+    let message = unmatched["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("No case matched filter") && message.contains("1 test module"),
+        "{unmatched}"
+    );
+
     // The tool runs the script's code as the caller, so it enforces the same
     // bar as the endpoint rather than trusting the MCP session.
     let refused = execute_native_mcp_tool(

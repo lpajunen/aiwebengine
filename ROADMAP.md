@@ -85,22 +85,14 @@ The order inside each section is the order they matter.
 3. **No capability column on the operation table.** Each operation authorizes
    inside its core, and most checks are not one capability. Worth doing only
    together with moving the checks out of the cores.
-4. **Unused security scaffolding.** `security/threat_detection.rs`,
-   `security/validation.rs`'s `InputValidator`, `security/operations.rs` and
-   `safe_helpers.rs` have few or no callers. Delete what nothing uses.
-5. **Unit tests that skip without a database.** `js_engine.rs`'s test helpers
-   return early on `should_skip_db_tests`, which the test rules forbid.
-6. **`mcp.ask` has no user.** No script in the four repositories calls it, so
+4. **`mcp.ask` has no user.** No script in the four repositories calls it, so
    `mcp_elicitation.rs` buys conformance and its tests, not a user. It stays
    because nothing else does its job: an ask reaches the person driving the
    client, and a stream cannot carry an answer back into a tool call.
    Reconsider with the next MCP revision; removing it is one module and one
    prelude, with no storage.
-7. **Not verified in a browser:** the editor's and admin's own flows after the
+5. **Not verified in a browser:** the editor's and admin's own flows after the
    operation-table and slug changes, and git sync against a real repository.
-8. **`run_tests` with a `filter` that matches nothing** answers "No test
-   modules found", which describes a different failure and sends the caller
-   looking for a discovery bug.
 
 ## Operations
 

@@ -689,7 +689,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
                     "type": "object",
                     "properties": {
                         "script": { "type": "string", "description": "URI of the script whose tests to run" },
-                        "filter": { "type": "string", "description": "Run only cases whose name contains this text" },
+                        "filter": { "type": "string", "description": "Run only cases whose name or file contains this text" },
                         "rollback": {
                             "type": "boolean",
                             "description": "Roll back the database writes the tests make (default true)",

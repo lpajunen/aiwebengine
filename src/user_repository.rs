@@ -1332,9 +1332,7 @@ mod tests {
     }
 
     fn setup_db() {
-        let Some(url) = crate::test_db::connection_string_blocking() else {
-            return;
-        };
+        let url = crate::test_db::require_connection_string();
         DB_INIT.call_once(|| {
             get_runtime().block_on(async {
                 let pool = sqlx::PgPool::connect_lazy(url).expect("Failed to create pool");
@@ -1348,15 +1346,8 @@ mod tests {
         });
     }
 
-    fn should_skip_db_tests() -> bool {
-        crate::test_db::connection_string_blocking().is_none()
-    }
-
     #[test]
     fn test_user_creation() {
-        if should_skip_db_tests() {
-            return;
-        }
         let user = User::new(
             Some("test@example.com".to_string()),
             Some("Test User".to_string()),
@@ -1374,9 +1365,6 @@ mod tests {
 
     #[test]
     fn test_upsert_user_new() {
-        if should_skip_db_tests() {
-            return;
-        }
         setup_db();
         let rt = get_runtime();
 
@@ -1399,9 +1387,6 @@ mod tests {
 
     #[test]
     fn test_upsert_user_existing() {
-        if should_skip_db_tests() {
-            return;
-        }
         setup_db();
         let rt = get_runtime();
 
@@ -1440,9 +1425,6 @@ mod tests {
 
     #[test]
     fn test_role_management() {
-        if should_skip_db_tests() {
-            return;
-        }
         setup_db();
         let rt = get_runtime();
 
@@ -1478,9 +1460,6 @@ mod tests {
 
     #[test]
     fn test_role_privileges() {
-        if should_skip_db_tests() {
-            return;
-        }
         assert!(UserRole::Administrator.has_privilege(&UserRole::Authenticated));
         assert!(UserRole::Administrator.has_privilege(&UserRole::Editor));
         assert!(UserRole::Administrator.has_privilege(&UserRole::Administrator));
@@ -1496,9 +1475,6 @@ mod tests {
 
     #[test]
     fn test_cannot_remove_authenticated_role() {
-        if should_skip_db_tests() {
-            return;
-        }
         setup_db();
         let rt = get_runtime();
 
@@ -1520,9 +1496,6 @@ mod tests {
 
     #[test]
     fn test_find_user_by_provider() {
-        if should_skip_db_tests() {
-            return;
-        }
         setup_db();
         let rt = get_runtime();
 
@@ -1549,9 +1522,6 @@ mod tests {
 
     #[test]
     fn test_update_user_roles() {
-        if should_skip_db_tests() {
-            return;
-        }
         setup_db();
         let rt = get_runtime();
 
@@ -1579,9 +1549,6 @@ mod tests {
 
     #[test]
     fn test_delete_user() {
-        if should_skip_db_tests() {
-            return;
-        }
         setup_db();
         let rt = get_runtime();
 
@@ -1614,9 +1581,6 @@ mod tests {
 
     #[test]
     fn test_validation() {
-        if should_skip_db_tests() {
-            return;
-        }
         setup_db();
         let rt = get_runtime();
         rt.block_on(async {
@@ -1663,9 +1627,6 @@ mod tests {
 
     #[test]
     fn test_bootstrap_admin() {
-        if should_skip_db_tests() {
-            return;
-        }
         setup_db();
         let rt = get_runtime();
 
@@ -1714,9 +1675,6 @@ mod tests {
     /// widen it, is served only on the host they can no longer reach.
     #[test]
     fn a_bootstrap_admin_is_a_principal_on_every_host() {
-        if should_skip_db_tests() {
-            return;
-        }
         setup_db();
         let rt = get_runtime();
 
@@ -1763,9 +1721,6 @@ mod tests {
     /// locked-out admin can authenticate.
     #[test]
     fn naming_an_existing_account_as_a_bootstrap_admin_widens_it_on_next_sign_in() {
-        if should_skip_db_tests() {
-            return;
-        }
         setup_db();
         let rt = get_runtime();
 
@@ -1817,9 +1772,6 @@ mod tests {
     /// as visiting a different URL.
     #[test]
     fn an_ordinary_account_is_still_pinned_to_the_host_it_signed_in_on() {
-        if should_skip_db_tests() {
-            return;
-        }
         setup_db();
         let rt = get_runtime();
 
@@ -1861,9 +1813,6 @@ mod tests {
 
     #[test]
     fn test_bootstrap_admin_case_insensitive() {
-        if should_skip_db_tests() {
-            return;
-        }
         setup_db();
         let rt = get_runtime();
 

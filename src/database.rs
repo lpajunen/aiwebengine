@@ -875,13 +875,12 @@ pub async fn init_database(config: &RepositoryConfig, auto_migrate: bool) -> Res
 mod tests {
     use super::*;
 
-    /// A repository config pointed at the test database, or `None` when there
-    /// is none to point at.
-    fn test_repository_config() -> Option<RepositoryConfig> {
-        crate::test_db::connection_string_blocking().map(|connection_string| RepositoryConfig {
-            connection_string: connection_string.to_string(),
+    /// A repository config pointed at the test database.
+    fn test_repository_config() -> RepositoryConfig {
+        RepositoryConfig {
+            connection_string: crate::test_db::require_connection_string().to_string(),
             ..RepositoryConfig::default()
-        })
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -978,14 +977,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_transaction_budget_lasts_exactly_as_long_as_the_transaction() {
-        let Some(config) = test_repository_config() else {
-            eprintln!("Skipping transaction budget test - no test database");
-            return;
-        };
-        let Ok(db) = Database::new(&config).await else {
-            eprintln!("Skipping transaction budget test - could not connect");
-            return;
-        };
+        let config = test_repository_config();
+        let db = Database::new(&config)
+            .await
+            .expect("connect to the test database");
 
         let mut tx = db.pool.begin().await.expect("begin");
         SessionGuards::from_config(&config)
@@ -1017,19 +1012,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn beginning_a_transaction_with_a_budget_hands_it_to_postgres() {
-        let Some(config) = test_repository_config() else {
-            eprintln!("Skipping begin_transaction budget test - no test database");
-            return;
-        };
-        let Ok(db) = Database::new(&config).await else {
-            eprintln!("Skipping begin_transaction budget test - could not connect");
-            return;
-        };
-
-        if !initialize_global_database(Arc::new(db)) {
-            eprintln!("Skipping begin_transaction budget test - global already initialized");
-            return;
-        }
+        let config = test_repository_config();
+        let db = Database::new(&config)
+            .await
+            .expect("connect to the test database");
+        // Each test is its own process, so the global is this test's to set.
+        assert!(initialize_global_database(Arc::new(db)));
 
         // On the blocking thread the engine runs handlers on: the transaction
         // lives in thread-local storage, so the whole exchange has to stay on
@@ -1079,10 +1067,7 @@ mod tests {
     #[tokio::test]
     async fn test_database_connection() {
         // This test requires a running PostgreSQL server.
-        let Some(database_url) = crate::test_db::connection_string_blocking() else {
-            eprintln!("Skipping database test - no test database");
-            return;
-        };
+        let database_url = crate::test_db::require_connection_string();
 
         let config = RepositoryConfig {
             connection_string: database_url.to_string(),
@@ -1108,29 +1093,15 @@ mod tests {
                     }
                 }
             }
-            Ok(Err(e)) => {
-                eprintln!(
-                    "Skipping database test - Failed to connect to database: {}",
-                    e
-                );
-                eprintln!("Make sure the test PostgreSQL server is running");
-                return;
-            }
-            Err(_) => {
-                eprintln!("Skipping database test - Database connection timed out");
-                eprintln!("Make sure PostgreSQL is running and accessible");
-                return;
-            }
+            Ok(Err(e)) => panic!("could not connect to the test database: {}", e),
+            Err(_) => panic!("connecting to the test database timed out"),
         }
     }
 
     #[test]
     fn test_transaction_state_creation() {
         // Test that transaction state is properly initialized
-        let Some(database_url) = crate::test_db::connection_string_blocking() else {
-            eprintln!("Skipping transaction test - no test database");
-            return;
-        };
+        let database_url = crate::test_db::require_connection_string();
 
         // Create a temporary runtime for this test
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -1139,11 +1110,6 @@ mod tests {
                 .max_connections(1)
                 .connect(database_url)
                 .await;
-
-            if pool.is_err() {
-                eprintln!("Skipping transaction test - could not connect to database");
-                return;
-            }
 
             let pool = pool.unwrap();
             let tx = pool.begin().await.unwrap();
@@ -1160,10 +1126,7 @@ mod tests {
 
     #[test]
     fn test_transaction_state_timeout_check() {
-        let Some(database_url) = crate::test_db::connection_string_blocking() else {
-            eprintln!("Skipping transaction test - no test database");
-            return;
-        };
+        let database_url = crate::test_db::require_connection_string();
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
@@ -1171,11 +1134,6 @@ mod tests {
                 .max_connections(1)
                 .connect(database_url)
                 .await;
-
-            if pool.is_err() {
-                eprintln!("Skipping transaction test - could not connect to database");
-                return;
-            }
 
             let pool = pool.unwrap();
             let tx = pool.begin().await.unwrap();
@@ -1237,10 +1195,7 @@ mod tests {
     #[tokio::test]
     async fn test_full_transaction_lifecycle() {
         // Integration test for complete transaction lifecycle
-        let Some(database_url) = crate::test_db::connection_string_blocking() else {
-            eprintln!("Skipping transaction lifecycle test - no test database");
-            return;
-        };
+        let database_url = crate::test_db::require_connection_string();
 
         // Create database with larger pool for testing
         let pool = PgPoolOptions::new()
@@ -1313,10 +1268,7 @@ mod tests {
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "Skipping transaction lifecycle test - Failed to connect: {}",
-                    e
-                );
+                panic!("could not connect to the test database: {}", e);
             }
         }
     }
@@ -1324,10 +1276,7 @@ mod tests {
     #[tokio::test]
     async fn test_transaction_rollback_lifecycle() {
         // Test rollback instead of commit
-        let Some(database_url) = crate::test_db::connection_string_blocking() else {
-            eprintln!("Skipping transaction rollback test - no test database");
-            return;
-        };
+        let database_url = crate::test_db::require_connection_string();
 
         let pool = PgPoolOptions::new()
             .max_connections(10)
@@ -1381,10 +1330,7 @@ mod tests {
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "Skipping transaction rollback test - Failed to connect: {}",
-                    e
-                );
+                panic!("could not connect to the test database: {}", e);
             }
         }
     }
@@ -1392,10 +1338,7 @@ mod tests {
     #[tokio::test]
     async fn test_nested_savepoints() {
         // Test multiple savepoints in a transaction
-        let Some(database_url) = crate::test_db::connection_string_blocking() else {
-            eprintln!("Skipping nested savepoints test - no test database");
-            return;
-        };
+        let database_url = crate::test_db::require_connection_string();
 
         let pool = PgPoolOptions::new()
             .max_connections(10)
@@ -1466,7 +1409,7 @@ mod tests {
                 }
             }
             Err(e) => {
-                eprintln!("Skipping nested savepoints test - Failed to connect: {}", e);
+                panic!("could not connect to the test database: {}", e);
             }
         }
     }

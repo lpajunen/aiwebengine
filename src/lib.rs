@@ -54,7 +54,6 @@ pub mod repository;
 pub mod resource_access;
 pub mod revisions;
 pub mod route_index;
-pub mod safe_helpers;
 pub mod sandbox;
 pub mod scheduler;
 pub mod script_audit;
@@ -4081,10 +4080,6 @@ mod tests {
         })
     }
 
-    fn should_skip_db_tests() -> bool {
-        crate::test_db::connection_string_blocking().is_none()
-    }
-
     fn do_db_init(url: String) {
         // Must be called with an active tokio runtime context (either via block_on or block_in_place).
         // connect_lazy spawns maintenance tasks using the current runtime handle.
@@ -4099,9 +4094,7 @@ mod tests {
 
     fn setup_db() {
         INIT_DB.call_once(|| {
-            let Some(url) = crate::test_db::connection_string_blocking() else {
-                return;
-            };
+            let url = crate::test_db::require_connection_string();
             let url = url.to_string();
             match tokio::runtime::Handle::try_current() {
                 Ok(_) => {
@@ -4149,9 +4142,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_editor_script_execution() {
-        if should_skip_db_tests() {
-            return;
-        }
         setup_db();
         // Load test scripts dynamically using upsert_script
         let _ = repository::upsert_script(
@@ -4198,9 +4188,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_script_crud_operations() {
-        if should_skip_db_tests() {
-            return;
-        }
         setup_db();
         // Test script upsert and retrieval
         let test_uri = "https://example.com/test_script";

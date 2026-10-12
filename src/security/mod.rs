@@ -8,7 +8,6 @@ pub mod csrf;
 pub mod elevation;
 pub mod encryption;
 pub mod headers;
-pub mod operations;
 pub mod rate_limiting;
 pub mod script_crypto;
 pub mod secure_globals;
@@ -29,7 +28,6 @@ pub use encryption::{
     DataEncryption, EncryptedData, EncryptionError, FieldEncryptor, SecureString,
 };
 pub use headers::{SecurityHeadersConfig, security_headers_middleware};
-pub use operations::{OperationResult, SecureOperations, UpsertScriptRequest};
 pub use rate_limiting::{RateLimitConfig, RateLimitKey, RateLimitResult, RateLimiter, TokenBucket};
 pub use secure_globals::{GlobalSecurityConfig, Principal, SecureGlobalContext};
 pub use session::{
@@ -37,7 +35,7 @@ pub use session::{
     SessionSummary, SessionToken, delete_sessions_for_user,
 };
 pub use threat_detection::{ThreatAssessment, ThreatDetectionConfig, ThreatDetector, ThreatLevel};
-pub use validation::{Capability, InputValidator, SecurityError};
+pub use validation::{Capability, SecurityError};
 
 // Re-export convenience macros
 pub use crate::{log_auth_failure, log_authz_failure, log_security_event};

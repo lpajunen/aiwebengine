@@ -13,10 +13,7 @@ static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 fn setup_db() {
     INIT.call_once(|| {
-        // Skip when the database server will not answer.
-        if crate::test_db::connection_string_blocking().is_none() {
-            return;
-        }
+        crate::test_db::require_connection_string();
 
         let pool = crate::test_db::pool();
         let db = Arc::new(crate::database::Database::from_pool(pool.clone()));
@@ -83,21 +80,8 @@ fn test_memory_limit_stops_runaway_allocation() {
     );
 }
 
-// Check if we should skip database-dependent tests
-fn should_skip_db_tests() -> bool {
-    crate::test_db::connection_string_blocking().is_none()
-}
-
 // Shadow execute_script_secure
 fn execute_script_secure(uri: &str, content: &str, principal: Principal) -> ScriptExecutionResult {
-    if should_skip_db_tests() {
-        return ScriptExecutionResult {
-            registrations: HashMap::new(),
-            success: false,
-            error: Some("Test skipped: no test database".to_string()),
-            execution_time_ms: 0,
-        };
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -108,9 +92,6 @@ fn execute_script_secure(uri: &str, content: &str, principal: Principal) -> Scri
 fn execute_script_for_request_secure(
     params: RequestExecutionParams,
 ) -> Result<JsHttpResponse, String> {
-    if should_skip_db_tests() {
-        return Err("Test skipped: no test database".to_string());
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -129,9 +110,6 @@ fn execute_mcp_tool_handler(
     auth_context: Option<crate::auth::JsAuthContext>,
     user_context: crate::security::UserContext,
 ) -> Result<String, String> {
-    if should_skip_db_tests() {
-        return Err("Test skipped: no test database".to_string());
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -162,9 +140,6 @@ fn setup_db_for_test() {
 
 #[test]
 fn test_execute_script_simple_registration() {
-    if should_skip_db_tests() {
-        return;
-    }
     let content = r#"
         routeRegistry.registerRoute("/test", { handler: "handler_function", method: "GET" });
     "#;
@@ -183,10 +158,6 @@ fn test_execute_script_simple_registration() {
 
 #[test]
 fn test_execute_mcp_tool_handler_includes_request_auth_context() {
-    if should_skip_db_tests() {
-        return;
-    }
-
     let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
     setup_db_for_test();
 
@@ -244,10 +215,6 @@ fn test_execute_mcp_tool_handler_includes_request_auth_context() {
 
 #[test]
 fn test_execute_mcp_tool_handler_uses_caller_capabilities() {
-    if should_skip_db_tests() {
-        return;
-    }
-
     let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
     setup_db_for_test();
 
@@ -309,9 +276,6 @@ fn test_execute_mcp_tool_handler_uses_caller_capabilities() {
 
 #[test]
 fn test_execute_script_multiple_registrations() {
-    if should_skip_db_tests() {
-        return;
-    }
     let content = r#"
         routeRegistry.registerRoute("/api/users", { handler: "getUsers", method: "GET" });
         routeRegistry.registerRoute("/api/users", { handler: "createUser", method: "POST" });
@@ -341,9 +305,6 @@ fn test_execute_script_multiple_registrations() {
 
 #[test]
 fn test_execute_script_with_default_method() {
-    if should_skip_db_tests() {
-        return;
-    }
     let content = r#"
         routeRegistry.registerRoute("/default-method", { handler: "handler", method: "GET" });
     "#;
@@ -397,9 +358,6 @@ fn test_execute_script_with_runtime_error() {
 
 #[test]
 fn test_execute_script_with_complex_javascript() {
-    if should_skip_db_tests() {
-        return;
-    }
     let content = r#"
         function setupRoutes() {
             routeRegistry.registerRoute("/api/health", { handler: "healthCheck", method: "GET" });
@@ -431,9 +389,6 @@ fn test_execute_script_with_complex_javascript() {
 
 #[test]
 fn test_execute_script_empty_content() {
-    if should_skip_db_tests() {
-        return;
-    }
     let result = execute_script_secure("empty-script", "", Principal::Engine("test"));
 
     assert!(result.success, "Empty script should succeed");
@@ -443,9 +398,6 @@ fn test_execute_script_empty_content() {
 
 #[test]
 fn test_execute_script_with_console_log() {
-    if should_skip_db_tests() {
-        return;
-    }
     let content = r#"
         routeRegistry.registerRoute("/logged", { handler: "loggedHandler", method: "GET" });
     "#;
@@ -511,9 +463,6 @@ async fn test_register_web_stream_function() {
     use std::sync::Once;
     static INIT: Once = Once::new();
 
-    if should_skip_db_tests() {
-        return;
-    }
     // Setup database first
     setup_db();
 
@@ -561,9 +510,6 @@ async fn test_register_web_stream_function() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_register_web_stream_invalid_path() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -603,9 +549,6 @@ async fn test_register_web_stream_invalid_path() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_send_stream_message_function() {
-    if should_skip_db_tests() {
-        return;
-    }
     setup_db();
 
     let script_content = r#"
@@ -655,9 +598,6 @@ async fn test_send_stream_message_function() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_send_stream_message_json_object() {
-    if should_skip_db_tests() {
-        return;
-    }
     setup_db();
 
     let script_content = r#"
@@ -719,9 +659,6 @@ async fn test_send_stream_message_json_object() {
 
 #[test]
 fn test_script_properties_validation() {
-    if should_skip_db_tests() {
-        return;
-    }
     // Test with a script that exceeds the default 1MB limit
     let large_script =
         "// ".repeat(600_000) + "routeRegistry.registerRoute('/test', { handler: 'handler' });";
@@ -755,9 +692,6 @@ fn test_script_validation_infinite_loop_warning() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_default_content_types() {
     use crate::security::UserContext;
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -875,9 +809,6 @@ async fn test_default_content_types() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_convert_markdown_to_html_simple() {
     use crate::security::UserContext;
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -933,9 +864,6 @@ This is **bold** text.`;
 #[tokio::test(flavor = "multi_thread")]
 async fn test_convert_markdown_to_html_code_block() {
     use crate::security::UserContext;
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -986,9 +914,6 @@ async fn test_convert_markdown_to_html_code_block() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_convert_markdown_to_html_list() {
     use crate::security::UserContext;
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -1039,9 +964,6 @@ async fn test_convert_markdown_to_html_list() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_convert_markdown_to_html_table() {
     use crate::security::UserContext;
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -1096,9 +1018,6 @@ async fn test_convert_markdown_to_html_table() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_convert_markdown_to_html_empty_input() {
     use crate::security::UserContext;
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -1149,9 +1068,6 @@ async fn test_convert_markdown_to_html_empty_input() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_convert_markdown_to_html_complex() {
     use crate::security::UserContext;
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -1232,9 +1148,6 @@ return "world";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_response_builders() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -1315,9 +1228,6 @@ async fn test_response_builders() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_query_object_guarantees() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -1381,9 +1291,6 @@ async fn test_query_object_guarantees() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_query_object_guarantees_empty_params() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
@@ -1435,9 +1342,6 @@ async fn test_query_object_guarantees_empty_params() {
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn test_automatic_path_parameters() {
-    if should_skip_db_tests() {
-        return;
-    }
     let rt = get_runtime();
     let _guard = rt.enter();
     setup_db();
