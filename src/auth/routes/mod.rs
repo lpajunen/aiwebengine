@@ -17,16 +17,20 @@ use sqlx::PgPool;
 mod account;
 mod common;
 mod delegation;
+mod deletion;
 mod elevation;
 mod login;
 mod oauth2;
+mod presence;
 mod session;
 pub use account::*;
 pub use common::*;
 pub use delegation::*;
+pub use deletion::*;
 pub use elevation::*;
 pub use login::*;
 pub use oauth2::*;
+use presence::*;
 pub use session::*;
 
 /// Create authentication router with all routes
@@ -34,6 +38,10 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
     Router::new()
         .route("/login", get(login_page))
         .route("/account", get(account_page))
+        .route(
+            "/account/delete",
+            get(delete_account_page).post(delete_account_route),
+        )
         .route("/login/{provider}", get(start_login))
         .route("/callback/{provider}", get(oauth_callback))
         .route("/guest", post(start_guest))

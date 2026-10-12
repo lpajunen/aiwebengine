@@ -85,8 +85,7 @@ pub(super) fn account_error_message(code: &str) -> &'static str {
              administrator can change what your account holds."
         }
         "authentication_required" => {
-            "Sign in again before switching these on. Proving you are here is the point \
-             of asking."
+            "Sign in again first. Proving you are here is the point of asking."
         }
         "session" => "That session is not one of yours to end. It may already be over.",
         "password" => "That new password is too short.",
@@ -486,7 +485,8 @@ pub async fn account_page(
         {elevation}
         {delegations}
         {sessions}
-        <p class="aw-small"><a href="/auth/logout">Sign out</a></p>"#,
+        <p class="aw-small"><a href="/auth/logout">Sign out</a> ·
+            <a href="{delete}">Delete your account</a></p>"#,
         notice_block = notice_block,
         label = html_escape::encode_text(&label),
         provider = html_escape::encode_text(&session.provider),
@@ -494,6 +494,7 @@ pub async fn account_page(
         elevation = elevation,
         delegations = delegations,
         sessions = sessions,
+        delete = DELETE_ACCOUNT_PATH,
     );
 
     let mut response = signed_in_page_response("Your account", Width::Wide, &body, &nonce);

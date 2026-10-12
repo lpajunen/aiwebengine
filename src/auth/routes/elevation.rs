@@ -296,51 +296,15 @@ pub async fn elevate_page(
         .collect::<Vec<_>>()
         .join("\n                ");
 
-    // How presence is proved. A local account types its password. A federated
-    // one has none here, so the only honest proof is a fresh sign-in — and
-    // this deliberately does not offer a button that would round-trip to the
-    // provider, because without `prompt=login` the provider answers from its
-    // own cookie and nobody proves anything. See `docs/SESSION_ELEVATION.md`.
-    let window = chrono::Duration::seconds(policy.reauth_window_secs);
-    let recently = session
-        .reauthenticated_at
-        .is_some_and(|at| chrono::Utc::now() - at < window);
-    let proof = match (&username, recently) {
-        (Some(_), _) => r#"<label class="aw-field">Your password
-                <input type="password" name="password" autocomplete="current-password" required>
-            </label>"#
-            .to_string(),
-        (None, true) => r#"<p class="aw-explain">You signed in a moment ago, so that is proof
-        enough this time.</p>"#
-            .to_string(),
-        // The provider can be asked to check them again, so offer that rather
-        // than a sign-out: it is one click, it comes back here, and it is a
-        // real challenge rather than a round trip answered from a cookie.
-        (None, false)
-            if auth_manager.can_force_reauthentication(host.as_deref(), &session.provider) =>
-        {
-            format!(
-                r#"<p class="aw-explain">Switching these on needs you to sign in again — that is
-        what asking is for.</p>
-        <p class="aw-small"><a href="/auth/login/{provider_path}?prompt=login&amp;redirect={back}">Check
-        me again with {provider}</a></p>"#,
-                provider_path = html_attribute(&session.provider),
-                provider = html_escape::encode_text(&session.provider),
-                back = html_attribute(&urlencoding::encode(&here)),
-            )
-        }
-        // It cannot, and the engine does not pretend otherwise. A bounce a
-        // provider answers from its own session proves nothing, so the only
-        // honest instruction is the one that actually re-authenticates.
-        (None, false) => format!(
-            r#"<p class="aw-explain">This account signs in through {provider}, which the engine
-        cannot ask to check you again. <a href="/auth/logout">Sign out and back in</a>, then
-        come straight here.</p>"#,
-            provider = html_escape::encode_text(&session.provider),
-        ),
-    };
-
-    let can_submit = username.is_some() || recently;
+    // How presence is proved: a password, or a recent sign-in.
+    let (proof, can_submit) = presence_fields(
+        &auth_manager,
+        &session,
+        username.as_deref(),
+        host.as_deref(),
+        &here,
+        "Switching these on",
+    );
 
     let live = session
         .elevation
@@ -479,7 +443,7 @@ pub async fn elevate_route(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, AuthErrorResponse> {
-    use crate::security::elevation::{self, Elevation, Method};
+    use crate::security::elevation::{self, Elevation};
 
     let policy = elevation::configured();
     if !policy.is_active() {
@@ -545,57 +509,17 @@ pub async fn elevate_route(
         return Ok(fail(crate::auth::error::AuthError::InsufficientPermissions));
     }
 
-    // Proof of presence. A password when the account has one — checked against
-    // the credential rather than trusted from the session, for the reason
-    // `change_password` gives: a stolen cookie must not be enough.
-    let username = crate::auth::local::username_for_user(&session.user_id)
-        .await
-        .map_err(|e| {
-            tracing::error!("Could not read the credential while elevating: {}", e);
-            crate::auth::error::AuthError::Internal("could not check the credential".into())
-        })?;
-
-    let method = if username.is_some() {
-        let password = request.password.as_deref().unwrap_or_default();
-        // Per address and per account, exactly as `login_local` is throttled:
-        // a guess here is worth more than a sign-in, not less.
-        let account = username.clone().unwrap_or_else(|| session.user_id.clone());
-        if !auth_manager
-            .security_context()
-            .check_auth_rate_limit(&ip_addr)
-            .await
-            || !auth_manager
-                .security_context()
-                .account_login_allowed(&account)
-                .await
-        {
-            return Ok(fail(crate::auth::error::AuthError::RateLimitExceeded));
-        }
-        if crate::auth::local::verify_user_password(&session.user_id, password)
-            .await
-            .is_err()
-        {
-            auth_manager
-                .security_context()
-                .record_account_login_failure(&account)
-                .await;
-            return Ok(fail(crate::auth::error::AuthError::InvalidCredentials));
-        }
-        Method::Password
-    } else {
-        // No credential to check, so the only proof is a recent sign-in.
-        // Deliberately not a round trip to the provider: without
-        // `prompt=login` the provider answers from its own cookie and nobody
-        // proves anything, and an engine that called that re-authentication
-        // would be claiming something it cannot back.
-        let window = chrono::Duration::seconds(policy.reauth_window_secs);
-        let fresh = session
-            .reauthenticated_at
-            .is_some_and(|at| chrono::Utc::now() - at < window);
-        if !fresh {
-            return Ok(fail(crate::auth::error::AuthError::AuthenticationRequired));
-        }
-        Method::Provider
+    let method = match prove_presence(
+        &auth_manager,
+        &session,
+        request.password.as_deref(),
+        &ip_addr,
+    )
+    .await
+    {
+        Ok(method) => method,
+        Err(error @ crate::auth::error::AuthError::Internal(_)) => return Err(error.into()),
+        Err(error) => return Ok(fail(error)),
     };
 
     let minutes = request.minutes.unwrap_or(policy.max_minutes);

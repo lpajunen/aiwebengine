@@ -123,6 +123,7 @@ What a script may spend is worth knowing before writing one: each invocation get
         auth::routes::claim_account,
         auth::routes::change_password_route,
         auth::routes::recovery_codes_route,
+        auth::routes::delete_account_route,
         auth::routes::recover_account,
         auth::routes::list_sessions_route,
         auth::routes::revoke_session_route,

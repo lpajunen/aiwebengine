@@ -68,7 +68,7 @@ avoids it by prefixing every task.
 
 ### 4. Quotas
 
-- [ ] A per-account budget on the operation table (ROADMAP: Security 2).
+- [ ] A per-account budget on the operation table (ROADMAP: Security 1).
 - [ ] Low default script limits for scripts the agent creates, and a storage
       cap per account.
 - [ ] Each person sees what their runs cost, on every channel (the agent's
@@ -83,7 +83,7 @@ avoids it by prefixing every task.
 - [x] The Telegram webhook secret is a script secret, compared with
       `crypto.secretEquals`.
 - [ ] The audit line says when an agent acted rather than the person
-      (ROADMAP: Security 3).
+      (ROADMAP: Security 2).
 
 ### 6. Documents that agree with the engine
 
@@ -120,7 +120,7 @@ avoids it by prefixing every task.
       `delete_user` erases the engine's rows and every table that declares
       `person` (`docs/DATABASE_SCHEMA_API.md`).
 - [x] The agent's tables declare `person`.
-- [ ] A person can delete their own account (ROADMAP: Security 1).
+- [x] A person can delete their own account (`/auth/account/delete`).
 - [ ] A short privacy statement: what is stored, where, for how long, and how
       to have it deleted.
 - [ ] Decide whether AGPL-3.0 is the license the pilot's users should meet.

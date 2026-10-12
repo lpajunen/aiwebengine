@@ -487,3 +487,172 @@ async fn signing_out_clears_the_cookie_rather_than_renewing_it() {
 
     engine.shutdown().await;
 }
+
+// ---------------------------------------------------------------------------
+// Deleting your own account
+// ---------------------------------------------------------------------------
+
+/// The deletion page's token, for a signed-in cookie.
+async fn deletion_token(engine: &AdminServer, http: &reqwest::Client, cookie: &str) -> String {
+    let page = http
+        .get(engine.url("/auth/account/delete"))
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await
+        .expect("the deletion page should answer")
+        .text()
+        .await
+        .expect("the page should have a body");
+    csrf_token_from(&page)
+}
+
+/// The whole of it: the password proves the person is there, the typed word
+/// proves they meant it, and afterwards nothing signs in as them.
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_your_own_account_erases_it_and_signs_you_out() {
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let http = engine.anonymous().clone();
+    let (username, cookie) = register_account(&engine, &http)
+        .await
+        .expect("registration should succeed");
+    let token = deletion_token(&engine, &http, &cookie).await;
+
+    let response = http
+        .post(engine.url("/auth/account/delete"))
+        .header(reqwest::header::COOKIE, &cookie)
+        .form(&[
+            ("csrf_token", token.as_str()),
+            ("password", PASSWORD),
+            ("confirm", "delete"),
+        ])
+        .send()
+        .await
+        .expect("the form should be answered");
+
+    assert_eq!(response.status(), 200);
+    let cleared = response
+        .headers()
+        .get(reqwest::header::SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        cleared.contains("Max-Age=0"),
+        "the browser should stop presenting the cookie: {cleared}"
+    );
+
+    assert!(
+        sign_in(&engine, &http, &username, PASSWORD).await.is_none(),
+        "a deleted account does not sign in"
+    );
+    let after = http
+        .get(engine.url("/auth/account"))
+        .header(reqwest::header::COOKIE, &cookie)
+        .send()
+        .await
+        .expect("the account page should answer");
+    assert!(
+        after.status().is_redirection(),
+        "the old session went with the account"
+    );
+
+    engine.shutdown().await;
+}
+
+/// A cookie is not enough: without the typed word, the password, or a token
+/// bound to this account, nothing is deleted.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deletion_without_proof_or_confirmation_deletes_nothing() {
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let http = engine.anonymous().clone();
+    let (username, cookie) = register_account(&engine, &http)
+        .await
+        .expect("registration should succeed");
+    let token = deletion_token(&engine, &http, &cookie).await;
+
+    for (fields, expected) in [
+        (
+            vec![("csrf_token", token.as_str()), ("password", PASSWORD)],
+            "/auth/account/delete?error=confirm",
+        ),
+        (
+            vec![
+                ("csrf_token", token.as_str()),
+                ("password", "not-the-password"),
+                ("confirm", "delete"),
+            ],
+            "/auth/account/delete?error=credentials",
+        ),
+        (
+            vec![
+                ("csrf_token", "not-a-token"),
+                ("password", PASSWORD),
+                ("confirm", "delete"),
+            ],
+            "/auth/account/delete?error=csrf",
+        ),
+    ] {
+        let response = http
+            .post(engine.url("/auth/account/delete"))
+            .header(reqwest::header::COOKIE, &cookie)
+            .form(&fields)
+            .send()
+            .await
+            .expect("the form should be answered");
+        assert!(response.status().is_redirection(), "{expected}");
+        assert_eq!(location_of(&response), expected);
+    }
+
+    assert!(
+        sign_in(&engine, &http, &username, PASSWORD).await.is_some(),
+        "the account should still be there"
+    );
+
+    engine.shutdown().await;
+}
+
+/// The only administrator is told why the button does nothing, and the
+/// endpoint refuses even if it is posted anyway.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_last_administrator_cannot_delete_their_account() {
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let http = engine.anonymous().clone();
+    let cookie = sign_in(
+        &engine,
+        &http,
+        common::TEST_ADMIN_USERNAME,
+        common::TEST_ADMIN_PASSWORD,
+    )
+    .await
+    .expect("the administrator should sign in");
+
+    let page = http
+        .get(engine.url("/auth/account/delete"))
+        .header(reqwest::header::COOKIE, &cookie)
+        .send()
+        .await
+        .expect("the deletion page should answer")
+        .text()
+        .await
+        .expect("the page should have a body");
+    assert!(page.contains("only administrator"), "{page}");
+    assert!(page.contains("disabled"), "the button should be disabled");
+
+    let response = http
+        .post(engine.url("/auth/account/delete"))
+        .header(reqwest::header::COOKIE, &cookie)
+        .form(&[
+            ("csrf_token", csrf_token_from(&page).as_str()),
+            ("password", common::TEST_ADMIN_PASSWORD),
+            ("confirm", "delete"),
+        ])
+        .send()
+        .await
+        .expect("the form should be answered");
+    assert_eq!(
+        location_of(&response),
+        "/auth/account/delete?error=last_administrator"
+    );
+
+    engine.shutdown().await;
+}

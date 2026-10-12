@@ -11,33 +11,28 @@ The order inside each section is the order they matter.
 
 ## Security
 
-1. **A person cannot delete their own account.** `delete_user` erases an
-   account and what the engine and every `person`-declaring table keep about
-   it, but only an administrator can call it. A deletion from `/auth/account`,
-   behind a fresh sign-in, would let a person erase their account themselves
-   rather than asking an administrator to.
-2. **Native tool calls have no budget.** `GitSync` and `ChannelTrigger` are
+1. **Native tool calls have no budget.** `GitSync` and `ChannelTrigger` are
    bounded; an agent loop calling `write_file` is not. A `RateLimitKey` per
    account for the operation table.
-3. **The engine's security audit has no actor dimension.** `security/audit.rs`
+2. **The engine's security audit has no actor dimension.** `security/audit.rs`
    records the person, so a change an agent made as them reads like one they
    made by hand. Carry the principal kind, `UserContext.attenuated` and the
    elevation method into the audit line.
-4. **The 2026-07-28 authorization hardening, the rest of it.** The `iss`
+3. **The 2026-07-28 authorization hardening, the rest of it.** The `iss`
    half of RFC 9207 is done. Left: Client ID Metadata Documents in place of
    open Dynamic Client Registration (a `client_id` that carries provenance,
    where today only the per-user consent in `oauth_client_grants` does),
    `application_type` on registration, and stored remote credentials keyed by
    issuer.
-5. **Consent as a primitive.** `/auth/delegate` is a page the engine renders and
+4. **Consent as a primitive.** `/auth/delegate` is a page the engine renders and
    a record it keeps. Generalised, a script needing approval for anything gets
    an auditable record instead of a boolean in its own table. Design it with the
    elevation page — the same page asked at two lifetimes.
-6. **No machine-to-machine credential, on purpose.** Nothing unattended: an
+5. **No machine-to-machine credential, on purpose.** Nothing unattended: an
    external agent completes a browser OAuth flow once and lives on refresh
    tokens, which forgive a replay for 30 seconds. If revisited, the question to
    answer first is whose roles and realm a userless token carries.
-7. **The cross-origin check has no opt-out.** `security/cross_origin.rs` refuses
+6. **The cross-origin check has no opt-out.** `security/cross_origin.rs` refuses
    a signed-in state-changing request from another origin. A route that must
    accept one (a credentialed cross-origin API) would need a route option;
    add it when such a route exists.

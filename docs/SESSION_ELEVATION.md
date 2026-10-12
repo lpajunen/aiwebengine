@@ -100,7 +100,9 @@ script or client propagates the link; it implements nothing.
 ## Proving the person is there
 
 Clicking a button with the cookie you already have stops a confused script and
-a CSRF, not a stolen session. So `POST /auth/elevate` requires
+a CSRF, not a stolen session. So `POST /auth/elevate` — and
+`POST /auth/account/delete`, which asks the same way (`auth/routes/presence.rs`)
+— requires
 `reauthenticated_at` (set at sign-in and by re-authentication) within
 `reauth_window_secs`:
 

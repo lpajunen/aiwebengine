@@ -130,6 +130,15 @@ offers exactly one of two forms, because they are different acts:
   when the browser is. A federated account is told the other thing it is for: a
   way in that does not depend on the provider being reachable.
 
+It also links to **Delete your account** (`/auth/account/delete`), which works
+for every kind of account. It asks for the proof `/auth/elevate` asks for — the
+password when the account has one, otherwise a sign-in within
+`security.elevation.reauth_window_secs` — and for the word `delete` typed out,
+so neither a stolen cookie nor a stray click can erase anybody. The last
+administrator is refused, as `delete_user` refuses them. On success it erases
+what `delete_user` erases (`docs/DATABASE_SCHEMA_API.md`, `person`), clears the
+cookie and says so.
+
 Signed out, the page redirects to `/auth/login?redirect=/auth/account` and
 comes back, so the link works for someone whose session has aged out. It is
 served `Cache-Control: no-store`, since it names the account it belongs to.
@@ -166,17 +175,18 @@ must not and need not: a cross-site page can POST a form anywhere without a
 preflight, which is how login CSRF signs a victim into an attacker's account,
 but it cannot POST `application/json` without one the engine does not grant.
 
-| Endpoint                          | Requires                                          | Does                                                                                                                                                                         |
-| --------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /auth/guest`                | `allow_guests`                                    | Issues an identity and a session to a caller with no credential. Body: `{"name": "..."}` (optional).                                                                         |
-| `POST /auth/local/register`       | `enabled` and `allow_registration`                | Creates an account and issues a session. Body: `{"username", "password", "name"}`.                                                                                           |
-| `POST /auth/local/login`          | `enabled`                                         | Signs in against a stored credential. Body: `{"username", "password"}`.                                                                                                      |
-| `POST /auth/local/claim`          | `enabled`, plus a session                         | Attaches a credential to the calling account, keeping its `user_id`. Body: `{"username", "password"}`.                                                                       |
-| `POST /auth/local/password`       | `enabled`, plus a session                         | Replaces the calling account's password, given the one it has now. Ends every session the account held and issues a fresh one. Body: `{"current_password", "new_password"}`. |
-| `POST /auth/local/recovery_codes` | `enabled`, `allow_recovery_codes`, plus a session | Issues a fresh set of recovery codes and answers with them, once. Replaces any set the account had. Body: `{"current_password"}`.                                            |
-| `POST /auth/local/recover`        | `enabled` and `allow_recovery_codes`              | Spends a recovery code: sets a new password, ends every session the account held, issues one. Body: `{"username", "code", "new_password"}`.                                  |
-| `GET /auth/sessions`              | A session                                         | The calling account's sessions, newest use first. Nothing in the answer authenticates.                                                                                       |
-| `POST /auth/sessions/revoke`      | A session                                         | Ends one session by the id the listing gave it, or — with no `session` field — every session but the one asking. Body: `{"session"}` (optional).                             |
+| Endpoint                          | Requires                                          | Does                                                                                                                                                                          |
+| --------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /auth/guest`                | `allow_guests`                                    | Issues an identity and a session to a caller with no credential. Body: `{"name": "..."}` (optional).                                                                          |
+| `POST /auth/local/register`       | `enabled` and `allow_registration`                | Creates an account and issues a session. Body: `{"username", "password", "name"}`.                                                                                            |
+| `POST /auth/local/login`          | `enabled`                                         | Signs in against a stored credential. Body: `{"username", "password"}`.                                                                                                       |
+| `POST /auth/local/claim`          | `enabled`, plus a session                         | Attaches a credential to the calling account, keeping its `user_id`. Body: `{"username", "password"}`.                                                                        |
+| `POST /auth/local/password`       | `enabled`, plus a session                         | Replaces the calling account's password, given the one it has now. Ends every session the account held and issues a fresh one. Body: `{"current_password", "new_password"}`.  |
+| `POST /auth/local/recovery_codes` | `enabled`, `allow_recovery_codes`, plus a session | Issues a fresh set of recovery codes and answers with them, once. Replaces any set the account had. Body: `{"current_password"}`.                                             |
+| `POST /auth/local/recover`        | `enabled` and `allow_recovery_codes`              | Spends a recovery code: sets a new password, ends every session the account held, issues one. Body: `{"username", "code", "new_password"}`.                                   |
+| `GET /auth/sessions`              | A session                                         | The calling account's sessions, newest use first. Nothing in the answer authenticates.                                                                                        |
+| `POST /auth/account/delete`       | A session, and proof of presence                  | Deletes the calling account and erases what the engine and every `person` table keep about it. Refused for the last administrator. Body: `{"confirm": "delete", "password"}`. |
+| `POST /auth/sessions/revoke`      | A session                                         | Ends one session by the id the listing gave it, or — with no `session` field — every session but the one asking. Body: `{"session"}` (optional).                              |
 
 `/auth/guest`, `/auth/local/register` and `/auth/local/login` set the session
 cookie on success, and so do `/auth/local/password` and `/auth/local/recover` —
