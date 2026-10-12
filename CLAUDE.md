@@ -50,7 +50,7 @@ cargo run -- --validate-config     # check a config without starting the server
 | Capabilities and `UserContext`                     | `security/capabilities.rs`                                                                               |
 | Engine operations (one table)                      | `engine_api/operations.rs::native_tools`; HTTP from it in `engine_http.rs`                               |
 | Routes, files, streams per host                    | `route_index.rs`, `hosts.rs`, `stream_registry.rs`                                                       |
-| MCP server / client / tasks / ask                  | `mcp.rs`, `mcp_client.rs`, `mcp_tasks.rs`, `mcp_elicitation.rs`                                          |
+| MCP server / client / tasks / ask                  | `mcp_http.rs` (the `/mcp` dispatch), `mcp.rs`, `mcp_client.rs`, `mcp_tasks.rs`, `mcp_elicitation.rs`     |
 | Auth: OAuth2/OIDC, local accounts, sessions        | `auth/`, `security/session.rs` — `docs/INTERNAL_AUTH.md`                                                 |
 | History, pins, read-views                          | `revisions.rs`, `deployments.rs`, `source_view.rs`                                                       |
 | Background work                                    | `scheduler/`, `tasks.rs`, `lease.rs` — `docs/SCRIPT_TASKS.md`                                            |
