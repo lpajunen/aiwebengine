@@ -26,7 +26,14 @@ use tracing::info;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_native_script_update_streaming() {
+    // Each phase says when it finished, on stderr, which nextest prints for a
+    // test it times out: this one has hung past its 180s limit in a full run
+    // and never under stress, and the line it stops after says where to look.
+    let started = std::time::Instant::now();
+    let phase = |name: &str| eprintln!("streaming test: {} after {:?}", name, started.elapsed());
+
     setup_env().await;
+    phase("environment ready");
 
     info!("Testing native /engine/script_updates streaming functionality");
 
@@ -74,6 +81,7 @@ async fn test_native_script_update_streaming() {
         None,
     );
 
+    phase("script stored");
     assert!(
         upsert_result.is_ok(),
         "Script upsert failed: {:?}",
@@ -116,6 +124,7 @@ async fn test_native_script_update_streaming() {
     info!("Testing script deletion through the native engine API...");
 
     let deleted = aiwebengine::engine_api::delete_script_authorized(&user, "test-streaming", None);
+    phase("script deleted");
     assert!(deleted, "Script delete failed");
 
     // Wait for the deletion message
