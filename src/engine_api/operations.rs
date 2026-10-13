@@ -892,9 +892,8 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "clear_git_remote",
-            "Stop a script tracking a repository. The script and its files stay exactly as they \
-            are; what goes is the record of where they came from, so later pulls no longer treat \
-            it as that repository's to replace.",
+            "Stop a script tracking a repository. The script keeps its files; later pulls no \
+            longer treat it as that repository's to replace.",
             || {
                 json!({
                     "type": "object",
@@ -944,17 +943,22 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "pull_from_git",
-            "Pull a public GitHub repository in as scripts: a directory holding main.ts (or .js/.tsx/.jsx) is one script, other files under it become assets at the same relative path, and files removed upstream are removed here.",
+            "Pull a GitHub repository in as scripts: each directory holding main.* is one script with the files under it. Files removed upstream are removed here.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
                         "repo": { "type": "string", "description": "'owner/repo', or any GitHub URL naming it" },
                         "branch": { "type": "string", "description": "Branch to read. Defaults to the repository's default branch." },
-                        "prefix": { "type": "string", "description": "URI prefix for the scripts; defaults to the repository name" },
+                        "prefix": { "type": "string", "description": "Name prefix: directory shop lands as <prefix>-shop" },
+                        "scripts": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Directories to take, not all; later pulls naming none refresh these"
+                        },
                         "force": {
                             "type": "boolean",
-                            "description": "Re-apply even if the repository has not moved",
+                            "description": "Replace files changed here; re-apply even if nothing moved",
                             "default": false
                         }
                     },

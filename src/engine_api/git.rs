@@ -339,6 +339,13 @@ pub(super) fn tool_pull_from_git(args: &Value, user: &UserContext) -> Value {
         branch: arg_str(args, "branch").map(str::to_string),
         prefix: arg_str(args, "prefix").map(str::to_string),
         force: args.get("force").and_then(Value::as_bool).unwrap_or(false),
+        scripts: args.get("scripts").and_then(Value::as_array).map(|names| {
+            names
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        }),
     };
 
     let user = user.clone();

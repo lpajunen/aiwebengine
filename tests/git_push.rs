@@ -356,6 +356,7 @@ fn pull_request(prefix: &str) -> PullRequest {
         branch: None,
         prefix: Some(prefix.to_string()),
         force: false,
+        scripts: None,
     }
 }
 
@@ -849,4 +850,33 @@ async fn status_reports_a_deployment_pin() {
         .await
         .expect("status should answer");
     assert_eq!(status.pinned, Some(revision));
+}
+
+/// Publishing one script into a repository follows that one, not everything
+/// already beside it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_push_follows_the_script_it_published() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = Fixture::start(&[("other/main.js", "function init() {}")])
+        .await
+        .expect("fixture should start");
+
+    let uri = &script_uri("push-follow");
+    edit(uri, "function init() {}");
+
+    let mut request = push_request(uri);
+    request.repo = Some("lpajunen/solution".to_string());
+    push_with(github.client(), &pusher(), request)
+        .await
+        .expect("push should succeed");
+
+    assert_eq!(
+        aiwebengine::git_sync::followed("lpajunen/solution", "main", "")
+            .await
+            .expect("follow should read"),
+        Some(Some(["push-follow".to_string()].into_iter().collect())),
+        "the pushed script, and not `other`"
+    );
 }

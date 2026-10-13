@@ -719,6 +719,14 @@ pub struct PullRequest {
     /// does not capture — so there has to be a way to say "do it anyway" that
     /// does not involve deleting rows to clear a cache.
     pub force: bool,
+    /// The repository's top-level directories to take, when not all of them.
+    ///
+    /// `None` takes what this engine already follows from the repository: the
+    /// scripts it took by name, if it took any that way, and every script the
+    /// repository holds otherwise. Naming directories takes those and makes
+    /// the binding selective, so a script added upstream later is not pulled
+    /// in by a pull that did not ask for it.
+    pub scripts: Option<Vec<String>>,
 }
 
 /// What one script's pull did.
@@ -910,6 +918,33 @@ fn fetch_and_write(
     // about to apply the same rules.
     let recorded_prefix = prefix.clone().unwrap_or_default();
 
+    let named = selection(request.scripts.as_deref())?;
+
+    // Every script this remote and branch wrote here, whatever prefix it was
+    // pulled under: a script is found again by its directory, not its name.
+    let known =
+        crate::database::run_blocking(last_synced(&repo.to_string(), &branch)).unwrap_or_default();
+
+    let remote = repo.to_string();
+    let binding: Vec<&SyncedScript> = known
+        .iter()
+        .filter(|row| row.uri_base.as_deref() == Some(recorded_prefix.as_str()))
+        .collect();
+    // Scripts pulled before follows were recorded have rows and no follow,
+    // and were taken with the whole repository.
+    let followed = crate::database::run_blocking(followed(&remote, &branch, &recorded_prefix))
+        .map_err(|e| SyncError::Storage(format!("Could not read what is followed: {}", e)))?
+        .or_else(|| (!binding.is_empty()).then_some(None));
+
+    // The directories this pull takes, or `None` for all of them: the ones
+    // named, or else the ones this engine follows.
+    let wanted: Option<BTreeSet<String>> = match (&named, &followed) {
+        (Some(named), _) => Some(named.clone()),
+        (None, Some(Some(scripts))) => Some(scripts.clone()),
+        (None, _) => None,
+    };
+    let follows = following_after(followed, named.as_ref());
+
     // Ask before downloading: a repository that has not moved since the last
     // pull costs two small API calls rather than an archive.
     //
@@ -918,17 +953,32 @@ fn fetch_and_write(
     // this pull would compose too, or the shortcut is answering about a mapping
     // that no longer applies and a pull silently does nothing. A row with no
     // base on record carries `None`, which matches nothing, so its first pull
-    // does the work.
+    // does the work. A selection is settled only when every directory in it
+    // has a row: one named for the first time has never been written.
     if !request.force {
-        let known = crate::database::run_blocking(last_synced(&repo.to_string(), &branch))
-            .unwrap_or_default();
-        let settled = !known.is_empty()
-            && known.iter().all(|row| {
-                row.commit == resolved.commit
-                    && row.uri_base.as_deref() == Some(recorded_prefix.as_str())
-                    && row.mapping_version == Some(MAPPING_VERSION)
-            });
+        let current = |row: &SyncedScript| {
+            row.commit == resolved.commit
+                && row.uri_base.as_deref() == Some(recorded_prefix.as_str())
+                && row.mapping_version == Some(MAPPING_VERSION)
+        };
+        let settled = match &wanted {
+            Some(wanted) => wanted.iter().all(|directory| {
+                binding
+                    .iter()
+                    .find(|row| row.repo_dir.as_deref() == Some(directory.as_str()))
+                    .is_some_and(|row| current(row))
+            }),
+            None => !known.is_empty() && known.iter().all(current),
+        };
         if settled {
+            crate::database::run_blocking(record_follow(
+                &remote,
+                &branch,
+                &recorded_prefix,
+                follows.as_ref(),
+                user.user_id.as_deref(),
+            ))
+            .map_err(|e| SyncError::Storage(format!("Could not record the follow: {}", e)))?;
             return Ok(WrittenScripts {
                 branch,
                 commit: resolved.commit,
@@ -940,7 +990,22 @@ fn fetch_and_write(
 
     let archive = client.fetch_archive(repo, &resolved.commit)?;
     let files = extract_tree(&archive)?;
-    let layouts = infer_scripts(&files)?;
+    let mut layouts = infer_scripts(&files)?;
+
+    if let Some(named) = &named {
+        check_named(named, &layouts)?;
+    }
+    // A directory followed before and since removed upstream is not an error:
+    // the repository changed, and refusing every later pull over it would
+    // leave the rest stuck at the commit before.
+    if let Some(wanted) = &wanted {
+        layouts.retain(|layout| {
+            layout
+                .name
+                .as_ref()
+                .is_some_and(|name| wanted.contains(name))
+        });
+    }
 
     // Compose every URI and check every one of them before writing any, so a
     // repository whose fourth script belongs to somebody else is refused whole
@@ -950,8 +1015,6 @@ fn fetch_and_write(
     // records, not by composing its name again: it may have been renamed since,
     // and a pull that composed `shop` for a script now called `storefront`
     // would write a second one beside it.
-    let known =
-        crate::database::run_blocking(last_synced(&repo.to_string(), &branch)).unwrap_or_default();
     let mut planned: Vec<(String, ScriptLayout)> = Vec::with_capacity(layouts.len());
     for layout in layouts {
         let directory = layout.name.clone().unwrap_or_default();
@@ -1008,6 +1071,27 @@ fn fetch_and_write(
         }
     }
 
+    // A pull replaces a script's whole tree, so one changed here since it was
+    // last synced would lose that change without anybody having decided to.
+    // Its revisions still hold it, but nothing would say to look.
+    if !request.force {
+        let changed: Vec<String> = planned
+            .iter()
+            .filter_map(|(uri, _)| {
+                let files = changed_here(uri, &remote)?;
+                Some(format!("'{}' ({})", uri, summarise(&files)))
+            })
+            .collect();
+        if !changed.is_empty() {
+            return Err(SyncError::Diverged(format!(
+                "Changed here since it was last synced: {}. Nothing was pulled. Push the change, \
+                 or pass force to replace it with the repository's copy; the script's revisions \
+                 keep this one.",
+                changed.join(", ")
+            )));
+        }
+    }
+
     let mut scripts = Vec::with_capacity(planned.len());
     for (script_uri, layout) in planned {
         scripts.push(write_script(
@@ -1021,12 +1105,163 @@ fn fetch_and_write(
         )?);
     }
 
+    crate::database::run_blocking(record_follow(
+        &remote,
+        &branch,
+        &recorded_prefix,
+        follows.as_ref(),
+        user.user_id.as_deref(),
+    ))
+    .map_err(|e| SyncError::Storage(format!("Could not record the follow: {}", e)))?;
+
     Ok(WrittenScripts {
         branch,
         commit: resolved.commit,
         scripts,
         up_to_date: false,
     })
+}
+
+/// The directories a caller named, tidied, or `None` when they named none.
+///
+/// A name is a top-level directory as the repository spells it, because that
+/// is what a script is in a repository; the script's name here may differ.
+fn selection(names: Option<&[String]>) -> Result<Option<BTreeSet<String>>, SyncError> {
+    let Some(names) = names else {
+        return Ok(None);
+    };
+    let mut chosen = BTreeSet::new();
+    for name in names {
+        let name = name.trim().trim_matches('/');
+        if name.is_empty() {
+            continue;
+        }
+        if name.contains('/') || name.contains('\\') {
+            return Err(SyncError::Layout(format!(
+                "'{}' is not a script directory: a script is a top-level directory of the \
+                 repository, so name it as one",
+                name
+            )));
+        }
+        chosen.insert(name.to_string());
+    }
+    if chosen.is_empty() {
+        return Err(SyncError::Layout(
+            "scripts names no directory. Leave it out to pull what this engine already follows."
+                .to_string(),
+        ));
+    }
+    Ok(Some(chosen))
+}
+
+/// Refuse a named directory the repository does not hold as a script, rather
+/// than pulling the rest and leaving the caller to notice what is missing.
+fn check_named(named: &BTreeSet<String>, layouts: &[ScriptLayout]) -> Result<(), SyncError> {
+    if layouts.iter().any(|layout| layout.name.is_none()) {
+        return Err(SyncError::Layout(
+            "This repository is one script, with its entry at the root. Pull it without \
+             naming scripts."
+                .to_string(),
+        ));
+    }
+    let held: BTreeSet<&str> = layouts
+        .iter()
+        .filter_map(|layout| layout.name.as_deref())
+        .collect();
+    let missing: Vec<&str> = named
+        .iter()
+        .map(String::as_str)
+        .filter(|name| !held.contains(name))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(SyncError::Layout(format!(
+        "The repository has no script directory {}. It holds: {}.",
+        missing
+            .iter()
+            .map(|name| format!("'{}'", name))
+            .collect::<Vec<_>>()
+            .join(", "),
+        held.into_iter().collect::<Vec<_>>().join(", ")
+    )))
+}
+
+/// What is followed once a pull or push naming `named` has landed, given what
+/// was followed before it (`None`: nothing yet; `Some(None)`: the whole
+/// repository).
+///
+/// Naming adds to a partial follow and starts one where there was none. It
+/// does not narrow a whole-repository follow, which already takes what was
+/// named: pulling one script now is not a request to stop following the rest.
+fn following_after(
+    before: Option<Option<BTreeSet<String>>>,
+    named: Option<&BTreeSet<String>>,
+) -> Option<BTreeSet<String>> {
+    match (named, before) {
+        (Some(named), Some(Some(mut scripts))) => {
+            scripts.extend(named.iter().cloned());
+            Some(scripts)
+        }
+        (Some(_), Some(None)) => None,
+        (Some(named), None) => Some(named.clone()),
+        (None, before) => before.flatten(),
+    }
+}
+
+/// The files of `script_uri` that differ from what its last sync with
+/// `remote` left, or `None` when it is unchanged, was not synced from there,
+/// or the base cannot be read.
+///
+/// Content, not revision numbers: a script that writes a file and deletes it
+/// again has moved its revision and changed nothing.
+fn changed_here(script_uri: &str, remote: &str) -> Option<Vec<String>> {
+    let row = crate::database::run_blocking(sync_row(script_uri)).ok()??;
+    if row.remote != remote {
+        return None;
+    }
+    let base = row.revision_at_sync?;
+    if crate::revisions::current(script_uri) == Some(base) {
+        return None;
+    }
+    let then: BTreeMap<String, String> =
+        crate::database::run_blocking(crate::revisions::files(script_uri, base))
+            .ok()??
+            .into_iter()
+            .map(|file| (file.uri, file.sha256))
+            .collect();
+    let now: BTreeMap<String, String> = crate::repository::fetch_assets(script_uri)
+        .into_iter()
+        .map(|(path, asset)| {
+            use sha2::{Digest, Sha256};
+            (path, hex::encode(Sha256::digest(&asset.content)))
+        })
+        .collect();
+
+    let changed: Vec<String> = then
+        .keys()
+        .chain(now.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|path| then.get(*path) != now.get(*path))
+        .cloned()
+        .collect();
+    (!changed.is_empty()).then_some(changed)
+}
+
+/// A few of `files`, and how many more there are.
+fn summarise(files: &[String]) -> String {
+    const SHOWN: usize = 3;
+    let mut text = files
+        .iter()
+        .take(SHOWN)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if files.len() > SHOWN {
+        text.push_str(&format!(" and {} more", files.len() - SHOWN));
+    }
+    text
 }
 
 /// Write one inferred script: its root, then its assets, then whatever the
@@ -1509,6 +1744,23 @@ fn gather_and_push(
     ))
     .map_err(|e| SyncError::Storage(format!("Could not record the sync: {}", e)))?;
 
+    // Publishing one script into a repository is following that one, not
+    // everything beside it.
+    let remote = repo.to_string();
+    let before = crate::database::run_blocking(followed(&remote, &branch, &recorded_prefix))
+        .map_err(|e| SyncError::Storage(format!("Could not read what is followed: {}", e)))?;
+    let named: Option<BTreeSet<String>> = entry_prefix
+        .as_deref()
+        .map(|dir| BTreeSet::from([dir.to_string()]));
+    crate::database::run_blocking(record_follow(
+        &remote,
+        &branch,
+        &recorded_prefix,
+        following_after(before, named.as_ref()).as_ref(),
+        user.user_id.as_deref(),
+    ))
+    .map_err(|e| SyncError::Storage(format!("Could not record the follow: {}", e)))?;
+
     Ok(PushReport {
         script_uri: request.script_uri.clone(),
         repo: repo.to_string(),
@@ -1720,16 +1972,59 @@ pub async fn bindings() -> crate::error::AppResult<Vec<Binding>> {
 /// binding without writing anything: a push names its repository and records
 /// the binding when it lands, and a binding that has never been either pushed
 /// or pulled describes an agreement neither side has made.
+///
+/// Its directory stops being followed too, or a later pull would find the
+/// script it names unbound and refuse to overwrite it. A follow with no
+/// script left goes, so the next pull starts from nothing.
 pub async fn unbind(script_uri: &str) -> crate::error::AppResult<bool> {
-    let result = sqlx::query("DELETE FROM script_git_sync WHERE script_uri = $1")
-        .bind(script_uri)
-        .execute(&pool()?)
+    let database_error = |e: sqlx::Error| crate::error::AppError::Database {
+        message: format!("Database error clearing a git binding: {}", e),
+        source: None,
+    };
+    let mut tx = pool()?.begin().await.map_err(database_error)?;
+
+    let removed: Option<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "DELETE FROM script_git_sync WHERE script_uri = $1 \
+         RETURNING remote, branch, uri_base, repo_dir",
+    )
+    .bind(script_uri)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(database_error)?;
+
+    let Some((remote, branch, uri_base, repo_dir)) = removed else {
+        return Ok(false);
+    };
+    let uri_base = uri_base.unwrap_or_default();
+
+    if let Some(repo_dir) = repo_dir {
+        sqlx::query(
+            "UPDATE git_follows SET scripts = array_remove(scripts, $4), updated_at = NOW() \
+             WHERE remote = $1 AND branch = $2 AND uri_base = $3 AND scripts IS NOT NULL",
+        )
+        .bind(&remote)
+        .bind(&branch)
+        .bind(&uri_base)
+        .bind(&repo_dir)
+        .execute(&mut *tx)
         .await
-        .map_err(|e| crate::error::AppError::Database {
-            message: format!("Database error clearing a git binding: {}", e),
-            source: None,
-        })?;
-    Ok(result.rows_affected() > 0)
+        .map_err(database_error)?;
+    }
+    sqlx::query(
+        "DELETE FROM git_follows f WHERE f.remote = $1 AND f.branch = $2 AND f.uri_base = $3 \
+         AND (f.scripts = '{}' OR NOT EXISTS ( \
+             SELECT 1 FROM script_git_sync s WHERE s.remote = f.remote AND s.branch = f.branch \
+             AND COALESCE(s.uri_base, '') = f.uri_base))",
+    )
+    .bind(&remote)
+    .bind(&branch)
+    .bind(&uri_base)
+    .execute(&mut *tx)
+    .await
+    .map_err(database_error)?;
+
+    tx.commit().await.map_err(database_error)?;
+    Ok(true)
 }
 
 pub async fn sync_row(script_uri: &str) -> crate::error::AppResult<Option<SyncRow>> {
@@ -2024,6 +2319,61 @@ pub async fn record_sync(
     .await
     .map_err(|e| crate::error::AppError::Database {
         message: format!("Database error recording git sync state: {}", e),
+        source: None,
+    })?;
+    Ok(())
+}
+
+/// What this engine follows from a repository, branch and prefix: `None` when
+/// it follows nothing there yet, `Some(None)` for the whole repository, and
+/// otherwise the directories followed.
+pub async fn followed(
+    remote: &str,
+    branch: &str,
+    uri_base: &str,
+) -> crate::error::AppResult<Option<Option<BTreeSet<String>>>> {
+    let row: Option<(Option<Vec<String>>,)> = sqlx::query_as(
+        "SELECT scripts FROM git_follows WHERE remote = $1 AND branch = $2 AND uri_base = $3",
+    )
+    .bind(remote)
+    .bind(branch)
+    .bind(uri_base)
+    .fetch_optional(&pool()?)
+    .await
+    .map_err(|e| crate::error::AppError::Database {
+        message: format!("Database error reading what is followed: {}", e),
+        source: None,
+    })?;
+    Ok(row.map(|(scripts,)| scripts.map(|scripts| scripts.into_iter().collect())))
+}
+
+/// Record what this engine follows from a repository, branch and prefix.
+pub async fn record_follow(
+    remote: &str,
+    branch: &str,
+    uri_base: &str,
+    scripts: Option<&BTreeSet<String>>,
+    user_id: Option<&str>,
+) -> crate::error::AppResult<()> {
+    let scripts: Option<Vec<&String>> = scripts.map(|scripts| scripts.iter().collect());
+    sqlx::query(
+        r#"
+        INSERT INTO git_follows (remote, branch, uri_base, scripts, created_by)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (remote, branch, uri_base) DO UPDATE SET
+            scripts = EXCLUDED.scripts,
+            updated_at = NOW()
+        "#,
+    )
+    .bind(remote)
+    .bind(branch)
+    .bind(uri_base)
+    .bind(scripts)
+    .bind(user_id)
+    .execute(&pool()?)
+    .await
+    .map_err(|e| crate::error::AppError::Database {
+        message: format!("Database error recording what is followed: {}", e),
         source: None,
     })?;
     Ok(())
@@ -2513,6 +2863,40 @@ mod tests {
         assert_eq!(
             scripts[0].assets.keys().collect::<Vec<_>>(),
             vec!["lib/cart.ts"]
+        );
+    }
+
+    #[test]
+    fn naming_adds_to_a_partial_follow_and_never_narrows_a_whole_one() {
+        let set = |names: &[&str]| -> BTreeSet<String> {
+            names.iter().map(|name| name.to_string()).collect()
+        };
+        let named = set(&["b"]);
+
+        assert_eq!(
+            following_after(None, None),
+            None,
+            "nothing named: the whole"
+        );
+        assert_eq!(
+            following_after(None, Some(&named)),
+            Some(set(&["b"])),
+            "naming starts a partial follow"
+        );
+        assert_eq!(
+            following_after(Some(Some(set(&["a"]))), Some(&named)),
+            Some(set(&["a", "b"])),
+            "and adds to one"
+        );
+        assert_eq!(
+            following_after(Some(None), Some(&named)),
+            None,
+            "but does not narrow the whole repository"
+        );
+        assert_eq!(
+            following_after(Some(Some(set(&["a"]))), None),
+            Some(set(&["a"])),
+            "naming none keeps what is followed"
         );
     }
 }

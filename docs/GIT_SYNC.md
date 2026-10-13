@@ -127,14 +127,51 @@ directory's (`examples-shop`) — set it when two repositories would otherwise
 both want `shop`. With no prefix a directory is simply its own name, and a
 repository that is one script takes the repository's name.
 
+### Taking some of the scripts
+
+```
+pull_from_git(repo: "owner/examples", scripts: ["virtual-world", "blog"])
+pull_from_git(repo: "owner/examples")
+```
+
+`scripts` names the top-level directories to take, as the repository spells
+them, and leaves the rest where they are. A name the repository does not hold
+as a script is refused, and so is any name at all for a repository that is
+itself one script.
+
+The engine remembers what it follows from each repository, branch and prefix
+(the `git_follows` table): either the whole repository or a list of
+directories. A pull that names no scripts takes what is followed, so the second
+line above refreshes `virtual-world` and `blog` and nothing else, and a script
+added upstream later is not pulled in by a pull that did not ask for it. A
+first pull naming none follows the whole repository.
+
+- Naming another directory adds it to a partial follow.
+- Naming one script of a whole-repository follow pulls that one now and keeps
+  following the rest.
+- A followed directory removed upstream is skipped rather than refused, so the
+  others keep updating.
+- Clearing a script's binding (`clear_git_remote`) stops following its
+  directory; clearing the last one ends the follow, and the next pull starts
+  from nothing.
+- Pushing a script into a repository follows that script, not everything
+  already beside it.
+
 A pull is a **sync, not an append**: a module deleted upstream is deleted here,
 because a script that kept building against a file its source of truth no
 longer has is a script nobody can reason about. Everything the pull writes for
 one script — the entry, the assets, the removals — is one revision and one
 `init()`.
 
+So a pull **will not replace a change made here**. When a script's files differ
+from what its last sync left, the pull is refused, names the files, and writes
+nothing. Push the change first, or pass `force: true` to take the repository's
+copy; the replaced files stay in the script's revisions. Content is what
+counts: a file written and deleted again is no change. The revision a sync last
+agreed on is kept by revision pruning, since it is what the comparison reads.
+
 Pulling a repository that has not moved costs two small API calls and does
-nothing. Pass `force: true` to download and re-apply anyway, for the times the
+nothing. `force: true` also downloads and re-applies anyway, for the times the
 engine's answer looks stale for a reason the commit cannot show. Forcing decides
 whether to _look_, not what to conclude: identical content still writes nothing
 and records no revision.

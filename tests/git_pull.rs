@@ -176,6 +176,7 @@ fn request(prefix: &str) -> PullRequest {
         branch: None,
         prefix: Some(prefix.to_string()),
         force: false,
+        scripts: None,
     }
 }
 
@@ -460,6 +461,7 @@ async fn a_missing_branch_is_reported_as_missing() {
             branch: Some("no-such-branch".to_string()),
             prefix: Some("git-branch".to_string()),
             force: false,
+            scripts: None,
         },
     )
     .await
@@ -603,6 +605,7 @@ async fn force_re_applies_a_repository_that_has_not_moved() {
             branch: None,
             prefix: Some("git-force".to_string()),
             force: true,
+            scripts: None,
         },
     )
     .await
@@ -703,6 +706,7 @@ async fn a_pull_that_writes_nothing_still_moves_the_watermark() {
             branch: None,
             prefix: Some("git-watermark".to_string()),
             force: true,
+            scripts: None,
         },
     )
     .await
@@ -1002,4 +1006,507 @@ async fn a_renamed_script_is_still_the_one_the_repository_writes() {
     );
 
     clear(&renamed);
+}
+
+// ============================================================================
+// Taking part of a repository
+// ============================================================================
+
+/// A pull of `repo` under `prefix` that takes only the directories named.
+fn selecting(repo: &str, prefix: &str, scripts: &[&str]) -> PullRequest {
+    PullRequest {
+        repo: repo.to_string(),
+        branch: None,
+        prefix: Some(prefix.to_string()),
+        force: false,
+        scripts: Some(scripts.iter().map(|name| name.to_string()).collect()),
+    }
+}
+
+/// A pull of `repo` under `prefix` that names no directories.
+fn following(repo: &str, prefix: &str) -> PullRequest {
+    PullRequest {
+        scripts: None,
+        ..selecting(repo, prefix, &[])
+    }
+}
+
+fn pulled(report: &aiwebengine::git_sync::PullReport) -> Vec<&str> {
+    let mut names: Vec<&str> = report
+        .scripts
+        .iter()
+        .map(|script| script.script_uri.as_str())
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+const THREE_SCRIPTS: &[(&str, &str)] = &[
+    ("a/main.ts", "function init() {}"),
+    ("b/main.ts", "function init() {}"),
+    ("c/main.ts", "function init() {}"),
+];
+
+#[tokio::test(flavor = "multi_thread")]
+async fn naming_scripts_takes_only_those() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+
+    let report = pull_with(
+        github.client(),
+        &puller(),
+        selecting("lpajunen/named", "named", &["a", "/c/"]),
+    )
+    .await
+    .expect("pull should succeed");
+
+    assert_eq!(pulled(&report), ["named-a", "named-c"]);
+    assert!(
+        repository::fetch_script("named-b").is_none(),
+        "a directory not named is not taken"
+    );
+}
+
+/// The selection is remembered, so following part of a repository does not
+/// turn into following all of it the first time somebody pulls without
+/// repeating the names.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pull_naming_none_refreshes_only_what_was_named() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+    pull_with(
+        github.client(),
+        &puller(),
+        selecting("lpajunen/followed", "followed", &["a"]),
+    )
+    .await
+    .expect("first pull should succeed");
+
+    let unmoved = pull_with(
+        github.client(),
+        &puller(),
+        following("lpajunen/followed", "followed"),
+    )
+    .await
+    .expect("repeat pull should succeed");
+    assert!(unmoved.up_to_date, "nothing moved, so nothing to do");
+
+    github.push(
+        "2222222222222222222222222222222222222222",
+        &[
+            ("a/main.ts", "function init() { /* v2 */ }"),
+            ("b/main.ts", "function init() { /* v2 */ }"),
+            ("d/main.ts", "function init() {}"),
+        ],
+    );
+    let report = pull_with(
+        github.client(),
+        &puller(),
+        following("lpajunen/followed", "followed"),
+    )
+    .await
+    .expect("pull after a push should succeed");
+
+    assert_eq!(pulled(&report), ["followed-a"]);
+    assert_eq!(
+        asset_text("followed-a", "main.ts").as_deref(),
+        Some("function init() { /* v2 */ }")
+    );
+    assert!(repository::fetch_script("followed-b").is_none());
+    assert!(
+        repository::fetch_script("followed-d").is_none(),
+        "a script added upstream is not pulled in unasked"
+    );
+}
+
+/// Naming one more directory at a commit the others already stand at still
+/// has work to do, and afterwards the binding follows both.
+#[tokio::test(flavor = "multi_thread")]
+async fn naming_another_script_adds_it_to_what_is_followed() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+    pull_with(
+        github.client(),
+        &puller(),
+        selecting("lpajunen/added", "added", &["a"]),
+    )
+    .await
+    .expect("first pull should succeed");
+
+    let report = pull_with(
+        github.client(),
+        &puller(),
+        selecting("lpajunen/added", "added", &["b"]),
+    )
+    .await
+    .expect("naming another should succeed");
+    assert!(!report.up_to_date, "b has never been written here");
+    assert_eq!(pulled(&report), ["added-b"]);
+
+    github.push(
+        "3333333333333333333333333333333333333333",
+        &[
+            ("a/main.ts", "function init() { /* v2 */ }"),
+            ("b/main.ts", "function init() { /* v2 */ }"),
+            ("c/main.ts", "function init() { /* v2 */ }"),
+        ],
+    );
+    let report = pull_with(
+        github.client(),
+        &puller(),
+        following("lpajunen/added", "added"),
+    )
+    .await
+    .expect("refresh should succeed");
+    assert_eq!(pulled(&report), ["added-a", "added-b"]);
+    assert!(repository::fetch_script("added-c").is_none());
+}
+
+/// Without a selection, a binding follows the whole repository, and a script
+/// added upstream arrives with the next pull.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_whole_repository_binding_takes_what_is_added_upstream() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[("a/main.ts", "function init() {}")])
+        .await
+        .expect("fixture should start");
+    pull_with(
+        github.client(),
+        &puller(),
+        following("lpajunen/whole", "whole"),
+    )
+    .await
+    .expect("first pull should succeed");
+
+    github.push(
+        "4444444444444444444444444444444444444444",
+        &[
+            ("a/main.ts", "function init() {}"),
+            ("b/main.ts", "function init() {}"),
+        ],
+    );
+    let report = pull_with(
+        github.client(),
+        &puller(),
+        following("lpajunen/whole", "whole"),
+    )
+    .await
+    .expect("second pull should succeed");
+    assert_eq!(pulled(&report), ["whole-a", "whole-b"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn naming_a_directory_the_repository_lacks_is_refused() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+
+    let error = pull_with(
+        github.client(),
+        &puller(),
+        selecting("lpajunen/missing", "missing", &["a", "nope"]),
+    )
+    .await
+    .expect_err("an unknown directory should be refused");
+
+    let message = error.to_string();
+    assert!(message.contains("'nope'"), "{message}");
+    assert!(
+        message.contains("a, b, c"),
+        "names what is there: {message}"
+    );
+    assert!(
+        repository::fetch_script("missing-a").is_none(),
+        "refused whole, not applied in part"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_single_script_repository_cannot_be_taken_in_part() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[
+        ("main.ts", "function init() {}"),
+        ("a/main.ts", "function init() {}"),
+    ])
+    .await
+    .expect("fixture should start");
+
+    let error = pull_with(
+        github.client(),
+        &puller(),
+        selecting("lpajunen/single", "single", &["a"]),
+    )
+    .await
+    .expect_err("a one-script repository has no directories to choose");
+    assert!(error.to_string().contains("one script"), "{error}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_selection_must_name_a_top_level_directory() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+
+    for scripts in [&["a/lib"][..], &[" "][..]] {
+        let error = pull_with(
+            github.client(),
+            &puller(),
+            selecting("lpajunen/shape", "shape", scripts),
+        )
+        .await
+        .expect_err("the selection should be refused");
+        assert!(
+            matches!(error, aiwebengine::git_sync::SyncError::Layout(_)),
+            "{error}"
+        );
+    }
+}
+
+/// Write `path` into a script the way a caller does, recording a revision.
+async fn write_here(script_uri: &str, path: &str, content: &str) {
+    let encoded = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(content)
+    };
+    let (uri, path) = (script_uri.to_string(), path.to_string());
+    tokio::task::spawn_blocking(move || {
+        aiwebengine::engine_api::upsert_asset_authorized(
+            &UserContext::admin("local-editor".to_string()),
+            &uri,
+            &path,
+            "text/plain",
+            &encoded,
+        )
+    })
+    .await
+    .expect("no panic")
+    .expect("the write should land");
+}
+
+/// A pull replaces a script's whole tree, so a change made here since the last
+/// sync would go without anybody having decided it should.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pull_will_not_replace_a_change_made_here() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[("a/main.ts", "function init() {}")])
+        .await
+        .expect("fixture should start");
+    pull_with(
+        github.client(),
+        &puller(),
+        following("lpajunen/edited", "edited"),
+    )
+    .await
+    .expect("first pull should succeed");
+
+    write_here("edited-a", "notes.md", "mine").await;
+    github.push(
+        "5555555555555555555555555555555555555555",
+        &[("a/main.ts", "function init() { /* v2 */ }")],
+    );
+
+    let error = pull_with(
+        github.client(),
+        &puller(),
+        following("lpajunen/edited", "edited"),
+    )
+    .await
+    .expect_err("a change made here should stop the pull");
+    assert!(
+        matches!(error, aiwebengine::git_sync::SyncError::Diverged(_)),
+        "{error}"
+    );
+    assert!(error.to_string().contains("notes.md"), "{error}");
+    assert_eq!(asset_text("edited-a", "notes.md").as_deref(), Some("mine"));
+    assert_eq!(
+        asset_text("edited-a", "main.ts").as_deref(),
+        Some("function init() {}"),
+        "nothing was pulled"
+    );
+
+    let mut forced = following("lpajunen/edited", "edited");
+    forced.force = true;
+    pull_with(github.client(), &puller(), forced)
+        .await
+        .expect("force replaces it");
+    assert!(asset_text("edited-a", "notes.md").is_none());
+    assert_eq!(
+        asset_text("edited-a", "main.ts").as_deref(),
+        Some("function init() { /* v2 */ }")
+    );
+}
+
+/// Content is what counts: a file written and deleted again changes nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_change_undone_here_does_not_stop_a_pull() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[("a/main.ts", "function init() {}")])
+        .await
+        .expect("fixture should start");
+    pull_with(
+        github.client(),
+        &puller(),
+        following("lpajunen/undone", "undone"),
+    )
+    .await
+    .expect("first pull should succeed");
+
+    write_here("undone-a", "scratch.txt", "scratch").await;
+    tokio::task::spawn_blocking(|| {
+        aiwebengine::engine_api::delete_asset_authorized(
+            &UserContext::admin("local-editor".to_string()),
+            "undone-a",
+            "scratch.txt",
+        )
+        .unwrap_or_else(|_| panic!("the delete should be authorized"))
+    })
+    .await
+    .expect("no panic");
+
+    github.push(
+        "6666666666666666666666666666666666666666",
+        &[("a/main.ts", "function init() { /* v2 */ }")],
+    );
+    pull_with(
+        github.client(),
+        &puller(),
+        following("lpajunen/undone", "undone"),
+    )
+    .await
+    .expect("the content is what the last sync left, so the pull goes ahead");
+}
+
+/// Naming one script of a whole-repository follow pulls that one now; it is
+/// not a request to stop following the rest.
+#[tokio::test(flavor = "multi_thread")]
+async fn naming_a_script_does_not_narrow_a_whole_follow() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[
+        ("a/main.ts", "function init() {}"),
+        ("b/main.ts", "function init() {}"),
+    ])
+    .await
+    .expect("fixture should start");
+    pull_with(
+        github.client(),
+        &puller(),
+        following("lpajunen/wide", "wide"),
+    )
+    .await
+    .expect("first pull should succeed");
+
+    github.push(
+        "7777777777777777777777777777777777777777",
+        &[
+            ("a/main.ts", "function init() { /* v2 */ }"),
+            ("b/main.ts", "function init() {}"),
+            ("c/main.ts", "function init() {}"),
+        ],
+    );
+    let report = pull_with(
+        github.client(),
+        &puller(),
+        selecting("lpajunen/wide", "wide", &["a"]),
+    )
+    .await
+    .expect("naming one should succeed");
+    assert_eq!(pulled(&report), ["wide-a"]);
+
+    let report = pull_with(
+        github.client(),
+        &puller(),
+        following("lpajunen/wide", "wide"),
+    )
+    .await
+    .expect("refresh should succeed");
+    assert!(
+        pulled(&report).contains(&"wide-c"),
+        "still the whole repository: {:?}",
+        pulled(&report)
+    );
+}
+
+/// Clearing one followed script's binding stops following it, rather than
+/// leaving every later pull to refuse over a script it no longer owns.
+#[tokio::test(flavor = "multi_thread")]
+async fn clearing_a_followed_script_stops_following_it() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+    pull_with(
+        github.client(),
+        &puller(),
+        selecting("lpajunen/cleared", "cleared", &["a", "b"]),
+    )
+    .await
+    .expect("first pull should succeed");
+
+    aiwebengine::git_sync::unbind("cleared-b")
+        .await
+        .expect("unbind should succeed");
+    assert_eq!(
+        aiwebengine::git_sync::followed("lpajunen/cleared", "main", "cleared")
+            .await
+            .expect("follow should read"),
+        Some(Some(["a".to_string()].into_iter().collect()))
+    );
+
+    github.push(
+        "8888888888888888888888888888888888888888",
+        &[
+            ("a/main.ts", "function init() { /* v2 */ }"),
+            ("b/main.ts", "function init() { /* v2 */ }"),
+            ("c/main.ts", "function init() {}"),
+        ],
+    );
+    let report = pull_with(
+        github.client(),
+        &puller(),
+        following("lpajunen/cleared", "cleared"),
+    )
+    .await
+    .expect("refresh should succeed");
+    assert_eq!(pulled(&report), ["cleared-a"]);
+
+    // With nothing left, the follow goes, and the next pull starts over.
+    aiwebengine::git_sync::unbind("cleared-a")
+        .await
+        .expect("unbind should succeed");
+    assert_eq!(
+        aiwebengine::git_sync::followed("lpajunen/cleared", "main", "cleared")
+            .await
+            .expect("follow should read"),
+        None
+    );
 }

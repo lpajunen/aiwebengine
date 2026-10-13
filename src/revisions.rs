@@ -1333,7 +1333,7 @@ pub struct PruneOutcome {
 
 /// Delete revisions the policy does not protect, then the blobs nothing cites.
 ///
-/// Three things are never deleted, whatever the policy says:
+/// These are never deleted, whatever the policy says:
 ///
 /// - a **labelled** revision, because a label is someone having said out loud
 ///   that this one is worth returning to;
@@ -1342,6 +1342,9 @@ pub struct PruneOutcome {
 ///   away the answer exactly when the question gets asked;
 /// - the **newest** revision of every script, which `keep_per_script` covers
 ///   for any sane value and which the `>= 1` clamp guarantees for the rest.
+/// - a **pinned** revision, because it is what the script is serving;
+/// - the revision a **git sync** last agreed on, because a pull compares the
+///   script against it to tell whether it was changed here.
 ///
 /// Age and count are both required before anything goes: a revision has to be
 /// older than `keep_days` *and* outside the newest `keep_per_script` of its
@@ -1427,6 +1430,13 @@ async fn prune_revisions(scope: Option<&str>, retention: Retention) -> AppResult
                            SELECT 1 FROM script_deployments d
                            WHERE d.script_uri = ranked.script_uri
                              AND d.revision = ranked.revision
+                       )
+                       -- What a git sync last agreed on is what a pull
+                       -- compares against to see what changed here.
+                       AND NOT EXISTS (
+                           SELECT 1 FROM script_git_sync g
+                           WHERE g.script_uri = ranked.script_uri
+                             AND g.revision_at_sync = ranked.revision
                        )
                        AND ranked.recency > $1
                        AND ranked.created_at < NOW() - make_interval(days => $2)
