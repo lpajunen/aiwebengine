@@ -316,12 +316,36 @@ pub(super) fn noting_follow(args: &Value, user: &UserContext, mut result: Value)
     else {
         return result;
     };
+    let paths = written_paths(args);
+    if !paths.is_empty()
+        && paths
+            .iter()
+            .all(|path| crate::database::run_blocking(crate::git_sync::is_kept_here(script, path)))
+    {
+        return result;
+    }
     result["followed"] = json!(format!(
         "'{}' follows {} on a schedule. Its pulls are refused while this change is only here: \
          push it (push_to_git) to keep receiving updates.",
         script, follow.remote
     ));
     result
+}
+
+/// The paths a write operation touches; empty when it names none.
+fn written_paths(args: &Value) -> Vec<&str> {
+    let mut paths: Vec<&str> = arg_str(args, "path").into_iter().collect();
+    if args.get("content").is_some() && args.get("path").is_none() {
+        // write_files' 'content' is the entrypoint, which is never kept.
+        paths.push("main.ts");
+    }
+    for file in args["files"].as_array().into_iter().flatten() {
+        paths.extend(file["name"].as_str());
+    }
+    for path in args["remove"].as_array().into_iter().flatten() {
+        paths.extend(path.as_str());
+    }
+    paths
 }
 
 pub(super) fn binding_json(binding: &crate::git_sync::Binding) -> Value {

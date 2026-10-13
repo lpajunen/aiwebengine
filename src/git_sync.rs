@@ -168,6 +168,9 @@ struct IgnorePattern {
 #[derive(Debug, Clone, Default)]
 pub struct IgnoreRules {
     patterns: Vec<IgnorePattern>,
+    /// The file as written, kept with a binding so the engine can tell its own
+    /// files apart without asking the repository again.
+    text: String,
 }
 
 impl IgnoreRules {
@@ -182,7 +185,13 @@ impl IgnoreRules {
     pub fn parse(text: &str) -> Self {
         Self {
             patterns: text.lines().filter_map(parse_pattern).collect(),
+            text: text.to_string(),
         }
+    }
+
+    /// The text the rules were read from.
+    pub fn text(&self) -> &str {
+        &self.text
     }
 
     /// What the rules say about a path, or `None` when none of them mention it.
@@ -1431,6 +1440,19 @@ fn kept_here(path: &str, directory: Option<&str>, ignore: &IgnoreRules) -> bool 
     is_excluded(&repo_path, path, ignore)
 }
 
+/// Whether `path` in `script_uri` is a file the engine keeps for itself: one
+/// the script's repository excludes, as of the last sync.
+pub async fn is_kept_here(script_uri: &str, path: &str) -> bool {
+    match sync_row(script_uri).await {
+        Ok(Some(row)) => kept_here(
+            path.trim_start_matches('/'),
+            row.repo_dir.as_deref(),
+            &row.ignore,
+        ),
+        _ => false,
+    }
+}
+
 /// The rules in a repository's [`IGNORE_FILE`], or none.
 fn ignore_rules_in(files: &BTreeMap<String, Vec<u8>>) -> IgnoreRules {
     files
@@ -1573,6 +1595,7 @@ fn write_script(
         layout.name.as_deref().unwrap_or_default(),
         watermark,
         user.user_id.as_deref(),
+        ignore,
     ))
     .map_err(|e| SyncError::Storage(format!("Could not record the sync: {}", e)))?;
 
@@ -1889,6 +1912,7 @@ fn gather_and_push(
         entry_prefix.as_deref().unwrap_or_default(),
         revision,
         user.user_id.as_deref(),
+        &ignore,
     ))
     .map_err(|e| SyncError::Storage(format!("Could not record the sync: {}", e)))?;
 
@@ -2069,6 +2093,8 @@ pub struct SyncRow {
     /// The directory of the repository this script is; empty for the root.
     pub repo_dir: Option<String>,
     pub revision_at_sync: Option<i32>,
+    /// The repository's ignore rules as of the last sync.
+    pub ignore: IgnoreRules,
 }
 
 /// One script's binding, for a listing.
@@ -2178,7 +2204,7 @@ pub async fn unbind(script_uri: &str) -> crate::error::AppResult<bool> {
 pub async fn sync_row(script_uri: &str) -> crate::error::AppResult<Option<SyncRow>> {
     use sqlx::Row;
     let row = sqlx::query(
-        "SELECT remote, branch, last_commit, uri_base, revision_at_sync, repo_dir \
+        "SELECT remote, branch, last_commit, uri_base, revision_at_sync, repo_dir, ignore_rules \
          FROM script_git_sync WHERE script_uri = $1",
     )
     .bind(script_uri)
@@ -2196,6 +2222,7 @@ pub async fn sync_row(script_uri: &str) -> crate::error::AppResult<Option<SyncRo
         uri_base: row.get::<Option<String>, _>(3),
         revision_at_sync: row.get::<Option<i32>, _>(4),
         repo_dir: row.get::<Option<String>, _>(5),
+        ignore: IgnoreRules::parse(&row.get::<String, _>(6)),
     }))
 }
 
@@ -2340,7 +2367,17 @@ pub async fn status_with(
         Err(e) => (None, Some(e.to_string())),
     };
 
-    let local_moved = revision != row.revision_at_sync;
+    // A moved revision is a change only if the content moved too, leaving out
+    // the files the repository leaves to the engine.
+    let local_moved = revision != row.revision_at_sync && {
+        let (uri, remote) = (script_uri.to_string(), row.remote.clone());
+        let (directory, ignore) = (row.repo_dir.clone(), row.ignore.clone());
+        tokio::task::spawn_blocking(move || {
+            changed_here(&uri, &remote, directory.as_deref(), &ignore).is_some()
+        })
+        .await
+        .map_err(|e| SyncError::Storage(format!("Status did not finish: {}", e)))?
+    };
     let state = match &remote_commit {
         None => SyncState::Unreachable,
         Some(commit) => match (commit != &row.last_commit, local_moved) {
@@ -2435,13 +2472,14 @@ pub async fn record_sync(
     repo_dir: &str,
     revision: Option<i32>,
     user_id: Option<&str>,
+    ignore: &IgnoreRules,
 ) -> crate::error::AppResult<()> {
     sqlx::query(
         r#"
         INSERT INTO script_git_sync
             (script_uri, remote, branch, last_commit, uri_base, mapping_version,
-             revision_at_sync, synced_at, synced_by, repo_dir)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9)
+             revision_at_sync, synced_at, synced_by, repo_dir, ignore_rules)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9, $10)
         ON CONFLICT (script_uri) DO UPDATE SET
             remote = EXCLUDED.remote,
             branch = EXCLUDED.branch,
@@ -2451,7 +2489,8 @@ pub async fn record_sync(
             mapping_version = EXCLUDED.mapping_version,
             revision_at_sync = COALESCE(EXCLUDED.revision_at_sync, script_git_sync.revision_at_sync),
             synced_at = EXCLUDED.synced_at,
-            synced_by = EXCLUDED.synced_by
+            synced_by = EXCLUDED.synced_by,
+            ignore_rules = EXCLUDED.ignore_rules
         "#,
     )
     .bind(script_uri)
@@ -2463,6 +2502,7 @@ pub async fn record_sync(
     .bind(revision)
     .bind(user_id)
     .bind(repo_dir)
+    .bind(ignore.text())
     .execute(&pool()?)
     .await
     .map_err(|e| crate::error::AppError::Database {
@@ -2830,6 +2870,7 @@ mod tests {
             uri_base: None,
             repo_dir: dir.map(str::to_string),
             revision_at_sync: None,
+            ignore: IgnoreRules::default(),
         };
         // Renamed since it was pulled: still the directory it came from.
         assert_eq!(

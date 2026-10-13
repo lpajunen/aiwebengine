@@ -110,8 +110,10 @@ takes shop's and leaves another script's alone.
 
 What the ignore file excludes is also **what the engine keeps for itself**. A
 file a script holds at a path the repository excludes is never the repository's:
-a pull leaves it where it is and does not count it as a change made here, and a
-push does not publish it. That is how a script writes files of its own and
+a pull leaves it where it is and does not count it as a change made here, a
+push does not publish it, and status does not report it as `ahead`. The engine
+keeps the rules from the last sync to tell, so a change to them counts from the
+next pull or push. That is how a script writes files of its own and
 still follows its repository — an agent keeps the skills it learns under
 `learned/`, and its repository ignores `agent/learned/`.
 

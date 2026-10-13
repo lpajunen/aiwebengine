@@ -2105,6 +2105,16 @@ async fn files_the_repository_ignores_are_kept_and_never_block_a_pull() {
     .expect("first pull should succeed");
 
     write_here("kept-a", "learned/refunds/SKILL.md", "written here").await;
+    assert!(aiwebengine::git_sync::is_kept_here("kept-a", "learned/refunds/SKILL.md").await);
+    assert!(!aiwebengine::git_sync::is_kept_here("kept-a", "main.ts").await);
+    let status = aiwebengine::git_sync::status_with(github.client(), "kept-a")
+        .await
+        .expect("status should read");
+    assert_eq!(
+        status.state,
+        aiwebengine::git_sync::SyncState::InSync,
+        "a file the engine keeps is not a change to push"
+    );
 
     github.push(
         "6666666666666666666666666666666666666666",
