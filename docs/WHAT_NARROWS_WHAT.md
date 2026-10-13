@@ -31,21 +31,23 @@ holding in your head instead of re-learning per layer:
 
 ## The layers, outermost first
 
-| Layer                 | Narrows                                                                          | Who decides                             | How long it lasts      | Where it is documented         |
-| --------------------- | -------------------------------------------------------------------------------- | --------------------------------------- | ---------------------- | ------------------------------ |
-| **Role**              | which tier an account is                                                         | an administrator                        | until changed          | `INTERNAL_AUTH.md`, CLAUDE.md  |
-| **Realm**             | which hosts an account is a principal on                                         | an administrator, or bootstrap          | until changed          | CLAUDE.md (identities, realms) |
-| **Token audience**    | which host and path a bearer token may be used on, and which grades it may carry | the OAuth2 client's request, at consent | the token's life       | CLAUDE.md (`/mcp`, OAuth2)     |
-| **Session elevation** | which gated capabilities the session holds _now_                                 | the person, by re-authenticating        | minutes                | `SESSION_ELEVATION.md`         |
-| **Delegation**        | what a script may do as a person while they are away                             | the person, at `/auth/delegate`         | days, mandatory expiry | `DELEGATION.md`                |
-| **Sub-execution**     | what one piece of code, and which hosts it may reach                             | the script, `sandbox.run`               | one call               | `CAPABILITY_ATTENUATION.md`    |
-| **Script limits**     | what one script may _spend_: time, memory                                        | an administrator                        | until changed          | `SCRIPT_LIMITS.md`             |
+| Layer                 | Narrows                                                                          | Who decides                             | How long it lasts        | Where it is documented         |
+| --------------------- | -------------------------------------------------------------------------------- | --------------------------------------- | ------------------------ | ------------------------------ |
+| **Role**              | which tier an account is                                                         | an administrator                        | until changed            | `INTERNAL_AUTH.md`, CLAUDE.md  |
+| **Realm**             | which hosts an account is a principal on                                         | an administrator, or bootstrap          | until changed            | CLAUDE.md (identities, realms) |
+| **Token audience**    | which host and path a bearer token may be used on, and which grades it may carry | the OAuth2 client's request, at consent | the token's life         | CLAUDE.md (`/mcp`, OAuth2)     |
+| **Session elevation** | which gated capabilities the session holds _now_                                 | the person, by re-authenticating        | minutes                  | `SESSION_ELEVATION.md`         |
+| **Delegation**        | what a script may do as a person while they are away                             | the person, at `/auth/delegate`         | days, mandatory expiry   | `DELEGATION.md`                |
+| **Scheduled follow**  | what a git follow may do as a person while they are away: their own scripts      | the person, with `follow_git`           | until any account change | `GIT_SYNC.md`                  |
+| **Sub-execution**     | what one piece of code, and which hosts it may reach                             | the script, `sandbox.run`               | one call                 | `CAPABILITY_ATTENUATION.md`    |
+| **Script limits**     | what one script may _spend_: time, memory                                        | an administrator                        | until changed            | `SCRIPT_LIMITS.md`             |
 
 Read top to bottom it is the order a request meets them: an account has a tier
 and a realm, a credential has an audience, a session has an elevation, a
-background run has a delegation, and a call inside a script has whatever the
-script chose to narrow it to. The last row is not authority at all; it sits in
-the table because it is the one a developer reaches for in the same breath.
+background run has a delegation (or, for a git follow, the schedule its person
+set), and a call inside a script has whatever the script chose to narrow it
+to. The last row is not authority at all; it sits in the table because it is
+the one a developer reaches for in the same breath.
 
 ### Role and tier
 

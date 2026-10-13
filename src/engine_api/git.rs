@@ -298,16 +298,89 @@ pub(super) fn binding_json(binding: &crate::git_sync::Binding) -> Value {
 }
 
 pub(super) fn tool_list_git_bindings(_args: &Value, user: &UserContext) -> Value {
-    match crate::database::run_blocking(crate::git_sync::bindings()) {
-        Ok(bindings) => json!({
-            "bindings": bindings
+    let bindings = match crate::database::run_blocking(crate::git_sync::bindings()) {
+        Ok(bindings) => bindings,
+        Err(e) => return refuse(Refusal::Failed, e.to_string()),
+    };
+    let follows = match crate::database::run_blocking(crate::git_follow::list()) {
+        Ok(follows) => follows,
+        Err(e) => return refuse_sync(&e),
+    };
+    json!({
+        "bindings": bindings
+            .iter()
+            .filter(|binding| can_read_history(user, &binding.script_uri))
+            .map(binding_json)
+            .collect::<Vec<Value>>(),
+        "follows": follows
+            .iter()
+            .filter(|follow| crate::git_follow::visible_to(follow, user))
+            .map(follow_json)
+            .collect::<Vec<Value>>(),
+        "timestamp": iso_timestamp(),
+    })
+}
+
+pub(super) fn follow_json(follow: &crate::git_follow::Follow) -> Value {
+    json!({
+        "repo": follow.remote,
+        "branch": follow.branch,
+        "prefix": follow.uri_base,
+        "scripts": follow.scripts,
+        "everyMinutes": follow.every_minutes,
+        "mode": follow.mode.as_str(),
+        "actingUser": follow.acting_user,
+        "nextDueAt": follow.next_due_at.map(|at| at.to_rfc3339()),
+        "lastRunAt": follow.last_run_at.map(|at| at.to_rfc3339()),
+        "lastOk": follow.last_ok,
+        "lastOutcome": follow.last_outcome,
+    })
+}
+
+pub(super) fn tool_follow_git(args: &Value, user: &UserContext) -> Value {
+    let Some(repo) = arg_str(args, "repo") else {
+        return missing_arg("repo");
+    };
+    let Some(every_minutes) = args
+        .get("every_minutes")
+        .and_then(Value::as_i64)
+        .and_then(|minutes| i32::try_from(minutes).ok())
+    else {
+        return missing_arg("every_minutes");
+    };
+    let mode = match arg_str(args, "mode") {
+        None => crate::git_follow::Mode::Apply,
+        Some(mode) => match crate::git_follow::Mode::parse(mode) {
+            Some(mode) => mode,
+            None => {
+                return refuse(Refusal::BadRequest, "mode is one of check, stage or apply");
+            }
+        },
+    };
+
+    let request = crate::git_follow::FollowRequest {
+        repo: repo.to_string(),
+        branch: arg_str(args, "branch").map(str::to_string),
+        prefix: arg_str(args, "prefix").map(str::to_string),
+        scripts: args.get("scripts").and_then(Value::as_array).map(|names| {
+            names
                 .iter()
-                .filter(|binding| can_read_history(user, &binding.script_uri))
-                .map(binding_json)
-                .collect::<Vec<Value>>(),
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        }),
+        every_minutes,
+        mode,
+    };
+
+    let user = user.clone();
+    match crate::database::run_blocking(crate::git_follow::schedule(&user, request)) {
+        Ok(follow) => json!({
+            "success": true,
+            "follow": follow_json(&follow),
             "timestamp": iso_timestamp(),
         }),
-        Err(e) => refuse(Refusal::Failed, e.to_string()),
+        Err(e) => refuse_sync(&e),
     }
 }
 

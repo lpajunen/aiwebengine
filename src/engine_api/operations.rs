@@ -270,7 +270,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "exposure_report",
-            "List registrations the engine refused to publish. 'scripts': a file outside the directory that exposes it ('public/' is served, 'resources/' is an MCP resource, the rest is private). 'collisions': a host, path and method already held by an older script. 'unclassified': scripts whose init() has not run cleanly.",
+            "List registrations the engine refused: 'scripts' (a file outside its exposing directory: public/ is served, resources/ is MCP, the rest private), 'collisions' (a host, path and method an older script holds), 'unclassified' (init() has not run cleanly).",
             || {
                 json!({
                     "type": "object",
@@ -308,7 +308,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "read_file",
-            "Read one file of a script, or part of it with 'lines' or 'grep'. The bytes are 'content', with 'encoding' saying 'utf8' or 'base64'; the reply carries the file's sha256 (edit_file's base_sha256). Reads head, which for a pinned script is not what it serves; a 'deployment' block says so.",
+            "Read one file of a script, or part with 'lines' or 'grep'. 'content' is utf8 or base64 per 'encoding'; 'sha256' is edit_file's base_sha256. Reads head; a 'deployment' block says when a pin serves something else.",
             || {
                 json!({
                     "type": "object",
@@ -343,7 +343,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "write_files",
-            "Write several of a script's files as one change, then run init() once. Modules go in 'text' as plain source ('content_base64' for non-text); 'remove' deletes paths. One revision, nothing written if any file is rejected. The entrypoint (main.ts/.js/.tsx/.jsx) is one of the files, or 'content'; writing it takes WriteScripts, the rest WriteAssets, both with ownership or administrator. The answer includes a 'check' report: read its diagnostics first.",
+            "Write several of a script's files as one change, then run init() once. Modules go in 'text' as plain source ('content_base64' for non-text); 'remove' deletes paths. One revision, nothing written if any file is rejected. The entrypoint (main.*) is one of the files, or 'content'. The answer includes a 'check' report: read its diagnostics first.",
             || {
                 json!({
                     "type": "object",
@@ -380,7 +380,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "edit_file",
-            "Edit one file in place by replacing strings, without resending it, then run init() once. Each old_string must be present and unique unless replace_all is set; nothing is written unless every edit applies. Editing the entrypoint takes WriteScripts and ownership; other files WriteAssets and ownership. Edits head; a pinned script keeps serving its pinned revision. The answer includes a 'check' report.",
+            "Edit one file in place by replacing strings, without resending it, then run init() once. Each old_string must be present and unique unless replace_all is set; nothing is written unless every edit applies. Edits head; a pinned script keeps serving its pinned revision. The answer includes a 'check' report.",
             || {
                 json!({
                     "type": "object",
@@ -781,7 +781,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "get_script_limits",
-            "What one script may spend, and what that resolves to once the engine's own settings are laid under it. Omit 'script' to list every override in the engine — which is the way to find out why one script behaves differently from the rest.",
+            "What one script may spend, resolved against the engine's own settings. Omit 'script' to list every override, to find why one script behaves differently.",
             || {
                 json!({
                     "type": "object",
@@ -907,7 +907,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "get_git_status",
-            "Where a script stands against its repository: unbound, in_sync, behind, ahead, diverged or unreachable. Ask this before pushing rather than reading the refusal. Also reports the deployment pin.",
+            "Where a script stands against its repository (unbound, in_sync, behind, ahead, diverged or unreachable), and its deployment pin. Ask before pushing.",
             || {
                 json!({
                     "type": "object",
@@ -921,7 +921,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "push_to_git",
-            "Publish a script's files to a GitHub repository as one commit, laid out the way pull_from_git reads them back. Files the script does not own are left alone. Refuses when both sides changed since the last sync; the engine does not merge. Needs a stored credential with write access.",
+            "Publish a script's files to GitHub as one commit, laid out as pull_from_git reads them; files it does not own are left alone. Refuses when both sides changed since the last sync. Needs a credential with write access.",
             || {
                 json!({
                     "type": "object",
@@ -966,6 +966,25 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
                 })
             },
             tool_pull_from_git,
+        ),
+        (
+            "follow_git",
+            "Pull a repository on a schedule as you, writing only scripts you own; a script changed here is never replaced.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "repo": { "type": "string" },
+                        "branch": { "type": "string" },
+                        "prefix": { "type": "string" },
+                        "scripts": { "type": "array", "items": { "type": "string" } },
+                        "every_minutes": { "type": "integer", "description": "10 to 10080; 0 stops" },
+                        "mode": { "type": "string", "enum": ["check", "stage", "apply"], "description": "stage keeps serving the pinned revision; default apply" }
+                    },
+                    "required": ["repo", "every_minutes"]
+                })
+            },
+            tool_follow_git,
         ),
         (
             "get_deployment",

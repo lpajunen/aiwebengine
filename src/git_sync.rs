@@ -776,30 +776,46 @@ struct WrittenScripts {
 /// thread. Re-initialising the scripts afterwards is async and runs here, once
 /// per script rather than once per file.
 pub async fn pull(user: &UserContext, request: PullRequest) -> Result<PullReport, SyncError> {
-    let host = crate::git_github::HOST;
+    let client = client_for(user).await?;
+    pull_through(client, user, request).await
+}
 
-    // Asked before anything is fetched, so a deployment that has turned git
-    // sync off answers with the reason rather than with a network error.
+/// A GitHub client acting as `user`, or the refusal when this engine does not
+/// read from GitHub at all.
+///
+/// Asked before anything is fetched, so a deployment that has turned git sync
+/// off answers with the reason rather than with a network error. The token is
+/// the caller's own, never anybody else's: the account that reaches GitHub is
+/// the account that asked, which keeps the attribution on the far side
+/// matching the attribution here.
+pub async fn client_for(user: &UserContext) -> Result<crate::git_github::GitHubClient, SyncError> {
+    let host = crate::git_github::HOST;
     if !crate::config::git_config().allows(host) {
         return Err(SyncError::AccessDenied(format!(
             "This engine is not configured to read from {}",
             host
         )));
     }
-
-    // The caller's own token, never anybody else's: the account that reaches
-    // GitHub is the account that asked, which is what keeps the attribution on
-    // the far side matching the attribution here.
     let token = match &user.user_id {
         Some(user_id) => crate::git_credentials::token_for(user_id, host).await,
         None => None,
     };
-    let authenticated = token.is_some();
+    Ok(crate::git_github::GitHubClient::new()?.with_token(token))
+}
+
+/// [`pull_with`], spending the account's git budget and recording the pull in
+/// the audit log: what every pull a person or a follow makes goes through.
+pub async fn pull_through(
+    client: crate::git_github::GitHubClient,
+    user: &UserContext,
+    request: PullRequest,
+) -> Result<PullReport, SyncError> {
+    let host = crate::git_github::HOST;
+    let authenticated = client.is_authenticated();
 
     spend_budget(user).await?;
 
     let repo_label = request.repo.clone();
-    let client = crate::git_github::GitHubClient::new()?.with_token(token);
     let report = pull_with(client, user, request).await;
 
     match &report {
@@ -899,21 +915,7 @@ fn fetch_and_write(
     // named after its directory alone, and two repositories that both hold a
     // `shop` meet at the "did not put it there" guard below rather than being
     // told apart by a prefix nobody asked for.
-    let prefix = request
-        .prefix
-        .as_deref()
-        .map(|prefix| prefix.trim().trim_matches('/'))
-        .filter(|prefix| !prefix.is_empty())
-        .map(str::to_string);
-    if let Some(prefix) = &prefix
-        && (prefix.contains("://") || prefix.contains('/') || prefix.contains('\\'))
-    {
-        return Err(SyncError::Layout(format!(
-            "'{}' is not a usable prefix: scripts are named with a slug now, so a prefix is a \
-             name such as 'acme', not a URL or a path",
-            prefix
-        )));
-    }
+    let prefix = normalize_prefix(request.prefix.as_deref())?;
     // What a row records, so the pull that wrote it can tell whether it is
     // about to apply the same rules.
     let recorded_prefix = prefix.clone().unwrap_or_default();
@@ -930,11 +932,11 @@ fn fetch_and_write(
         .iter()
         .filter(|row| row.uri_base.as_deref() == Some(recorded_prefix.as_str()))
         .collect();
-    // Scripts pulled before follows were recorded have rows and no follow,
-    // and were taken with the whole repository.
-    let followed = crate::database::run_blocking(followed(&remote, &branch, &recorded_prefix))
-        .map_err(|e| SyncError::Storage(format!("Could not read what is followed: {}", e)))?
-        .or_else(|| (!binding.is_empty()).then_some(None));
+    let followed = with_older_bindings(
+        crate::database::run_blocking(followed(&remote, &branch, &recorded_prefix))
+            .map_err(|e| SyncError::Storage(format!("Could not read what is followed: {}", e)))?,
+        !binding.is_empty(),
+    );
 
     // The directories this pull takes, or `None` for all of them: the ones
     // named, or else the ones this engine follows.
@@ -1122,11 +1124,41 @@ fn fetch_and_write(
     })
 }
 
+/// A prefix as the caller gave it, tidied, or `None` for none.
+///
+/// What the caller gave and nothing invented: with no prefix a script is named
+/// after its directory alone.
+pub(crate) fn normalize_prefix(prefix: Option<&str>) -> Result<Option<String>, SyncError> {
+    let prefix = prefix
+        .map(|prefix| prefix.trim().trim_matches('/'))
+        .filter(|prefix| !prefix.is_empty())
+        .map(str::to_string);
+    if let Some(prefix) = &prefix
+        && (prefix.contains("://") || prefix.contains('/') || prefix.contains('\\'))
+    {
+        return Err(SyncError::Layout(format!(
+            "'{}' is not a usable prefix: scripts are named with a slug now, so a prefix is a \
+             name such as 'acme', not a URL or a path",
+            prefix
+        )));
+    }
+    Ok(prefix)
+}
+
+/// What is followed, counting scripts pulled before follows were recorded:
+/// those have rows and no follow, and were taken with the whole repository.
+pub(crate) fn with_older_bindings(
+    followed: Option<Option<BTreeSet<String>>>,
+    bound: bool,
+) -> Option<Option<BTreeSet<String>>> {
+    followed.or_else(|| bound.then_some(None))
+}
+
 /// The directories a caller named, tidied, or `None` when they named none.
 ///
 /// A name is a top-level directory as the repository spells it, because that
 /// is what a script is in a repository; the script's name here may differ.
-fn selection(names: Option<&[String]>) -> Result<Option<BTreeSet<String>>, SyncError> {
+pub(crate) fn selection(names: Option<&[String]>) -> Result<Option<BTreeSet<String>>, SyncError> {
     let Some(names) = names else {
         return Ok(None);
     };
@@ -1194,7 +1226,7 @@ fn check_named(named: &BTreeSet<String>, layouts: &[ScriptLayout]) -> Result<(),
 /// Naming adds to a partial follow and starts one where there was none. It
 /// does not narrow a whole-repository follow, which already takes what was
 /// named: pulling one script now is not a request to stop following the rest.
-fn following_after(
+pub(crate) fn following_after(
     before: Option<Option<BTreeSet<String>>>,
     named: Option<&BTreeSet<String>>,
 ) -> Option<BTreeSet<String>> {

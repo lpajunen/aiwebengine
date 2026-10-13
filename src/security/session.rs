@@ -95,6 +95,15 @@ pub async fn delete_sessions_for_user(pool: &PgPool, user_id: &str) -> Result<u6
             "Sessions were ended but the delegations could not be withdrawn"
         );
     }
+    // A scheduled git follow acts as the account too, for the same reason and
+    // with the same caveat: it re-reads the account on every run.
+    if let Err(e) = crate::git_follow::pause_for(user_id).await {
+        tracing::error!(
+            user = %user_id,
+            error = %e,
+            "Sessions were ended but the account's git follows could not be paused"
+        );
+    }
 
     Ok(result.rows_affected())
 }

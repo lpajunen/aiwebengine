@@ -1510,3 +1510,419 @@ async fn clearing_a_followed_script_stops_following_it() {
         None
     );
 }
+
+// ============================================================================
+// Following on a schedule
+// ============================================================================
+
+use aiwebengine::git_follow::{self, FollowRequest, Mode};
+
+/// An account holding the editor role, and the context its own session has.
+async fn an_editor(label: &str) -> (String, UserContext) {
+    let user_id = aiwebengine::user_repository::upsert_internal_user(
+        Some(format!("follow test {}", label)),
+        "test".to_string(),
+        format!("{}-{}", label, uuid::Uuid::new_v4()),
+        "localhost".to_string(),
+    )
+    .await
+    .expect("the account should be created");
+    aiwebengine::user_repository::add_user_role(
+        &user_id,
+        aiwebengine::user_repository::UserRole::Editor,
+    )
+    .expect("the role should be granted");
+    let context = UserContext::for_session(aiwebengine::security::SessionRoles {
+        user_id: Some(&user_id),
+        is_admin: false,
+        is_editor: true,
+        elevation: None,
+        via_token: false,
+    });
+    (user_id, context)
+}
+
+fn every_ten(repo: &str, prefix: &str, scripts: Option<&[&str]>, mode: Mode) -> FollowRequest {
+    FollowRequest {
+        repo: repo.to_string(),
+        branch: None,
+        prefix: Some(prefix.to_string()),
+        scripts: scripts.map(|names| names.iter().map(|name| name.to_string()).collect()),
+        every_minutes: 10,
+        mode,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_scheduled_follow_pulls_as_the_account_that_set_it() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+    let (user_id, editor) = an_editor("apply").await;
+
+    let follow = git_follow::schedule_with(
+        github.client(),
+        &editor,
+        every_ten("lpajunen/sched", "sched", Some(&["a"]), Mode::Apply),
+    )
+    .await
+    .expect("an editor may schedule a follow");
+    assert_eq!(follow.acting_user.as_deref(), Some(user_id.as_str()));
+    assert!(follow.next_due_at.is_some(), "due straight away");
+
+    let (ok, outcome) = git_follow::run(&follow, Some(github.client())).await;
+    assert!(ok, "{outcome}");
+    assert!(outcome.starts_with("Pulled"), "{outcome}");
+    assert!(repository::fetch_script("sched-a").is_some());
+    assert!(repository::fetch_script("sched-b").is_none());
+    assert!(
+        aiwebengine::engine_api::can_write_script(&editor, "sched-a"),
+        "the script belongs to the account the follow ran as"
+    );
+}
+
+/// Claiming moves the next run on, so a second claim at the same moment —
+/// another instance, or the next tick — finds nothing due.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_due_follow_is_claimed_once() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+    let (_, editor) = an_editor("claim").await;
+    git_follow::schedule_with(
+        github.client(),
+        &editor,
+        every_ten("lpajunen/claimed", "claimed", None, Mode::Check),
+    )
+    .await
+    .expect("schedule should succeed");
+
+    let first = git_follow::claim_due().await.expect("claim should run");
+    assert_eq!(first.len(), 1);
+    let second = git_follow::claim_due().await.expect("claim should run");
+    assert!(second.is_empty(), "already claimed until the next interval");
+}
+
+/// The next run steps from when this one was due, so a tick that claims it a
+/// little late does not push every later run back by a tick; a run missed by
+/// more than an interval starts again from now rather than running to catch up.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_claim_keeps_the_interval_and_a_long_miss_starts_from_now() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+    let (_, editor) = an_editor("cadence").await;
+    git_follow::schedule_with(
+        github.client(),
+        &editor,
+        every_ten("lpajunen/cadence", "cadence", None, Mode::Check),
+    )
+    .await
+    .expect("schedule should succeed");
+    let pool = common::test_pool().await;
+    let due_at = |offset: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let row = sqlx::query(
+                "UPDATE git_follows SET next_due_at = NOW() - $1::interval \
+                 WHERE uri_base = 'cadence' RETURNING next_due_at",
+            )
+            .bind(offset)
+            .fetch_one(&pool)
+            .await
+            .expect("the follow should exist");
+            sqlx::Row::get::<chrono::DateTime<chrono::Utc>, _>(&row, "next_due_at")
+        }
+    };
+    let claimed = || async {
+        git_follow::claim_due()
+            .await
+            .expect("claim should run")
+            .into_iter()
+            .find(|follow| follow.uri_base == "cadence")
+            .expect("the follow is due")
+    };
+
+    let was_due = due_at("30 seconds").await;
+    let next = claimed().await.next_due_at.expect("still scheduled");
+    assert_eq!(next, was_due + chrono::Duration::minutes(10));
+
+    due_at("1 day").await;
+    let next = claimed().await.next_due_at.expect("still scheduled");
+    assert!(next > chrono::Utc::now() + chrono::Duration::minutes(9));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_follow_writes_only_scripts_its_account_owns() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+    // An administrator pulled it first, so the scripts are theirs.
+    pull_with(
+        github.client(),
+        &puller(),
+        selecting("lpajunen/theirs", "theirs", &["a"]),
+    )
+    .await
+    .expect("the administrator's pull should succeed");
+
+    let (_, editor) = an_editor("not-owner").await;
+    let follow = git_follow::schedule_with(
+        github.client(),
+        &editor,
+        every_ten("lpajunen/theirs", "theirs", None, Mode::Apply),
+    )
+    .await
+    .expect("scheduling decides nothing about ownership yet");
+
+    github.push(
+        "9999999999999999999999999999999999999999",
+        &[("a/main.ts", "function init() { /* v2 */ }")],
+    );
+    let (ok, outcome) = git_follow::run(&follow, Some(github.client())).await;
+    assert!(!ok, "{outcome}");
+    assert!(outcome.contains("do not own"), "{outcome}");
+    assert_eq!(
+        asset_text("theirs-a", "main.ts").as_deref(),
+        Some("function init() {}")
+    );
+}
+
+/// Background work acting for somebody holds what its grant says until the
+/// grant ends; a follow it set up would outlive that.
+#[tokio::test(flavor = "multi_thread")]
+async fn only_the_person_can_schedule_a_follow() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+    let (_, mut delegated) = an_editor("delegated").await;
+    delegated.acting.kind = aiwebengine::security::ActingKind::Delegated;
+
+    let error = git_follow::schedule_with(
+        github.client(),
+        &delegated,
+        every_ten("lpajunen/delegated", "delegated", None, Mode::Apply),
+    )
+    .await
+    .expect_err("a delegated run cannot schedule");
+    assert!(
+        matches!(error, aiwebengine::git_sync::SyncError::AccessDenied(_)),
+        "{error}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn another_account_cannot_take_over_a_follow() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+    let (_, first) = an_editor("first").await;
+    let (_, second) = an_editor("second").await;
+    git_follow::schedule_with(
+        github.client(),
+        &first,
+        every_ten("lpajunen/taken", "taken", None, Mode::Apply),
+    )
+    .await
+    .expect("the first schedule should succeed");
+
+    let error = git_follow::schedule_with(
+        github.client(),
+        &second,
+        every_ten("lpajunen/taken", "taken", None, Mode::Apply),
+    )
+    .await
+    .expect_err("it runs as somebody else");
+    assert!(error.to_string().contains("another account"), "{error}");
+}
+
+/// Changing what an account may do pauses its follows, as it withdraws its
+/// delegations.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_role_change_pauses_the_accounts_follows() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+    let (user_id, editor) = an_editor("demoted").await;
+    git_follow::schedule_with(
+        github.client(),
+        &editor,
+        every_ten("lpajunen/demoted", "demoted", None, Mode::Apply),
+    )
+    .await
+    .expect("schedule should succeed");
+
+    aiwebengine::user_repository::remove_user_role(
+        &user_id,
+        &aiwebengine::user_repository::UserRole::Editor,
+    )
+    .expect("the role should be removed");
+
+    let follow = git_follow::get("lpajunen/demoted", "main", "demoted")
+        .await
+        .expect("follow should read")
+        .expect("the follow is kept");
+    assert_eq!(follow.every_minutes, None, "no longer scheduled");
+    assert_eq!(follow.acting_user, None, "and acts for nobody");
+    assert!(
+        follow
+            .last_outcome
+            .as_deref()
+            .is_some_and(|outcome| outcome.starts_with("Paused")),
+        "{:?}",
+        follow.last_outcome
+    );
+}
+
+/// An account that can no longer write scripts stops the follow at the run,
+/// even when nothing paused it beforehand.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_for_an_account_that_cannot_write_pauses_it() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+    let (user_id, editor) = an_editor("gone").await;
+    let follow = git_follow::schedule_with(
+        github.client(),
+        &editor,
+        every_ten("lpajunen/gone", "gone", None, Mode::Apply),
+    )
+    .await
+    .expect("schedule should succeed");
+
+    aiwebengine::user_repository::delete_user(&user_id).expect("the account should go");
+
+    let (ok, outcome) = git_follow::run(&follow, Some(github.client())).await;
+    assert!(!ok);
+    assert!(outcome.contains("no longer exists"), "{outcome}");
+    assert!(repository::fetch_script("gone-a").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_check_follow_reports_and_writes_nothing() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+    let (_, editor) = an_editor("check").await;
+    let follow = git_follow::schedule_with(
+        github.client(),
+        &editor,
+        every_ten("lpajunen/checked", "checked", Some(&["a"]), Mode::Check),
+    )
+    .await
+    .expect("schedule should succeed");
+
+    let (ok, outcome) = git_follow::run(&follow, Some(github.client())).await;
+    assert!(ok, "{outcome}");
+    assert!(outcome.starts_with("Behind"), "{outcome}");
+    assert!(
+        repository::fetch_script("checked-a").is_none(),
+        "nothing written"
+    );
+
+    pull_with(
+        github.client(),
+        &editor,
+        following("lpajunen/checked", "checked"),
+    )
+    .await
+    .expect("a pull by hand should succeed");
+    let (ok, outcome) = git_follow::run(&follow, Some(github.client())).await;
+    assert!(ok, "{outcome}");
+    assert!(outcome.starts_with("Up to date"), "{outcome}");
+}
+
+/// A staged pull lands in head while each script keeps serving what it served.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stage_follow_pulls_without_going_live() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+    let (_, editor) = an_editor("stage").await;
+    pull_with(
+        github.client(),
+        &editor,
+        selecting("lpajunen/staged", "staged", &["a"]),
+    )
+    .await
+    .expect("the first pull should succeed");
+    let served = aiwebengine::revisions::current("staged-a").expect("a revision");
+
+    let follow = git_follow::schedule_with(
+        github.client(),
+        &editor,
+        every_ten("lpajunen/staged", "staged", None, Mode::Stage),
+    )
+    .await
+    .expect("schedule should succeed");
+    github.push(
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        &[("a/main.ts", "function init() { /* v2 */ }")],
+    );
+
+    let (ok, outcome) = git_follow::run(&follow, Some(github.client())).await;
+    assert!(ok, "{outcome}");
+    assert!(outcome.contains("pinned 1"), "{outcome}");
+    assert_eq!(
+        aiwebengine::deployments::pinned("staged-a"),
+        Some(served),
+        "still serving what it served"
+    );
+    assert_eq!(
+        asset_text("staged-a", "main.ts").as_deref(),
+        Some("function init() { /* v2 */ }"),
+        "the pull is in head, for deploy_script"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_schedule_names_a_sensible_interval() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+    let (_, editor) = an_editor("interval").await;
+    for every_minutes in [1, 9, 7 * 24 * 60 + 1, -5] {
+        let mut request = every_ten("lpajunen/interval", "interval", None, Mode::Apply);
+        request.every_minutes = every_minutes;
+        let error = git_follow::schedule_with(github.client(), &editor, request)
+            .await
+            .expect_err("out of range");
+        assert!(
+            matches!(error, aiwebengine::git_sync::SyncError::Layout(_)),
+            "{every_minutes}: {error}"
+        );
+    }
+}

@@ -223,6 +223,48 @@ unchanged script makes no commit at all.
 Pushing takes ownership of the script or administrator, and needs a stored
 credential with write access.
 
+## Following on a schedule
+
+```
+follow_git(repo: "owner/examples", scripts: ["virtual-world"], every_minutes: 60)
+follow_git(repo: "owner/examples", every_minutes: 60, mode: "stage")
+follow_git(repo: "owner/examples", every_minutes: 0)          # stop
+```
+
+A follow can pull on its own, every 10 minutes to once a week. It is the same
+pull a person makes, from the same follow, and it refuses the same things: it
+never replaces a script changed here, and it never writes a script the
+repository did not put there.
+
+| `mode`  | Each run                                                                                                                         |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `apply` | pulls; what it pulls is served, unless the script is pinned (the default)                                                        |
+| `stage` | pins every followed script to what it serves now, then pulls into head; `deploy_script` serves it. A new script is live at once. |
+| `check` | records whether the repository has moved, and writes nothing                                                                     |
+
+**Whose authority.** A run acts as the account that set the schedule, with that
+account's stored GitHub credential. The account is read again on every run,
+capped at editor and narrowed to reading and writing scripts and their files,
+so a follow only ever writes scripts that account owns, and an administrator's
+follow does not act on other people's scripts. Only the person can schedule
+one, in their own session or token: work running under a delegation cannot,
+because a follow would outlast its grant. Once scheduled, only that account or
+an administrator can change it.
+
+**When it stops.** Anything that changes what the account may do — its roles,
+its realm, its password, its deletion — pauses its follows, as it withdraws its
+delegations. A run that finds the account gone or no longer an editor pauses
+the follow too. A paused follow keeps what it follows; set the schedule again
+to resume. There is no expiry otherwise.
+
+**How it runs.** Every minute the engine claims up to ten due follows. Claiming
+moves the next run on in the same statement, so one instance runs each, and an
+engine that slept runs each once rather than once per interval missed. Each run
+spends the account's git budget like a pull by hand.
+
+`list_git_bindings` shows each follow you scheduled or recorded (all of them to
+an administrator): its schedule, mode, next run, and how the last one went.
+
 ## Knowing which of the two you want
 
 ```
@@ -261,7 +303,7 @@ of the _same_ repository is unaffected — replacing what it wrote is the point.
 ## Where a script came from
 
 ```
-list_git_bindings()                                    # what tracks what
+list_git_bindings()             # what tracks what, and what is followed
 clear_git_remote(script: "x")   # stop tracking
 ```
 
@@ -279,9 +321,9 @@ made.
 - **GitHub only.** GitLab and Gitea expose equivalent APIs in different shapes,
   and picking an abstraction before a second host exists produces one fitted to
   a single example.
-- **Nothing runs unattended.** No scheduled pulls, no webhooks. Every sync is
-  something a person or their agent asked for, so the credential used is always
-  one whose owner is present.
+- **Only pulls run unattended**, and only a scheduled follow's. Pushes are
+  always asked for. There are no webhooks: a desktop engine cannot receive one,
+  so a follow asks instead.
 - **Sixty operations an hour per account**, refilling one per ten seconds. A
   pull downloads an archive and rewrites a tree; iterating on a solution never
   notices this, and a loop stops within the minute.

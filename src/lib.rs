@@ -32,6 +32,7 @@ pub mod execution_slots;
 pub mod exposure;
 pub mod fix_hints;
 pub mod git_credentials;
+pub mod git_follow;
 pub mod git_github;
 pub mod git_sync;
 pub mod hosts;
@@ -1590,6 +1591,7 @@ pub async fn start_server_with_config(
     let (pruner_shutdown_tx, pruner_shutdown_rx) = tokio::sync::oneshot::channel();
     let (log_pruner_shutdown_tx, log_pruner_shutdown_rx) = tokio::sync::oneshot::channel();
     let (tasks_shutdown_tx, tasks_shutdown_rx) = tokio::sync::oneshot::channel();
+    let (follow_shutdown_tx, follow_shutdown_rx) = tokio::sync::oneshot::channel();
 
     scheduler::spawn_worker(scheduler_shutdown_rx);
     // The queue's worker, beside the scheduler's rather than inside it: the two
@@ -1598,6 +1600,7 @@ pub async fn start_server_with_config(
     tasks::spawn_worker(notifications::generate_server_id(), tasks_shutdown_rx);
     revisions::spawn_pruner(config.revisions.clone(), pruner_shutdown_rx);
     log_retention::spawn_pruner(config.logs.clone(), log_pruner_shutdown_rx);
+    git_follow::spawn_runner(follow_shutdown_rx);
 
     tokio::spawn(async move {
         let _ = shutdown_rx.await;
@@ -1605,6 +1608,7 @@ pub async fn start_server_with_config(
         let _ = tasks_shutdown_tx.send(());
         let _ = pruner_shutdown_tx.send(());
         let _ = log_pruner_shutdown_tx.send(());
+        let _ = follow_shutdown_tx.send(());
         let _ = server_shutdown_tx.send(());
     });
     // An embedded database is *not* stopped here. This task is detached and
