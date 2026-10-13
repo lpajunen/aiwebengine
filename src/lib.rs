@@ -40,6 +40,7 @@ pub mod fix_hints;
 pub mod git_credentials;
 pub mod git_follow;
 pub mod git_github;
+pub mod git_install;
 pub mod git_sync;
 pub mod hosts;
 pub mod http_client;
@@ -1607,6 +1608,10 @@ pub async fn start_server_with_config(
     revisions::spawn_pruner(config.revisions.clone(), pruner_shutdown_rx);
     log_retention::spawn_pruner(config.logs.clone(), log_pruner_shutdown_rx);
     git_follow::spawn_runner(follow_shutdown_rx);
+    // Repositories a fresh engine starts with, pulled once each and never
+    // again: in the background, so a GitHub that does not answer delays no
+    // request.
+    git_install::spawn(config.git.install.clone());
 
     tokio::spawn(async move {
         let _ = shutdown_rx.await;

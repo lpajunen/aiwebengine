@@ -63,6 +63,18 @@ async fn serve() -> AppResult<()> {
                 .action(clap::ArgAction::Set),
         )
         .arg(
+            Arg::new("install")
+                .long("install")
+                .value_name("OWNER/REPO[@REF]")
+                .help(
+                    "Install a GitHub repository's scripts at startup unless this engine already \
+                     has it, e.g. --install lpajunen/aiwebengine-agent@v1. Repeatable; added to \
+                     git.install in the configuration. Public repositories only, and the scripts \
+                     it creates are administrators' to manage.",
+                )
+                .action(clap::ArgAction::Append),
+        )
+        .arg(
             Arg::new("desktop")
                 .long("desktop")
                 .conflicts_with("config")
@@ -138,6 +150,15 @@ async fn serve() -> AppResult<()> {
             aiwebengine::AppError::config(format!("Failed to load configuration: {}", e))
         })?
     };
+
+    let mut config = config;
+    for spec in matches.get_many::<String>("install").into_iter().flatten() {
+        let install = aiwebengine::config::GitInstall::parse(spec)
+            .map_err(|e| aiwebengine::AppError::config(format!("--install: {}", e)))?;
+        if !config.git.install.contains(&install) {
+            config.git.install.push(install);
+        }
+    }
 
     // Initialize logging based on configuration, but allow RUST_LOG to override
     let log_level = match config.logging.level.as_str() {

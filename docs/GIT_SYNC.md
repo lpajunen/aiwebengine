@@ -353,6 +353,15 @@ until the change is pushed, and `get_git_status` reports the script's follow.
 an administrator): its schedule, mode, next run, state, and how the last run
 went.
 
+## Installing at startup
+
+`git.install` in the configuration, or `--install owner/repo[@ref]`, names
+repositories a fresh engine pulls when it starts and does not have them yet —
+how it gets the agent before anybody has signed in to pull it. It is a first
+pull and nothing more: once the repository is followed, startup leaves it to
+the rest of this page. See
+[Operations](engine-administrators/OPERATIONS.md#scripts-a-fresh-engine-starts-with).
+
 ## Knowing which of the two you want
 
 ```

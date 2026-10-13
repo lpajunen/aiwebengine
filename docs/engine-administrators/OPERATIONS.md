@@ -50,6 +50,40 @@ last `Administrator` cannot be revoked either. A role change signs the account
 out everywhere, so it takes effect on the next request. The first administrator
 comes from configuration — see `OAUTH-AND-SECRETS.md`.
 
+## Scripts a fresh engine starts with
+
+An engine starts with no scripts. Name repositories to install, and it pulls
+each one at startup that it does not have yet:
+
+```toml
+[[git.install]]
+repo = "lpajunen/aiwebengine-agent"
+ref = "v1"            # a branch, tag or full commit sha; default branch if absent
+# prefix = "acme"     # name prefix for the scripts it creates
+# scripts = ["agent"] # only these top-level directories
+```
+
+The same from the command line, repeatable, is
+`--install lpajunen/aiwebengine-agent@v1`, and from the environment
+`APP_GIT__INSTALL='[{repo="lpajunen/aiwebengine-agent", ref="v1"}]'` — an inline
+table, not JSON.
+
+- **Once.** A repository this engine already follows, or has synced any script
+  from, is skipped. A restart never pulls again and never undoes an upgrade;
+  keeping it current is `pull_from_git` and `follow_git`
+  ([Git sync](../GIT_SYNC.md)).
+- **Public repositories only.** No account exists yet whose credential it could
+  use.
+- **Nobody owns what it installs.** Administrators manage the scripts; an
+  administrator who wants to schedule a follow for them adds themselves as an
+  owner first (`add_script_owner`), since a follow writes only its account's
+  scripts.
+- **It never takes over a script.** A script of the same name that the
+  repository did not write is left alone, and the install is refused.
+- **It does not hold up startup.** It runs in the background; a failure is a
+  warning in the log, and the next start tries again. Several instances
+  starting together install it once.
+
 ## Backup and restore
 
 ### What a backup consists of

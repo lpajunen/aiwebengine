@@ -200,6 +200,14 @@ prune_interval_secs = 3600
 # host — is how a deployment turns git sync off.
 allowed_remotes = []
 
+# Repositories to install at startup when this engine does not have them yet,
+# e.g. the agent on a fresh install. Pulled once each, public only; the
+# scripts are administrators' to manage. Also --install owner/repo[@ref], or
+# APP_GIT__INSTALL='[{repo="owner/repo", ref="v1"}]'.
+# [[git.install]]
+# repo = "lpajunen/aiwebengine-agent"
+# ref = "v1"
+
 [logs]
 # Both dials are enforced and either alone is enough to remove a line: the count
 # bounds a script that logs in a loop, the age bounds dormant scripts that would

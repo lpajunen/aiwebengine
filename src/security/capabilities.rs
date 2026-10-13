@@ -365,6 +365,38 @@ impl UserContext {
         }
     }
 
+    /// The context the engine installs a configured repository with at
+    /// startup (`git.install`), before any account exists to do it.
+    ///
+    /// No identity, so what it creates has no owner and only an administrator
+    /// acts on it. It holds what writing a script's files takes, plus
+    /// [`Capability::AdministerEngine`], because a file of an ownerless script
+    /// is written by an administrator or nobody. That is safe only because of
+    /// where it is used: `git_install` builds it, hands it to one pull that
+    /// refuses to replace any script the repository did not write, and drops
+    /// it.
+    pub fn engine_installer() -> Self {
+        Self {
+            user_id: None,
+            is_authenticated: true,
+            capabilities: [
+                Capability::ReadScripts,
+                Capability::WriteScripts,
+                Capability::ReadAssets,
+                Capability::WriteAssets,
+                Capability::AdministerEngine,
+            ]
+            .into_iter()
+            .collect(),
+            attenuated: false,
+            network_scope: None,
+            acting: Acting {
+                kind: ActingKind::Engine,
+                elevation: None,
+            },
+        }
+    }
+
     /// The context a credential is entitled to.
     ///
     /// The one place the engine turns a session's roles into a tier. Every

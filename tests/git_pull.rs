@@ -2517,3 +2517,122 @@ async fn files_the_repository_ignores_are_kept_and_never_block_a_pull() {
         "the pull leaves the engine's own file where it is"
     );
 }
+
+// ============================================================================
+// Installing at startup
+// ============================================================================
+
+use aiwebengine::config::GitInstall;
+use aiwebengine::git_install::{self, Installed};
+
+fn agent_at(git_ref: Option<&str>) -> GitInstall {
+    GitInstall {
+        repo: "lpajunen/agent".to_string(),
+        git_ref: git_ref.map(str::to_string),
+        ..GitInstall::default()
+    }
+}
+
+/// A fresh engine gets the repository once; a restart leaves it alone, and
+/// what it created is administrators' to manage.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_configured_repository_is_installed_once_and_owned_by_nobody() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+    let github = tagged_then_moved().await;
+
+    let installed = git_install::install_one(&agent_at(Some("v1")), Some(github.client())).await;
+    assert_eq!(installed, Installed::Pulled(vec!["agent".to_string()]));
+    assert_eq!(asset_text("agent", "main.ts").as_deref(), Some("// v1"));
+    assert!(
+        repository::get_script_owners("agent")
+            .expect("owners should read")
+            .is_empty(),
+        "nobody owns what the engine installed"
+    );
+
+    let (_, editor) = an_editor("install").await;
+    assert!(!aiwebengine::engine_api::can_write_script(&editor, "agent"));
+    assert!(aiwebengine::engine_api::can_write_script(
+        &puller(),
+        "agent"
+    ));
+
+    let again = git_install::install_one(&agent_at(Some("v1")), Some(github.client())).await;
+    assert!(matches!(again, Installed::Skipped(_)), "{again:?}");
+
+    // An administrator upgrades it the ordinary way.
+    let mut upgrade = at(V2, "");
+    upgrade.repo = "lpajunen/agent".to_string();
+    upgrade.prefix = None;
+    pull_with(github.client(), &puller(), upgrade)
+        .await
+        .expect("an administrator may move what was installed");
+    assert_eq!(asset_text("agent", "main.ts").as_deref(), Some("// v2"));
+
+    let restart = git_install::install_one(&agent_at(Some("v1")), Some(github.client())).await;
+    assert!(matches!(restart, Installed::Skipped(_)), "{restart:?}");
+    assert_eq!(
+        asset_text("agent", "main.ts").as_deref(),
+        Some("// v2"),
+        "a restart does not put the configured ref back"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn instances_starting_together_install_once() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+    let github = tagged_then_moved().await;
+
+    let install = agent_at(None);
+    let (first, second) = tokio::join!(
+        git_install::install_one(&install, Some(github.client())),
+        git_install::install_one(&install, Some(github.client())),
+    );
+    let pulled = [&first, &second]
+        .iter()
+        .filter(|outcome| matches!(outcome, Installed::Pulled(_)))
+        .count();
+    assert_eq!(pulled, 1, "{first:?} / {second:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_install_never_takes_over_a_script_of_the_same_name() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+    let github = tagged_then_moved().await;
+
+    aiwebengine::engine_api::upsert_script_authorized(&puller(), "agent", "// mine", Some("test"))
+        .expect("a script written here");
+
+    let installed = git_install::install_one(&agent_at(None), Some(github.client())).await;
+    let Installed::Failed(why) = &installed else {
+        panic!("expected a refusal, got {installed:?}");
+    };
+    assert!(why.contains("did not put there"), "{why}");
+    let root = repository::fetch_assets("agent")
+        .into_iter()
+        .find(|(name, _)| aiwebengine::module_loader::is_root_module_name(name))
+        .map(|(_, asset)| String::from_utf8_lossy(&asset.content).into_owned());
+    assert_eq!(root.as_deref(), Some("// mine"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repository_that_cannot_be_read_is_reported_and_left() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+    let github = tagged_then_moved().await;
+
+    let installed =
+        git_install::install_one(&agent_at(Some("no-such-tag")), Some(github.client())).await;
+    assert!(matches!(installed, Installed::Failed(_)), "{installed:?}");
+    assert!(repository::fetch_script("agent").is_none());
+
+    let retried = git_install::install_one(&agent_at(Some("v1")), Some(github.client())).await;
+    assert_eq!(
+        retried,
+        Installed::Pulled(vec!["agent".to_string()]),
+        "a failed install leaves nothing that stops the next start trying"
+    );
+}

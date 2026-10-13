@@ -248,6 +248,7 @@ async fn the_allowlist_names_hosts_and_matches_them_loosely() {
 
     let restricted = GitConfig {
         allowed_remotes: vec!["GitHub.com".to_string(), "git.internal/".to_string()],
+        ..GitConfig::default()
     };
     assert!(
         restricted.allows(HOST),
@@ -262,6 +263,7 @@ async fn the_allowlist_names_hosts_and_matches_them_loosely() {
     // Naming only another host is how a deployment turns git sync off.
     let disabled = GitConfig {
         allowed_remotes: vec!["git.internal".to_string()],
+        ..GitConfig::default()
     };
     assert!(!disabled.allows(HOST));
 }

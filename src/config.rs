@@ -65,6 +65,57 @@ pub struct GitConfig {
     /// caller cannot dress one host up as another in the URL.
     #[serde(default)]
     pub allowed_remotes: Vec<String>,
+
+    /// Repositories to install when the engine starts and they are not
+    /// installed yet: how a fresh engine gets its first scripts, such as the
+    /// agent, before anybody has signed in to pull them.
+    #[serde(default)]
+    pub install: Vec<GitInstall>,
+}
+
+/// A repository installed at startup. Each field reads as `pull_from_git`'s.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GitInstall {
+    /// `owner/repo`, or any GitHub URL naming it.
+    pub repo: String,
+    /// A branch, a tag or a full commit sha; the default branch when absent.
+    #[serde(rename = "ref", default, skip_serializing_if = "Option::is_none")]
+    pub git_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    /// Top-level directories to take, when not all of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scripts: Option<Vec<String>>,
+}
+
+impl GitInstall {
+    /// Read the command line's `owner/repo[@ref]`. The `@` that names a ref is
+    /// the first one after a `/`, so the `@` of `git@github.com:owner/repo` is
+    /// not mistaken for one and a ref may itself hold slashes
+    /// (`owner/repo@refs/tags/v1`).
+    pub fn parse(spec: &str) -> Result<Self, String> {
+        let spec = spec.trim();
+        let after_slash = spec.find('/').map(|slash| slash + 1).unwrap_or(spec.len());
+        let (repo, git_ref) = match spec[after_slash..].find('@') {
+            Some(at) => {
+                let (repo, git_ref) = spec.split_at(after_slash + at);
+                (repo, Some(git_ref[1..].to_string()))
+            }
+            None => (spec, None),
+        };
+        if git_ref.as_deref() == Some("") {
+            return Err(format!("'{}' names no ref after '@'", spec));
+        }
+        crate::git_github::RepoRef::parse(repo).map_err(|e| e.to_string())?;
+        if let Some(git_ref) = &git_ref {
+            crate::git_github::GitRef::exact(git_ref).map_err(|e| e.to_string())?;
+        }
+        Ok(Self {
+            repo: repo.to_string(),
+            git_ref,
+            ..Self::default()
+        })
+    }
 }
 
 /// The git configuration this process is running with.
@@ -1013,6 +1064,17 @@ impl AppConfig {
             ),
         }
 
+        // A repository to install is checked here rather than at startup, where
+        // a mistake would only be a line in the log.
+        for install in &self.git.install {
+            crate::git_github::RepoRef::parse(&install.repo)
+                .map_err(|e| anyhow::anyhow!("git.install: {}", e))?;
+            if let Some(git_ref) = &install.git_ref {
+                crate::git_github::GitRef::exact(git_ref)
+                    .map_err(|e| anyhow::anyhow!("git.install '{}': {}", install.repo, e))?;
+            }
+        }
+
         // Validate JavaScript configuration
         if self.javascript.execution_timeout_ms == 0 {
             anyhow::bail!("JavaScript execution timeout must be > 0");
@@ -1125,6 +1187,38 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_install_on_the_command_line_names_a_repository_and_a_ref() {
+        let parsed = |spec: &str| GitInstall::parse(spec).map(|i| (i.repo, i.git_ref));
+        assert_eq!(parsed("owner/agent"), Ok(("owner/agent".to_string(), None)));
+        assert_eq!(
+            parsed("owner/agent@v1"),
+            Ok(("owner/agent".to_string(), Some("v1".to_string())))
+        );
+        assert_eq!(
+            parsed("git@github.com:owner/agent.git"),
+            Ok(("git@github.com:owner/agent.git".to_string(), None)),
+            "the @ of an ssh URL is not a ref"
+        );
+        assert_eq!(
+            parsed("git@github.com:owner/agent.git@v1"),
+            Ok((
+                "git@github.com:owner/agent.git".to_string(),
+                Some("v1".to_string())
+            ))
+        );
+        assert_eq!(
+            parsed("https://github.com/owner/agent@refs/tags/v1"),
+            Ok((
+                "https://github.com/owner/agent".to_string(),
+                Some("refs/tags/v1".to_string())
+            ))
+        );
+        assert!(parsed("owner/agent@").is_err());
+        assert!(parsed("not a repo").is_err());
+        assert!(parsed("owner/agent@a..b").is_err());
+    }
 
     #[test]
     fn test_base_url_authority_omits_default_ports() {
