@@ -164,7 +164,7 @@ These come after the widening. Each starts as suite tasks.
    same engine operations through `engine.call`, so it gets no authority the
    person lacks. A "build an admin page" template makes this a simple script.
 3. **Improving existing solutions.** The agent creates and changes solutions in
-   `aiwebengine-examples` and `aiwebengine-private`, pulling them with
+   repositories such as `aiwebengine-examples`, pulling them with
    `pull_from_git` and pushing changes back with `push_to_git` for review. This
    needs editing scripts the run did not create, so it waits until the
    own-scripts-only rule can be relaxed per task.
