@@ -126,15 +126,50 @@ content.
 
 ```
 pull_from_git(repo: "owner/solution")
-pull_from_git(repo: "https://github.com/owner/solution.git", branch: "next")
+pull_from_git(repo: "https://github.com/owner/solution.git", ref: "next")
+pull_from_git(repo: "owner/solution", ref: "v1.4.0")
 pull_from_git(repo: "owner/solution", prefix: "examples")
 ```
 
-`repo` takes `owner/repo`, a browser URL, or a clone URL. `branch` defaults to
-the repository's own default. `prefix` is a name put in front of each
-directory's (`examples-shop`) — set it when two repositories would otherwise
-both want `shop`. With no prefix a directory is simply its own name, and a
-repository that is one script takes the repository's name.
+`repo` takes `owner/repo`, a browser URL, or a clone URL. `prefix` is a name
+put in front of each directory's (`examples-shop`) — set it when two
+repositories would otherwise both want `shop`. With no prefix a directory is
+simply its own name, and a repository that is one script takes the
+repository's name.
+
+### Which version
+
+`ref` says what to read:
+
+| `ref`                           | Reads                                                       |
+| ------------------------------- | ----------------------------------------------------------- |
+| `main`, `v1.4.0`                | that branch or tag; a name that is both is refused          |
+| `refs/heads/v1`, `refs/tags/v1` | the branch, or the tag, when a name is both                 |
+| `3f2a…` (all 40 characters)     | that one commit; a short sha is refused                     |
+| _(omitted)_                     | what the repository is followed at, else its default branch |
+
+An engine follows a repository **once**: at one ref and under one prefix. A
+pull that names another ref moves it there — the scripts the old ref wrote are
+the ones written, renamed or not, and later pulls naming no ref read the new
+one. That is how an installation upgrades:
+
+```
+pull_from_git(repo: "owner/agent", ref: "v1.4.0")   # install
+pull_from_git(repo: "owner/agent")                  # still v1.4.0, whatever main does
+pull_from_git(repo: "owner/agent", ref: "v1.5.0")   # upgrade
+```
+
+A tag is what several engines should share: each one runs exactly what was
+released, and moves when somebody decides it should. A branch is for the
+engine you develop on. A commit is for the times nothing else will do; it is
+pulled once, and cannot be followed on a schedule, since it never moves.
+
+The stored form is git's own — `refs/heads/main`, `refs/tags/v1.4.0`, or the
+sha — and that is what reports and listings show as `ref`.
+
+Leaving `prefix` out keeps the one the repository is followed under; an empty
+one is no prefix. A prefix names the scripts a pull creates, so changing it
+leaves the scripts already pulled where they are.
 
 ### Taking some of the scripts
 
@@ -148,9 +183,8 @@ them, and leaves the rest where they are. A name the repository does not hold
 as a script is refused, and so is any name at all for a repository that is
 itself one script.
 
-The engine remembers what it follows from each repository, branch and prefix
-(the `git_follows` table): either the whole repository or a list of
-directories. A pull that names no scripts takes what is followed, so the second
+The engine remembers what it follows from each repository (the `git_follows`
+table): either the whole repository or a list of directories. A pull that names no scripts takes what is followed, so the second
 line above refreshes `virtual-world` and `blog` and nothing else, and a script
 added upstream later is not pulled in by a pull that did not ask for it. A
 first pull naming none follows the whole repository.
@@ -238,6 +272,11 @@ out the way a pull reads them back — so what a push writes pulls onto any othe
 engine. `repo` is optional once a script has been pulled, since it already
 knows where it came from.
 
+A push moves a branch: the one the script was pulled from, or the one named
+with `branch`. A script pulled at a tag or a commit has no branch to default
+to, so its push names one, and the repository is followed at that branch from
+then on.
+
 **Files the script does not own are left untouched.** The README, the CI
 workflow, everything the ignore file excludes — from the engine's side those
 are indistinguishable from files deleted upstream, and a push that treated its
@@ -253,6 +292,7 @@ credential with write access.
 ```
 follow_git(repo: "owner/examples", scripts: ["virtual-world"], every_minutes: 60)
 follow_git(repo: "owner/examples", every_minutes: 60, mode: "stage")
+follow_git(repo: "owner/agent", ref: "v1", every_minutes: 1440)
 follow_git(repo: "owner/examples", every_minutes: 0)          # stop
 ```
 
@@ -260,6 +300,11 @@ A follow can pull on its own, every 10 minutes to once a week. It is the same
 pull a person makes, from the same follow, and it refuses the same things: it
 never replaces a script changed here, and it never writes a script the
 repository did not put there.
+
+It runs at the ref the repository is followed at; `ref` moves it, and leaving
+it out keeps it. Following a tag a project moves on release — a `v1` that
+always names the newest 1.x — is how a set of engines takes releases and
+nothing in between. A commit cannot be followed.
 
 | `mode`  | Each run                                                                                                                         |
 | ------- | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -274,7 +319,8 @@ so a follow only ever writes scripts that account owns, and an administrator's
 follow does not act on other people's scripts. Only the person can schedule
 one, in their own session or token: work running under a delegation cannot,
 because a follow would outlast its grant. Once scheduled, only that account or
-an administrator can change it.
+an administrator can change it — and that includes moving it to another ref
+or prefix, by `follow_git`, a pull or a push.
 
 **When it stops.** Anything that changes what the account may do — its roles,
 its realm, its password, its deletion — pauses its follows, as it withdraws its
@@ -322,8 +368,11 @@ get_git_status(script: "solution")
 | `unbound`     | never synced anywhere     | push, naming a repository    |
 | `unreachable` | GitHub could not be asked | only the local half is known |
 
-Ask this rather than attempting an operation and reading the refusal. The
-answer also carries the deployment pin, because a pull into a pinned script
+Ask this rather than attempting an operation and reading the refusal. `ref`
+is what the script was last synced at, and `branch` is where a push goes by
+default — empty for a tag or a commit. A script pulled at a commit is never
+`behind`, since a commit does not move. The answer also carries the deployment
+pin, because a pull into a pinned script
 advances head without changing what answers requests — correct, and worth
 knowing at the point you are deciding.
 

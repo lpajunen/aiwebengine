@@ -931,7 +931,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
                     "properties": {
                         "script": { "type": "string", "description": "URI of the script to publish" },
                         "repo": { "type": "string", "description": "'owner/repo' or a GitHub URL; optional once the script was pulled" },
-                        "branch": { "type": "string", "description": "Branch to write. Defaults to the one it was pulled from, or the repository's default branch." },
+                        "branch": { "type": "string", "description": "Branch to write; defaults to the one pulled, or the default. Required after a tag or commit." },
                         "message": { "type": "string", "description": "Commit message. Defaults to one naming the script." },
                         "force": {
                             "type": "boolean",
@@ -952,7 +952,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
                     "type": "object",
                     "properties": {
                         "repo": { "type": "string", "description": "'owner/repo', or any GitHub URL naming it" },
-                        "branch": { "type": "string", "description": "Branch to read. Defaults to the repository's default branch." },
+                        "ref": { "type": "string", "description": "Branch, tag or full sha; defaults to the followed one. Another moves the follow." },
                         "prefix": { "type": "string", "description": "Name prefix: directory shop lands as <prefix>-shop" },
                         "scripts": {
                             "type": "array",
@@ -978,7 +978,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
                     "type": "object",
                     "properties": {
                         "repo": { "type": "string" },
-                        "branch": { "type": "string" },
+                        "ref": { "type": "string" },
                         "prefix": { "type": "string" },
                         "scripts": { "type": "array", "items": { "type": "string" } },
                         "every_minutes": { "type": "integer", "description": "10 to 10080; 0 stops" },

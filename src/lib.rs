@@ -18,7 +18,7 @@ extern crate self as aiwebengine;
 /// prelude, or the shape of an operation `engine.call` reaches. A repository
 /// names the day it needs in `.aiwebengine-requires`, and an engine older than
 /// that refuses to pull it. Move it to the day of any such change.
-pub const SCRIPT_API: &str = "2026-10-12";
+pub const SCRIPT_API: &str = "2026-10-13";
 
 pub mod bytecode;
 pub mod config;

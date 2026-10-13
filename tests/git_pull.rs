@@ -32,11 +32,18 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 struct FakeState {
     default_branch: String,
-    /// The commit the branch points at. Changing it is this fixture's
+    /// The commit the default branch points at. Changing it is this fixture's
     /// equivalent of somebody pushing.
     commit: String,
-    /// Repository path to content.
-    tree: BTreeMap<String, String>,
+    /// Other branches, by name, to the commit each points at.
+    branches: BTreeMap<String, String>,
+    /// Tags, by name, to what the ref names: a commit for a lightweight tag,
+    /// a tag object for an annotated one.
+    tags: BTreeMap<String, String>,
+    /// Annotated tag objects, by sha, to the commit each tags.
+    tag_objects: BTreeMap<String, String>,
+    /// Every commit's tree: repository path to content.
+    trees: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 #[derive(Clone)]
@@ -45,15 +52,22 @@ struct FakeGitHub {
     state: Arc<Mutex<FakeState>>,
 }
 
+fn tree_of(tree: &[(&str, &str)]) -> BTreeMap<String, String> {
+    tree.iter()
+        .map(|(path, content)| (path.to_string(), content.to_string()))
+        .collect()
+}
+
 impl FakeGitHub {
     async fn start(tree: &[(&str, &str)]) -> anyhow::Result<Self> {
+        let commit = "1111111111111111111111111111111111111111".to_string();
         let state = Arc::new(Mutex::new(FakeState {
             default_branch: "main".to_string(),
-            commit: "1111111111111111111111111111111111111111".to_string(),
-            tree: tree
-                .iter()
-                .map(|(path, content)| (path.to_string(), content.to_string()))
-                .collect(),
+            commit: commit.clone(),
+            branches: BTreeMap::new(),
+            tags: BTreeMap::new(),
+            tag_objects: BTreeMap::new(),
+            trees: BTreeMap::from([(commit, tree_of(tree))]),
         }));
 
         let app = axum::Router::new()
@@ -61,6 +75,18 @@ impl FakeGitHub {
             .route(
                 "/repos/{owner}/{repo}/git/ref/heads/{*branch}",
                 axum::routing::get(git_ref),
+            )
+            .route(
+                "/repos/{owner}/{repo}/git/ref/tags/{*tag}",
+                axum::routing::get(tag_ref),
+            )
+            .route(
+                "/repos/{owner}/{repo}/git/tags/{sha}",
+                axum::routing::get(tag_object),
+            )
+            .route(
+                "/repos/{owner}/{repo}/git/commits/{sha}",
+                axum::routing::get(commit_object),
             )
             .route(
                 "/repos/{owner}/{repo}/tarball/{sha}",
@@ -84,14 +110,36 @@ impl FakeGitHub {
         GitHubClient::for_tests(&self.base).expect("test client should build")
     }
 
-    /// Replace the tree and move the branch, the way a push would.
+    /// Replace the tree and move the default branch, the way a push would.
     fn push(&self, commit: &str, tree: &[(&str, &str)]) {
         let mut state = self.state.lock().expect("fixture state");
         state.commit = commit.to_string();
-        state.tree = tree
-            .iter()
-            .map(|(path, content)| (path.to_string(), content.to_string()))
-            .collect();
+        state.trees.insert(commit.to_string(), tree_of(tree));
+    }
+
+    /// Point another branch at a new commit holding `tree`.
+    fn push_branch(&self, branch: &str, commit: &str, tree: &[(&str, &str)]) {
+        let mut state = self.state.lock().expect("fixture state");
+        state
+            .branches
+            .insert(branch.to_string(), commit.to_string());
+        state.trees.insert(commit.to_string(), tree_of(tree));
+    }
+
+    /// Tag what the default branch points at now, lightweight.
+    fn tag(&self, name: &str) {
+        let mut state = self.state.lock().expect("fixture state");
+        let commit = state.commit.clone();
+        state.tags.insert(name.to_string(), commit);
+    }
+
+    /// Tag what the default branch points at now with an annotated tag, whose
+    /// ref names a tag object rather than the commit.
+    fn annotated_tag(&self, name: &str, object: &str) {
+        let mut state = self.state.lock().expect("fixture state");
+        let commit = state.commit.clone();
+        state.tag_objects.insert(object.to_string(), commit);
+        state.tags.insert(name.to_string(), object.to_string());
     }
 }
 
@@ -103,6 +151,10 @@ async fn repo_info(State(state): State<Arc<Mutex<FakeState>>>) -> Response {
     axum::Json(json!({ "default_branch": branch })).into_response()
 }
 
+fn not_found() -> Response {
+    (axum::http::StatusCode::NOT_FOUND, "").into_response()
+}
+
 async fn git_ref(
     State(state): State<Arc<Mutex<FakeState>>>,
     Path((_owner, _repo, branch)): Path<(String, String, String)>,
@@ -110,10 +162,67 @@ async fn git_ref(
     let Ok(state) = state.lock() else {
         return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "").into_response();
     };
-    if branch != state.default_branch {
-        return (axum::http::StatusCode::NOT_FOUND, "").into_response();
+    let commit = if branch == state.default_branch {
+        Some(state.commit.clone())
+    } else {
+        state.branches.get(&branch).cloned()
+    };
+    match commit {
+        Some(sha) => {
+            axum::Json(json!({ "object": { "sha": sha, "type": "commit" } })).into_response()
+        }
+        None => not_found(),
     }
-    axum::Json(json!({ "object": { "sha": state.commit, "type": "commit" } })).into_response()
+}
+
+async fn tag_ref(
+    State(state): State<Arc<Mutex<FakeState>>>,
+    Path((_owner, _repo, tag)): Path<(String, String, String)>,
+) -> Response {
+    let Ok(state) = state.lock() else {
+        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "").into_response();
+    };
+    match state.tags.get(&tag) {
+        Some(sha) => {
+            let kind = if state.tag_objects.contains_key(sha) {
+                "tag"
+            } else {
+                "commit"
+            };
+            axum::Json(json!({ "object": { "sha": sha, "type": kind } })).into_response()
+        }
+        None => not_found(),
+    }
+}
+
+async fn tag_object(
+    State(state): State<Arc<Mutex<FakeState>>>,
+    Path((_owner, _repo, sha)): Path<(String, String, String)>,
+) -> Response {
+    let Ok(state) = state.lock() else {
+        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "").into_response();
+    };
+    match state.tag_objects.get(&sha) {
+        Some(commit) => {
+            axum::Json(json!({ "sha": sha, "object": { "sha": commit, "type": "commit" } }))
+                .into_response()
+        }
+        None => not_found(),
+    }
+}
+
+async fn commit_object(
+    State(state): State<Arc<Mutex<FakeState>>>,
+    Path((_owner, _repo, sha)): Path<(String, String, String)>,
+) -> Response {
+    let Ok(state) = state.lock() else {
+        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "").into_response();
+    };
+    if state.trees.contains_key(&sha) {
+        axum::Json(json!({ "sha": sha })).into_response()
+    } else {
+        not_found()
+    }
 }
 
 async fn tarball(
@@ -123,15 +232,14 @@ async fn tarball(
     let Ok(state) = state.lock() else {
         return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "").into_response();
     };
-    if sha != state.commit {
-        return (axum::http::StatusCode::NOT_FOUND, "").into_response();
-    }
+    let Some(tree) = state.trees.get(&sha) else {
+        return not_found();
+    };
 
     // GitHub wraps every archive in one `{owner}-{repo}-{short sha}` directory,
     // and stripping it is part of what is under test.
     let prefix = format!("{}-{}-{}", owner, repo, &sha[..7.min(sha.len())]);
-    let entries: Vec<(String, String)> = state
-        .tree
+    let entries: Vec<(String, String)> = tree
         .iter()
         .map(|(path, content)| (format!("{}/{}", prefix, path), content.clone()))
         .collect();
@@ -173,7 +281,7 @@ fn puller() -> UserContext {
 fn request(prefix: &str) -> PullRequest {
     PullRequest {
         repo: "lpajunen/solution".to_string(),
-        branch: None,
+        git_ref: None,
         prefix: Some(prefix.to_string()),
         force: false,
         scripts: None,
@@ -232,7 +340,7 @@ async fn a_repository_with_a_root_entry_becomes_one_script() {
         .await
         .expect("pull should succeed");
 
-    assert_eq!(report.branch, "main");
+    assert_eq!(report.git_ref.stored(), "refs/heads/main");
     assert_eq!(report.scripts.len(), 1, "one script expected");
     assert_eq!(&report.scripts[0].script_uri, uri);
 
@@ -458,7 +566,7 @@ async fn a_missing_branch_is_reported_as_missing() {
         &puller(),
         PullRequest {
             repo: "lpajunen/solution".to_string(),
-            branch: Some("no-such-branch".to_string()),
+            git_ref: Some("no-such-branch".to_string()),
             prefix: Some("git-branch".to_string()),
             force: false,
             scripts: None,
@@ -602,7 +710,7 @@ async fn force_re_applies_a_repository_that_has_not_moved() {
         &puller(),
         PullRequest {
             repo: "lpajunen/solution".to_string(),
-            branch: None,
+            git_ref: None,
             prefix: Some("git-force".to_string()),
             force: true,
             scripts: None,
@@ -703,7 +811,7 @@ async fn a_pull_that_writes_nothing_still_moves_the_watermark() {
         &puller(),
         PullRequest {
             repo: "lpajunen/solution".to_string(),
-            branch: None,
+            git_ref: None,
             prefix: Some("git-watermark".to_string()),
             force: true,
             scripts: None,
@@ -1009,6 +1117,272 @@ async fn a_renamed_script_is_still_the_one_the_repository_writes() {
 }
 
 // ============================================================================
+// Reading a tag or a commit
+// ============================================================================
+
+const V1: &str = "1111111111111111111111111111111111111111";
+const V2: &str = "2222222222222222222222222222222222222222";
+
+/// A pull of `lpajunen/solution` at `git_ref`, under `prefix`.
+fn at(git_ref: &str, prefix: &str) -> PullRequest {
+    PullRequest {
+        git_ref: Some(git_ref.to_string()),
+        ..request(prefix)
+    }
+}
+
+/// The default branch holds `v1` at [`V1`], tagged `v1`, and then moves on to
+/// `v2` at [`V2`].
+async fn tagged_then_moved() -> FakeGitHub {
+    let github = FakeGitHub::start(&[("main.ts", "// v1")])
+        .await
+        .expect("fixture should start");
+    github.tag("v1");
+    github.push(V2, &[("main.ts", "// v2")]);
+    github
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tag_holds_still_while_the_branch_moves() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+    let github = tagged_then_moved().await;
+
+    let report = pull_with(github.client(), &puller(), at("v1", "git-tag"))
+        .await
+        .expect("a tag should pull");
+    assert_eq!(report.git_ref.stored(), "refs/tags/v1");
+    assert_eq!(report.commit, V1);
+    assert_eq!(asset_text("git-tag", "main.ts").as_deref(), Some("// v1"));
+
+    // A pull naming no ref reads what the repository is followed at, not the
+    // branch that has moved on.
+    let again = pull_with(github.client(), &puller(), request("git-tag"))
+        .await
+        .expect("a second pull should succeed");
+    assert!(again.up_to_date, "the tag has not moved");
+    assert_eq!(asset_text("git-tag", "main.ts").as_deref(), Some("// v1"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_annotated_tag_reads_the_commit_it_tags() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+    let github = FakeGitHub::start(&[("main.ts", "// v1")])
+        .await
+        .expect("fixture should start");
+    github.annotated_tag("v1", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    github.push(V2, &[("main.ts", "// v2")]);
+
+    let report = pull_with(github.client(), &puller(), at("v1", "git-annotated"))
+        .await
+        .expect("an annotated tag should pull");
+    assert_eq!(report.commit, V1, "the commit, not the tag object");
+    assert_eq!(
+        asset_text("git-annotated", "main.ts").as_deref(),
+        Some("// v1")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_full_commit_sha_pulls_that_commit() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+    let github = tagged_then_moved().await;
+
+    let report = pull_with(github.client(), &puller(), at(V1, "git-sha"))
+        .await
+        .expect("a commit should pull");
+    assert_eq!(report.git_ref.stored(), V1);
+    assert_eq!(asset_text("git-sha", "main.ts").as_deref(), Some("// v1"));
+
+    let error = pull_with(github.client(), &puller(), at(&V1[..7], "git-sha"))
+        .await
+        .expect_err("a short sha is a name, and no branch or tag has it");
+    assert!(
+        error.to_string().contains("full 40-character sha"),
+        "{error}"
+    );
+
+    let error = pull_with(
+        github.client(),
+        &puller(),
+        at("3333333333333333333333333333333333333333", "git-sha"),
+    )
+    .await
+    .expect_err("a commit the repository lacks");
+    assert!(error.to_string().contains("no commit"), "{error}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_name_that_is_both_a_branch_and_a_tag_is_refused() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+    let github = tagged_then_moved().await;
+    github.push_branch("v1", V2, &[("main.ts", "// v2")]);
+
+    let error = pull_with(github.client(), &puller(), at("v1", "git-both"))
+        .await
+        .expect_err("which one is meant is not the engine's to guess");
+    assert!(error.to_string().contains("refs/tags/v1"), "{error}");
+
+    let report = pull_with(github.client(), &puller(), at("refs/tags/v1", "git-both"))
+        .await
+        .expect("spelled out, it pulls");
+    assert_eq!(report.commit, V1);
+}
+
+/// Upgrading is pulling the next tag: the scripts the first one wrote are the
+/// ones written, renamed or not, and the follow moves with them.
+#[tokio::test(flavor = "multi_thread")]
+async fn pulling_another_ref_moves_the_scripts_and_the_follow() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+    let github = tagged_then_moved().await;
+    github.tag("v2");
+
+    pull_with(github.client(), &puller(), at("v1", "git-upgrade"))
+        .await
+        .expect("v1 should pull");
+    aiwebengine::engine_api::rename_script_authorized(&puller(), "git-upgrade", "git-renamed")
+        .expect("the owner may rename it");
+
+    // No prefix this time: the follow's is kept.
+    let report = pull_with(
+        github.client(),
+        &puller(),
+        PullRequest {
+            prefix: None,
+            ..at("v2", "")
+        },
+    )
+    .await
+    .expect("v2 should pull");
+    assert_eq!(report.scripts.len(), 1);
+    assert_eq!(report.scripts[0].script_uri, "git-renamed");
+    assert_eq!(
+        asset_text("git-renamed", "main.ts").as_deref(),
+        Some("// v2")
+    );
+    assert!(repository::fetch_script("git-upgrade").is_none());
+
+    let follow = aiwebengine::git_sync::followed("lpajunen/solution")
+        .await
+        .expect("follow should read")
+        .expect("the repository is followed");
+    assert_eq!(follow.git_ref, "refs/tags/v2");
+    assert_eq!(follow.uri_base, "git-upgrade");
+}
+
+/// The bug a follow per ref had: a schedule left at the old ref pulled it back
+/// over the new one on its next run.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_scheduled_follow_runs_at_the_ref_it_was_moved_to() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+    let github = tagged_then_moved().await;
+    github.tag("v2");
+    let (_, editor) = an_editor("moved").await;
+
+    git_follow::schedule_with(
+        github.client(),
+        &editor,
+        FollowRequest {
+            git_ref: Some("v1".to_string()),
+            ..every_ten("lpajunen/moved", "moved", None, Mode::Apply)
+        },
+    )
+    .await
+    .expect("an editor may follow a tag");
+    let follow = git_follow::get("lpajunen/moved")
+        .await
+        .expect("follow should read")
+        .expect("it is scheduled");
+    assert_eq!(follow.git_ref, "refs/tags/v1");
+    let ran = git_follow::run(&follow, Some(github.client())).await;
+    assert_eq!(ran.state, git_follow::State::Ok, "{}", ran.outcome);
+    assert_eq!(asset_text("moved", "main.ts").as_deref(), Some("// v1"));
+
+    let mut upgrade = at("v2", "moved");
+    upgrade.repo = "lpajunen/moved".to_string();
+    pull_with(github.client(), &editor, upgrade)
+        .await
+        .expect("the account that runs it may move it");
+
+    let follow = git_follow::get("lpajunen/moved")
+        .await
+        .expect("follow should read")
+        .expect("still scheduled");
+    assert_eq!(follow.git_ref, "refs/tags/v2");
+    assert!(follow.every_minutes.is_some(), "moving keeps the schedule");
+    let ran = git_follow::run(&follow, Some(github.client())).await;
+    assert_eq!(ran.state, git_follow::State::Ok, "{}", ran.outcome);
+    assert!(ran.outcome.starts_with("Up to date"), "{}", ran.outcome);
+    assert_eq!(asset_text("moved", "main.ts").as_deref(), Some("// v2"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn another_account_cannot_move_a_scheduled_follow() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+    let github = tagged_then_moved().await;
+    github.tag("v2");
+    let (_, first) = an_editor("owner").await;
+    let (second_id, second) = an_editor("other").await;
+
+    git_follow::schedule_with(
+        github.client(),
+        &first,
+        FollowRequest {
+            git_ref: Some("v1".to_string()),
+            ..every_ten("lpajunen/held", "held", None, Mode::Apply)
+        },
+    )
+    .await
+    .expect("the first account follows v1");
+    let follow = git_follow::get("lpajunen/held")
+        .await
+        .expect("follow should read")
+        .expect("it is scheduled");
+    git_follow::run(&follow, Some(github.client())).await;
+    aiwebengine::repository::add_script_owner("held", &second_id)
+        .expect("a second owner can be added");
+
+    let mut moved = at("v2", "held");
+    moved.repo = "lpajunen/held".to_string();
+    let error = pull_with(github.client(), &second, moved)
+        .await
+        .expect_err("a co-owner cannot redirect another account's schedule");
+    assert!(error.to_string().contains("another account"), "{error}");
+
+    let mut same = at("v1", "held");
+    same.repo = "lpajunen/held".to_string();
+    pull_with(github.client(), &second, same)
+        .await
+        .expect("pulling what is followed is not moving it");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_commit_is_pulled_once_rather_than_followed() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+    let github = tagged_then_moved().await;
+    let (_, editor) = an_editor("commit").await;
+
+    let error = git_follow::schedule_with(
+        github.client(),
+        &editor,
+        FollowRequest {
+            git_ref: Some(V1.to_string()),
+            ..every_ten("lpajunen/pinned", "pinned", None, Mode::Apply)
+        },
+    )
+    .await
+    .expect_err("a commit never moves");
+    assert!(error.to_string().contains("never moves"), "{error}");
+}
+
+// ============================================================================
 // Taking part of a repository
 // ============================================================================
 
@@ -1016,7 +1390,7 @@ async fn a_renamed_script_is_still_the_one_the_repository_writes() {
 fn selecting(repo: &str, prefix: &str, scripts: &[&str]) -> PullRequest {
     PullRequest {
         repo: repo.to_string(),
-        branch: None,
+        git_ref: None,
         prefix: Some(prefix.to_string()),
         force: false,
         scripts: Some(scripts.iter().map(|name| name.to_string()).collect()),
@@ -1476,9 +1850,10 @@ async fn clearing_a_followed_script_stops_following_it() {
         .await
         .expect("unbind should succeed");
     assert_eq!(
-        aiwebengine::git_sync::followed("lpajunen/cleared", "main", "cleared")
+        aiwebengine::git_sync::followed("lpajunen/cleared")
             .await
-            .expect("follow should read"),
+            .expect("follow should read")
+            .map(|follow| follow.scripts),
         Some(Some(["a".to_string()].into_iter().collect()))
     );
 
@@ -1504,9 +1879,10 @@ async fn clearing_a_followed_script_stops_following_it() {
         .await
         .expect("unbind should succeed");
     assert_eq!(
-        aiwebengine::git_sync::followed("lpajunen/cleared", "main", "cleared")
+        aiwebengine::git_sync::followed("lpajunen/cleared")
             .await
-            .expect("follow should read"),
+            .expect("follow should read")
+            .map(|follow| follow.scripts),
         None
     );
 }
@@ -1545,7 +1921,7 @@ async fn an_editor(label: &str) -> (String, UserContext) {
 fn every_ten(repo: &str, prefix: &str, scripts: Option<&[&str]>, mode: Mode) -> FollowRequest {
     FollowRequest {
         repo: repo.to_string(),
-        branch: None,
+        git_ref: None,
         prefix: Some(prefix.to_string()),
         scripts: scripts.map(|names| names.iter().map(|name| name.to_string()).collect()),
         every_minutes: 10,
@@ -1783,7 +2159,7 @@ async fn a_role_change_pauses_the_accounts_follows() {
     )
     .expect("the role should be removed");
 
-    let follow = git_follow::get("lpajunen/demoted", "main", "demoted")
+    let follow = git_follow::get("lpajunen/demoted")
         .await
         .expect("follow should read")
         .expect("the follow is kept");
@@ -2005,7 +2381,7 @@ async fn a_blocked_follow_says_so_in_the_log_once() {
     .await
     .expect("schedule should succeed");
     let current = || async {
-        git_follow::get(&scheduled.remote, &scheduled.branch, &scheduled.uri_base)
+        git_follow::get(&scheduled.remote)
             .await
             .expect("read should succeed")
             .expect("the follow exists")

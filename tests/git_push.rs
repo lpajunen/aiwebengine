@@ -142,6 +142,10 @@ impl Fixture {
                 axum::routing::post(post_commit),
             )
             .route(
+                "/repos/{owner}/{repo}/git/commits/{sha}",
+                axum::routing::get(get_commit),
+            )
+            .route(
                 "/repos/{owner}/{repo}/git/refs/heads/{*branch}",
                 axum::routing::patch(patch_ref),
             )
@@ -200,6 +204,20 @@ async fn git_ref(
             axum::Json(json!({ "message": "Not Found" })),
         )
             .into_response(),
+    }
+}
+
+async fn get_commit(
+    State(state): Shared,
+    Path((_o, _r, sha)): Path<(String, String, String)>,
+) -> Response {
+    let Ok(git) = state.lock() else {
+        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "").into_response();
+    };
+    if git.commits.contains_key(&sha) {
+        axum::Json(json!({ "sha": sha })).into_response()
+    } else {
+        (axum::http::StatusCode::NOT_FOUND, "").into_response()
     }
 }
 
@@ -353,7 +371,7 @@ fn pusher() -> UserContext {
 fn pull_request(prefix: &str) -> PullRequest {
     PullRequest {
         repo: "lpajunen/solution".to_string(),
-        branch: None,
+        git_ref: None,
         prefix: Some(prefix.to_string()),
         force: false,
         scripts: None,
@@ -442,6 +460,73 @@ async fn a_local_change_lands_in_the_repository() {
         Some("export const cart = [];"),
         "and the module nobody touched is unchanged"
     );
+}
+
+/// A push moves a branch, and a script pulled at a commit has none to default
+/// to. Named, the push lands there and the repository is followed at it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_pulled_at_a_commit_pushes_only_to_a_named_branch() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = Fixture::start(&[("shop/main.js", "function init() {}")])
+        .await
+        .expect("fixture should start");
+    let head = github
+        .state
+        .lock()
+        .expect("fixture state")
+        .branches
+        .get("main")
+        .cloned()
+        .expect("main has a commit");
+
+    let uri = &script_uri("push-pinned-shop");
+    clear(uri);
+    pull_with(
+        github.client(),
+        &pusher(),
+        PullRequest {
+            git_ref: Some(head.clone()),
+            ..pull_request("push-pinned")
+        },
+    )
+    .await
+    .expect("a commit should pull");
+    edit(uri, "function init() { /* fixed */ }");
+
+    let status = status_with(github.client(), uri)
+        .await
+        .expect("status should answer");
+    assert_eq!(status.git_ref.as_deref(), Some(head.as_str()));
+    assert_eq!(status.branch, None, "a commit is no branch to push to");
+
+    let error = push_with(github.client(), &pusher(), push_request(uri))
+        .await
+        .expect_err("there is no branch to default to");
+    assert!(error.to_string().contains("Name the branch"), "{error}");
+
+    let report = push_with(
+        github.client(),
+        &pusher(),
+        PushRequest {
+            branch: Some("main".to_string()),
+            ..push_request(uri)
+        },
+    )
+    .await
+    .expect("named, it pushes");
+    assert_eq!(report.branch, "main");
+    assert_eq!(
+        github.snapshot().get("shop/main.js").map(String::as_str),
+        Some("function init() { /* fixed */ }")
+    );
+
+    let follow = aiwebengine::git_sync::followed("lpajunen/solution")
+        .await
+        .expect("follow should read")
+        .expect("the repository is followed");
+    assert_eq!(follow.git_ref, "refs/heads/main");
 }
 
 /// The property that keeps a push from being destructive. Everything the script
@@ -765,6 +850,7 @@ async fn status_reports_which_cell_a_script_is_in() {
         .expect("status should answer");
     assert_eq!(settled.state, SyncState::InSync);
     assert_eq!(settled.remote.as_deref(), Some("lpajunen/solution"));
+    assert_eq!(settled.git_ref.as_deref(), Some("refs/heads/main"));
     assert_eq!(settled.branch.as_deref(), Some("main"));
 
     // We change it here.
@@ -921,9 +1007,10 @@ async fn a_push_follows_the_script_it_published() {
         .expect("push should succeed");
 
     assert_eq!(
-        aiwebengine::git_sync::followed("lpajunen/solution", "main", "")
+        aiwebengine::git_sync::followed("lpajunen/solution")
             .await
-            .expect("follow should read"),
+            .expect("follow should read")
+            .map(|follow| follow.scripts),
         Some(Some(["push-follow".to_string()].into_iter().collect())),
         "the pushed script, and not `other`"
     );

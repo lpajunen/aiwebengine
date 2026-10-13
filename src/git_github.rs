@@ -144,10 +144,93 @@ fn is_safe_segment(segment: &str) -> bool {
         && !segment.contains("..")
 }
 
-/// A branch resolved to the commit it points at.
+/// Where in a repository a pull reads: a branch, a tag, or one commit.
+///
+/// Stored the way git itself spells it — `refs/heads/<name>`, `refs/tags/<name>`
+/// or a full 40-character sha — so the stored form is unambiguous and is also
+/// something a caller can pass back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitRef {
+    Branch(String),
+    Tag(String),
+    Commit(String),
+}
+
+impl GitRef {
+    /// Read a ref spelled exactly: `refs/heads/<name>`, `refs/tags/<name>` or a
+    /// full sha. `None` for a bare name, which only the repository can settle.
+    pub fn exact(spec: &str) -> Result<Option<Self>, GitHubError> {
+        let spec = spec.trim();
+        if is_full_sha(spec) {
+            return Ok(Some(GitRef::Commit(spec.to_ascii_lowercase())));
+        }
+        let (git_ref, name) = if let Some(name) = spec.strip_prefix("refs/heads/") {
+            (GitRef::Branch(name.to_string()), name)
+        } else if let Some(name) = spec.strip_prefix("refs/tags/") {
+            (GitRef::Tag(name.to_string()), name)
+        } else {
+            check_ref_name(spec)?;
+            return Ok(None);
+        };
+        check_ref_name(name)?;
+        Ok(Some(git_ref))
+    }
+
+    /// Read a ref this engine stored.
+    pub fn from_stored(stored: &str) -> Result<Self, GitHubError> {
+        Self::exact(stored)?
+            .ok_or_else(|| GitHubError::InvalidRef(format!("'{}' is not a stored git ref", stored)))
+    }
+
+    /// The form this engine stores and reports.
+    pub fn stored(&self) -> String {
+        match self {
+            GitRef::Branch(name) => format!("refs/heads/{}", name),
+            GitRef::Tag(name) => format!("refs/tags/{}", name),
+            GitRef::Commit(sha) => sha.clone(),
+        }
+    }
+
+    /// The branch a push can write, when this is one.
+    pub fn branch(&self) -> Option<&str> {
+        match self {
+            GitRef::Branch(name) => Some(name),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for GitRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GitRef::Branch(name) => write!(f, "branch {}", name),
+            GitRef::Tag(name) => write!(f, "tag {}", name),
+            GitRef::Commit(sha) => write!(f, "commit {}", &sha[..7.min(sha.len())]),
+        }
+    }
+}
+
+/// A full commit sha. A short one is refused rather than guessed at: seven hex
+/// characters are also a perfectly good branch name.
+fn is_full_sha(spec: &str) -> bool {
+    spec.len() == 40 && spec.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn check_ref_name(name: &str) -> Result<(), GitHubError> {
+    if is_safe_segment(name) {
+        Ok(())
+    } else {
+        Err(GitHubError::InvalidRef(format!(
+            "'{}' is not a usable branch or tag name",
+            name
+        )))
+    }
+}
+
+/// A ref resolved to the commit it points at.
 #[derive(Debug, Clone)]
 pub struct ResolvedRef {
-    pub branch: String,
+    pub git_ref: GitRef,
     pub commit: String,
 }
 
@@ -157,13 +240,23 @@ struct RepoInfo {
 }
 
 #[derive(Debug, Deserialize)]
-struct GitRef {
+struct RefResponse {
     object: GitRefObject,
 }
 
 #[derive(Debug, Deserialize)]
 struct GitRefObject {
     sha: String,
+    /// `commit`, or `tag` for an annotated tag, which points at a tag object
+    /// rather than at the commit.
+    #[serde(rename = "type", default)]
+    kind: String,
+}
+
+/// An annotated tag object, which names what it tags.
+#[derive(Debug, Deserialize)]
+struct TagObject {
+    object: GitRefObject,
 }
 
 /// A GitHub endpoint this engine reads from.
@@ -234,38 +327,143 @@ impl GitHubClient {
         Ok(info.default_branch)
     }
 
+    /// Resolve what a person named — a branch, a tag, `refs/heads/<name>`,
+    /// `refs/tags/<name>` or a full commit sha — to a ref and its commit.
+    ///
+    /// A bare name is looked up as both a branch and a tag, and one that is
+    /// both is refused: which of the two a fleet of engines follows is not
+    /// something to settle by a lookup order nobody reads.
+    pub fn resolve_named(&self, repo: &RepoRef, spec: &str) -> Result<ResolvedRef, GitHubError> {
+        if let Some(git_ref) = GitRef::exact(spec)? {
+            if let GitRef::Commit(sha) = &git_ref {
+                self.check_commit(repo, sha)?;
+            }
+            return self.resolve(repo, &git_ref);
+        }
+        let name = spec.trim();
+        let branch = self.lookup(repo, "heads", name)?;
+        let tag = self.lookup(repo, "tags", name)?;
+        match (branch, tag) {
+            (Some(_), Some(_)) => Err(GitHubError::InvalidRef(format!(
+                "'{}' is both a branch and a tag in {}. Name refs/heads/{} or refs/tags/{}.",
+                name, repo, name, name
+            ))),
+            (Some(object), None) => Ok(ResolvedRef {
+                git_ref: GitRef::Branch(name.to_string()),
+                commit: object.sha,
+            }),
+            (None, Some(object)) => Ok(ResolvedRef {
+                git_ref: GitRef::Tag(name.to_string()),
+                commit: self.peel(repo, object)?,
+            }),
+            (None, None) => Err(GitHubError::NotFound(format!(
+                "{} has no branch or tag '{}' (or the repository is private). A commit is \
+                 named by its full 40-character sha.",
+                repo, name
+            ))),
+        }
+    }
+
+    /// Resolve a ref this engine already knows the kind of.
+    ///
+    /// A commit resolves to itself without asking: it cannot move.
+    pub fn resolve(&self, repo: &RepoRef, git_ref: &GitRef) -> Result<ResolvedRef, GitHubError> {
+        let commit = match git_ref {
+            GitRef::Commit(sha) => sha.clone(),
+            GitRef::Branch(name) => {
+                self.lookup(repo, "heads", name)?
+                    .ok_or_else(|| {
+                        GitHubError::NotFound(format!(
+                            "Branch '{}' does not exist in {} (or the repository is private)",
+                            name, repo
+                        ))
+                    })?
+                    .sha
+            }
+            GitRef::Tag(name) => {
+                let object = self.lookup(repo, "tags", name)?.ok_or_else(|| {
+                    GitHubError::NotFound(format!(
+                        "Tag '{}' does not exist in {} (or the repository is private)",
+                        name, repo
+                    ))
+                })?;
+                self.peel(repo, object)?
+            }
+        };
+        Ok(ResolvedRef {
+            git_ref: git_ref.clone(),
+            commit,
+        })
+    }
+
     /// Resolve a branch to the commit sha it currently points at.
+    pub fn resolve_branch(&self, repo: &RepoRef, branch: &str) -> Result<ResolvedRef, GitHubError> {
+        check_ref_name(branch)?;
+        self.resolve(repo, &GitRef::Branch(branch.to_string()))
+    }
+
+    /// One ref under `refs/{namespace}/`, or `None` when there is no such ref.
     ///
     /// Uses the Git Data ref endpoint rather than the commits endpoint, whose
     /// response carries the commit's full file list and can run to hundreds of
     /// kilobytes for a large merge. All that is wanted here is one sha.
-    pub fn resolve_branch(&self, repo: &RepoRef, branch: &str) -> Result<ResolvedRef, GitHubError> {
-        if !is_safe_segment(branch) {
-            return Err(GitHubError::InvalidRef(format!(
-                "'{}' is not a usable branch name",
-                branch
-            )));
-        }
-
+    fn lookup(
+        &self,
+        repo: &RepoRef,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Option<GitRefObject>, GitHubError> {
+        check_ref_name(name)?;
         let url = format!(
-            "{}/repos/{}/{}/git/ref/heads/{}",
-            self.api_base, repo.owner, repo.repo, branch
+            "{}/repos/{}/{}/git/ref/{}/{}",
+            self.api_base, repo.owner, repo.repo, namespace, name
         );
+        match self.get_json::<RefResponse>(&url, repo) {
+            Ok(found) => Ok(Some(found.object)),
+            // The ref endpoint answers 404 both for "no such repository" and
+            // for "no such ref"; the caller words the miss.
+            Err(GitHubError::NotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
 
-        let git_ref: GitRef = self.get_json(&url, repo).map_err(|e| match e {
-            // The ref endpoint answers 404 both for "no such repository" and for
-            // "no such branch", and the caller can only act on the difference.
-            GitHubError::NotFound(_) => GitHubError::NotFound(format!(
-                "Branch '{}' does not exist in {} (or the repository is private)",
-                branch, repo
-            )),
-            other => other,
-        })?;
+    /// The commit a tag ref points at. A lightweight tag names it directly; an
+    /// annotated one names a tag object, which names the commit — or, rarely,
+    /// another tag.
+    fn peel(&self, repo: &RepoRef, mut object: GitRefObject) -> Result<String, GitHubError> {
+        for _ in 0..4 {
+            if object.kind != "tag" {
+                return Ok(object.sha);
+            }
+            if !is_full_sha(&object.sha) {
+                break;
+            }
+            let url = format!(
+                "{}/repos/{}/{}/git/tags/{}",
+                self.api_base, repo.owner, repo.repo, object.sha
+            );
+            object = self.get_json::<TagObject>(&url, repo)?.object;
+        }
+        Err(GitHubError::UnexpectedResponse(format!(
+            "A tag in {} does not lead to a commit",
+            repo
+        )))
+    }
 
-        Ok(ResolvedRef {
-            branch: branch.to_string(),
-            commit: git_ref.object.sha,
-        })
+    /// Whether `sha` is a commit the repository holds.
+    fn check_commit(&self, repo: &RepoRef, sha: &str) -> Result<(), GitHubError> {
+        let url = format!(
+            "{}/repos/{}/{}/git/commits/{}",
+            self.api_base, repo.owner, repo.repo, sha
+        );
+        match self.get_json::<ShaResponse>(&url, repo) {
+            Ok(_) => Ok(()),
+            Err(GitHubError::NotFound(_)) => Err(GitHubError::NotFound(format!(
+                "{} has no commit {} (or the repository is private)",
+                repo, sha
+            ))),
+            Err(e) => Err(e),
+        }
     }
 
     /// Download the repository's tree at `commit` as a gzipped tar.
@@ -802,6 +1000,53 @@ pub enum GitHubError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_ref_spelled_out_needs_no_lookup() {
+        let sha = "ABCDEF0123456789abcdef0123456789abcdef01";
+        assert_eq!(
+            GitRef::exact(sha).expect("a sha parses"),
+            Some(GitRef::Commit(sha.to_ascii_lowercase()))
+        );
+        assert_eq!(
+            GitRef::exact("refs/heads/release/1.x").expect("a branch parses"),
+            Some(GitRef::Branch("release/1.x".to_string()))
+        );
+        assert_eq!(
+            GitRef::exact("refs/tags/v1.4.0").expect("a tag parses"),
+            Some(GitRef::Tag("v1.4.0".to_string()))
+        );
+        assert_eq!(GitRef::exact("v1").expect("a bare name parses"), None);
+        assert_eq!(
+            GitRef::exact("abc1234").expect("a short sha is a name"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_stored_ref_round_trips() {
+        for git_ref in [
+            GitRef::Branch("main".to_string()),
+            GitRef::Tag("v1".to_string()),
+            GitRef::Commit("0123456789abcdef0123456789abcdef01234567".to_string()),
+        ] {
+            assert_eq!(
+                GitRef::from_stored(&git_ref.stored()).expect("it reads back"),
+                git_ref
+            );
+        }
+        assert!(
+            GitRef::from_stored("main").is_err(),
+            "stored refs are spelled out"
+        );
+    }
+
+    #[test]
+    fn an_unusable_ref_name_is_refused() {
+        for bad in ["", "refs/tags/", "a..b", "refs/heads/x y", "v1?x"] {
+            assert!(GitRef::exact(bad).is_err(), "{bad:?}");
+        }
+    }
 
     #[test]
     fn parses_owner_slash_repo() {

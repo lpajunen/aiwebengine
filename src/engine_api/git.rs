@@ -19,14 +19,17 @@ pub struct GitPullBody {
     #[schema(example = "octocat/hello-world")]
     pub repo: Option<String>,
 
-    /// Branch to read. Omit to use whichever branch the repository calls its
-    /// default.
-    #[schema(example = "main")]
-    pub branch: Option<String>,
+    /// What to read: a branch, a tag (`refs/heads/<name>` or
+    /// `refs/tags/<name>` when a name is both), or a full commit sha. Omit to
+    /// read the ref this engine follows the repository at, or else the
+    /// repository's default branch.
+    #[serde(rename = "ref")]
+    #[schema(example = "v1.4.0")]
+    pub git_ref: Option<String>,
 
-    /// URI prefix the pulled scripts land under, appended to this engine's own
-    /// origin. Defaults to the repository name. Set it when two repositories
-    /// would otherwise collide, or to place a solution somewhere specific.
+    /// Name prefix for the scripts a pull creates: directory `shop` lands as
+    /// `<prefix>-shop`. Omit to keep the one this repository is followed under;
+    /// empty for none. Set it when two repositories would otherwise collide.
     #[schema(example = "examples")]
     pub prefix: Option<String>,
 
@@ -41,7 +44,7 @@ pub(super) fn pull_report_json(report: &crate::git_sync::PullReport) -> Value {
     json!({
         "success": true,
         "repo": report.repo,
-        "branch": report.branch,
+        "ref": report.git_ref.stored(),
         "commit": report.commit,
         "upToDate": report.up_to_date,
         "scripts": report.scripts.iter().map(|script| json!({
@@ -196,7 +199,8 @@ pub struct GitPushBody {
     pub repo: Option<String>,
 
     /// Branch to write. Defaults to the branch the script was pulled from, or
-    /// the repository's default branch on a first publish.
+    /// the repository's default branch on a first publish. Required for a
+    /// script pulled from a tag or a commit.
     #[schema(example = "main")]
     pub branch: Option<String>,
 
@@ -257,6 +261,7 @@ pub(super) fn status_json(status: &crate::git_sync::SyncStatus) -> Value {
         "state": status.state.as_str(),
         "action": status.state.advice(),
         "repo": status.remote,
+        "ref": status.git_ref,
         "branch": status.branch,
         "commit": status.remote_commit,
         "commitAtSync": status.commit_at_sync,
@@ -352,7 +357,7 @@ pub(super) fn binding_json(binding: &crate::git_sync::Binding) -> Value {
     json!({
         "script": binding.script_uri,
         "repo": binding.remote,
-        "branch": binding.branch,
+        "ref": binding.git_ref,
         "commitAtSync": binding.last_commit,
         "syncedAt": binding.synced_at.to_rfc3339(),
         "syncedBy": binding.synced_by,
@@ -386,7 +391,7 @@ pub(super) fn tool_list_git_bindings(_args: &Value, user: &UserContext) -> Value
 pub(super) fn follow_json(follow: &crate::git_follow::Follow) -> Value {
     json!({
         "repo": follow.remote,
-        "branch": follow.branch,
+        "ref": follow.git_ref,
         "prefix": follow.uri_base,
         "scripts": follow.scripts,
         "everyMinutes": follow.every_minutes,
@@ -422,7 +427,7 @@ pub(super) fn tool_follow_git(args: &Value, user: &UserContext) -> Value {
 
     let request = crate::git_follow::FollowRequest {
         repo: repo.to_string(),
-        branch: arg_str(args, "branch").map(str::to_string),
+        git_ref: arg_str(args, "ref").map(str::to_string),
         prefix: arg_str(args, "prefix").map(str::to_string),
         scripts: args.get("scripts").and_then(Value::as_array).map(|names| {
             names
@@ -471,7 +476,7 @@ pub(super) fn tool_pull_from_git(args: &Value, user: &UserContext) -> Value {
 
     let request = crate::git_sync::PullRequest {
         repo: repo.to_string(),
-        branch: arg_str(args, "branch").map(str::to_string),
+        git_ref: arg_str(args, "ref").map(str::to_string),
         prefix: arg_str(args, "prefix").map(str::to_string),
         force: args.get("force").and_then(Value::as_bool).unwrap_or(false),
         scripts: args.get("scripts").and_then(Value::as_array).map(|names| {

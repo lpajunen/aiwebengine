@@ -752,14 +752,14 @@ fn audit_sync(
 pub struct PullRequest {
     /// `owner/repo`, or any GitHub URL naming it.
     pub repo: String,
-    /// Branch to read. `None` asks GitHub for the repository's default.
-    pub branch: Option<String>,
-    /// URI prefix the pulled scripts land under.
+    /// What to read: a branch, a tag, or a full commit sha. `None` reads the
+    /// ref this engine follows the repository at, or the repository's default
+    /// branch when it follows nothing there yet.
+    pub git_ref: Option<String>,
+    /// Name prefix for the scripts a pull creates. `None` keeps the follow's;
+    /// an empty one is no prefix.
     ///
-    /// Explicit rather than derived from the local host, and defaulted from the
-    /// repository name. On a shared server the prefix is what keeps two people
-    /// pulling the same public repository from colliding on one URI — and it is
-    /// a decision belonging to whoever is deploying the solution rather than to
+    /// A decision belonging to whoever is deploying the solution rather than to
     /// whoever named the repository.
     pub prefix: Option<String>,
     /// Download and re-apply even when nothing appears to have moved.
@@ -804,7 +804,7 @@ pub struct PulledScript {
 #[derive(Debug, Clone)]
 pub struct PullReport {
     pub repo: String,
-    pub branch: String,
+    pub git_ref: crate::git_github::GitRef,
     pub commit: String,
     pub scripts: Vec<PulledScript>,
     /// Whether every script this repository owns already stood at `commit`, in
@@ -814,7 +814,7 @@ pub struct PullReport {
 
 /// The scripts written by a pull, before any of them has been initialised.
 struct WrittenScripts {
-    branch: String,
+    git_ref: crate::git_github::GitRef,
     commit: String,
     scripts: Vec<PulledScript>,
     up_to_date: bool,
@@ -943,7 +943,7 @@ pub async fn pull_with(
 
     Ok(PullReport {
         repo: repo_label,
-        branch: written.branch,
+        git_ref: written.git_ref,
         commit: written.commit,
         scripts,
         up_to_date: written.up_to_date,
@@ -957,38 +957,57 @@ fn fetch_and_write(
     repo: &crate::git_github::RepoRef,
     request: &PullRequest,
 ) -> Result<WrittenScripts, SyncError> {
-    let branch = match &request.branch {
-        Some(branch) => branch.clone(),
-        None => client.default_branch(repo)?,
+    let remote = repo.to_string();
+    // An engine follows a repository once, at one ref and under one prefix.
+    // What the caller leaves out is what the follow is at.
+    let follow = crate::database::run_blocking(followed(&remote))
+        .map_err(|e| SyncError::Storage(format!("Could not read what is followed: {}", e)))?;
+
+    let resolved = match (&request.git_ref, &follow) {
+        (Some(spec), _) => client.resolve_named(repo, spec)?,
+        (None, Some(follow)) => client.resolve(
+            repo,
+            &crate::git_github::GitRef::from_stored(&follow.git_ref)?,
+        )?,
+        (None, None) => {
+            let branch = client.default_branch(repo)?;
+            client.resolve_branch(repo, &branch)?
+        }
     };
-    let resolved = client.resolve_branch(repo, &branch)?;
+    let git_ref = resolved.git_ref.stored();
 
     // What the caller gave, and nothing invented: with no prefix a script is
     // named after its directory alone, and two repositories that both hold a
     // `shop` meet at the "did not put it there" guard below rather than being
     // told apart by a prefix nobody asked for.
-    let prefix = normalize_prefix(request.prefix.as_deref())?;
+    let prefix = match (&request.prefix, &follow) {
+        (Some(prefix), _) => normalize_prefix(Some(prefix))?,
+        (None, Some(follow)) => normalize_prefix(Some(&follow.uri_base))?,
+        (None, None) => None,
+    };
     // What a row records, so the pull that wrote it can tell whether it is
     // about to apply the same rules.
     let recorded_prefix = prefix.clone().unwrap_or_default();
 
+    // Moving a follow another account runs on a schedule changes what that
+    // account's runs write, which is that account's to decide.
+    if let Some(follow) = &follow
+        && (follow.git_ref != git_ref || follow.uri_base != recorded_prefix)
+    {
+        check_may_move(follow, user)?;
+    }
+
     let named = selection(request.scripts.as_deref())?;
 
-    // Every script this remote and branch wrote here, whatever prefix it was
-    // pulled under: a script is found again by its directory, not its name.
-    let known =
-        crate::database::run_blocking(last_synced(&repo.to_string(), &branch)).unwrap_or_default();
+    // Every script this repository wrote here, whatever ref and prefix it was
+    // pulled at: a script is found again by its directory, not its name.
+    let known = crate::database::run_blocking(last_synced(&remote)).unwrap_or_default();
 
-    let remote = repo.to_string();
     let binding: Vec<&SyncedScript> = known
         .iter()
         .filter(|row| row.uri_base.as_deref() == Some(recorded_prefix.as_str()))
         .collect();
-    let followed = with_older_bindings(
-        crate::database::run_blocking(followed(&remote, &branch, &recorded_prefix))
-            .map_err(|e| SyncError::Storage(format!("Could not read what is followed: {}", e)))?,
-        &binding,
-    );
+    let followed = with_older_bindings(follow.map(|follow| follow.scripts), &binding);
 
     // The directories this pull takes, or `None` for all of them: the ones
     // named, or else the ones this engine follows.
@@ -1012,6 +1031,7 @@ fn fetch_and_write(
     if !request.force {
         let current = |row: &SyncedScript| {
             row.commit == resolved.commit
+                && row.git_ref == git_ref
                 && row.uri_base.as_deref() == Some(recorded_prefix.as_str())
                 && row.mapping_version == Some(MAPPING_VERSION)
         };
@@ -1027,14 +1047,14 @@ fn fetch_and_write(
         if settled {
             crate::database::run_blocking(record_follow(
                 &remote,
-                &branch,
+                &git_ref,
                 &recorded_prefix,
                 follows.as_ref(),
                 user.user_id.as_deref(),
             ))
             .map_err(|e| SyncError::Storage(format!("Could not record the follow: {}", e)))?;
             return Ok(WrittenScripts {
-                branch,
+                git_ref: resolved.git_ref,
                 commit: resolved.commit,
                 scripts: Vec::new(),
                 up_to_date: true,
@@ -1162,7 +1182,7 @@ fn fetch_and_write(
         scripts.push(write_script(
             user,
             repo,
-            &branch,
+            &git_ref,
             &resolved.commit,
             &recorded_prefix,
             &script_uri,
@@ -1173,7 +1193,7 @@ fn fetch_and_write(
 
     crate::database::run_blocking(record_follow(
         &remote,
-        &branch,
+        &git_ref,
         &recorded_prefix,
         follows.as_ref(),
         user.user_id.as_deref(),
@@ -1181,7 +1201,7 @@ fn fetch_and_write(
     .map_err(|e| SyncError::Storage(format!("Could not record the follow: {}", e)))?;
 
     Ok(WrittenScripts {
-        branch,
+        git_ref: resolved.git_ref,
         commit: resolved.commit,
         scripts,
         up_to_date: false,
@@ -1465,7 +1485,7 @@ fn ignore_rules_in(files: &BTreeMap<String, Vec<u8>>) -> IgnoreRules {
 fn write_script(
     user: &UserContext,
     repo: &crate::git_github::RepoRef,
-    branch: &str,
+    git_ref: &str,
     commit: &str,
     prefix: &str,
     script_uri: &str,
@@ -1589,7 +1609,7 @@ fn write_script(
     crate::database::run_blocking(record_sync(
         script_uri,
         &repo.to_string(),
-        branch,
+        git_ref,
         commit,
         prefix,
         layout.name.as_deref().unwrap_or_default(),
@@ -1779,13 +1799,40 @@ fn gather_and_push(
     request: &PushRequest,
     known: Option<&SyncRow>,
 ) -> Result<PushReport, SyncError> {
+    // A push moves a branch. A script pulled from a tag or a commit has no
+    // branch to default to, and guessing one would publish somewhere nobody
+    // chose.
     let branch = match &request.branch {
         Some(branch) => branch.clone(),
-        None => match known {
-            Some(row) => row.branch.clone(),
+        None => match known.filter(|row| row.remote == repo.to_string()) {
+            Some(row) => {
+                let pulled = crate::git_github::GitRef::from_stored(&row.git_ref)?;
+                match pulled.branch() {
+                    Some(branch) => branch.to_string(),
+                    None => {
+                        return Err(SyncError::Layout(format!(
+                            "'{}' was pulled from {}, which a push cannot move. Name the \
+                             branch to push to.",
+                            request.script_uri, pulled
+                        )));
+                    }
+                }
+            }
             None => client.default_branch(repo)?,
         },
     };
+    let pushed_ref = crate::git_github::GitRef::Branch(branch.clone());
+    let remote = repo.to_string();
+
+    // The engine follows the repository at what this push writes from now on;
+    // moving a follow another account runs is that account's to decide.
+    let follow = crate::database::run_blocking(followed(&remote))
+        .map_err(|e| SyncError::Storage(format!("Could not read what is followed: {}", e)))?;
+    if let Some(follow) = &follow
+        && follow.git_ref != pushed_ref.stored()
+    {
+        check_may_move(follow, user)?;
+    }
 
     // A repository with no commits on this branch yet is a first publish rather
     // than an error: there is simply no parent and no tree to preserve.
@@ -1905,8 +1952,8 @@ fn gather_and_push(
         .unwrap_or_default();
     crate::database::run_blocking(record_sync(
         &request.script_uri,
-        &repo.to_string(),
-        &branch,
+        &remote,
+        &pushed_ref.stored(),
         &commit,
         &recorded_prefix,
         entry_prefix.as_deref().unwrap_or_default(),
@@ -1918,16 +1965,18 @@ fn gather_and_push(
 
     // Publishing one script into a repository is following that one, not
     // everything beside it.
-    let remote = repo.to_string();
-    let before = crate::database::run_blocking(followed(&remote, &branch, &recorded_prefix))
-        .map_err(|e| SyncError::Storage(format!("Could not read what is followed: {}", e)))?;
+    let follow_prefix = follow
+        .as_ref()
+        .map(|follow| follow.uri_base.clone())
+        .unwrap_or(recorded_prefix);
+    let before = follow.map(|follow| follow.scripts);
     let named: Option<BTreeSet<String>> = entry_prefix
         .as_deref()
         .map(|dir| BTreeSet::from([dir.to_string()]));
     crate::database::run_blocking(record_follow(
         &remote,
-        &branch,
-        &recorded_prefix,
+        &pushed_ref.stored(),
+        &follow_prefix,
         following_after(before, named.as_ref()).as_ref(),
         user.user_id.as_deref(),
     ))
@@ -2087,7 +2136,8 @@ fn git_blob_sha(content: &[u8]) -> String {
 #[derive(Debug, Clone)]
 pub struct SyncRow {
     pub remote: String,
-    pub branch: String,
+    /// The ref as stored: `refs/heads/<name>`, `refs/tags/<name>` or a sha.
+    pub git_ref: String,
     pub last_commit: String,
     pub uri_base: Option<String>,
     /// The directory of the repository this script is; empty for the root.
@@ -2102,7 +2152,7 @@ pub struct SyncRow {
 pub struct Binding {
     pub script_uri: String,
     pub remote: String,
-    pub branch: String,
+    pub git_ref: String,
     pub last_commit: String,
     pub synced_at: chrono::DateTime<chrono::Utc>,
     pub synced_by: Option<String>,
@@ -2116,7 +2166,7 @@ pub struct Binding {
 pub async fn bindings() -> crate::error::AppResult<Vec<Binding>> {
     use sqlx::Row;
     let rows = sqlx::query(
-        "SELECT script_uri, remote, branch, last_commit, synced_at, synced_by \
+        "SELECT script_uri, remote, git_ref, last_commit, synced_at, synced_by \
          FROM script_git_sync ORDER BY remote, script_uri",
     )
     .fetch_all(&pool()?)
@@ -2131,7 +2181,7 @@ pub async fn bindings() -> crate::error::AppResult<Vec<Binding>> {
         .map(|row| Binding {
             script_uri: row.get::<String, _>(0),
             remote: row.get::<String, _>(1),
-            branch: row.get::<String, _>(2),
+            git_ref: row.get::<String, _>(2),
             last_commit: row.get::<String, _>(3),
             synced_at: row.get::<chrono::DateTime<chrono::Utc>, _>(4),
             synced_by: row.get::<Option<String>, _>(5),
@@ -2157,42 +2207,35 @@ pub async fn unbind(script_uri: &str) -> crate::error::AppResult<bool> {
     };
     let mut tx = pool()?.begin().await.map_err(database_error)?;
 
-    let removed: Option<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
-        "DELETE FROM script_git_sync WHERE script_uri = $1 \
-         RETURNING remote, branch, uri_base, repo_dir",
+    let removed: Option<(String, Option<String>)> = sqlx::query_as(
+        "DELETE FROM script_git_sync WHERE script_uri = $1 RETURNING remote, repo_dir",
     )
     .bind(script_uri)
     .fetch_optional(&mut *tx)
     .await
     .map_err(database_error)?;
 
-    let Some((remote, branch, uri_base, repo_dir)) = removed else {
+    let Some((remote, repo_dir)) = removed else {
         return Ok(false);
     };
-    let uri_base = uri_base.unwrap_or_default();
 
     if let Some(repo_dir) = repo_dir {
         sqlx::query(
-            "UPDATE git_follows SET scripts = array_remove(scripts, $4), updated_at = NOW() \
-             WHERE remote = $1 AND branch = $2 AND uri_base = $3 AND scripts IS NOT NULL",
+            "UPDATE git_follows SET scripts = array_remove(scripts, $2), updated_at = NOW() \
+             WHERE remote = $1 AND scripts IS NOT NULL",
         )
         .bind(&remote)
-        .bind(&branch)
-        .bind(&uri_base)
         .bind(&repo_dir)
         .execute(&mut *tx)
         .await
         .map_err(database_error)?;
     }
     sqlx::query(
-        "DELETE FROM git_follows f WHERE f.remote = $1 AND f.branch = $2 AND f.uri_base = $3 \
+        "DELETE FROM git_follows f WHERE f.remote = $1 \
          AND (f.scripts = '{}' OR NOT EXISTS ( \
-             SELECT 1 FROM script_git_sync s WHERE s.remote = f.remote AND s.branch = f.branch \
-             AND COALESCE(s.uri_base, '') = f.uri_base))",
+             SELECT 1 FROM script_git_sync s WHERE s.remote = f.remote))",
     )
     .bind(&remote)
-    .bind(&branch)
-    .bind(&uri_base)
     .execute(&mut *tx)
     .await
     .map_err(database_error)?;
@@ -2204,7 +2247,7 @@ pub async fn unbind(script_uri: &str) -> crate::error::AppResult<bool> {
 pub async fn sync_row(script_uri: &str) -> crate::error::AppResult<Option<SyncRow>> {
     use sqlx::Row;
     let row = sqlx::query(
-        "SELECT remote, branch, last_commit, uri_base, revision_at_sync, repo_dir, ignore_rules \
+        "SELECT remote, git_ref, last_commit, uri_base, revision_at_sync, repo_dir, ignore_rules \
          FROM script_git_sync WHERE script_uri = $1",
     )
     .bind(script_uri)
@@ -2217,7 +2260,7 @@ pub async fn sync_row(script_uri: &str) -> crate::error::AppResult<Option<SyncRo
 
     Ok(row.map(|row| SyncRow {
         remote: row.get::<String, _>(0),
-        branch: row.get::<String, _>(1),
+        git_ref: row.get::<String, _>(1),
         last_commit: row.get::<String, _>(2),
         uri_base: row.get::<Option<String>, _>(3),
         revision_at_sync: row.get::<Option<i32>, _>(4),
@@ -2292,10 +2335,13 @@ pub struct SyncStatus {
     pub state: SyncState,
     /// Where it came from, when it came from anywhere.
     pub remote: Option<String>,
+    /// The ref it was last synced at, as stored.
+    pub git_ref: Option<String>,
+    /// The branch a push writes by default: the ref, when that is a branch.
     pub branch: Option<String>,
     /// The commit the two sides last agreed on.
     pub commit_at_sync: Option<String>,
-    /// What the branch points at now, when the host could be asked.
+    /// What the ref points at now, when the host could be asked.
     pub remote_commit: Option<String>,
     /// The revision they last agreed on, and the newest one here.
     pub revision_at_sync: Option<i32>,
@@ -2340,6 +2386,7 @@ pub async fn status_with(
             script_uri: script_uri.to_string(),
             state: SyncState::Unbound,
             remote: None,
+            git_ref: None,
             branch: None,
             commit_at_sync: None,
             remote_commit: None,
@@ -2351,14 +2398,15 @@ pub async fn status_with(
     };
 
     let repo = crate::git_github::RepoRef::parse(&row.remote)?;
-    let branch = row.branch.clone();
+    let git_ref = crate::git_github::GitRef::from_stored(&row.git_ref)?;
+    let branch = git_ref.branch().map(str::to_string);
 
     // Asking the host is what makes this worth calling, and it is also the one
     // part that can fail for reasons that have nothing to do with the script.
     // A host that cannot be reached degrades to the local half rather than
     // failing the whole answer: "your copy has changed and I could not check
     // theirs" is useful, and an error is not.
-    let probe = tokio::task::spawn_blocking(move || client.resolve_branch(&repo, &branch))
+    let probe = tokio::task::spawn_blocking(move || client.resolve(&repo, &git_ref))
         .await
         .map_err(|e| SyncError::Storage(format!("Status did not finish: {}", e)))?;
 
@@ -2392,7 +2440,8 @@ pub async fn status_with(
         script_uri: script_uri.to_string(),
         state,
         remote: Some(row.remote),
-        branch: Some(row.branch),
+        git_ref: Some(row.git_ref),
+        branch,
         commit_at_sync: Some(row.last_commit),
         remote_commit,
         revision_at_sync: row.revision_at_sync,
@@ -2419,6 +2468,8 @@ fn pool() -> crate::error::AppResult<sqlx::PgPool> {
 #[derive(Debug, Clone)]
 pub struct SyncedScript {
     pub script_uri: String,
+    /// The ref it was last synced at, as stored.
+    pub git_ref: String,
     pub commit: String,
     /// The base the pull composed this script's URI against, or `None` for a
     /// row written before that was recorded.
@@ -2429,19 +2480,14 @@ pub struct SyncedScript {
     pub mapping_version: Option<i32>,
 }
 
-/// The scripts this remote and branch have written here.
-///
-/// Read for one question today — is there anything to do — but it is the same
-/// row a push and a divergence check will read, which is why it carries the
-/// revision alongside the commit rather than the commit alone.
-pub async fn last_synced(remote: &str, branch: &str) -> crate::error::AppResult<Vec<SyncedScript>> {
+/// The scripts this repository has written here, at whatever ref.
+pub async fn last_synced(remote: &str) -> crate::error::AppResult<Vec<SyncedScript>> {
     use sqlx::Row;
     let rows = sqlx::query(
-        "SELECT script_uri, last_commit, uri_base, mapping_version, repo_dir FROM script_git_sync \
-         WHERE remote = $1 AND branch = $2",
+        "SELECT script_uri, last_commit, uri_base, mapping_version, repo_dir, git_ref \
+         FROM script_git_sync WHERE remote = $1",
     )
     .bind(remote)
-    .bind(branch)
     .fetch_all(&pool()?)
     .await
     .map_err(|e| crate::error::AppError::Database {
@@ -2457,6 +2503,7 @@ pub async fn last_synced(remote: &str, branch: &str) -> crate::error::AppResult<
             uri_base: row.get::<Option<String>, _>(2),
             mapping_version: row.get::<Option<i32>, _>(3),
             repo_dir: row.get::<Option<String>, _>(4),
+            git_ref: row.get::<String, _>(5),
         })
         .collect())
 }
@@ -2466,7 +2513,7 @@ pub async fn last_synced(remote: &str, branch: &str) -> crate::error::AppResult<
 pub async fn record_sync(
     script_uri: &str,
     remote: &str,
-    branch: &str,
+    git_ref: &str,
     commit: &str,
     uri_base: &str,
     repo_dir: &str,
@@ -2477,12 +2524,12 @@ pub async fn record_sync(
     sqlx::query(
         r#"
         INSERT INTO script_git_sync
-            (script_uri, remote, branch, last_commit, uri_base, mapping_version,
+            (script_uri, remote, git_ref, last_commit, uri_base, mapping_version,
              revision_at_sync, synced_at, synced_by, repo_dir, ignore_rules)
         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9, $10)
         ON CONFLICT (script_uri) DO UPDATE SET
             remote = EXCLUDED.remote,
-            branch = EXCLUDED.branch,
+            git_ref = EXCLUDED.git_ref,
             last_commit = EXCLUDED.last_commit,
             uri_base = EXCLUDED.uri_base,
             repo_dir = EXCLUDED.repo_dir,
@@ -2495,7 +2542,7 @@ pub async fn record_sync(
     )
     .bind(script_uri)
     .bind(remote)
-    .bind(branch)
+    .bind(git_ref)
     .bind(commit)
     .bind(uri_base)
     .bind(MAPPING_VERSION)
@@ -2512,33 +2559,68 @@ pub async fn record_sync(
     Ok(())
 }
 
-/// What this engine follows from a repository, branch and prefix: `None` when
-/// it follows nothing there yet, `Some(None)` for the whole repository, and
-/// otherwise the directories followed.
-pub async fn followed(
-    remote: &str,
-    branch: &str,
-    uri_base: &str,
-) -> crate::error::AppResult<Option<Option<BTreeSet<String>>>> {
-    let row: Option<(Option<Vec<String>>,)> = sqlx::query_as(
-        "SELECT scripts FROM git_follows WHERE remote = $1 AND branch = $2 AND uri_base = $3",
+/// What this engine follows a repository at, as a pull and a push read it.
+#[derive(Debug, Clone)]
+pub struct FollowedAt {
+    /// The ref, as stored.
+    pub git_ref: String,
+    pub uri_base: String,
+    /// The directories followed, or `None` for the whole repository.
+    pub scripts: Option<BTreeSet<String>>,
+    /// The account a scheduled follow runs as.
+    pub acting_user: Option<String>,
+}
+
+/// What this engine follows of a repository, or `None` when it follows
+/// nothing there yet.
+pub async fn followed(remote: &str) -> crate::error::AppResult<Option<FollowedAt>> {
+    type Row = (String, String, Option<Vec<String>>, Option<String>);
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT git_ref, uri_base, scripts, acting_user FROM git_follows WHERE remote = $1",
     )
     .bind(remote)
-    .bind(branch)
-    .bind(uri_base)
     .fetch_optional(&pool()?)
     .await
     .map_err(|e| crate::error::AppError::Database {
         message: format!("Database error reading what is followed: {}", e),
         source: None,
     })?;
-    Ok(row.map(|(scripts,)| scripts.map(|scripts| scripts.into_iter().collect())))
+    Ok(
+        row.map(|(git_ref, uri_base, scripts, acting_user)| FollowedAt {
+            git_ref,
+            uri_base,
+            scripts: scripts.map(|scripts| scripts.into_iter().collect()),
+            acting_user,
+        }),
+    )
 }
 
-/// Record what this engine follows from a repository, branch and prefix.
+/// Refuse to move a follow that another account runs on a schedule, unless
+/// `user` administers the engine: what that account's runs write is its own
+/// decision.
+pub(crate) fn check_may_move(follow: &FollowedAt, user: &UserContext) -> Result<(), SyncError> {
+    match follow.acting_user.as_deref() {
+        Some(acting)
+            if user.user_id.as_deref() != Some(acting)
+                && !user.has_capability(&crate::security::Capability::AdministerEngine) =>
+        {
+            Err(SyncError::AccessDenied(format!(
+                "This engine follows the repository at {} on another account's schedule. Only \
+                 that account or an administrator can move it.",
+                crate::git_github::GitRef::from_stored(&follow.git_ref)
+                    .map(|git_ref| git_ref.to_string())
+                    .unwrap_or_else(|_| follow.git_ref.clone())
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Record what this engine follows of a repository: the ref, the prefix and
+/// the directories. A schedule already set stays.
 pub async fn record_follow(
     remote: &str,
-    branch: &str,
+    git_ref: &str,
     uri_base: &str,
     scripts: Option<&BTreeSet<String>>,
     user_id: Option<&str>,
@@ -2546,15 +2628,17 @@ pub async fn record_follow(
     let scripts: Option<Vec<&String>> = scripts.map(|scripts| scripts.iter().collect());
     sqlx::query(
         r#"
-        INSERT INTO git_follows (remote, branch, uri_base, scripts, created_by)
+        INSERT INTO git_follows (remote, git_ref, uri_base, scripts, created_by)
         VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (remote, branch, uri_base) DO UPDATE SET
+        ON CONFLICT (remote) DO UPDATE SET
+            git_ref = EXCLUDED.git_ref,
+            uri_base = EXCLUDED.uri_base,
             scripts = EXCLUDED.scripts,
             updated_at = NOW()
         "#,
     )
     .bind(remote)
-    .bind(branch)
+    .bind(git_ref)
     .bind(uri_base)
     .bind(scripts)
     .bind(user_id)
@@ -2865,7 +2949,7 @@ mod tests {
     fn a_recorded_directory_says_where_a_script_goes() {
         let row = |dir: Option<&str>| SyncRow {
             remote: "o/r".to_string(),
-            branch: "main".to_string(),
+            git_ref: "refs/heads/main".to_string(),
             last_commit: "c".to_string(),
             uri_base: None,
             repo_dir: dir.map(str::to_string),
@@ -3091,6 +3175,7 @@ mod tests {
     fn an_older_binding_follows_the_directories_it_is() {
         let row = |uri: &str, dir: Option<&str>| SyncedScript {
             script_uri: uri.to_string(),
+            git_ref: "refs/heads/main".to_string(),
             commit: String::new(),
             uri_base: Some(String::new()),
             repo_dir: dir.map(str::to_string),

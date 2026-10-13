@@ -1,9 +1,11 @@
 //! Following a repository on a schedule.
 //!
-//! A follow (`git_follows`) records what this engine takes from a repository,
-//! branch and prefix. Pulling it by hand needs nothing more. Scheduling it
-//! adds how often, what a run does (`Mode`), and whose authority it runs
-//! with — because a scheduled pull writes scripts while nobody is there.
+//! A follow (`git_follows`) records what this engine takes from a repository:
+//! one row per repository, at one ref and under one prefix, so pulling another
+//! ref moves the follow rather than leaving a second one to pull the old ref
+//! back. Pulling by hand needs nothing more. Scheduling it adds how often, what
+//! a run does (`Mode`), and whose authority it runs with — because a scheduled
+//! pull writes scripts while nobody is there.
 //!
 //! A run acts as the account that set the schedule. That account is read again
 //! on every run, capped at editor and narrowed to reading and writing scripts,
@@ -146,7 +148,9 @@ impl Ran {
 #[derive(Debug, Clone)]
 pub struct Follow {
     pub remote: String,
-    pub branch: String,
+    /// The ref followed, as stored: `refs/heads/<name>`, `refs/tags/<name>` or
+    /// a full commit sha.
+    pub git_ref: String,
     pub uri_base: String,
     /// The directories followed, or `None` for the whole repository.
     pub scripts: Option<BTreeSet<String>>,
@@ -165,8 +169,10 @@ pub struct Follow {
 #[derive(Debug, Clone)]
 pub struct FollowRequest {
     pub repo: String,
-    /// `None` reads the repository's default branch.
-    pub branch: Option<String>,
+    /// A branch, a tag or a full commit sha. `None` keeps the ref the follow is
+    /// at, or reads the repository's default branch for a new one.
+    pub git_ref: Option<String>,
+    /// `None` keeps the follow's prefix; an empty one is no prefix.
     pub prefix: Option<String>,
     /// Directories to add to what is followed, as a pull naming them would.
     pub scripts: Option<Vec<String>>,
@@ -189,7 +195,7 @@ fn storage(e: sqlx::Error) -> SyncError {
 /// sqlx can see whole.
 macro_rules! columns {
     () => {
-        "remote, branch, uri_base, scripts, every_minutes, mode, acting_user, created_by, \
+        "remote, git_ref, uri_base, scripts, every_minutes, mode, acting_user, created_by, \
          next_due_at, last_run_at, last_state, last_outcome"
     };
 }
@@ -197,7 +203,7 @@ macro_rules! columns {
 fn follow_from(row: &sqlx::postgres::PgRow) -> Follow {
     Follow {
         remote: row.get("remote"),
-        branch: row.get("branch"),
+        git_ref: row.get("git_ref"),
         uri_base: row.get("uri_base"),
         scripts: row
             .get::<Option<Vec<String>>, _>("scripts")
@@ -216,16 +222,14 @@ fn follow_from(row: &sqlx::postgres::PgRow) -> Follow {
     }
 }
 
-/// One follow, if this engine has it.
-pub async fn get(remote: &str, branch: &str, uri_base: &str) -> Result<Option<Follow>, SyncError> {
+/// The follow of a repository, if this engine has one.
+pub async fn get(remote: &str) -> Result<Option<Follow>, SyncError> {
     let row = sqlx::query(concat!(
         "SELECT ",
         columns!(),
-        " FROM git_follows WHERE remote = $1 AND branch = $2 AND uri_base = $3"
+        " FROM git_follows WHERE remote = $1"
     ))
     .bind(remote)
-    .bind(branch)
-    .bind(uri_base)
     .fetch_optional(&pool()?)
     .await
     .map_err(storage)?;
@@ -237,7 +241,7 @@ pub async fn list() -> Result<Vec<Follow>, SyncError> {
     let rows = sqlx::query(concat!(
         "SELECT ",
         columns!(),
-        " FROM git_follows ORDER BY remote, branch, uri_base"
+        " FROM git_follows ORDER BY remote"
     ))
     .fetch_all(&pool()?)
     .await
@@ -246,15 +250,14 @@ pub async fn list() -> Result<Vec<Follow>, SyncError> {
 }
 
 /// The follow that covers `script_uri`, if one does: the one recorded for the
-/// repository, branch and prefix it was synced from, following its directory.
+/// repository it was synced from, following its directory.
 pub async fn for_script(script_uri: &str) -> Result<Option<Follow>, SyncError> {
     let row = sqlx::query(concat!(
         "SELECT ",
         columns!(),
         " FROM git_follows f WHERE EXISTS ( \
              SELECT 1 FROM script_git_sync g \
-             WHERE g.script_uri = $1 AND g.remote = f.remote AND g.branch = f.branch \
-               AND g.uri_base = f.uri_base \
+             WHERE g.script_uri = $1 AND g.remote = f.remote \
                AND (f.scripts IS NULL OR g.repo_dir = ANY(f.scripts)))"
     ))
     .bind(script_uri)
@@ -321,17 +324,9 @@ pub async fn schedule_with(
 
     let repo = crate::git_github::RepoRef::parse(&request.repo)?;
     let remote = repo.to_string();
-    let branch = match request.branch.clone() {
-        Some(branch) => branch,
-        None => tokio::task::spawn_blocking(move || client.default_branch(&repo))
-            .await
-            .map_err(|e| SyncError::Storage(format!("Could not read the branch: {}", e)))??,
-    };
-    let uri_base =
-        crate::git_sync::normalize_prefix(request.prefix.as_deref())?.unwrap_or_default();
+    let existing = get(&remote).await?;
     let named = crate::git_sync::selection(request.scripts.as_deref())?;
 
-    let existing = get(&remote, &branch, &uri_base).await?;
     if let Some(acting) = existing.as_ref().and_then(|f| f.acting_user.as_deref())
         && acting != user_id
         && !user.has_capability(&Capability::AdministerEngine)
@@ -346,23 +341,52 @@ pub async fn schedule_with(
     if every == 0 {
         if existing.is_none() {
             return Err(SyncError::Layout(format!(
-                "This engine does not follow {} {} under '{}'",
-                remote, branch, uri_base
+                "This engine does not follow {}",
+                remote
             )));
         }
         sqlx::query(
             "UPDATE git_follows SET every_minutes = NULL, acting_user = NULL, \
-             next_due_at = NULL, updated_at = NOW() \
-             WHERE remote = $1 AND branch = $2 AND uri_base = $3",
+             next_due_at = NULL, updated_at = NOW() WHERE remote = $1",
         )
         .bind(&remote)
-        .bind(&branch)
-        .bind(&uri_base)
         .execute(&pool()?)
         .await
         .map_err(storage)?;
     } else {
-        let known = crate::git_sync::last_synced(&remote, &branch)
+        // What the request leaves out is what the follow is at already.
+        let kept = existing.as_ref().map(|follow| follow.git_ref.clone());
+        let git_ref = match (request.git_ref.clone(), kept) {
+            (Some(spec), _) => {
+                tokio::task::spawn_blocking(move || client.resolve_named(&repo, &spec))
+                    .await
+                    .map_err(|e| SyncError::Storage(format!("Could not read the ref: {}", e)))??
+                    .git_ref
+            }
+            (None, Some(stored)) => crate::git_github::GitRef::from_stored(&stored)?,
+            (None, None) => crate::git_github::GitRef::Branch(
+                tokio::task::spawn_blocking(move || client.default_branch(&repo))
+                    .await
+                    .map_err(|e| {
+                        SyncError::Storage(format!("Could not read the branch: {}", e))
+                    })??,
+            ),
+        };
+        if matches!(git_ref, crate::git_github::GitRef::Commit(_)) {
+            return Err(SyncError::Layout(format!(
+                "A commit never moves, so there is nothing to follow at {}. Follow a branch or \
+                 a tag, or pull the commit once.",
+                git_ref
+            )));
+        }
+        let uri_base = match (&request.prefix, &existing) {
+            (Some(prefix), _) => crate::git_sync::normalize_prefix(Some(prefix))?,
+            (None, Some(follow)) => Some(follow.uri_base.clone()),
+            (None, None) => None,
+        }
+        .unwrap_or_default();
+
+        let known = crate::git_sync::last_synced(&remote)
             .await
             .map_err(|e| SyncError::Storage(e.to_string()))?;
         let binding: Vec<&crate::git_sync::SyncedScript> = known
@@ -379,10 +403,12 @@ pub async fn schedule_with(
         sqlx::query(
             r#"
             INSERT INTO git_follows
-                (remote, branch, uri_base, scripts, created_by,
+                (remote, git_ref, uri_base, scripts, created_by,
                  every_minutes, mode, acting_user, next_due_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $5, NOW())
-            ON CONFLICT (remote, branch, uri_base) DO UPDATE SET
+            ON CONFLICT (remote) DO UPDATE SET
+                git_ref = EXCLUDED.git_ref,
+                uri_base = EXCLUDED.uri_base,
                 scripts = EXCLUDED.scripts,
                 every_minutes = EXCLUDED.every_minutes,
                 mode = EXCLUDED.mode,
@@ -392,7 +418,7 @@ pub async fn schedule_with(
             "#,
         )
         .bind(&remote)
-        .bind(&branch)
+        .bind(git_ref.stored())
         .bind(&uri_base)
         .bind(scripts)
         .bind(&user_id)
@@ -403,7 +429,7 @@ pub async fn schedule_with(
         .map_err(storage)?;
     }
 
-    get(&remote, &branch, &uri_base)
+    get(&remote)
         .await?
         .ok_or_else(|| SyncError::Storage("The follow vanished after storing".to_string()))
 }
@@ -477,12 +503,12 @@ pub async fn claim_due() -> Result<Vec<Follow>, SyncError> {
              THEN f.next_due_at + make_interval(mins => f.every_minutes) \
              ELSE NOW() + make_interval(mins => f.every_minutes) END \
          FROM ( \
-             SELECT remote, branch, uri_base FROM git_follows \
+             SELECT remote FROM git_follows \
              WHERE every_minutes IS NOT NULL AND next_due_at <= NOW() \
              ORDER BY next_due_at LIMIT $1 FOR UPDATE SKIP LOCKED \
          ) due \
-         WHERE f.remote = due.remote AND f.branch = due.branch AND f.uri_base = due.uri_base \
-         RETURNING f.remote, f.branch, f.uri_base, f.scripts, f.every_minutes, f.mode, \
+         WHERE f.remote = due.remote \
+         RETURNING f.remote, f.git_ref, f.uri_base, f.scripts, f.every_minutes, f.mode, \
                    f.acting_user, f.created_by, f.next_due_at, f.last_run_at, f.last_state, f.last_outcome",
     )
     .bind(BATCH)
@@ -500,12 +526,10 @@ pub async fn claim_due() -> Result<Vec<Follow>, SyncError> {
 /// to ask, and nobody waiting for updates that stopped arriving does.
 pub async fn record(follow: &Follow, ran: &Ran) -> Result<(), SyncError> {
     sqlx::query(
-        "UPDATE git_follows SET last_run_at = NOW(), last_state = $4, last_outcome = $5 \
-         WHERE remote = $1 AND branch = $2 AND uri_base = $3",
+        "UPDATE git_follows SET last_run_at = NOW(), last_state = $2, last_outcome = $3 \
+         WHERE remote = $1",
     )
     .bind(&follow.remote)
-    .bind(&follow.branch)
-    .bind(&follow.uri_base)
     .bind(ran.state.as_str())
     .bind(&ran.outcome)
     .execute(&pool()?)
@@ -659,8 +683,8 @@ async fn pull(
         acting,
         PullRequest {
             repo: follow.remote.clone(),
-            branch: Some(follow.branch.clone()),
-            prefix: Some(follow.uri_base.clone()).filter(|prefix| !prefix.is_empty()),
+            git_ref: Some(follow.git_ref.clone()),
+            prefix: Some(follow.uri_base.clone()),
             force: false,
             // What the follow names is what the pull reads, from the same row.
             scripts: None,
@@ -689,11 +713,10 @@ fn describe(report: &PullReport) -> String {
 
 /// The scripts this follow has written here.
 async fn followed_scripts(follow: &Follow) -> Vec<crate::git_sync::SyncedScript> {
-    crate::git_sync::last_synced(&follow.remote, &follow.branch)
+    crate::git_sync::last_synced(&follow.remote)
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|row| row.uri_base.as_deref() == Some(follow.uri_base.as_str()))
         .filter(|row| match (&follow.scripts, &row.repo_dir) {
             (None, _) => true,
             (Some(scripts), Some(dir)) => scripts.contains(dir),
@@ -708,13 +731,17 @@ async fn check(follow: &Follow, client: crate::git_github::GitHubClient) -> (boo
         Ok(repo) => repo,
         Err(e) => return (false, e.to_string()),
     };
-    let branch = follow.branch.clone();
-    let resolved =
-        match tokio::task::spawn_blocking(move || client.resolve_branch(&repo, &branch)).await {
-            Ok(Ok(resolved)) => resolved,
-            Ok(Err(e)) => return (false, e.to_string()),
-            Err(e) => return (false, format!("Check did not finish: {}", e)),
-        };
+    let git_ref = match crate::git_github::GitRef::from_stored(&follow.git_ref) {
+        Ok(git_ref) => git_ref,
+        Err(e) => return (false, e.to_string()),
+    };
+    let wanted = git_ref.stored();
+    let resolved = match tokio::task::spawn_blocking(move || client.resolve(&repo, &git_ref)).await
+    {
+        Ok(Ok(resolved)) => resolved,
+        Ok(Err(e)) => return (false, e.to_string()),
+        Err(e) => return (false, format!("Check did not finish: {}", e)),
+    };
     let short = &resolved.commit[..7.min(resolved.commit.len())];
 
     let held = followed_scripts(follow).await;
@@ -722,7 +749,11 @@ async fn check(follow: &Follow, client: crate::git_github::GitHubClient) -> (boo
         .scripts
         .as_ref()
         .is_some_and(|scripts| scripts.len() > held.len());
-    let behind = missing || held.is_empty() || held.iter().any(|row| row.commit != resolved.commit);
+    let behind = missing
+        || held.is_empty()
+        || held
+            .iter()
+            .any(|row| row.commit != resolved.commit || row.git_ref != wanted);
     if behind {
         (true, format!("Behind: {} is at {}", follow.remote, short))
     } else {
