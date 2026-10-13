@@ -180,13 +180,17 @@ async fn a_call_hands_back_a_handle_and_the_result_arrives_through_it() -> anyho
         .expect("a handle must carry an id")
         .to_string();
 
-    // Polling before the worker has run reports the work still going, and the
-    // poll itself is a complete answer — `resultType` describes the response,
-    // not the work it reports on.
+    // The poll itself is a complete answer — `resultType` describes the
+    // response, not the work it reports on. The server's own worker may already
+    // have run the task, so it reports either the work still going, with no
+    // result yet, or the work done.
     let polled = post(&http, &url, &task_request("tasks/get", &task_id)).await?;
     assert_eq!(polled["result"]["resultType"], "complete", "{}", polled);
-    assert_eq!(polled["result"]["status"], "working");
-    assert!(polled["result"].get("result").is_none());
+    match polled["result"]["status"].as_str() {
+        Some("working") => assert!(polled["result"].get("result").is_none(), "{}", polled),
+        Some("completed") => {}
+        _ => panic!("a fresh task is working or completed: {}", polled),
+    }
 
     let finished = poll_until_terminal(&http, &url, &task_id).await?;
     let finished = &finished;
