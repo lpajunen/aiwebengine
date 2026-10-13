@@ -1337,7 +1337,7 @@ async fn a_pull_will_not_replace_a_change_made_here() {
     .await
     .expect_err("a change made here should stop the pull");
     assert!(
-        matches!(error, aiwebengine::git_sync::SyncError::Diverged(_)),
+        matches!(error, aiwebengine::git_sync::SyncError::ChangedHere { .. }),
         "{error}"
     );
     assert!(error.to_string().contains("notes.md"), "{error}");
@@ -1573,7 +1573,9 @@ async fn a_scheduled_follow_pulls_as_the_account_that_set_it() {
     assert_eq!(follow.acting_user.as_deref(), Some(user_id.as_str()));
     assert!(follow.next_due_at.is_some(), "due straight away");
 
-    let (ok, outcome) = git_follow::run(&follow, Some(github.client())).await;
+    let git_follow::Ran { state, outcome, .. } =
+        git_follow::run(&follow, Some(github.client())).await;
+    let ok = state == git_follow::State::Ok;
     assert!(ok, "{outcome}");
     assert!(outcome.starts_with("Pulled"), "{outcome}");
     assert!(repository::fetch_script("sched-a").is_some());
@@ -1691,7 +1693,9 @@ async fn a_follow_writes_only_scripts_its_account_owns() {
         "9999999999999999999999999999999999999999",
         &[("a/main.ts", "function init() { /* v2 */ }")],
     );
-    let (ok, outcome) = git_follow::run(&follow, Some(github.client())).await;
+    let git_follow::Ran { state, outcome, .. } =
+        git_follow::run(&follow, Some(github.client())).await;
+    let ok = state == git_follow::State::Ok;
     assert!(!ok, "{outcome}");
     assert!(outcome.contains("do not own"), "{outcome}");
     assert_eq!(
@@ -1816,7 +1820,9 @@ async fn a_run_for_an_account_that_cannot_write_pauses_it() {
 
     aiwebengine::user_repository::delete_user(&user_id).expect("the account should go");
 
-    let (ok, outcome) = git_follow::run(&follow, Some(github.client())).await;
+    let git_follow::Ran { state, outcome, .. } =
+        git_follow::run(&follow, Some(github.client())).await;
+    let ok = state == git_follow::State::Ok;
     assert!(!ok);
     assert!(outcome.contains("no longer exists"), "{outcome}");
     assert!(repository::fetch_script("gone-a").is_none());
@@ -1839,7 +1845,9 @@ async fn a_check_follow_reports_and_writes_nothing() {
     .await
     .expect("schedule should succeed");
 
-    let (ok, outcome) = git_follow::run(&follow, Some(github.client())).await;
+    let git_follow::Ran { state, outcome, .. } =
+        git_follow::run(&follow, Some(github.client())).await;
+    let ok = state == git_follow::State::Ok;
     assert!(ok, "{outcome}");
     assert!(outcome.starts_with("Behind"), "{outcome}");
     assert!(
@@ -1854,7 +1862,9 @@ async fn a_check_follow_reports_and_writes_nothing() {
     )
     .await
     .expect("a pull by hand should succeed");
-    let (ok, outcome) = git_follow::run(&follow, Some(github.client())).await;
+    let git_follow::Ran { state, outcome, .. } =
+        git_follow::run(&follow, Some(github.client())).await;
+    let ok = state == git_follow::State::Ok;
     assert!(ok, "{outcome}");
     assert!(outcome.starts_with("Up to date"), "{outcome}");
 }
@@ -1890,7 +1900,9 @@ async fn a_stage_follow_pulls_without_going_live() {
         &[("a/main.ts", "function init() { /* v2 */ }")],
     );
 
-    let (ok, outcome) = git_follow::run(&follow, Some(github.client())).await;
+    let git_follow::Ran { state, outcome, .. } =
+        git_follow::run(&follow, Some(github.client())).await;
+    let ok = state == git_follow::State::Ok;
     assert!(ok, "{outcome}");
     assert!(outcome.contains("pinned 1"), "{outcome}");
     assert_eq!(
@@ -1925,4 +1937,147 @@ async fn a_schedule_names_a_sensible_interval() {
             "{every_minutes}: {error}"
         );
     }
+}
+
+/// A repository that names a newer script API than this engine's is refused
+/// before anything is written; force takes it anyway.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repository_needing_a_newer_engine_is_not_pulled() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[
+        (
+            ".aiwebengine-requires",
+            "# what these scripts are written against\n2999-01-01\n",
+        ),
+        ("a/main.ts", "function init() {}"),
+    ])
+    .await
+    .expect("fixture should start");
+
+    let error = pull_with(
+        github.client(),
+        &puller(),
+        following("lpajunen/newer", "newer"),
+    )
+    .await
+    .expect_err("an engine too old for the repository should refuse it");
+    assert!(
+        matches!(error, aiwebengine::git_sync::SyncError::Incompatible(_)),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains(aiwebengine::SCRIPT_API),
+        "{error}"
+    );
+    assert!(repository::fetch_script("newer-a").is_none());
+
+    let mut forced = following("lpajunen/newer", "newer");
+    forced.force = true;
+    pull_with(github.client(), &puller(), forced)
+        .await
+        .expect("force should take it anyway");
+    assert!(repository::fetch_script("newer-a").is_some());
+    assert!(
+        repository::fetch_asset("newer-a", ".aiwebengine-requires").is_none(),
+        "the requirement is the repository's, not one of the script's files"
+    );
+}
+
+/// A follow refused over a change made here records that it is blocked, says
+/// so once in the script's log rather than every run, says so again when it
+/// goes through, and a write to the script says what it does to the follow.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_blocked_follow_says_so_in_the_log_once() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(THREE_SCRIPTS)
+        .await
+        .expect("fixture should start");
+    let (_, editor) = an_editor("blocked").await;
+    let scheduled = git_follow::schedule_with(
+        github.client(),
+        &editor,
+        every_ten("lpajunen/blocked", "blocked", Some(&["a"]), Mode::Apply),
+    )
+    .await
+    .expect("schedule should succeed");
+    let current = || async {
+        git_follow::get(&scheduled.remote, &scheduled.branch, &scheduled.uri_base)
+            .await
+            .expect("read should succeed")
+            .expect("the follow exists")
+    };
+    let run_once = || async {
+        let follow = current().await;
+        let ran = git_follow::run(&follow, Some(github.client())).await;
+        git_follow::record(&follow, &ran)
+            .await
+            .expect("record should succeed");
+        ran
+    };
+    let warnings = || {
+        repository::fetch_log_messages("blocked-a")
+            .into_iter()
+            .filter(|entry| {
+                entry.message.contains("Following") && entry.message.contains("stopped")
+            })
+            .count()
+    };
+
+    assert_eq!(run_once().await.state, git_follow::State::Ok);
+
+    let written = tokio::task::spawn_blocking(|| {
+        aiwebengine::engine_api::execute_native_mcp_tool(
+            "write_file",
+            &json!({ "script": "blocked-a", "path": "notes.txt", "content": "mine" }),
+            &UserContext::admin("local-editor".to_string()),
+        )
+    })
+    .await
+    .expect("the write should not panic")
+    .expect("write_file is an operation");
+    assert!(written.get("error").is_none(), "{written}");
+    assert!(
+        written["followed"]
+            .as_str()
+            .is_some_and(|note| note.contains("push_to_git")),
+        "{written}"
+    );
+
+    github.push(
+        "5555555555555555555555555555555555555555",
+        &[("a/main.ts", "function init() { /* moved */ }")],
+    );
+    let ran = run_once().await;
+    assert_eq!(ran.state, git_follow::State::Blocked, "{}", ran.outcome);
+    assert_eq!(ran.about, ["blocked-a"]);
+    assert_eq!(warnings(), 1);
+    assert_eq!(current().await.last_state, Some(git_follow::State::Blocked));
+
+    assert_eq!(run_once().await.state, git_follow::State::Blocked);
+    assert_eq!(warnings(), 1, "said once, not every run");
+
+    write_here("blocked-a", "notes.txt", "").await;
+    let removed = tokio::task::spawn_blocking(|| {
+        aiwebengine::engine_api::execute_native_mcp_tool(
+            "delete_file",
+            &json!({ "script": "blocked-a", "path": "notes.txt" }),
+            &UserContext::admin("local-editor".to_string()),
+        )
+    })
+    .await
+    .expect("the delete should not panic")
+    .expect("delete_file is an operation");
+    assert!(removed.get("error").is_none(), "{removed}");
+    let ran = run_once().await;
+    assert_eq!(ran.state, git_follow::State::Ok, "{}", ran.outcome);
+    assert!(
+        repository::fetch_log_messages("blocked-a")
+            .iter()
+            .any(|entry| entry.message.contains("again")),
+        "going through again is said too"
+    );
 }

@@ -14,6 +14,12 @@ use tracing::{debug, error, info, warn};
 // it uses is what lets the two suites share the file rather than a copy.
 extern crate self as aiwebengine;
 
+/// The day of the last change that broke what scripts see: a global, a
+/// prelude, or the shape of an operation `engine.call` reaches. A repository
+/// names the day it needs in `.aiwebengine-requires`, and an engine older than
+/// that refuses to pull it. Move it to the day of any such change.
+pub const SCRIPT_API: &str = "2026-10-12";
+
 pub mod bytecode;
 pub mod config;
 pub mod conversion;
@@ -1692,6 +1698,7 @@ async fn health_handler() -> impl IntoResponse {
         "timestamp": chrono::Utc::now().to_rfc3339(),
         "version": {
             "cargo": env!("CARGO_PKG_VERSION"),
+            "script_api": crate::SCRIPT_API,
             "git_commit": option_env!("VERGEN_GIT_SHA").unwrap_or(""),
             "git_commit_timestamp": option_env!("VERGEN_GIT_COMMIT_TIMESTAMP").unwrap_or(""),
             "build_timestamp": option_env!("VERGEN_BUILD_TIMESTAMP").unwrap_or("")

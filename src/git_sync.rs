@@ -103,6 +103,52 @@ fn is_license_file(name: &str) -> bool {
 /// answer rather than a borrowed one.
 pub const IGNORE_FILE: &str = ".aiwebengineignore";
 
+/// The file at a repository's root naming the oldest [`crate::SCRIPT_API`] its
+/// scripts work with, as a date. Lines starting with `#` are comments.
+pub const REQUIRES_FILE: &str = ".aiwebengine-requires";
+
+/// Refuse a repository whose [`REQUIRES_FILE`] names a newer script API than
+/// `engine` (no file requires nothing).
+///
+/// Refused before anything is written, so an engine that is too old keeps the
+/// scripts it has rather than taking ones that would fail in it; updating the
+/// engine is what lets the next pull through.
+pub(crate) fn check_requires(requires: Option<&[u8]>, engine: &str) -> Result<(), SyncError> {
+    let Some(requires) = requires else {
+        return Ok(());
+    };
+    let line = String::from_utf8_lossy(requires)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_string);
+    let Some(line) = line else {
+        return Ok(());
+    };
+    let wanted = chrono::NaiveDate::parse_from_str(&line, "%Y-%m-%d").map_err(|_| {
+        SyncError::Layout(format!(
+            "{} says '{}'; it names the script API the repository needs as a date, such as {}",
+            REQUIRES_FILE,
+            line,
+            crate::SCRIPT_API
+        ))
+    })?;
+    let have = chrono::NaiveDate::parse_from_str(engine, "%Y-%m-%d").map_err(|_| {
+        SyncError::Storage(format!(
+            "This engine's script API '{}' is not a date",
+            engine
+        ))
+    })?;
+    if wanted > have {
+        return Err(SyncError::Incompatible(format!(
+            "This repository needs script API {} and this engine has {}. Nothing was pulled. \
+             Update the engine; the next pull takes it, or pass force to take it anyway.",
+            wanted, have
+        )));
+    }
+    Ok(())
+}
+
 /// One line of [`IGNORE_FILE`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct IgnorePattern {
@@ -992,6 +1038,12 @@ fn fetch_and_write(
 
     let archive = client.fetch_archive(repo, &resolved.commit)?;
     let files = extract_tree(&archive)?;
+    if !request.force {
+        check_requires(
+            files.get(REQUIRES_FILE).map(Vec::as_slice),
+            crate::SCRIPT_API,
+        )?;
+    }
     let mut layouts = infer_scripts(&files)?;
 
     if let Some(named) = &named {
@@ -1077,20 +1129,24 @@ fn fetch_and_write(
     // last synced would lose that change without anybody having decided to.
     // Its revisions still hold it, but nothing would say to look.
     if !request.force {
-        let changed: Vec<String> = planned
+        let changed: Vec<(String, String)> = planned
             .iter()
             .filter_map(|(uri, _)| {
                 let files = changed_here(uri, &remote)?;
-                Some(format!("'{}' ({})", uri, summarise(&files)))
+                Some((uri.clone(), format!("'{}' ({})", uri, summarise(&files))))
             })
             .collect();
         if !changed.is_empty() {
-            return Err(SyncError::Diverged(format!(
-                "Changed here since it was last synced: {}. Nothing was pulled. Push the change, \
-                 or pass force to replace it with the repository's copy; the script's revisions \
-                 keep this one.",
-                changed.join(", ")
-            )));
+            let named: Vec<&str> = changed.iter().map(|(_, named)| named.as_str()).collect();
+            return Err(SyncError::ChangedHere {
+                message: format!(
+                    "Changed here since it was last synced: {}. Nothing was pulled. Push the \
+                     change, or pass force to replace it with the repository's copy; the \
+                     script's revisions keep this one.",
+                    named.join(", ")
+                ),
+                scripts: changed.into_iter().map(|(uri, _)| uri).collect(),
+            });
         }
     }
 
@@ -2456,6 +2512,18 @@ pub enum SyncError {
     #[error("{0}")]
     WouldOverwrite(String),
 
+    /// Scripts changed here since they were last synced, which a pull would
+    /// replace; `scripts` names them.
+    #[error("{message}")]
+    ChangedHere {
+        scripts: Vec<String>,
+        message: String,
+    },
+
+    /// The repository needs a newer engine than this one.
+    #[error("{0}")]
+    Incompatible(String),
+
     /// This account has spent its git budget.
     #[error("{0}")]
     RateLimited(String),
@@ -2912,6 +2980,26 @@ mod tests {
         assert_eq!(
             scripts[0].assets.keys().collect::<Vec<_>>(),
             vec!["lib/cart.ts"]
+        );
+    }
+
+    #[test]
+    fn a_requirement_is_a_date_no_newer_than_the_engine() {
+        assert!(check_requires(None, "2026-10-12").is_ok());
+        assert!(check_requires(Some(b"# nothing yet\n\n"), "2026-10-12").is_ok());
+        assert!(check_requires(Some(b"2026-10-01\n"), "2026-10-12").is_ok());
+        assert!(check_requires(Some(b"2026-10-12"), "2026-10-12").is_ok());
+        assert!(matches!(
+            check_requires(Some(b"# newer\n2026-11-01\n"), "2026-10-12"),
+            Err(SyncError::Incompatible(_))
+        ));
+        assert!(matches!(
+            check_requires(Some(b">= 0.4"), "2026-10-12"),
+            Err(SyncError::Layout(_))
+        ));
+        assert!(
+            chrono::NaiveDate::parse_from_str(crate::SCRIPT_API, "%Y-%m-%d").is_ok(),
+            "SCRIPT_API is a date"
         );
     }
 

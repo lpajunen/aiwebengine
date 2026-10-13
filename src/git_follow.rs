@@ -68,6 +68,80 @@ impl Mode {
     }
 }
 
+/// How a follow's last run went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    /// It ran: pulled, found nothing to pull, or checked.
+    Ok,
+    /// A script it follows was changed here, so the pull was refused; it stays
+    /// refused until the change is pushed or pulled over with force.
+    Blocked,
+    /// The repository needs a newer engine; the first run after an update
+    /// goes through.
+    Incompatible,
+    /// Anything else: the repository could not be read, a script belongs to
+    /// another account, the budget was spent.
+    Failing,
+    /// It no longer runs until scheduled again.
+    Paused,
+}
+
+impl State {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            State::Ok => "ok",
+            State::Blocked => "blocked",
+            State::Incompatible => "incompatible",
+            State::Failing => "failing",
+            State::Paused => "paused",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "ok" => Some(State::Ok),
+            "blocked" => Some(State::Blocked),
+            "incompatible" => Some(State::Incompatible),
+            "failing" => Some(State::Failing),
+            "paused" => Some(State::Paused),
+            _ => None,
+        }
+    }
+}
+
+/// How one run went.
+#[derive(Debug, Clone)]
+pub struct Ran {
+    pub state: State,
+    pub outcome: String,
+    /// The scripts the outcome is about, whose logs hear of it when the state
+    /// changes; empty means every script the follow has written.
+    pub about: Vec<String>,
+}
+
+impl Ran {
+    fn new(state: State, outcome: impl Into<String>) -> Self {
+        Ran {
+            state,
+            outcome: outcome.into(),
+            about: Vec::new(),
+        }
+    }
+
+    fn from_result(result: Result<String, SyncError>) -> Self {
+        match result {
+            Ok(outcome) => Ran::new(State::Ok, outcome),
+            Err(SyncError::ChangedHere { scripts, message }) => Ran {
+                state: State::Blocked,
+                outcome: message,
+                about: scripts,
+            },
+            Err(e @ SyncError::Incompatible(_)) => Ran::new(State::Incompatible, e.to_string()),
+            Err(e) => Ran::new(State::Failing, e.to_string()),
+        }
+    }
+}
+
 /// A follow as stored.
 #[derive(Debug, Clone)]
 pub struct Follow {
@@ -83,7 +157,7 @@ pub struct Follow {
     pub created_by: Option<String>,
     pub next_due_at: Option<DateTime<Utc>>,
     pub last_run_at: Option<DateTime<Utc>>,
-    pub last_ok: Option<bool>,
+    pub last_state: Option<State>,
     pub last_outcome: Option<String>,
 }
 
@@ -116,7 +190,7 @@ fn storage(e: sqlx::Error) -> SyncError {
 macro_rules! columns {
     () => {
         "remote, branch, uri_base, scripts, every_minutes, mode, acting_user, created_by, \
-         next_due_at, last_run_at, last_ok, last_outcome"
+         next_due_at, last_run_at, last_state, last_outcome"
     };
 }
 
@@ -134,7 +208,10 @@ fn follow_from(row: &sqlx::postgres::PgRow) -> Follow {
         created_by: row.get("created_by"),
         next_due_at: row.get("next_due_at"),
         last_run_at: row.get("last_run_at"),
-        last_ok: row.get("last_ok"),
+        last_state: row
+            .get::<Option<String>, _>("last_state")
+            .as_deref()
+            .and_then(State::parse),
         last_outcome: row.get("last_outcome"),
     }
 }
@@ -166,6 +243,25 @@ pub async fn list() -> Result<Vec<Follow>, SyncError> {
     .await
     .map_err(storage)?;
     Ok(rows.iter().map(follow_from).collect())
+}
+
+/// The follow that covers `script_uri`, if one does: the one recorded for the
+/// repository, branch and prefix it was synced from, following its directory.
+pub async fn for_script(script_uri: &str) -> Result<Option<Follow>, SyncError> {
+    let row = sqlx::query(concat!(
+        "SELECT ",
+        columns!(),
+        " FROM git_follows f WHERE EXISTS ( \
+             SELECT 1 FROM script_git_sync g \
+             WHERE g.script_uri = $1 AND g.remote = f.remote AND g.branch = f.branch \
+               AND g.uri_base = f.uri_base \
+               AND (f.scripts IS NULL OR g.repo_dir = ANY(f.scripts)))"
+    ))
+    .bind(script_uri)
+    .fetch_optional(&pool()?)
+    .await
+    .map_err(storage)?;
+    Ok(row.as_ref().map(follow_from))
 }
 
 /// Whether `user` may see `follow`: an administrator, the account it runs as,
@@ -320,7 +416,7 @@ pub async fn schedule_with(
 pub async fn pause_for(user_id: &str) -> Result<u64, SyncError> {
     let result = sqlx::query(
         "UPDATE git_follows SET every_minutes = NULL, acting_user = NULL, next_due_at = NULL, \
-         last_ok = false, last_outcome = $2, updated_at = NOW() WHERE acting_user = $1",
+         last_state = 'paused', last_outcome = $2, updated_at = NOW() WHERE acting_user = $1",
     )
     .bind(user_id)
     .bind("Paused: what the account that scheduled it may do changed. Schedule it again to resume.")
@@ -364,8 +460,8 @@ pub fn spawn_runner(shutdown: tokio::sync::oneshot::Receiver<()>) {
 pub async fn run_due() -> Result<usize, SyncError> {
     let due = claim_due().await?;
     for follow in &due {
-        let (ok, outcome) = run(follow, None).await;
-        record(follow, ok, &outcome).await?;
+        let ran = run(follow, None).await;
+        record(follow, &ran).await?;
     }
     Ok(due.len())
 }
@@ -387,7 +483,7 @@ pub async fn claim_due() -> Result<Vec<Follow>, SyncError> {
          ) due \
          WHERE f.remote = due.remote AND f.branch = due.branch AND f.uri_base = due.uri_base \
          RETURNING f.remote, f.branch, f.uri_base, f.scripts, f.every_minutes, f.mode, \
-                   f.acting_user, f.created_by, f.next_due_at, f.last_run_at, f.last_ok, f.last_outcome",
+                   f.acting_user, f.created_by, f.next_due_at, f.last_run_at, f.last_state, f.last_outcome",
     )
     .bind(BATCH)
     .fetch_all(&pool()?)
@@ -397,19 +493,57 @@ pub async fn claim_due() -> Result<Vec<Follow>, SyncError> {
 }
 
 /// Record how a run went.
-pub async fn record(follow: &Follow, ok: bool, outcome: &str) -> Result<(), SyncError> {
+///
+/// A follow that stops going through says so in the logs of the scripts it is
+/// about, once, when its state changes rather than every interval: a pull
+/// refused over a change made here is otherwise visible only to whoever thinks
+/// to ask, and nobody waiting for updates that stopped arriving does.
+pub async fn record(follow: &Follow, ran: &Ran) -> Result<(), SyncError> {
     sqlx::query(
-        "UPDATE git_follows SET last_run_at = NOW(), last_ok = $4, last_outcome = $5 \
+        "UPDATE git_follows SET last_run_at = NOW(), last_state = $4, last_outcome = $5 \
          WHERE remote = $1 AND branch = $2 AND uri_base = $3",
     )
     .bind(&follow.remote)
     .bind(&follow.branch)
     .bind(&follow.uri_base)
-    .bind(ok)
-    .bind(outcome)
+    .bind(ran.state.as_str())
+    .bind(&ran.outcome)
     .execute(&pool()?)
     .await
     .map_err(storage)?;
+
+    let before = follow.last_state;
+    if before == Some(ran.state) || (before.is_none() && ran.state == State::Ok) {
+        return Ok(());
+    }
+    let (level, line) = if ran.state == State::Ok {
+        (
+            "INFO",
+            format!("Following {} again: {}", follow.remote, ran.outcome),
+        )
+    } else {
+        (
+            "WARN",
+            format!(
+                "Following {} has stopped ({}): {}",
+                follow.remote,
+                ran.state.as_str(),
+                ran.outcome
+            ),
+        )
+    };
+    let about = if ran.about.is_empty() {
+        followed_scripts(follow)
+            .await
+            .into_iter()
+            .map(|row| row.script_uri)
+            .collect()
+    } else {
+        ran.about.clone()
+    };
+    for script_uri in about {
+        crate::repository::insert_log_message_async(&script_uri, &line, level).await;
+    }
     Ok(())
 }
 
@@ -417,12 +551,9 @@ pub async fn record(follow: &Follow, ok: bool, outcome: &str) -> Result<(), Sync
 ///
 /// `client` is for the suite; a scheduled run builds its own with the
 /// account's stored credential.
-pub async fn run(
-    follow: &Follow,
-    client: Option<crate::git_github::GitHubClient>,
-) -> (bool, String) {
+pub async fn run(follow: &Follow, client: Option<crate::git_github::GitHubClient>) -> Ran {
     let Some(user_id) = follow.acting_user.as_deref() else {
-        return (false, "Not scheduled".to_string());
+        return Ran::new(State::Paused, "Not scheduled");
     };
     let acting = match acting_context(user_id).await {
         Ok(acting) => acting,
@@ -432,44 +563,44 @@ pub async fn run(
             if let Err(e) = pause_for(user_id).await {
                 warn!(user = %user_id, error = %e, "Could not pause a follow that cannot run");
             }
-            return (false, format!("Paused: {}", reason));
+            return Ran::new(State::Paused, format!("Paused: {}", reason));
         }
     };
     let client = match client {
         Some(client) => client,
         None => match crate::git_sync::client_for(&acting).await {
             Ok(client) => client,
-            Err(e) => return (false, e.to_string()),
+            Err(e) => return Ran::new(State::Failing, e.to_string()),
         },
     };
 
     match follow.mode {
-        Mode::Check => check(follow, client).await,
+        Mode::Check => match check(follow, client).await {
+            (true, outcome) => Ran::new(State::Ok, outcome),
+            (false, outcome) => Ran::new(State::Failing, outcome),
+        },
         Mode::Stage => {
             let pinned = pin_followed(follow, &acting).await;
-            match pull(follow, client, &acting).await {
-                Ok(report) => (
-                    true,
-                    format!(
-                        "{}{}",
-                        describe(&report),
-                        if pinned > 0 {
-                            format!(
-                                "; pinned {} to keep serving, deploy_script serves the pull",
-                                pinned
-                            )
-                        } else {
-                            String::new()
-                        }
-                    ),
-                ),
-                Err(e) => (false, e.to_string()),
-            }
+            Ran::from_result(pull(follow, client, &acting).await.map(|report| {
+                format!(
+                    "{}{}",
+                    describe(&report),
+                    if pinned > 0 {
+                        format!(
+                            "; pinned {} to keep serving, deploy_script serves the pull",
+                            pinned
+                        )
+                    } else {
+                        String::new()
+                    }
+                )
+            }))
         }
-        Mode::Apply => match pull(follow, client, &acting).await {
-            Ok(report) => (true, describe(&report)),
-            Err(e) => (false, e.to_string()),
-        },
+        Mode::Apply => Ran::from_result(
+            pull(follow, client, &acting)
+                .await
+                .map(|report| describe(&report)),
+        ),
     }
 }
 

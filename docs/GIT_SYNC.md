@@ -176,6 +176,22 @@ engine's answer looks stale for a reason the commit cannot show. Forcing decides
 whether to _look_, not what to conclude: identical content still writes nothing
 and records no revision.
 
+### Which engine it needs
+
+```
+# .aiwebengine-requires, at the repository's root
+2026-10-12
+```
+
+Scripts are written against the engine they were developed on, and the script
+API changes in ways that break them. An engine reports its own script API as a
+date, `script_api` in `/health`: the day of the last change that broke what
+scripts see. A repository names the date it needs in `.aiwebengine-requires`,
+and an engine older than that refuses to pull it, names both dates, and writes
+nothing. Updating the engine is what lets the next pull through; `force` takes
+it anyway. A repository without the file needs nothing, and the file never
+becomes one of a script's files.
+
 ### Private repositories
 
 Store a token once:
@@ -262,8 +278,25 @@ moves the next run on in the same statement, so one instance runs each, and an
 engine that slept runs each once rather than once per interval missed. Each run
 spends the account's git budget like a pull by hand.
 
+**When it stops going through.** Each follow keeps how its last run went:
+
+| `state`        | Meaning                                                                  |
+| -------------- | ------------------------------------------------------------------------ |
+| `ok`           | it pulled, found nothing to pull, or checked                             |
+| `blocked`      | a followed script was changed here, so the pull was refused until pushed |
+| `incompatible` | the repository needs a newer engine; the first run after an update pulls |
+| `failing`      | anything else: GitHub did not answer, a script is another account's      |
+| `paused`       | it runs again only when scheduled again                                  |
+
+A follow that leaves `ok` writes one line to the log of each script it is
+about, a warning naming why; one that comes back writes one more. A write to a
+followed script (`write_file`, `write_files`, `edit_file`, `create_file`,
+`delete_file`) answers with a `followed` note saying its pulls are refused
+until the change is pushed, and `get_git_status` reports the script's follow.
+
 `list_git_bindings` shows each follow you scheduled or recorded (all of them to
-an administrator): its schedule, mode, next run, and how the last one went.
+an administrator): its schedule, mode, next run, state, and how the last run
+went.
 
 ## Knowing which of the two you want
 

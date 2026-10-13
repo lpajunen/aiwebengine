@@ -116,6 +116,9 @@ Breaking one of these is a bug even when every test passes.
   with every API change.
 - `.json`, `.md` and `.txt` imports are data modules; their content is never
   parsed as code.
+- A change that breaks what scripts see (a global, a prelude, the shape of an
+  operation `engine.call` reaches) moves `SCRIPT_API` in `lib.rs` to that day.
+  Repositories name the date they need, and older engines refuse to pull them.
 
 **HTTP edge**
 

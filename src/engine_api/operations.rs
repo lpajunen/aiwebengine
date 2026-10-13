@@ -126,7 +126,10 @@ pub(super) fn refuse_sync(error: &crate::git_sync::SyncError) -> Value {
     use crate::git_sync::SyncError;
     let kind = match error {
         SyncError::AccessDenied(_) => Refusal::Forbidden,
-        SyncError::Diverged(_) | SyncError::WouldOverwrite(_) => Refusal::Conflict,
+        SyncError::Diverged(_)
+        | SyncError::WouldOverwrite(_)
+        | SyncError::ChangedHere { .. }
+        | SyncError::Incompatible(_) => Refusal::Conflict,
         SyncError::Layout(_) | SyncError::TooLarge(_) => Refusal::BadRequest,
         SyncError::RateLimited(_) => Refusal::RateLimited,
         SyncError::Archive(_) | SyncError::Remote(_) | SyncError::Storage(_) => Refusal::Failed,
@@ -339,7 +342,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
                     "required": ["script", "path"]
                 })
             },
-            tool_write_file,
+            |args, user| git::noting_follow(args, user, tool_write_file(args, user)),
         ),
         (
             "write_files",
@@ -376,7 +379,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
                     "required": ["script"]
                 })
             },
-            tool_write_files,
+            |args, user| git::noting_follow(args, user, tool_write_files(args, user)),
         ),
         (
             "edit_file",
@@ -407,7 +410,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
                     "required": ["script", "path", "edits"]
                 })
             },
-            tool_edit_file,
+            |args, user| git::noting_follow(args, user, tool_edit_file(args, user)),
         ),
         (
             "create_file",
@@ -425,7 +428,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
                     "required": ["script", "path"]
                 })
             },
-            tool_create_file,
+            |args, user| git::noting_follow(args, user, tool_create_file(args, user)),
         ),
         (
             "delete_file",
@@ -440,7 +443,7 @@ pub(super) fn native_tools() -> &'static [NativeToolEntry] {
                     "required": ["script", "path"]
                 })
             },
-            tool_delete_file,
+            |args, user| git::noting_follow(args, user, tool_delete_file(args, user)),
         ),
         (
             "list_script_owners",

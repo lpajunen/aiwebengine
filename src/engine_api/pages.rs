@@ -246,6 +246,7 @@ pub async fn cluster_health_route(auth_user: Option<Extension<AuthUser>>) -> Res
             "timestamp": iso_timestamp(),
             "version": {
                 "cargo": env!("CARGO_PKG_VERSION"),
+                "script_api": crate::SCRIPT_API,
                 "git_commit": option_env!("VERGEN_GIT_SHA").unwrap_or(""),
                 "git_commit_timestamp": option_env!("VERGEN_GIT_COMMIT_TIMESTAMP").unwrap_or(""),
                 "build_timestamp": option_env!("VERGEN_BUILD_TIMESTAMP").unwrap_or("")

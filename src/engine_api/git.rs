@@ -276,14 +276,52 @@ pub(super) fn tool_get_git_status(args: &Value, user: &UserContext) -> Value {
         return refuse(Refusal::Forbidden, "Access denied");
     }
 
-    let user = user.clone();
+    let caller = user.clone();
     let script = script.to_string();
     match crate::database::run_blocking(
-        async move { crate::git_sync::status(&user, &script).await },
+        async move { crate::git_sync::status(&caller, &script).await },
     ) {
-        Ok(status) => status_json(&status),
+        Ok(status) => {
+            let mut body = status_json(&status);
+            body["follow"] = followed(&status.script_uri, user)
+                .as_ref()
+                .map(follow_json)
+                .unwrap_or(Value::Null);
+            body
+        }
         Err(e) => refuse_sync(&e),
     }
+}
+
+/// The follow covering `script`, when `user` may see it.
+fn followed(script: &str, user: &UserContext) -> Option<crate::git_follow::Follow> {
+    crate::database::run_blocking(crate::git_follow::for_script(script))
+        .ok()
+        .flatten()
+        .filter(|follow| crate::git_follow::visible_to(follow, user))
+}
+
+/// A successful write to a script a scheduled follow covers, told what it has
+/// done: until the change is pushed, every pull of the script is refused, so
+/// the follow stops bringing updates. Said at the write, because that is where
+/// the person or agent making the change is looking.
+pub(super) fn noting_follow(args: &Value, user: &UserContext, mut result: Value) -> Value {
+    if result.get("error").is_some() {
+        return result;
+    }
+    let Some(script) = arg_str(args, "script") else {
+        return result;
+    };
+    let Some(follow) = followed(script, user).filter(|follow| follow.every_minutes.is_some())
+    else {
+        return result;
+    };
+    result["followed"] = json!(format!(
+        "'{}' follows {} on a schedule. Its pulls are refused while this change is only here: \
+         push it (push_to_git) to keep receiving updates.",
+        script, follow.remote
+    ));
+    result
 }
 
 pub(super) fn binding_json(binding: &crate::git_sync::Binding) -> Value {
@@ -332,7 +370,7 @@ pub(super) fn follow_json(follow: &crate::git_follow::Follow) -> Value {
         "actingUser": follow.acting_user,
         "nextDueAt": follow.next_due_at.map(|at| at.to_rfc3339()),
         "lastRunAt": follow.last_run_at.map(|at| at.to_rfc3339()),
-        "lastOk": follow.last_ok,
+        "state": follow.last_state.map(|state| state.as_str()),
         "lastOutcome": follow.last_outcome,
     })
 }
