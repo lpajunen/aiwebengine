@@ -935,7 +935,7 @@ fn fetch_and_write(
     let followed = with_older_bindings(
         crate::database::run_blocking(followed(&remote, &branch, &recorded_prefix))
             .map_err(|e| SyncError::Storage(format!("Could not read what is followed: {}", e)))?,
-        !binding.is_empty(),
+        &binding,
     );
 
     // The directories this pull takes, or `None` for all of them: the ones
@@ -1146,12 +1146,29 @@ pub(crate) fn normalize_prefix(prefix: Option<&str>) -> Result<Option<String>, S
 }
 
 /// What is followed, counting scripts pulled before follows were recorded:
-/// those have rows and no follow, and were taken with the whole repository.
+/// those have rows and no follow, and count as following the directories they
+/// are. The scripts kept are the ones wanted; a pull that took the whole
+/// repository then may have been pruned to one since. A script that is the
+/// whole repository follows all of it.
 pub(crate) fn with_older_bindings(
     followed: Option<Option<BTreeSet<String>>>,
-    bound: bool,
+    binding: &[&SyncedScript],
 ) -> Option<Option<BTreeSet<String>>> {
-    followed.or_else(|| bound.then_some(None))
+    followed.or_else(|| {
+        if binding.is_empty() {
+            return None;
+        }
+        Some(
+            binding
+                .iter()
+                .map(|row| match row.repo_dir.as_deref() {
+                    Some("") => None,
+                    Some(directory) => Some(directory.to_string()),
+                    None => Some(crate::slug::suggest(&row.script_uri)),
+                })
+                .collect(),
+        )
+    })
 }
 
 /// The directories a caller named, tidied, or `None` when they named none.
@@ -2896,6 +2913,32 @@ mod tests {
             scripts[0].assets.keys().collect::<Vec<_>>(),
             vec!["lib/cart.ts"]
         );
+    }
+
+    #[test]
+    fn an_older_binding_follows_the_directories_it_is() {
+        let row = |uri: &str, dir: Option<&str>| SyncedScript {
+            script_uri: uri.to_string(),
+            commit: String::new(),
+            uri_base: Some(String::new()),
+            repo_dir: dir.map(str::to_string),
+            mapping_version: None,
+        };
+        let set = |names: &[&str]| names.iter().map(|name| name.to_string()).collect();
+
+        assert_eq!(with_older_bindings(None, &[]), None);
+        let recorded = Some(Some(set(&["a"])));
+        let shop = row("shop", Some("shop"));
+        assert_eq!(with_older_bindings(recorded.clone(), &[&shop]), recorded);
+
+        let renamed = row("storefront", Some("shop"));
+        let unresolved = row("blog", None);
+        assert_eq!(
+            with_older_bindings(None, &[&renamed, &unresolved]),
+            Some(Some(set(&["blog", "shop"])))
+        );
+        let whole = row("solution", Some(""));
+        assert_eq!(with_older_bindings(None, &[&whole]), Some(None));
     }
 
     #[test]

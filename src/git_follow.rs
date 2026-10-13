@@ -266,14 +266,16 @@ pub async fn schedule_with(
         .await
         .map_err(storage)?;
     } else {
-        let bound = crate::git_sync::last_synced(&remote, &branch)
+        let known = crate::git_sync::last_synced(&remote, &branch)
             .await
-            .map_err(|e| SyncError::Storage(e.to_string()))?
+            .map_err(|e| SyncError::Storage(e.to_string()))?;
+        let binding: Vec<&crate::git_sync::SyncedScript> = known
             .iter()
-            .any(|row| row.uri_base.as_deref() == Some(uri_base.as_str()));
+            .filter(|row| row.uri_base.as_deref() == Some(uri_base.as_str()))
+            .collect();
         let before = crate::git_sync::with_older_bindings(
             existing.as_ref().map(|f| f.scripts.clone()),
-            bound,
+            &binding,
         );
         let scripts: Option<Vec<String>> = crate::git_sync::following_after(before, named.as_ref())
             .map(|scripts| scripts.into_iter().collect());
