@@ -2081,3 +2081,53 @@ async fn a_blocked_follow_says_so_in_the_log_once() {
         "going through again is said too"
     );
 }
+
+/// A file at a path the repository's ignore file excludes is the engine's own:
+/// a pull neither counts it as a change made here nor removes it, so a script
+/// can keep what it writes for itself and still follow its repository.
+#[tokio::test(flavor = "multi_thread")]
+async fn files_the_repository_ignores_are_kept_and_never_block_a_pull() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = FakeGitHub::start(&[
+        (".aiwebengineignore", "a/learned/\n"),
+        ("a/main.ts", "function init() {}"),
+    ])
+    .await
+    .expect("fixture should start");
+    pull_with(
+        github.client(),
+        &puller(),
+        following("lpajunen/kept", "kept"),
+    )
+    .await
+    .expect("first pull should succeed");
+
+    write_here("kept-a", "learned/refunds/SKILL.md", "written here").await;
+
+    github.push(
+        "6666666666666666666666666666666666666666",
+        &[
+            (".aiwebengineignore", "a/learned/\n"),
+            ("a/main.ts", "function init() { /* moved */ }"),
+        ],
+    );
+    let report = pull_with(
+        github.client(),
+        &puller(),
+        following("lpajunen/kept", "kept"),
+    )
+    .await
+    .expect("a file the repository ignores does not block the pull");
+    assert_eq!(pulled(&report), ["kept-a"]);
+    assert_eq!(
+        asset_text("kept-a", "main.ts").as_deref(),
+        Some("function init() { /* moved */ }")
+    );
+    assert_eq!(
+        asset_text("kept-a", "learned/refunds/SKILL.md").as_deref(),
+        Some("written here"),
+        "the pull leaves the engine's own file where it is"
+    );
+}

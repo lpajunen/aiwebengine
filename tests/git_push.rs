@@ -490,6 +490,54 @@ async fn files_the_script_does_not_own_survive() {
     }
 }
 
+/// A file the engine keeps at a path the repository ignores is the engine's
+/// own: a pull leaves it, so a push does not publish it either.
+#[tokio::test(flavor = "multi_thread")]
+async fn files_kept_here_under_an_ignored_path_are_not_published() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let github = Fixture::start(&[
+        ("shop/main.js", "function init() {}"),
+        (".aiwebengineignore", "shop/learned/\n"),
+    ])
+    .await
+    .expect("fixture should start");
+
+    let uri = &script_uri("push-learned-shop");
+    clear(uri);
+
+    pull_with(github.client(), &pusher(), pull_request("push-learned"))
+        .await
+        .expect("pull should succeed");
+    let learned = uri.clone();
+    tokio::task::spawn_blocking(move || {
+        use base64::Engine as _;
+        aiwebengine::engine_api::upsert_asset_authorized(
+            &pusher(),
+            &learned,
+            "learned/refunds/SKILL.md",
+            "text/markdown",
+            &base64::engine::general_purpose::STANDARD.encode("written here"),
+        )
+    })
+    .await
+    .expect("no panic")
+    .expect("the file should store");
+    edit(uri, "function init() { /* v2 */ }");
+
+    let report = push_with(github.client(), &pusher(), push_request(uri))
+        .await
+        .expect("push should succeed");
+    assert_eq!(report.written, vec!["shop/main.js".to_string()]);
+    assert!(
+        !github
+            .snapshot()
+            .contains_key("shop/learned/refunds/SKILL.md"),
+        "a file kept here is not published"
+    );
+}
+
 /// A module removed here is removed there. The mirror of a pull applying an
 /// upstream deletion.
 #[tokio::test(flavor = "multi_thread")]

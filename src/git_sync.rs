@@ -591,10 +591,7 @@ pub fn infer_scripts(files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<ScriptLayo
     // The rules are read from the tree rather than passed in, because they are
     // a property of the repository and travel with it — the same repository
     // pulled onto a different install has to take the same files.
-    let ignore = files
-        .get(IGNORE_FILE)
-        .map(|content| IgnoreRules::parse(&String::from_utf8_lossy(content)))
-        .unwrap_or_default();
+    let ignore = ignore_rules_in(files);
 
     // A script whose entry the repository has excluded is not a script this
     // pull takes. Ignoring a directory should mean the whole of it, rather than
@@ -1045,6 +1042,7 @@ fn fetch_and_write(
         )?;
     }
     let mut layouts = infer_scripts(&files)?;
+    let ignore = ignore_rules_in(&files);
 
     if let Some(named) = &named {
         check_named(named, &layouts)?;
@@ -1131,8 +1129,8 @@ fn fetch_and_write(
     if !request.force {
         let changed: Vec<(String, String)> = planned
             .iter()
-            .filter_map(|(uri, _)| {
-                let files = changed_here(uri, &remote)?;
+            .filter_map(|(uri, layout)| {
+                let files = changed_here(uri, &remote, layout.name.as_deref(), &ignore)?;
                 Some((uri.clone(), format!("'{}' ({})", uri, summarise(&files))))
             })
             .collect();
@@ -1160,6 +1158,7 @@ fn fetch_and_write(
             &recorded_prefix,
             &script_uri,
             &layout,
+            &ignore,
         )?);
     }
 
@@ -1320,7 +1319,15 @@ pub(crate) fn following_after(
 ///
 /// Content, not revision numbers: a script that writes a file and deletes it
 /// again has moved its revision and changed nothing.
-fn changed_here(script_uri: &str, remote: &str) -> Option<Vec<String>> {
+///
+/// Files the repository excludes are the engine's own and never a change: a
+/// pull leaves them where they are.
+fn changed_here(
+    script_uri: &str,
+    remote: &str,
+    directory: Option<&str>,
+    ignore: &IgnoreRules,
+) -> Option<Vec<String>> {
     let row = crate::database::run_blocking(sync_row(script_uri)).ok()??;
     if row.remote != remote {
         return None;
@@ -1349,6 +1356,7 @@ fn changed_here(script_uri: &str, remote: &str) -> Option<Vec<String>> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .filter(|path| then.get(*path) != now.get(*path))
+        .filter(|path| !kept_here(path, directory, ignore))
         .cloned()
         .collect();
     (!changed.is_empty()).then_some(changed)
@@ -1403,6 +1411,34 @@ fn compose_script_name(
     Ok(slug)
 }
 
+/// Whether a script's file at `path` is the engine's own rather than the
+/// repository's: one the repository's rules exclude, so a pull would never
+/// write it. A pull leaves such a file where it is and does not count it as a
+/// change, and a push does not publish it — the rule [`owns_path`] applies to
+/// the repository's side.
+///
+/// It is how a script keeps files it writes itself, such as the skills an agent
+/// learns, under a directory its repository ignores, and still follows that
+/// repository.
+fn kept_here(path: &str, directory: Option<&str>, ignore: &IgnoreRules) -> bool {
+    if crate::module_loader::is_root_module_name(path) {
+        return false;
+    }
+    let repo_path = match directory {
+        Some(directory) if !directory.is_empty() => format!("{}/{}", directory, path),
+        _ => path.to_string(),
+    };
+    is_excluded(&repo_path, path, ignore)
+}
+
+/// The rules in a repository's [`IGNORE_FILE`], or none.
+fn ignore_rules_in(files: &BTreeMap<String, Vec<u8>>) -> IgnoreRules {
+    files
+        .get(IGNORE_FILE)
+        .map(|content| IgnoreRules::parse(&String::from_utf8_lossy(content)))
+        .unwrap_or_default()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn write_script(
     user: &UserContext,
@@ -1412,6 +1448,7 @@ fn write_script(
     prefix: &str,
     script_uri: &str,
     layout: &ScriptLayout,
+    ignore: &IgnoreRules,
 ) -> Result<PulledScript, SyncError> {
     let entry = String::from_utf8(layout.entry.clone()).map_err(|_| {
         SyncError::Layout(format!(
@@ -1443,7 +1480,9 @@ fn write_script(
 
     // Anything the script holds that the repository does not is a file removed
     // upstream. Leaving it would let the script keep building against a module
-    // its source of truth no longer has.
+    // its source of truth no longer has. A file at a path the repository
+    // excludes is the exception: the repository never had it, and it is the
+    // engine's to keep.
     //
     // A root the repository no longer holds under the same name is removed
     // like any other file, which is how renaming `main.js` to `main.ts`
@@ -1453,6 +1492,7 @@ fn write_script(
     let removed: Vec<String> = crate::repository::fetch_assets(script_uri)
         .into_keys()
         .filter(|existing| !held.contains(existing.as_str()))
+        .filter(|existing| !kept_here(existing, layout.name.as_deref(), ignore))
         .collect();
 
     // The whole tree as one change, under one revision — the unit a person
@@ -1736,13 +1776,16 @@ fn gather_and_push(
         check_divergence(row, head.as_ref(), &request.script_uri, request.force)?;
     }
 
-    let files = engine_files(&request.script_uri, known)?;
+    let mut files = engine_files(&request.script_uri, known)?;
     let ignore = head
         .as_ref()
         .and_then(|tree| ignore_rules_from(client, repo, tree))
         .unwrap_or_default();
 
     let entry_prefix = script_prefix(&request.script_uri, known);
+    // A file at a path the repository excludes is the engine's own (see
+    // `kept_here`): a pull leaves it here, so a push does not publish it.
+    files.retain(|path, _| owns_path(path, &entry_prefix, &ignore));
     let existing = head
         .as_ref()
         .map(|tree| tree.entries.clone())
