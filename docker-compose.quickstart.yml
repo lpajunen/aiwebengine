@@ -1,0 +1,51 @@
+# Try aiwebengine on this machine with nothing but Docker:
+#
+#   docker compose -f docker-compose.quickstart.yml up
+#
+# then open http://localhost:3000/auth/login and register the username
+# `admin`, which becomes the administrator. Plain HTTP on localhost, one engine,
+# Postgres in a container. `down -v` removes the database with it.
+#
+# The four keys below are the published ones from .env-local: anyone can read
+# them, so this file is for trying the engine, never for a deployment that
+# holds real data. DEPLOYMENT.md describes the real ones.
+name: aiwebengine-quickstart
+
+services:
+  aiwebengine:
+    image: ghcr.io/lpajunen/aiwebengine:latest
+    # The image is built for amd64 only; on an ARM machine (Apple silicon)
+    # Docker runs it emulated.
+    platform: linux/amd64
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      APP_REPOSITORY__DATABASE_URL: postgresql://aiwebengine:quickstart@postgres:5432/aiwebengine
+      APP_AUTH__JWT_SECRET: local-install-jwt-secret-not-a-real-one
+      APP_SECURITY__CSRF_KEY: bG9jYWwtZGV2ZWxvcG1lbnQtY3NyZi1rZXktLTMyYnk=
+      APP_SECURITY__SESSION_ENCRYPTION_KEY: bG9jYWwtZGV2ZWxvcG1lbnQtc2Vzc2lvbi1rZXkzMmI=
+      APP_SECURITY__SECRET_ENCRYPTION_KEY: bG9jYWwtZGV2ZWxvcG1lbnQtc2VjcmV0LWtleS0zMmI=
+      APP_AUTH__COOKIE__SECURE: "false"
+      APP_AUTH__INTERNAL__ENABLED: "true"
+      APP_AUTH__INTERNAL__ALLOW_REGISTRATION: "true"
+      APP_AUTH__INTERNAL__BOOTSTRAP_ADMIN_USERNAMES: '["admin"]'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aiwebengine
+      POSTGRES_USER: aiwebengine
+      POSTGRES_PASSWORD: quickstart
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "aiwebengine"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  postgres-data:

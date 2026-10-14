@@ -56,6 +56,20 @@ builds scripts in `aiwebengine-agent`.
 
 ## Running it
 
+With nothing but Docker, from the published image:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/lpajunen/aiwebengine/main/docker-compose.quickstart.yml
+docker compose -f docker-compose.quickstart.yml up
+```
+
+Open <http://localhost:3000/auth/login> and register the username `admin`,
+which becomes the administrator. The file uses published keys, so it is for
+trying the engine only; `docker compose -f docker-compose.quickstart.yml down -v`
+removes it and its database.
+
+From source:
+
 ```bash
 make postgres-local                # Postgres in a container
 source .env-local && cargo run     # http://localhost:3000
