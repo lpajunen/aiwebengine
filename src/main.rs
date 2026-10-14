@@ -96,7 +96,24 @@ async fn serve() -> AppResult<()> {
                 )
                 .action(clap::ArgAction::SetTrue),
         )
+        .arg(
+            Arg::new("healthcheck")
+                .long("healthcheck")
+                .value_name("ADDR")
+                .num_args(0..=1)
+                .default_missing_value("127.0.0.1:3000")
+                .help(
+                    "Exit 0 when a TCP connection to ADDR (default 127.0.0.1:3000) opens within \
+                     two seconds, 1 otherwise. The container health check: the runtime image \
+                     has no shell, curl or wget.",
+                )
+                .action(clap::ArgAction::Set),
+        )
         .get_matches();
+
+    if let Some(addr) = matches.get_one::<String>("healthcheck") {
+        return healthcheck(addr);
+    }
 
     // First run of a desktop install, before anything reads configuration:
     // there is nothing to read until this has written it.
@@ -487,4 +504,15 @@ fn read_new_password(account: &str) -> AppResult<String> {
     }
 
     Ok(password)
+}
+
+/// `--healthcheck`: whether something accepts TCP connections at `addr`. A
+/// connect, not a request to `/health`, so a slow database does not get the
+/// container restarted; the database-aware probe is the proxy's.
+fn healthcheck(addr: &str) -> AppResult<()> {
+    let addr: std::net::SocketAddr = addr
+        .parse()
+        .map_err(|e| aiwebengine::AppError::config(format!("--healthcheck {addr}: {e}")))?;
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2))?;
+    Ok(())
 }

@@ -2,14 +2,12 @@
 # This Dockerfile creates a minimal production image with the aiwebengine server
 
 # Build stage
-FROM rust:bookworm AS builder
+# The same Debian release as the runtime image, so the binary links against
+# the glibc it will run with.
+FROM rust:trixie AS builder
 
-# Install build dependencies and nightly toolchain
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && rustup default nightly
+# TLS is rustls throughout, so nothing links OpenSSL.
+RUN rustup default nightly
 
 # Create app directory
 WORKDIR /app
@@ -65,21 +63,12 @@ ENV VERGEN_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
 RUN touch src/lib.rs src/main.rs && \
     cargo build --release
 
-# Runtime stage
-FROM debian:bookworm-slim
+# Runtime stage: distroless, with glibc, libgcc and CA certificates and no
+# shell or package manager. The binary needs nothing else, and every package
+# left out is one the image scan has nothing to report about. The nonroot
+# variant runs as uid 65532.
+FROM gcr.io/distroless/cc-debian13:nonroot
 
-# Install runtime dependencies and security updates
-# CVE-2025-15467: Upgrade OpenSSL to 3.0.18-1deb12u2 or later
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    libssl3 \
-    && apt-get upgrade -y \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create non-root user
-RUN useradd -m -u 1000 -s /bin/bash aiwebengine
-
-# Create app directory
 WORKDIR /app
 
 # Copy binary from builder
@@ -90,21 +79,15 @@ COPY --from=builder /app/target/release/aiwebengine /usr/local/bin/aiwebengine
 # in the binary by include_bytes!, scripts and their assets live in Postgres,
 # migrations are compiled in by sqlx::migrate!, and logs go to stdout.
 COPY config.toml /app/config.toml
-RUN chown aiwebengine:aiwebengine /app /app/config.toml
-
-# Switch to non-root user
-USER aiwebengine
 
 # Expose port
 EXPOSE 3000
 
-# Health check
-# A TCP connect rather than a request to /health: the runtime stage installs
-# ca-certificates and libssl3 only, so neither curl nor wget exists here. The
-# database-aware /health probe lives at the proxy, in Caddy's active health
-# checks.
+# Health check: the binary's own TCP connect, since the image has no shell,
+# curl or wget. The database-aware /health probe lives at the proxy, in
+# Caddy's active health checks.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
-    CMD timeout 2 bash -c '</dev/tcp/localhost/3000' || exit 1
+    CMD ["aiwebengine", "--healthcheck"]
 
 # Set environment variables
 ENV RUST_LOG=info

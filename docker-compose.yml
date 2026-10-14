@@ -52,11 +52,10 @@ x-engine: &engine
     postgres:
       condition: service_healthy
   healthcheck:
-    # A TCP connect rather than a request to /health: the runtime image
-    # installs ca-certificates and libssl3 only, so neither curl nor wget
-    # exists in it. The database-aware probe lives at the proxy, in Caddy's
-    # active health checks.
-    test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/3000' || exit 1"]
+    # The binary's own TCP connect: the runtime image has no shell, curl or
+    # wget. The database-aware probe lives at the proxy, in Caddy's active
+    # health checks.
+    test: ["CMD", "aiwebengine", "--healthcheck"]
     interval: 10s
     timeout: 3s
     retries: 3

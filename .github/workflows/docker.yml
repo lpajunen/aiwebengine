@@ -252,6 +252,8 @@ jobs:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build-and-test.outputs.digest }}
           format: 'sarif'
           output: 'trivy-results.sarif'
+          # Report only what an update can fix; the rest is not actionable.
+          ignore-unfixed: true
 
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
