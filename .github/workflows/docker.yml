@@ -164,6 +164,8 @@ jobs:
     name: Build and push image
     needs: [lint, deny, test]
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -207,6 +209,7 @@ jobs:
           echo "build_timestamp=$(date -u +%Y-%m-%dT%H:%M:%S%z)" >> $GITHUB_OUTPUT
 
       - name: Build and push production Docker image
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -244,7 +247,9 @@ jobs:
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          # By digest: the image tags are not the git ref name (a v1.2.3 tag
+          # publishes 1.2.3).
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build-and-test.outputs.digest }}
           format: 'sarif'
           output: 'trivy-results.sarif'
 
