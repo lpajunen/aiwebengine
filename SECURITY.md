@@ -4,9 +4,10 @@
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-If you discover a security vulnerability in aiwebengine, please report it privately to:
-
-**Email:** lpajunen@gmail.com
+If you discover a security vulnerability in aiwebengine or one of its script
+repositories, please report it privately through GitHub:
+[Report a vulnerability](https://github.com/lpajunen/aiwebengine/security/advisories/new).
+If you cannot use GitHub, email lpajunen@gmail.com instead.
 
 Please include:
 
