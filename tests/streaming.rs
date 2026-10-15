@@ -82,6 +82,7 @@ async fn test_native_script_update_streaming() {
     );
 
     phase("script stored");
+    aiwebengine::engine_api::background_inits_settled().await;
     assert!(
         upsert_result.is_ok(),
         "Script upsert failed: {:?}",

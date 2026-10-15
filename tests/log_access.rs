@@ -29,6 +29,7 @@ async fn only_the_owner_or_an_administrator_reads_a_scripts_log() {
     let uri = "log-access-probe";
     upsert_root_authorized(&owner, uri, Some("main.ts"), "// logs\n", None)
         .expect("the owner writes the script");
+    aiwebengine::engine_api::background_inits_settled().await;
     repository::insert_log_message(uri, "a customer's address", "INFO");
 
     let read = |user: &UserContext, args: serde_json::Value| {

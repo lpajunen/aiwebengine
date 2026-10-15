@@ -261,6 +261,7 @@ async fn executing_a_script_leaves_its_tree_alone() {
     let owner = UserContext::admin("tree-exec-owner".to_string());
     aiwebengine::engine_api::upsert_root_authorized(&owner, uri, Some("main.ts"), stored, None)
         .expect("the entrypoint should be written");
+    aiwebengine::engine_api::background_inits_settled().await;
 
     let result = execute_script_secure(
         uri,

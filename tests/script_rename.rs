@@ -39,6 +39,7 @@ async fn everything_that_names_a_script_follows_its_rename() {
     repository::create_script_table(&from, "notes").expect("table");
 
     rename_script_authorized(&admin(), &from, &to).expect("the rename should succeed");
+    aiwebengine::engine_api::background_inits_settled().await;
 
     assert!(
         repository::fetch_script(&from).is_none(),
@@ -86,6 +87,7 @@ async fn a_new_script_can_take_a_name_a_renamed_one_left() {
     let first = repository::create_script_table(&old, "notes").expect("first table");
 
     rename_script_authorized(&admin(), &old, &moved).expect("rename");
+    aiwebengine::engine_api::background_inits_settled().await;
 
     store(&old);
     let second = repository::create_script_table(&old, "notes")
@@ -161,9 +163,11 @@ async fn a_script_with_a_legacy_name_goes_on_working_and_can_move_to_a_slug() {
         None,
     )
     .expect("an existing script is written whatever it is called");
+    aiwebengine::engine_api::background_inits_settled().await;
 
     let slug = name("legacy");
     rename_script_authorized(&admin(), &legacy, &slug).expect("and renamed to a slug");
+    aiwebengine::engine_api::background_inits_settled().await;
     assert!(repository::fetch_script(&slug).is_some());
 
     repository::delete_script(&slug);

@@ -58,6 +58,7 @@ async fn editor_can_create_and_delete_its_own_script() {
         upsert_script_authorized(&editor, &uri, "function init() {}", None).is_ok(),
         "an editor authors scripts"
     );
+    aiwebengine::engine_api::background_inits_settled().await;
     assert!(repository::fetch_script(&uri).is_some());
 
     assert!(
@@ -77,6 +78,7 @@ async fn editor_cannot_delete_a_script_it_does_not_own() {
     let uri = unique_uri("someone-elses");
     let owner = UserContext::editor("first-author".to_string());
     assert!(upsert_script_authorized(&owner, &uri, "function init() {}", None).is_ok());
+    aiwebengine::engine_api::background_inits_settled().await;
 
     let intruder = UserContext::editor("second-author".to_string());
     assert!(
@@ -103,6 +105,7 @@ async fn editor_cannot_modify_a_script_it_does_not_own() {
     let owner = UserContext::editor("first-author".to_string());
     let original = "function init() { /* original */ }";
     assert!(upsert_script_authorized(&owner, &uri, original, None).is_ok());
+    aiwebengine::engine_api::background_inits_settled().await;
 
     let intruder = UserContext::editor("second-author".to_string());
     assert!(

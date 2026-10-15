@@ -42,9 +42,38 @@ pub(super) async fn reinitialize_script(script_uri: &str) -> crate::script_init:
 /// [`reinitialize_script`] in the background, for the callers that answer
 /// before init() finishes.
 pub(super) fn spawn_script_init(script_uri: String) {
-    tokio::task::spawn(async move {
+    let init = tokio::task::spawn(async move {
         reinitialize_script(&script_uri).await;
     });
+    let mut running = background_inits()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    running.retain(|init| !init.is_finished());
+    running.push(init);
+}
+
+/// The inits [`spawn_script_init`] started, kept until the next one starts.
+fn background_inits() -> &'static std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>> {
+    static RUNNING: std::sync::OnceLock<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>> =
+        std::sync::OnceLock::new();
+    RUNNING.get_or_init(Default::default)
+}
+
+/// Wait for the inits writes started in the background.
+///
+/// For a caller about to drop the runtime they run on, which is a test at its
+/// end. Dropping a runtime waits for an init's blocking half, and that half
+/// cannot finish its database calls once the runtime's workers have stopped,
+/// so a test that ends while one is running never ends.
+pub async fn background_inits_settled() {
+    let running = std::mem::take(
+        &mut *background_inits()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    );
+    for init in running {
+        let _ = init.await;
+    }
 }
 
 /// An init() run reported back to whoever triggered it.

@@ -961,6 +961,7 @@ async fn a_pull_will_not_overwrite_a_script_it_did_not_write() {
         Some("test"),
     )
     .expect("script should store");
+    aiwebengine::engine_api::background_inits_settled().await;
 
     let error = pull_with(github.client(), &puller(), request("git-occupied"))
         .await
@@ -1096,6 +1097,7 @@ async fn a_renamed_script_is_still_the_one_the_repository_writes() {
 
     aiwebengine::engine_api::rename_script_authorized(&puller(), &original, &renamed)
         .expect("the owner may rename it");
+    aiwebengine::engine_api::background_inits_settled().await;
 
     let mut again = request("git-renamed");
     again.force = true;
@@ -1246,6 +1248,7 @@ async fn pulling_another_ref_moves_the_scripts_and_the_follow() {
         .expect("v1 should pull");
     aiwebengine::engine_api::rename_script_authorized(&puller(), "git-upgrade", "git-renamed")
         .expect("the owner may rename it");
+    aiwebengine::engine_api::background_inits_settled().await;
 
     // No prefix this time: the follow's is kept.
     let report = pull_with(
@@ -2605,6 +2608,7 @@ async fn an_install_never_takes_over_a_script_of_the_same_name() {
 
     aiwebengine::engine_api::upsert_script_authorized(&puller(), "agent", "// mine", Some("test"))
         .expect("a script written here");
+    aiwebengine::engine_api::background_inits_settled().await;
 
     let installed = git_install::install_one(&agent_at(None), Some(github.client())).await;
     let Installed::Failed(why) = &installed else {

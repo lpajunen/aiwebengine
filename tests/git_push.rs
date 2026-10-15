@@ -397,9 +397,13 @@ fn script_uri(name: &str) -> String {
 /// Not `repository::upsert_script`, which stores the row and records no
 /// revision — and the divergence check asks whether the script has moved since
 /// the sync, which is a question about revisions.
-fn edit(script_uri: &str, content: &str) {
+///
+/// Waits for the init the write starts, so none is still running when the
+/// test ends (`background_inits_settled`).
+async fn edit(script_uri: &str, content: &str) {
     aiwebengine::engine_api::upsert_script_authorized(&pusher(), script_uri, content, Some("test"))
         .expect("script should store");
+    aiwebengine::engine_api::background_inits_settled().await;
 }
 
 fn clear(script_uri: &str) {
@@ -440,7 +444,7 @@ async fn a_local_change_lands_in_the_repository() {
         .expect("pull should succeed");
 
     // Edit here, the way an agent would.
-    edit(uri, "function init() { /* edited */ }");
+    edit(uri, "function init() { /* edited */ }").await;
 
     let report = push_with(github.client(), &pusher(), push_request(uri))
         .await
@@ -493,7 +497,7 @@ async fn a_script_pulled_at_a_commit_pushes_only_to_a_named_branch() {
     )
     .await
     .expect("a commit should pull");
-    edit(uri, "function init() { /* fixed */ }");
+    edit(uri, "function init() { /* fixed */ }").await;
 
     let status = status_with(github.client(), uri)
         .await
@@ -553,7 +557,7 @@ async fn files_the_script_does_not_own_survive() {
     pull_with(github.client(), &pusher(), pull_request("push-keep"))
         .await
         .expect("pull should succeed");
-    edit(uri, "function init() { /* v2 */ }");
+    edit(uri, "function init() { /* v2 */ }").await;
 
     push_with(github.client(), &pusher(), push_request(uri))
         .await
@@ -609,7 +613,7 @@ async fn files_kept_here_under_an_ignored_path_are_not_published() {
     .await
     .expect("no panic")
     .expect("the file should store");
-    edit(uri, "function init() { /* v2 */ }");
+    edit(uri, "function init() { /* v2 */ }").await;
 
     let report = push_with(github.client(), &pusher(), push_request(uri))
         .await
@@ -704,7 +708,7 @@ async fn both_sides_moving_is_refused_rather_than_merged() {
     // Somebody else pushes.
     github.land_commit(&[("shop/main.js", "function init() { /* theirs */ }")]);
     // And we change it here.
-    edit(uri, "function init() { /* ours */ }");
+    edit(uri, "function init() { /* ours */ }").await;
 
     let error = push_with(github.client(), &pusher(), push_request(uri))
         .await
@@ -779,7 +783,7 @@ async fn force_publishes_over_a_divergence() {
         .expect("pull should succeed");
 
     github.land_commit(&[("shop/main.js", "function init() { /* theirs */ }")]);
-    edit(uri, "function init() { /* ours */ }");
+    edit(uri, "function init() { /* ours */ }").await;
 
     let forced = PushRequest {
         force: true,
@@ -807,7 +811,7 @@ async fn a_script_with_no_repository_is_refused() {
         .expect("fixture should start");
 
     let uri = "push-unbound-loose";
-    edit(uri, "function init() {}");
+    edit(uri, "function init() {}").await;
 
     let error = push_with(github.client(), &pusher(), push_request(uri))
         .await
@@ -854,7 +858,7 @@ async fn status_reports_which_cell_a_script_is_in() {
     assert_eq!(settled.branch.as_deref(), Some("main"));
 
     // We change it here.
-    edit(uri, "function init() { /* ours */ }");
+    edit(uri, "function init() { /* ours */ }").await;
     let ahead = status_with(github.client(), uri)
         .await
         .expect("status should answer");
@@ -914,7 +918,7 @@ async fn status_reports_a_script_that_came_from_nowhere() {
         .expect("fixture should start");
 
     let uri = "status-unbound-loose";
-    edit(uri, "function init() {}");
+    edit(uri, "function init() {}").await;
 
     let status = status_with(github.client(), uri)
         .await
@@ -998,7 +1002,7 @@ async fn a_push_follows_the_script_it_published() {
         .expect("fixture should start");
 
     let uri = &script_uri("push-follow");
-    edit(uri, "function init() {}");
+    edit(uri, "function init() {}").await;
 
     let mut request = push_request(uri);
     request.repo = Some("lpajunen/solution".to_string());
