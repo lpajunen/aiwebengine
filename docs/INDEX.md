@@ -27,6 +27,7 @@ the `aiwebengine-dev` repository.
 | [Writing files as one change](ASSET_BATCH.md)              | `write_files`: several files, one transaction, one revision  |
 | [Editing without resending](ASSET_EDIT.md)                 | `edit_file`, ranged and grepped reads, `search_files`        |
 | [Checking scripts](SCRIPT_CHECKS.md)                       | `check_script`: bundle and run `init()` without deploying    |
+| [Checking a script repository](../script-kit/README.md)    | Format, lint and typecheck, the same locally and in CI       |
 | [Testing scripts](SCRIPT_TESTS.md)                         | `*.test.ts` files and `run_tests`                            |
 | [Evaluating snippets](SCRIPT_EVAL.md)                      | `eval_script` against a deployed script's sandbox            |
 | [Revisions and deployments](SCRIPT_REVISIONS.md)           | History, pinning, revert, diff, labels                       |

@@ -21,7 +21,10 @@ source .env-local && cargo run     # http://localhost:3000
 3. A change that alters the JavaScript API or an engine operation changes the
    script repositories with it (`aiwebengine-examples`, `aiwebengine-dev`,
    `aiwebengine-agent`, `aiwebengine-template`). There is no
-   backwards-compatibility requirement.
+   backwards-compatibility requirement. Their CI checks them against the types
+   the engine image built from `main` prints (`--print-types`), and their
+   format, lint and typecheck targets are `script-kit/`, copied into each as
+   `.aiwebengine/` ([script-kit/README.md](script-kit/README.md)).
 
 ## Before a pull request
 

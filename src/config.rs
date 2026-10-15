@@ -920,20 +920,7 @@ impl AppConfig {
             }
         }
 
-        let figment = Figment::new()
-            .merge(Serialized::defaults(Self::default()))
-            .merge(Toml::file("config.toml"));
-
-        // Debug: print what we have so far
-        if config_toml_exists && let Ok(_partial_config) = figment.clone().extract::<Self>() {
-            eprintln!("After loading config.toml - connection_string: (***hidden***)");
-        }
-
-        let config: Self = figment
-            .merge(Yaml::file("config.yaml"))
-            .merge(Yaml::file("config.yml"))
-            .merge(Env::prefixed("APP_").split("__"))
-            .extract()?;
+        let config: Self = Self::sources().extract()?;
 
         eprintln!("Final config - connection_string: (***hidden***)");
 
@@ -941,6 +928,25 @@ impl AppConfig {
         config.validate()?;
 
         Ok(config)
+    }
+
+    /// The configuration for a command that reads limits and never signs,
+    /// encrypts or authenticates anything (`--print-types`): the sources
+    /// [`AppConfig::load`] reads, with no key required and nothing validated.
+    pub fn load_limits_only() -> Result<Self, anyhow::Error> {
+        Ok(Self::sources()
+            .join(Serialized::default("auth.jwt_secret", ""))
+            .extract()?)
+    }
+
+    /// Defaults, then `config.toml`, `config.yaml`/`.yml`, then `APP_*`.
+    fn sources() -> Figment {
+        Figment::new()
+            .merge(Serialized::defaults(Self::default()))
+            .merge(Toml::file("config.toml"))
+            .merge(Yaml::file("config.yaml"))
+            .merge(Yaml::file("config.yml"))
+            .merge(Env::prefixed("APP_").split("__"))
     }
 
     /// Create a test configuration with a specific port

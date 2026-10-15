@@ -1449,11 +1449,10 @@ pub async fn set_password_command(
     ))
 }
 
-/// Starts the web server with custom configuration
-pub async fn start_server_with_config(
-    config: config::AppConfig,
-    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
-) -> AppResult<u16> {
+/// Records every configured limit: the ones the engine enforces and the
+/// snapshot the OpenAPI document and the served type definitions publish.
+/// Each is set once per process; a second call keeps the first values.
+pub fn configure_limits(config: &config::AppConfig) {
     // Apply configured JavaScript limits to every execution path (memory limit,
     // stack size, script size, and the interrupt-handler deadline) before any
     // script runs.
@@ -1503,30 +1502,10 @@ pub async fn start_server_with_config(
         debug!("Log retention was already configured");
     }
 
-    // Which authority a session has to switch on deliberately. Read before
-    // anything authenticates, since the first request to arrive resolves a
-    // credential into a `UserContext` and that is where the policy applies.
-    let elevation_policy = config.security.elevation.policy();
-    if elevation_policy.is_active() {
-        info!(
-            "Session elevation is active: {} must be switched on per session, for at most {} minutes",
-            elevation_policy
-                .gated
-                .iter()
-                .map(|grade| grade.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
-            elevation_policy.max_minutes
-        );
-    }
-    if !security::elevation::configure(elevation_policy) {
-        debug!("Session elevation was already configured");
-    }
-
     // Every limit a solution developer can meet, captured so the OpenAPI
     // document publishes what this engine enforces rather than the defaults it
     // shipped with.
-    if !limits::configure(&config) {
+    if !limits::configure(config) {
         debug!("Developer-facing limits were already configured");
     }
 
@@ -1548,6 +1527,34 @@ pub async fn start_server_with_config(
         .unwrap_or(script_test::DEFAULT_TEST_RUN_TIMEOUT_MS);
     if !script_test::configure_test_timeouts(test_timeout_ms, test_run_timeout_ms) {
         debug!("Script test timeouts were already configured");
+    }
+}
+
+/// Starts the web server with custom configuration
+pub async fn start_server_with_config(
+    config: config::AppConfig,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+) -> AppResult<u16> {
+    configure_limits(&config);
+
+    // Which authority a session has to switch on deliberately. Read before
+    // anything authenticates, since the first request to arrive resolves a
+    // credential into a `UserContext` and that is where the policy applies.
+    let elevation_policy = config.security.elevation.policy();
+    if elevation_policy.is_active() {
+        info!(
+            "Session elevation is active: {} must be switched on per session, for at most {} minutes",
+            elevation_policy
+                .gated
+                .iter()
+                .map(|grade| grade.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            elevation_policy.max_minutes
+        );
+    }
+    if !security::elevation::configure(elevation_policy) {
+        debug!("Session elevation was already configured");
     }
 
     // Resolve the hosts this engine serves before anything reads them: script
@@ -1931,8 +1938,7 @@ async fn setup_routes(
             repository::fetch_asset_async("https://example.com/core", asset_name).await
         {
             let content = match String::from_utf8(asset.content) {
-                Ok(text) => crate::engine_types::render(&crate::limits::render_placeholders(&text))
-                    .into_bytes(),
+                Ok(text) => crate::engine_types::render_served(&text).into_bytes(),
                 // Not reachable for a `.d.ts`, and not worth failing over if it
                 // ever were: the declarations are more use unrendered than
                 // missing.

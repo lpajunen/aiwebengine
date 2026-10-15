@@ -1,0 +1,56 @@
+# The gate for a repository of scripts, called from that repository:
+#
+#   jobs:
+#     verify:
+#       uses: lpajunen/aiwebengine/.github/workflows/script-repository.yml@main
+#
+# It runs the same Makefile targets a developer runs (script-kit/verify.mk), so
+# there is one definition of the checks. The kit and the type definitions both
+# come from this repository's main: the kit from a checkout, the types from the
+# image built from it.
+name: Script repository
+
+on:
+  workflow_call:
+    inputs:
+      engine-image:
+        description: Image whose `aiwebengine --print-types` the scripts are checked against.
+        type: string
+        default: ghcr.io/lpajunen/aiwebengine:main
+
+jobs:
+  verify:
+    name: Format, lint and typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Side by side rather than nested, so the repository's globs never reach
+      # the engine checkout.
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          path: repository
+
+      - name: Checkout the script kit
+        uses: actions/checkout@v7
+        with:
+          repository: lpajunen/aiwebengine
+          ref: main
+          path: engine
+          sparse-checkout: script-kit
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Kit matches the engine's
+        run: make -C repository check-kit KIT_SOURCE=../engine/script-kit
+
+      - name: Type definitions
+        env:
+          ENGINE_IMAGE: ${{ inputs.engine-image }}
+        run: make -C repository types
+
+      - name: Verify
+        run: make -C repository verify

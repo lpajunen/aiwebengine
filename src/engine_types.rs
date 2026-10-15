@@ -38,6 +38,16 @@ pub fn render_operations() -> String {
         .join("\n")
 }
 
+/// The type definitions as written, placeholders and all.
+pub const TYPE_DEFINITIONS: &str = include_str!("../assets/aiwebengine.d.ts");
+
+/// Type definitions as `/engine/types/…/aiwebengine.d.ts` serves them: this
+/// engine's limits and operations filled in. `--print-types` writes the same
+/// text for script repositories to typecheck against.
+pub fn render_served(declarations: &str) -> String {
+    render(&crate::limits::render_placeholders(declarations))
+}
+
 /// The type definitions with the operations filled in.
 pub fn render(declarations: &str) -> String {
     match declarations.find(OPERATIONS_PLACEHOLDER) {
@@ -212,16 +222,6 @@ mod tests {
                 "{} is not declared",
                 operation.name
             );
-        }
-    }
-
-    #[test]
-    #[ignore = "writes the rendered declarations to $DUMP_DTS for a tsc check by hand"]
-    fn dump_for_tsc() {
-        if let Ok(path) = std::env::var("DUMP_DTS") {
-            let text = include_str!("../assets/aiwebengine.d.ts");
-            std::fs::write(path, render(&crate::limits::render_placeholders(text)))
-                .expect("the declarations should be written");
         }
     }
 

@@ -97,6 +97,17 @@ async fn serve() -> AppResult<()> {
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
+            Arg::new("print-types")
+                .long("print-types")
+                .help(
+                    "Write aiwebengine.d.ts to standard output as /engine/types serves it, with \
+                     this configuration's limits and the operation table filled in, and exit. \
+                     Script repositories typecheck against it. Reads config.toml and APP_* \
+                     like a start does, but needs no keys and no database.",
+                )
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("healthcheck")
                 .long("healthcheck")
                 .value_name("ADDR")
@@ -113,6 +124,18 @@ async fn serve() -> AppResult<()> {
 
     if let Some(addr) = matches.get_one::<String>("healthcheck") {
         return healthcheck(addr);
+    }
+
+    if matches.get_flag("print-types") {
+        let config = AppConfig::load_limits_only().map_err(|e| {
+            aiwebengine::AppError::config(format!("Failed to load configuration: {}", e))
+        })?;
+        aiwebengine::configure_limits(&config);
+        print!(
+            "{}",
+            aiwebengine::engine_types::render_served(aiwebengine::engine_types::TYPE_DEFINITIONS)
+        );
+        return Ok(());
     }
 
     // First run of a desktop install, before anything reads configuration:

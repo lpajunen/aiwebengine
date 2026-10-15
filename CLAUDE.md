@@ -19,6 +19,7 @@ make typecheck                     # tsc over scripts/** against assets/*.d.ts
 make deny                          # cargo-deny: advisories, licenses, sources (deny.toml)
 make check                         # format-check + lint + typecheck + deny + test; run before committing
 cargo run -- --validate-config     # check a config without starting the server
+cargo run -- --print-types         # aiwebengine.d.ts as served; what script repos check against
 ```
 
 - `make test-simple` (`cargo test`) does not pass and is not a gate.
@@ -113,6 +114,9 @@ Breaking one of these is a bug even when every test passes.
 - Types are in `assets/aiwebengine.d.ts`; `engine.call` argument types are
   generated from the operation table (`engine_types.rs`). Update the `.d.ts`
   with every API change.
+- Script repositories run `script-kit/` as `.aiwebengine/` (format, lint,
+  typecheck against `--print-types`). Change the kit here, then `make sync-kit`
+  in each; their CI fails on drift.
 - `.json`, `.md` and `.txt` imports are data modules; their content is never
   parsed as code.
 - A change that breaks what scripts see (a global, a prelude, the shape of an
