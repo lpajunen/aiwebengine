@@ -42,6 +42,17 @@ async fn declare(
     script_uri: &str,
     spec: Value,
 ) -> Result<personal_schedules::PersonalSchedule, personal_schedules::ScheduleError> {
+    declare_reporting(user_id, script_uri, spec)
+        .await
+        .map(|declared| declared.schedule)
+}
+
+/// As [`declare`], with whether anything was written.
+async fn declare_reporting(
+    user_id: &str,
+    script_uri: &str,
+    spec: Value,
+) -> Result<personal_schedules::Declared, personal_schedules::ScheduleError> {
     let limits = personal_schedules::limits();
     let spec = ScheduleSpec::from_json(&spec, &limits)?;
     let pool = common::test_pool().await;
@@ -72,7 +83,7 @@ async fn tasks_for(script_uri: &str) -> Vec<tasks::Task> {
 async fn schedule_row(script_uri: &str, key: &str) -> Option<sqlx::postgres::PgRow> {
     sqlx::query(
         "SELECT state, paused_reason, consecutive_failures, next_run_at, interval_ms, cron, \
-         handler_name, last_task_id FROM personal_schedules \
+         handler_name, last_task_id, updated_at FROM personal_schedules \
          WHERE script_uri = $1 AND schedule_key = $2",
     )
     .bind(script_uri)
@@ -213,6 +224,38 @@ async fn restating_the_same_cadence_keeps_the_next_slot() {
     .await
     .expect("declared with a new cadence");
     assert!(changed.next_run_at > first.next_run_at);
+}
+
+/// Saying exactly what is already running writes nothing — no row update, so
+/// no audit line per visit — while any real change is written.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_identical_restatement_writes_nothing() {
+    setup_env().await;
+    let user_id = a_user("restate-noop").await;
+    let script_uri = "test://schedules/restate-noop";
+    repository::upsert_script(script_uri, "function work() {}").expect("script should store");
+    let updated_at = |row: sqlx::postgres::PgRow| row.get::<chrono::DateTime<Utc>, _>("updated_at");
+    let changed = |spec: Value| {
+        let user_id = user_id.clone();
+        async move {
+            declare_reporting(&user_id, script_uri, spec)
+                .await
+                .expect("declared")
+                .changed
+        }
+    };
+
+    assert!(changed(hourly("k", "work")).await);
+    let before = updated_at(schedule_row(script_uri, "k").await.expect("a row"));
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+    assert!(!changed(hourly("k", "work")).await);
+    let after = updated_at(schedule_row(script_uri, "k").await.expect("a row"));
+    assert_eq!(before, after, "an identical restatement must not write");
+
+    let payload =
+        json!({ "key": "k", "handler": "work", "intervalMinutes": 60, "payload": { "a": 1 } });
+    assert!(changed(payload).await);
 }
 
 /// A due slot becomes exactly one task, as the person, in their lane — even

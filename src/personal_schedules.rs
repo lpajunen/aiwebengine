@@ -515,6 +515,16 @@ impl PersonalSchedule {
         self.state == "paused"
     }
 
+    /// Whether declaring `spec` with `lane` would change nothing: the same
+    /// handler, payload, cadence and lane, and already running.
+    fn restated_by(&self, spec: &ScheduleSpec, lane: Option<&str>) -> bool {
+        !self.is_paused()
+            && self.handler == spec.handler
+            && self.payload == spec.payload
+            && self.cadence == spec.cadence
+            && self.lane.as_deref() == lane
+    }
+
     /// What a script sees. No user id: a script only ever reads its caller's
     /// own schedules, and an id would end up in whatever it logs.
     pub fn to_json(&self) -> Value {
@@ -545,9 +555,21 @@ impl PersonalSchedule {
     }
 }
 
+/// What [`declare_on`] did.
+#[derive(Debug)]
+pub struct Declared {
+    pub schedule: PersonalSchedule,
+    /// False when the declaration restated a running schedule word for word,
+    /// and so wrote nothing.
+    pub changed: bool,
+}
+
 /// Declare, or replace, `user_id`'s schedule under `spec.key` on `script_uri`.
 ///
 /// `lane` is already resolved by the caller (the person's lane by default).
+///
+/// Saying exactly what is already running writes nothing, so the "declare it
+/// on every visit" pattern costs a read, and leaves no audit line per visit.
 ///
 /// Restating a schedule with the same cadence keeps its next slot, so a
 /// script that calls `schedule` on every visit does not push an interval
@@ -561,7 +583,7 @@ pub async fn declare_on(
     spec: &ScheduleSpec,
     lane: Option<&str>,
     limits: &ScheduleLimits,
-) -> Result<PersonalSchedule, ScheduleError> {
+) -> Result<Declared, ScheduleError> {
     let storage = |e: sqlx::Error| ScheduleError::Storage(e.to_string());
 
     // Counting and inserting must not interleave with another declaration by
@@ -572,6 +594,26 @@ pub async fn declare_on(
         .execute(&mut *conn)
         .await
         .map_err(storage)?;
+
+    let existing = sqlx::query(concat!(
+        "SELECT ",
+        columns!(),
+        " FROM personal_schedules \
+         WHERE script_uri = $1 AND user_id = $2 AND schedule_key = $3"
+    ))
+    .bind(script_uri)
+    .bind(user_id)
+    .bind(&spec.key)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(storage)?
+    .map(|row| PersonalSchedule::from_row(&row));
+    if let Some(current) = existing.filter(|current| current.restated_by(spec, lane)) {
+        return Ok(Declared {
+            schedule: current,
+            changed: false,
+        });
+    }
 
     let (for_script, for_person): (i64, i64) = sqlx::query_as(
         r#"
@@ -662,7 +704,10 @@ pub async fn declare_on(
         next_run_at = %schedule.next_run_at,
         "Personal schedule declared"
     );
-    Ok(schedule)
+    Ok(Declared {
+        schedule,
+        changed: true,
+    })
 }
 
 /// This person's schedules for this script, by key.
@@ -1102,7 +1147,7 @@ pub mod blocking {
         script_uri: &str,
         spec: &ScheduleSpec,
         lane: Option<&str>,
-    ) -> Result<PersonalSchedule, ScheduleError> {
+    ) -> Result<Declared, ScheduleError> {
         let Some(db) = crate::database::get_global_database() else {
             return Err(ScheduleError::Unavailable);
         };
@@ -1117,12 +1162,12 @@ pub mod blocking {
                         .begin()
                         .await
                         .map_err(|e| ScheduleError::Storage(e.to_string()))?;
-                    let schedule =
+                    let declared =
                         declare_on(&mut tx, user_id, script_uri, spec, lane, &limits).await?;
                     tx.commit()
                         .await
                         .map_err(|e| ScheduleError::Storage(e.to_string()))?;
-                    Ok(schedule)
+                    Ok(declared)
                 }
             }
         })

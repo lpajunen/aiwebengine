@@ -1190,16 +1190,19 @@ impl SecureGlobalContext {
             &spec,
             lane.as_deref(),
         ) {
-            Ok(schedule) => {
-                Self::audit_schedule(
-                    "declare_personal_schedule",
-                    acting,
-                    script_uri,
-                    user_id,
-                    &schedule.key,
-                    channel,
-                );
-                host_ok(schedule.to_json())
+            Ok(declared) => {
+                // A restatement changed nothing, so there is nothing to audit.
+                if declared.changed {
+                    Self::audit_schedule(
+                        "declare_personal_schedule",
+                        acting,
+                        script_uri,
+                        user_id,
+                        &declared.schedule.key,
+                        channel,
+                    );
+                }
+                host_ok(declared.schedule.to_json())
             }
             Err(e) => host_failure(e.js_name(), &format!("{}: {}", api, e)),
         }
