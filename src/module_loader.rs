@@ -835,9 +835,16 @@ fn render_named_binding_assignment(
     named_bindings: &str,
 ) -> Result<String, ModuleLoaderError> {
     let mut bindings = Vec::new();
+    let mut type_only = false;
     for binding in named_bindings.split(',') {
         let trimmed = binding.trim();
         if trimmed.is_empty() {
+            continue;
+        }
+        // `import { type Name }` names a type, which the transpiler erases;
+        // there is no value to bind.
+        if is_inline_type_specifier(trimmed) {
+            type_only = true;
             continue;
         }
 
@@ -859,6 +866,10 @@ fn render_named_binding_assignment(
     }
 
     if bindings.is_empty() {
+        if type_only {
+            // Only types: the module is still a dependency, so it still loads.
+            return Ok(format!("{};", source_expr));
+        }
         return Err(ModuleLoaderError::InvalidSpecifier(
             "Named import list cannot be empty".to_string(),
         ));
@@ -869,6 +880,18 @@ fn render_named_binding_assignment(
         bindings.join(", "),
         source_expr
     ))
+}
+
+/// Whether one specifier of a named import is `type Name` (or
+/// `type Name as Other`) rather than a value.
+///
+/// `type` alone, and `type as other`, import a value that happens to be called
+/// `type`; what tells them apart is how many words follow.
+fn is_inline_type_specifier(specifier: &str) -> bool {
+    let Some(rest) = specifier.strip_prefix("type") else {
+        return false;
+    };
+    rest.starts_with(char::is_whitespace) && matches!(rest.split_whitespace().count(), 1 | 3)
 }
 
 fn rewrite_exports(
@@ -1719,6 +1742,34 @@ function handle() {
         assert_eq!(
             transformed.dependencies,
             vec!["server/world-domain.ts".to_string()]
+        );
+    }
+
+    #[test]
+    fn transform_module_source_drops_inline_type_specifiers() {
+        let transformed = transform_module_source(
+            r#"
+import { type Deps, home, type Other as Alias, type as kind } from "./lib/handlers.ts";
+import { type OnlyTypes } from "./lib/types.ts";
+"#,
+            "main.ts",
+            true,
+        )
+        .expect("inline type specifiers should rewrite");
+
+        assert!(transformed.code.contains(
+            "const { home, type: kind } = __asset_module_require__(\"lib/handlers.ts\");"
+        ));
+        assert!(
+            transformed
+                .code
+                .contains("__asset_module_require__(\"lib/types.ts\");")
+        );
+        assert!(!transformed.code.contains("Deps"));
+        assert!(!transformed.code.contains("OnlyTypes"));
+        assert_eq!(
+            transformed.dependencies,
+            vec!["lib/handlers.ts".to_string(), "lib/types.ts".to_string()]
         );
     }
 
