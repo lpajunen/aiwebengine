@@ -171,6 +171,7 @@ format: format-markdown format-javascript
 # Check formatting without modifying files
 format-check:
 	cargo fmt --all -- --check
+	./node_modules/.bin/prettier --check --log-level warn "**/*.md" "**/*.js" "**/*.ts" && echo '✓ Markdown and JavaScript formatted'
 
 format-markdown:
 	./node_modules/.bin/prettier --write "**/*.md"
