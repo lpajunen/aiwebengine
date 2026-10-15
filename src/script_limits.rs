@@ -194,14 +194,14 @@ pub fn for_script_job(script_uri: &str) -> ExecutionLimits {
 pub fn job_timeout_ms_for(script_uri: &str) -> u64 {
     overrides_for(script_uri)
         .job_timeout_ms
-        .unwrap_or_else(crate::scheduler::configured_job_timeout_ms)
+        .unwrap_or_else(crate::tasks::configured_job_timeout_ms)
 }
 
 fn apply(base: ExecutionLimits, overrides: &Overrides, background: bool) -> ExecutionLimits {
     let timeout_ms = if background {
         overrides
             .job_timeout_ms
-            .unwrap_or_else(crate::scheduler::configured_job_timeout_ms)
+            .unwrap_or_else(crate::tasks::configured_job_timeout_ms)
     } else {
         overrides.timeout_ms.unwrap_or(base.timeout_ms)
     };

@@ -1,7 +1,7 @@
 //! Keeping a worker's claim on a row alive for as long as it is working on it.
 //!
-//! Two tables are worked the same way — `scheduler_jobs` and `script_tasks`.
-//! A worker claims a due row by stamping `locked_by` and `lock_expires_at`,
+//! `script_tasks` is worked this way; every scheduled run is a task too, so
+//! it is the one table. A worker claims a due row by stamping `locked_by` and `lock_expires_at`,
 //! runs it, and writes the outcome under a guard naming its claim. The
 //! guard is what stops two instances finishing the same row, and it is exactly
 //! what breaks when the claim lapses mid-run: another instance re-claims the
@@ -14,9 +14,6 @@
 //! bounded, but the wait for an execution slot happens after the claim and is
 //! bounded by nothing. A renewed lease needs no prediction, and it stays short,
 //! so a worker that dies returns its rows in one lease rather than one budget.
-//!
-//! One implementation rather than one per table, because the second hand-rolled
-//! copy is where the two drift apart.
 //!
 //! # Fencing
 //!
@@ -53,15 +50,12 @@ pub const RENEW_EVERY_SECONDS: u64 = 10;
 
 /// What a lease is held against.
 ///
-/// Each variant carries its whole statement as a literal rather than a table
-/// name to interpolate. Building the SQL by `format!` would work and would be
-/// safe — the names are compile-time constants — but sqlx refuses a query it
-/// cannot see as a literal, and it is right to: a shared helper is exactly
-/// where a caller-supplied name would eventually be threaded through. Two
-/// literals cost a line each and close the question.
+/// The variant carries its whole statement as a literal rather than a table
+/// name to interpolate: sqlx refuses a query it cannot see as a literal, and a
+/// shared helper is exactly where a caller-supplied name would eventually be
+/// threaded through.
 #[derive(Debug, Clone, Copy)]
 pub enum Leased {
-    SchedulerJob,
     ScriptTask,
 }
 
@@ -70,14 +64,6 @@ impl Leased {
     /// row's id, `$3` the epoch the claim was taken with.
     const fn renew_statement(self) -> &'static str {
         match self {
-            Leased::SchedulerJob => {
-                r#"
-                UPDATE scheduler_jobs
-                SET lock_expires_at = NOW() + make_interval(secs => $1),
-                    updated_at = NOW()
-                WHERE job_id = $2 AND claim_epoch = $3
-                "#
-            }
             Leased::ScriptTask => {
                 r#"
                 UPDATE script_tasks
@@ -91,7 +77,6 @@ impl Leased {
 
     const fn noun(self) -> &'static str {
         match self {
-            Leased::SchedulerJob => "scheduler job",
             Leased::ScriptTask => "script task",
         }
     }
@@ -233,23 +218,22 @@ mod tests {
         );
     }
 
-    /// Every variant renews by naming the claim's epoch. Without that clause a
-    /// renewal would take back a row whose claim had moved on, which is the
-    /// failure the lease exists to prevent.
+    /// A renewal names the claim's epoch. Without that clause it would take
+    /// back a row whose claim had moved on, which is the failure the lease
+    /// exists to prevent.
     #[test]
-    fn every_renewal_is_scoped_to_the_claim_it_was_taken_with() {
-        for leased in [Leased::SchedulerJob, Leased::ScriptTask] {
-            let statement = leased.renew_statement();
-            assert!(
-                statement.contains("claim_epoch = $3"),
-                "{} renews without checking which claim it holds",
-                leased.noun()
-            );
-            assert!(
-                statement.contains("lock_expires_at = NOW()"),
-                "{} does not push its lease out",
-                leased.noun()
-            );
-        }
+    fn a_renewal_is_scoped_to_the_claim_it_was_taken_with() {
+        let leased = Leased::ScriptTask;
+        let statement = leased.renew_statement();
+        assert!(
+            statement.contains("claim_epoch = $3"),
+            "{} renews without checking which claim it holds",
+            leased.noun()
+        );
+        assert!(
+            statement.contains("lock_expires_at = NOW()"),
+            "{} does not push its lease out",
+            leased.noun()
+        );
     }
 }

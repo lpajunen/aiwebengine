@@ -58,7 +58,7 @@ declare function init(context?: HandlerContext): void;
 /**
  * Every global in this file is present in every execution context. A script
  * sees the same API whether it was entered through an HTTP route, an MCP
- * resolver, an MCP tool, a scheduled job, a stream customizer, a message
+ * resolver, an MCP tool, a scheduled run, a stream customizer, a message
  * listener or a test, so shared helpers never need `typeof x === "undefined"`
  * guards. What a call is *allowed* to do still depends on the caller's
  * capabilities, and what it *does* depends on the phase described here.
@@ -68,7 +68,7 @@ declare function init(context?: HandlerContext): void;
  *
  * - `routeRegistry.registerRoute`
  * - `mcpRegistry.registerTool` / `registerPrompt` / `registerResource`
- * - `schedulerService.registerOnce` / `registerRecurring` / `clearAll`
+ * - `scriptTasks.schedule` / `unschedule`
  *
  * take effect during startup and `init()`, and elsewhere answer
  * `{ ok: false, reason }` saying the entry was not registered. They never throw
@@ -162,9 +162,9 @@ declare function init(context?: HandlerContext): void;
  * than an unreadable body. An `McpClient` naming a blocked address is refused
  * when it is constructed, before its token is looked up.
  *
- * **Scheduled jobs.** A recurring interval is at least
- * {{limits.scheduler.minRecurringInterval}} and a job name
- * 1-{{limits.scheduler.maxJobNameChars}} characters. A person's schedule
+ * **Schedules.** A script's own schedule (`scriptTasks.schedule`) runs at most
+ * every {{limits.scheduler.scriptMinInterval}}, and a schedule key is at most
+ * {{limits.scheduler.maxKeyChars}} characters. A person's schedule
  * (`personalTasks.schedule`) runs at most every
  * {{limits.scheduler.personalMinInterval}}, and one person may hold
  * {{limits.scheduler.personalPerScript}} on a script and
@@ -378,13 +378,13 @@ interface HandlerContext {
   invocationId?: string;
 
   /**
-   * What this particular kind of invocation was given. A scheduled handler
-   * finds its schedule under `meta.schedule`; a task handler finds `meta.task`,
-   * and when a person's schedule fired the task, also `meta.schedule` as a
-   * {@link PersonalScheduleRun}.
+   * What this particular kind of invocation was given. A task handler finds
+   * `meta.task`, and when a schedule fired the task — the script's own or a
+   * person's — also `meta.schedule`.
    */
   meta?: {
     task?: TaskContext;
+    schedule?: ScheduleRun;
     [key: string]: any;
   };
 }
@@ -410,10 +410,10 @@ interface TaskContext {
 }
 
 /**
- * Which slot of which personal schedule a task is a run of —
- * `context.meta.schedule` in a task that `personalTasks.schedule` fired.
+ * Which slot of which schedule a task is a run of — `context.meta.schedule` in
+ * a task that `scriptTasks.schedule` or `personalTasks.schedule` fired.
  */
-interface PersonalScheduleRun {
+interface ScheduleRun {
   key: string;
   /** The slot this run is for (UTC). Retries do not move it. */
   scheduledFor: string;
@@ -882,69 +882,6 @@ interface SecretStorage {
 }
 
 // ============================================================================
-// Scheduler Service API
-// ============================================================================
-
-/**
- * Scheduler service for managing scheduled tasks.
- *
- * A scheduled handler gets {{limits.execution.jobTimeout}} rather than the
- * {{limits.execution.timeout}} a request handler gets: a job is not answering
- * a request, so it is not held to a budget chosen to keep pages responsive.
- * Everything else is the same — the same memory ceiling, and `fetch` still
- * shortened to whatever is left of that budget.
- *
- * A one-off that throws is retried, waiting longer each time, and dropped
- * after a few failures with a line in the script's log saying so. A recurring
- * job is not retried: it runs again at its next interval.
- */
-/** What a scheduler registration answers. */
-type ScheduledJobResult =
-  | { ok: true; jobId?: string; name?: string; nextRun?: string }
-  | { ok: false; reason: string };
-
-interface SchedulerService {
-  /**
-   * Run `handler` once, at `runAt` (a UTC ISO timestamp).
-   * @param options.name - The job's key (1-{{limits.scheduler.maxJobNameChars}} characters); registering
-   *   the same name again replaces it. Defaults to the handler's name.
-   * @example
-   * schedulerService.registerOnce({
-   *   handler: "sendReminder",
-   *   runAt: new Date(Date.now() + 3600000).toISOString(),
-   *   name: "reminder-job",
-   * });
-   */
-  registerOnce(options: {
-    handler: string;
-    runAt: string;
-    name?: string;
-  }): ScheduledJobResult;
-
-  /**
-   * Run `handler` every `intervalMilliseconds` (at least 100) or
-   * `intervalMinutes` (at least 1) — one of the two.
-   * @param options.startAt - Optional UTC ISO timestamp for the first run
-   * @example
-   * schedulerService.registerRecurring({
-   *   handler: "cleanupOldData",
-   *   intervalMinutes: 5,
-   *   name: "cleanup-job",
-   * });
-   */
-  registerRecurring(options: {
-    handler: string;
-    intervalMilliseconds?: number;
-    intervalMinutes?: number;
-    name?: string;
-    startAt?: string;
-  }): ScheduledJobResult;
-
-  /** Remove every job this script registered. */
-  clearAll(): { ok: true; cleared: number } | { ok: false; reason: string };
-}
-
-// ============================================================================
 // Script Tasks API
 // ============================================================================
 
@@ -985,18 +922,18 @@ interface ScriptTask {
  * A durable queue of work this script enqueued for itself.
  *
  * The shape this is for is: start something while handling a request, answer
- * the request, and let the work finish afterwards. Unlike `schedulerService`,
- * which registers a *schedule* and only takes effect during `init()`, these
- * may be called from anywhere — a route handler, another task — because a task
- * exists in response to something that happened rather than being part of what
- * the script declares about itself.
+ * the request, and let the work finish afterwards. `enqueue` may be called
+ * from anywhere — a route handler, another task — because a task exists in
+ * response to something that happened. `schedule` is the exception: a
+ * schedule is part of what the script declares about itself, so it takes
+ * effect only in `init()`.
  *
  * A task survives deployment. Writing a new version of the script does not
- * discard work already accepted, where a scheduled job is wiped and
- * re-declared on every `init()`.
+ * discard work already accepted, where the script's own schedules are what its
+ * new `init()` declares.
  *
- * A handler runs with {{limits.execution.jobTimeout}} — the scheduled-handler
- * budget, not the per-request one — and finds `context.meta.task` carrying the
+ * A handler runs with {{limits.execution.jobTimeout}} — the background-work
+ * budget, not the {{limits.execution.timeout}} a request gets — and finds `context.meta.task` carrying the
  * payload, the attempt number, and the ceiling. It runs in **script context**:
  * it holds what the script holds, and nothing belonging to whoever enqueued
  * it, so `personalStorage` and a per-user secret are not reachable from one.
@@ -1027,7 +964,7 @@ interface ScriptTasks {
    * Accept a piece of work. Inside `database.transaction(fn)` the task commits
    * with the transaction and is gone if it rolls back; no worker sees it first.
    *
-   * @param options.handler - Name of the function to call. 1-{{limits.scheduler.maxJobNameChars}} characters.
+   * @param options.handler - Name of the function to call.
    * @param options.payload - A JSON object describing the work. At most 64KB;
    *   put the data itself in storage and name it here, so a retry reads what
    *   is current rather than a copy taken at enqueue time.
@@ -1070,6 +1007,50 @@ interface ScriptTasks {
    *   the answer for one that already succeeded, since success keeps no row.
    */
   get(taskId: string): ScriptTask | null;
+
+  /**
+   * Declare one of the script's own schedules: work that runs in script
+   * context on a cadence, as part of what this version of the code is.
+   *
+   * **`init()` only.** What one `init()` does not declare is removed after
+   * it, so deleting the line removes the schedule. A schedule declared again
+   * with the same cadence keeps its next slot, so a restart or an unrelated
+   * deployment does not push a nightly job back a night. Elsewhere this
+   * answers `{ ok: false, reason }` and declares nothing.
+   *
+   * Each due slot becomes a task with one attempt: a slot that fails waits for
+   * the next one rather than being retried. A slot whose previous run has not
+   * finished is skipped, and after downtime a schedule runs once, not once per
+   * missed slot. The handler finds `context.meta.schedule`.
+   *
+   * For a one-off, `enqueue({ runAt })`. For work soon after a deployment,
+   * `firstRunAfterMs` on the schedule that does the same work afterwards.
+   *
+   * @throws TypeError or RangeError for a spec that is not usable — the same
+   *   rules as `personalTasks.schedule`, with runs at most every
+   *   {{limits.scheduler.scriptMinInterval}}.
+   *
+   * @example
+   * function init() {
+   *   scriptTasks.schedule({
+   *     key: "nightly-cleanup",
+   *     handler: "cleanup",
+   *     cron: "0 3 * * *",
+   *     timeZone: "Europe/Helsinki",
+   *   });
+   * }
+   */
+  schedule(
+    spec: ScheduleSpec,
+  ): { ok: true; nextRunAt: string } | { ok: false; reason: string };
+
+  /**
+   * Remove one of the script's own schedules. `init()` only, and rarely
+   * needed: not declaring it is enough.
+   */
+  unschedule(
+    key: string,
+  ): { ok: true; removed: boolean } | { ok: false; reason: string };
 }
 
 /**
@@ -1320,11 +1301,11 @@ interface PersonalTasks {
   get(taskId: string): ScriptTask | null;
 }
 
-/** When, and what: the argument to `personalTasks.schedule`. */
+/** When, and what: the argument to `scriptTasks.schedule` and `personalTasks.schedule`. */
 interface ScheduleSpec {
   /**
    * Saying it again under the same key replaces it. Up to
-   * {{limits.scheduler.personalMaxKeyChars}} characters.
+   * {{limits.scheduler.maxKeyChars}} characters.
    */
   key: string;
   handler: string;
@@ -1344,7 +1325,10 @@ interface ScheduleSpec {
   timeZone?: string;
   /** The first run, when it should not wait a whole interval. */
   firstRunAfterMs?: number;
-  /** As `enqueue`: defaults to the person; `null` for no lane. */
+  /**
+   * What its runs must not run beside. A person's schedule defaults to the
+   * person (`null` for no lane); the script's own has none unless named.
+   */
   lane?: string | null;
 }
 
@@ -1567,7 +1551,7 @@ interface ScriptToolInfo {
  *
  * Requires `call_tools`: held by a signed-in caller, by a delegated run whose
  * grant includes `"tools"`, and by a `sandbox.run` only when named. Never by
- * `init()` or a scheduled job. Listed are the tools of scripts sharing a host
+ * `init()` or a scheduled run. Listed are the tools of scripts sharing a host
  * with this one; the engine's own tools are `engine.call`'s.
  *
  * A tool cannot ask questions (`mcp.canAsk()` is false in it). Failures throw:
@@ -2577,7 +2561,7 @@ interface Mcp {
    * Whether this caller can be asked at all.
    *
    * False when the client declared no elicitation capability, and false
-   * wherever there is no client — a scheduled job, a delegated task, a
+   * wherever there is no client — a scheduled run, a delegated task, a
    * listener. A tool that can manage without the answer should check this and
    * fall back; one that cannot should just ask and let the throw stand.
    */
@@ -2695,7 +2679,6 @@ interface Mcp {
 declare var scriptStorage: Storage;
 declare var personalStorage: Storage;
 declare var secretStorage: SecretStorage;
-declare var schedulerService: SchedulerService;
 declare var scriptTasks: ScriptTasks;
 declare var personalTasks: PersonalTasks;
 declare var mcpRegistry: McpRegistry;
@@ -2912,7 +2895,7 @@ interface HmacVerifyOptions {
  * **It is not always there.** `engine` is `undefined` outside the two
  * executions whose authority came from a credential — a script serving a
  * request, and a delegated task where somebody consented to `author` or
- * `administer`. A scheduled job, `init()`, a test run, `/engine/eval_script` and
+ * `administer`. A scheduled run, `init()`, a test run, `/engine/eval_script` and
  * `sandbox.run` do not get it, because those run as the
  * engine's own synthetic administrator or with a capability subset that cannot
  * express the difference between reading your own `console` and reading every

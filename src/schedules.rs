@@ -1,24 +1,26 @@
-//! Schedules that belong to a person: "every morning at seven, as me".
+//! Schedules: "every morning at seven, as me", and "every night at three".
 //!
-//! `schedulerService` declares a schedule for the *script*: it runs as the
-//! engine, and it is wiped and declared again on every `init()` because it
-//! belongs to the version of the code. `personalTasks.enqueue({ runAt })` runs
-//! once, as the person. Neither is a declaration that belongs to a person —
-//! keyed so that saying it again replaces it, kept across deployments, bounded
-//! by the grant that lets it act, and visible on the account page beside that
-//! grant. This is.
+//! A row belongs either to a person (`user_id` set) or to the script
+//! (`user_id` NULL), and the two are declared differently because they belong
+//! to different things:
+//!
+//! - A **person's** schedule is declared at runtime by `personalTasks.schedule`
+//!   — keyed so that saying it again replaces it, kept across deployments,
+//!   bounded by the grant that lets it act, and visible on the account page
+//!   beside that grant.
+//! - A **script's** schedule is declared in `init()` by `scriptTasks.schedule`
+//!   and belongs to the version of the code: what one `init()` does not declare
+//!   is removed after it ([`sweep_undeclared`]).
 //!
 //! # What a row is
 //!
-//! A row in `personal_schedules` says *when*, never runs JavaScript itself.
-//! When it is due, [`fire_due`] inserts an ordinary delegated task into
-//! `script_tasks` (`run_as` = the person), and from there it is what any
-//! `personalTasks.enqueue` task gets: the person's lane, retries, the job
-//! budget, and the grant read again when it runs. How that task ends is
-//! written back by [`record_outcome_on`], so a schedule whose handler is gone
-//! stops costing runs instead of failing every morning forever.
+//! A row says *when*, and never runs JavaScript itself. When it is due,
+//! [`fire_due`] inserts an ordinary task into `script_tasks` — delegated to the
+//! person, or in script context — and from there it is what any enqueued task
+//! gets: a lane, the job budget, and for a person the grant read again when it
+//! runs. How that task ends is written back by [`record_outcome_on`].
 //!
-//! # Lifetime
+//! # A person's schedule's lifetime
 //!
 //! Deleted with the script, the account (foreign keys), or the grant
 //! ([`delete_for_grant`], from `delegation::revoke` and `revoke_all`): a
@@ -45,8 +47,17 @@ use crate::tasks;
 /// Longest a schedule key may be.
 pub const MAX_KEY_CHARS: usize = 128;
 
-/// How many attempts the task a firing creates gets.
+/// How many attempts the task a person's schedule fires gets.
 const ATTEMPTS_PER_RUN: i32 = 3;
+
+/// A script's schedule gets one: a slot that fails waits for the next one,
+/// which is a retry that already comes on a schedule.
+const ATTEMPTS_PER_SCRIPT_RUN: i32 = 1;
+
+/// The closest together a script's own schedule may run. A person's floor is
+/// configured ([`ScheduleLimits::min_interval_ms`]); a script's is the code
+/// author's to choose, and the task worker's poll sets the real granularity.
+pub const SCRIPT_MIN_INTERVAL_MS: u64 = 100;
 
 /// Given-up runs in a row after which a schedule pauses as `failing`.
 pub const FAILURES_BEFORE_PAUSE: i32 = 3;
@@ -118,7 +129,7 @@ pub enum ScheduleError {
     TimeZoneWithInterval,
     #[error("unknown time zone '{0}' - use an IANA name such as 'Europe/Helsinki'")]
     UnknownTimeZone(String),
-    #[error("runs must be at least {0} minutes apart")]
+    #[error("runs must be at least {} apart", describe_floor(*.0))]
     TooFrequent(u64),
     #[error("firstRunAfterMs must be a whole number of milliseconds, zero or more")]
     InvalidFirstRun,
@@ -128,6 +139,8 @@ pub enum ScheduleError {
     TooManyForScript(u32),
     #[error("this person already has {0} schedules")]
     TooManyForPerson(u32),
+    #[error("scriptTasks.schedule is for init(): a script's schedules are declared with its code")]
+    OutsideInit,
     #[error("no database is available to store the schedule")]
     Unavailable,
     #[error("could not store the schedule: {0}")]
@@ -155,7 +168,9 @@ impl ScheduleError {
             | ScheduleError::InvalidFirstRun
             | ScheduleError::TooManyForScript(_)
             | ScheduleError::TooManyForPerson(_) => "RangeError",
-            ScheduleError::Unavailable | ScheduleError::Storage(_) => "Error",
+            ScheduleError::OutsideInit | ScheduleError::Unavailable | ScheduleError::Storage(_) => {
+                "Error"
+            }
         }
     }
 }
@@ -290,6 +305,16 @@ impl Cadence {
     }
 }
 
+/// A floor, as a refusal names it: "15 minutes", "100 ms".
+fn describe_floor(ms: u64) -> String {
+    if ms >= 60_000 {
+        let minutes = ms.div_ceil(60_000);
+        format!("{} minute{}", minutes, if minutes == 1 { "" } else { "s" })
+    } else {
+        format!("{} ms", ms)
+    }
+}
+
 fn describe_interval(ms: i64) -> String {
     let minutes = ms / 60_000;
     let plural = |n: i64, unit: &str| {
@@ -334,8 +359,9 @@ fn whole_number(value: &Value) -> Option<i64> {
 
 impl ScheduleSpec {
     /// Read a `ScheduleSpec` as the script passed it, checking everything
-    /// that does not need the database.
-    pub fn from_json(options: &Value, limits: &ScheduleLimits) -> Result<Self, ScheduleError> {
+    /// that does not need the database. `min_interval_ms` is the floor: the
+    /// configured one for a person, [`SCRIPT_MIN_INTERVAL_MS`] for a script.
+    pub fn from_json(options: &Value, min_interval_ms: u64) -> Result<Self, ScheduleError> {
         let key = options
             .get("key")
             .and_then(|v| v.as_str())
@@ -415,13 +441,11 @@ impl ScheduleSpec {
             }
         };
 
-        let floor = Duration::milliseconds(limits.min_interval_ms as i64);
+        let floor = Duration::milliseconds(min_interval_ms as i64);
         if let Some(gap) = cadence.tightest_gap(Utc::now())
             && gap < floor
         {
-            return Err(ScheduleError::TooFrequent(
-                limits.min_interval_ms.div_ceil(60_000),
-            ));
+            return Err(ScheduleError::TooFrequent(min_interval_ms));
         }
 
         let first_run_after_ms = match options.get("firstRunAfterMs") {
@@ -460,10 +484,11 @@ impl ScheduleSpec {
 
 /// A schedule as stored.
 #[derive(Debug, Clone)]
-pub struct PersonalSchedule {
+pub struct Schedule {
     pub schedule_id: Uuid,
     pub script_uri: String,
-    pub user_id: String,
+    /// The person it runs as; `None` for the script's own.
+    pub user_id: Option<String>,
     pub key: String,
     pub handler: String,
     pub payload: Value,
@@ -477,7 +502,7 @@ pub struct PersonalSchedule {
     pub created_at: DateTime<Utc>,
 }
 
-/// The columns [`PersonalSchedule::from_row`] reads, as a literal so it can be
+/// The columns [`Schedule::from_row`] reads, as a literal so it can be
 /// spliced into a static statement.
 macro_rules! columns {
     () => {
@@ -487,7 +512,7 @@ macro_rules! columns {
     };
 }
 
-impl PersonalSchedule {
+impl Schedule {
     fn from_row(row: &sqlx::postgres::PgRow) -> Self {
         Self {
             schedule_id: row.get("schedule_id"),
@@ -558,7 +583,7 @@ impl PersonalSchedule {
 /// What [`declare_on`] did.
 #[derive(Debug)]
 pub struct Declared {
-    pub schedule: PersonalSchedule,
+    pub schedule: Schedule,
     /// False when the declaration restated a running schedule word for word,
     /// and so wrote nothing.
     pub changed: bool,
@@ -589,7 +614,7 @@ pub async fn declare_on(
     // Counting and inserting must not interleave with another declaration by
     // the same person, or two at the limit both pass. Held to the end of the
     // enclosing transaction.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('personal_schedules'), hashtext($1))")
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('schedules'), hashtext($1))")
         .bind(user_id)
         .execute(&mut *conn)
         .await
@@ -598,7 +623,7 @@ pub async fn declare_on(
     let existing = sqlx::query(concat!(
         "SELECT ",
         columns!(),
-        " FROM personal_schedules \
+        " FROM schedules \
          WHERE script_uri = $1 AND user_id = $2 AND schedule_key = $3"
     ))
     .bind(script_uri)
@@ -607,7 +632,7 @@ pub async fn declare_on(
     .fetch_optional(&mut *conn)
     .await
     .map_err(storage)?
-    .map(|row| PersonalSchedule::from_row(&row));
+    .map(|row| Schedule::from_row(&row));
     if let Some(current) = existing.filter(|current| current.restated_by(spec, lane)) {
         return Ok(Declared {
             schedule: current,
@@ -620,7 +645,7 @@ pub async fn declare_on(
         SELECT
             COUNT(*) FILTER (WHERE script_uri = $2),
             COUNT(*)
-        FROM personal_schedules
+        FROM schedules
         WHERE user_id = $1
           AND NOT (script_uri = $2 AND schedule_key = $3)
         "#,
@@ -651,19 +676,19 @@ pub async fn declare_on(
 
     let row = sqlx::query(concat!(
         r#"
-        INSERT INTO personal_schedules
+        INSERT INTO schedules
             (schedule_id, script_uri, user_id, schedule_key, handler_name, payload,
              interval_ms, cron, time_zone, lane, next_run_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        ON CONFLICT (script_uri, user_id, schedule_key) DO UPDATE SET
+        ON CONFLICT ON CONSTRAINT schedules_owner_key DO UPDATE SET
             handler_name = EXCLUDED.handler_name,
             payload = EXCLUDED.payload,
             next_run_at = CASE
-                WHEN personal_schedules.state = 'active'
-                 AND personal_schedules.interval_ms IS NOT DISTINCT FROM EXCLUDED.interval_ms
-                 AND personal_schedules.cron IS NOT DISTINCT FROM EXCLUDED.cron
-                 AND personal_schedules.time_zone IS NOT DISTINCT FROM EXCLUDED.time_zone
-                THEN personal_schedules.next_run_at
+                WHEN schedules.state = 'active'
+                 AND schedules.interval_ms IS NOT DISTINCT FROM EXCLUDED.interval_ms
+                 AND schedules.cron IS NOT DISTINCT FROM EXCLUDED.cron
+                 AND schedules.time_zone IS NOT DISTINCT FROM EXCLUDED.time_zone
+                THEN schedules.next_run_at
                 ELSE EXCLUDED.next_run_at
             END,
             interval_ms = EXCLUDED.interval_ms,
@@ -694,7 +719,7 @@ pub async fn declare_on(
     .await
     .map_err(storage)?;
 
-    let schedule = PersonalSchedule::from_row(&row);
+    let schedule = Schedule::from_row(&row);
     let created: bool = row.get("created");
     debug!(
         script = %script_uri,
@@ -710,43 +735,201 @@ pub async fn declare_on(
     })
 }
 
+/// Declare, or replace, the script's own schedule under `spec.key`, from its
+/// `init()`.
+///
+/// Stamps `declared_at` even when nothing else changes: that stamp is what
+/// keeps the row through [`sweep_undeclared`] after this `init()`. A schedule
+/// declared again with the same cadence keeps its next slot, so restarting the
+/// engine or deploying an unrelated change does not push a nightly job back a
+/// night.
+pub async fn declare_for_script_on(
+    conn: &mut sqlx::PgConnection,
+    script_uri: &str,
+    spec: &ScheduleSpec,
+    lane: Option<&str>,
+) -> Result<Schedule, ScheduleError> {
+    let (interval_ms, cron, time_zone) = match &spec.cadence {
+        Cadence::Interval { ms } => (Some(*ms), None, None),
+        Cadence::Cron { pattern, time_zone } => (
+            None,
+            Some(pattern.clone()),
+            Some(time_zone.name().to_string()),
+        ),
+    };
+    let next_run_at = spec.first_run(Utc::now());
+
+    let row = sqlx::query(concat!(
+        r#"
+        INSERT INTO schedules
+            (schedule_id, script_uri, user_id, schedule_key, handler_name, payload,
+             interval_ms, cron, time_zone, lane, next_run_at, declared_at)
+        VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, $9, $10, clock_timestamp())
+        ON CONFLICT ON CONSTRAINT schedules_owner_key DO UPDATE SET
+            handler_name = EXCLUDED.handler_name,
+            payload = EXCLUDED.payload,
+            next_run_at = CASE
+                WHEN schedules.interval_ms IS NOT DISTINCT FROM EXCLUDED.interval_ms
+                 AND schedules.cron IS NOT DISTINCT FROM EXCLUDED.cron
+                 AND schedules.time_zone IS NOT DISTINCT FROM EXCLUDED.time_zone
+                THEN schedules.next_run_at
+                ELSE EXCLUDED.next_run_at
+            END,
+            interval_ms = EXCLUDED.interval_ms,
+            cron = EXCLUDED.cron,
+            time_zone = EXCLUDED.time_zone,
+            lane = EXCLUDED.lane,
+            declared_at = EXCLUDED.declared_at,
+            updated_at = NOW()
+        RETURNING "#,
+        columns!()
+    ))
+    .bind(Uuid::new_v4())
+    .bind(script_uri)
+    .bind(&spec.key)
+    .bind(&spec.handler)
+    .bind(&spec.payload)
+    .bind(interval_ms)
+    .bind(cron)
+    .bind(time_zone)
+    .bind(lane)
+    .bind(next_run_at)
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(|e| ScheduleError::Storage(e.to_string()))?;
+
+    let schedule = Schedule::from_row(&row);
+    debug!(
+        script = %script_uri,
+        key = %schedule.key,
+        next_run_at = %schedule.next_run_at,
+        "Script schedule declared"
+    );
+    Ok(schedule)
+}
+
+/// Remove the script's own schedule under `key`. False if there was none.
+pub async fn remove_for_script_on<'e, E>(
+    executor: E,
+    script_uri: &str,
+    key: &str,
+) -> Result<bool, sqlx::Error>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let result = sqlx::query(
+        "DELETE FROM schedules \
+         WHERE user_id IS NULL AND script_uri = $1 AND schedule_key = $2",
+    )
+    .bind(script_uri)
+    .bind(key.trim())
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// The database's clock now, taken before an `init()` runs, so
+/// [`sweep_undeclared`] can tell what that `init()` declared. The database's
+/// rather than this instance's, because `declared_at` is stamped by it.
+pub async fn declaration_mark() -> Option<DateTime<Utc>> {
+    let db = crate::database::get_global_database()?;
+    match sqlx::query_scalar::<_, DateTime<Utc>>("SELECT clock_timestamp()")
+        .fetch_one(db.pool())
+        .await
+    {
+        Ok(mark) => Some(mark),
+        Err(e) => {
+            warn!(error = %e, "Could not read the clock before init()");
+            None
+        }
+    }
+}
+
+/// After an `init()`: remove the script's own schedules it did not declare.
+///
+/// Whatever the `init()`'s outcome. One that failed part-way keeps what it
+/// declared before failing and loses the rest, which is what wiping before it
+/// and declaring again would also leave. A person's schedules are never
+/// touched: they do not belong to the code.
+pub async fn sweep_undeclared(script_uri: &str, mark: DateTime<Utc>) -> u64 {
+    let Some(db) = crate::database::get_global_database() else {
+        return 0;
+    };
+    match sqlx::query(
+        "DELETE FROM schedules WHERE script_uri = $1 AND user_id IS NULL \
+         AND (declared_at IS NULL OR declared_at < $2)",
+    )
+    .bind(script_uri)
+    .bind(mark)
+    .execute(db.pool())
+    .await
+    {
+        Ok(result) => {
+            let removed = result.rows_affected();
+            if removed > 0 {
+                debug!(script = %script_uri, removed, "Removed schedules init() no longer declares");
+            }
+            removed
+        }
+        Err(e) => {
+            warn!(script = %script_uri, error = %e, "Could not remove undeclared schedules");
+            0
+        }
+    }
+}
+
+/// How many schedules each script has, the script's own and its people's,
+/// for the status page.
+pub async fn count_by_script() -> Result<Vec<(String, i64, i64)>, sqlx::Error> {
+    let Some(db) = crate::database::get_global_database() else {
+        return Ok(Vec::new());
+    };
+    sqlx::query_as(
+        "SELECT script_uri, COUNT(*) FILTER (WHERE user_id IS NULL), \
+         COUNT(*) FILTER (WHERE user_id IS NOT NULL) \
+         FROM schedules GROUP BY script_uri ORDER BY script_uri",
+    )
+    .fetch_all(db.pool())
+    .await
+}
+
 /// This person's schedules for this script, by key.
 pub async fn list_on<'e, E>(
     executor: E,
     user_id: &str,
     script_uri: &str,
-) -> Result<Vec<PersonalSchedule>, sqlx::Error>
+) -> Result<Vec<Schedule>, sqlx::Error>
 where
     E: sqlx::PgExecutor<'e>,
 {
     let rows = sqlx::query(concat!(
         "SELECT ",
         columns!(),
-        " FROM personal_schedules \
+        " FROM schedules \
          WHERE user_id = $1 AND script_uri = $2 ORDER BY schedule_key"
     ))
     .bind(user_id)
     .bind(script_uri)
     .fetch_all(executor)
     .await?;
-    Ok(rows.iter().map(PersonalSchedule::from_row).collect())
+    Ok(rows.iter().map(Schedule::from_row).collect())
 }
 
 /// Every schedule this person has, for the account page.
-pub async fn list_for_user(user_id: &str) -> Result<Vec<PersonalSchedule>, sqlx::Error> {
+pub async fn list_for_user(user_id: &str) -> Result<Vec<Schedule>, sqlx::Error> {
     let Some(db) = crate::database::get_global_database() else {
         return Ok(Vec::new());
     };
     let rows = sqlx::query(concat!(
         "SELECT ",
         columns!(),
-        " FROM personal_schedules \
+        " FROM schedules \
          WHERE user_id = $1 ORDER BY script_uri, schedule_key"
     ))
     .bind(user_id)
     .fetch_all(db.pool())
     .await?;
-    Ok(rows.iter().map(PersonalSchedule::from_row).collect())
+    Ok(rows.iter().map(Schedule::from_row).collect())
 }
 
 /// Remove one by key. False if there was nothing under it.
@@ -760,7 +943,7 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     let result = sqlx::query(
-        "DELETE FROM personal_schedules \
+        "DELETE FROM schedules \
          WHERE user_id = $1 AND script_uri = $2 AND schedule_key = $3",
     )
     .bind(user_id)
@@ -776,19 +959,19 @@ where
 pub async fn delete_by_id(
     user_id: &str,
     schedule_id: Uuid,
-) -> Result<Option<PersonalSchedule>, sqlx::Error> {
+) -> Result<Option<Schedule>, sqlx::Error> {
     let Some(db) = crate::database::get_global_database() else {
         return Ok(None);
     };
     let row = sqlx::query(concat!(
-        "DELETE FROM personal_schedules WHERE user_id = $1 AND schedule_id = $2 RETURNING ",
+        "DELETE FROM schedules WHERE user_id = $1 AND schedule_id = $2 RETURNING ",
         columns!()
     ))
     .bind(user_id)
     .bind(schedule_id)
     .fetch_optional(db.pool())
     .await?;
-    Ok(row.as_ref().map(PersonalSchedule::from_row))
+    Ok(row.as_ref().map(Schedule::from_row))
 }
 
 /// Pause or resume one, for the account page. Scoped to its owner.
@@ -800,19 +983,19 @@ pub async fn set_paused(
     user_id: &str,
     schedule_id: Uuid,
     paused: bool,
-) -> Result<Option<PersonalSchedule>, sqlx::Error> {
+) -> Result<Option<Schedule>, sqlx::Error> {
     let Some(db) = crate::database::get_global_database() else {
         return Ok(None);
     };
     let statement = if paused {
         concat!(
-            "UPDATE personal_schedules SET state = 'paused', paused_reason = 'person', \
+            "UPDATE schedules SET state = 'paused', paused_reason = 'person', \
              updated_at = NOW() WHERE user_id = $1 AND schedule_id = $2 RETURNING ",
             columns!()
         )
     } else {
         concat!(
-            "UPDATE personal_schedules SET state = 'active', paused_reason = NULL, \
+            "UPDATE schedules SET state = 'active', paused_reason = NULL, \
              consecutive_failures = 0, updated_at = NOW() \
              WHERE user_id = $1 AND schedule_id = $2 RETURNING ",
             columns!()
@@ -823,7 +1006,7 @@ pub async fn set_paused(
         .bind(schedule_id)
         .fetch_optional(db.pool())
         .await?;
-    Ok(row.as_ref().map(PersonalSchedule::from_row))
+    Ok(row.as_ref().map(Schedule::from_row))
 }
 
 /// Delete what a withdrawn grant allowed: one script's, or with `None` every
@@ -834,14 +1017,14 @@ pub async fn delete_for_grant(user_id: &str, script_uri: Option<&str>) -> Result
     };
     let result = match script_uri {
         Some(script_uri) => {
-            sqlx::query("DELETE FROM personal_schedules WHERE user_id = $1 AND script_uri = $2")
+            sqlx::query("DELETE FROM schedules WHERE user_id = $1 AND script_uri = $2")
                 .bind(user_id)
                 .bind(script_uri)
                 .execute(db.pool())
                 .await?
         }
         None => {
-            sqlx::query("DELETE FROM personal_schedules WHERE user_id = $1")
+            sqlx::query("DELETE FROM schedules WHERE user_id = $1")
                 .bind(user_id)
                 .execute(db.pool())
                 .await?
@@ -857,7 +1040,7 @@ pub async fn resume_expired(user_id: &str, script_uri: &str) -> Result<u64, sqlx
     };
     let result = sqlx::query(
         r#"
-        UPDATE personal_schedules
+        UPDATE schedules
         SET state = 'active', paused_reason = NULL, updated_at = NOW()
         WHERE user_id = $1 AND script_uri = $2
           AND state = 'paused' AND paused_reason = 'expired'
@@ -871,17 +1054,14 @@ pub async fn resume_expired(user_id: &str, script_uri: &str) -> Result<u64, sqlx
 }
 
 /// The schedules a grant being given would start again, for the consent page.
-pub async fn paused_expired(
-    user_id: &str,
-    script_uri: &str,
-) -> Result<Vec<PersonalSchedule>, sqlx::Error> {
+pub async fn paused_expired(user_id: &str, script_uri: &str) -> Result<Vec<Schedule>, sqlx::Error> {
     let Some(db) = crate::database::get_global_database() else {
         return Ok(Vec::new());
     };
     let rows = sqlx::query(concat!(
         "SELECT ",
         columns!(),
-        " FROM personal_schedules \
+        " FROM schedules \
          WHERE user_id = $1 AND script_uri = $2 \
            AND state = 'paused' AND paused_reason = 'expired' \
          ORDER BY schedule_key"
@@ -890,7 +1070,7 @@ pub async fn paused_expired(
     .bind(script_uri)
     .fetch_all(db.pool())
     .await?;
-    Ok(rows.iter().map(PersonalSchedule::from_row).collect())
+    Ok(rows.iter().map(Schedule::from_row).collect())
 }
 
 /// Turn every due schedule into a task. Returns how many tasks were queued.
@@ -911,7 +1091,7 @@ pub async fn fire_due(now: DateTime<Utc>) -> usize {
     let mut tx = match db.pool().begin().await {
         Ok(tx) => tx,
         Err(e) => {
-            warn!(error = %e, "Failed opening a transaction to fire personal schedules");
+            warn!(error = %e, "Failed opening a transaction to fire schedules");
             return 0;
         }
     };
@@ -921,7 +1101,7 @@ pub async fn fire_due(now: DateTime<Utc>) -> usize {
         SELECT "#,
         columns!(),
         r#", last_task_id
-        FROM personal_schedules
+        FROM schedules
         WHERE state = 'active' AND next_run_at <= $1
         ORDER BY next_run_at
         LIMIT $2
@@ -935,7 +1115,7 @@ pub async fn fire_due(now: DateTime<Utc>) -> usize {
     {
         Ok(rows) => rows,
         Err(e) => {
-            warn!(error = %e, "Failed reading due personal schedules");
+            warn!(error = %e, "Failed reading due schedules");
             return 0;
         }
     };
@@ -947,7 +1127,7 @@ pub async fn fire_due(now: DateTime<Utc>) -> usize {
 
     let mut queued = 0;
     for row in &due {
-        let schedule = PersonalSchedule::from_row(row);
+        let schedule = Schedule::from_row(row);
         let last_task_id: Option<Uuid> = row.get("last_task_id");
         match fire_one(&mut tx, &schedule, last_task_id, now).await {
             Ok(true) => queued += 1,
@@ -956,7 +1136,7 @@ pub async fn fire_due(now: DateTime<Utc>) -> usize {
                 warn!(
                     schedule = %schedule.schedule_id,
                     error = %e,
-                    "Failed firing a personal schedule"
+                    "Failed firing a schedule"
                 );
                 let _ = tx.rollback().await;
                 return 0;
@@ -965,7 +1145,7 @@ pub async fn fire_due(now: DateTime<Utc>) -> usize {
     }
 
     if let Err(e) = tx.commit().await {
-        warn!(error = %e, "Failed committing fired personal schedules");
+        warn!(error = %e, "Failed committing fired schedules");
         return 0;
     }
     if queued > 0 {
@@ -977,33 +1157,52 @@ pub async fn fire_due(now: DateTime<Utc>) -> usize {
 /// One due schedule. True when a task was queued.
 async fn fire_one(
     tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
-    schedule: &PersonalSchedule,
+    schedule: &Schedule,
     last_task_id: Option<Uuid>,
     now: DateTime<Utc>,
 ) -> Result<bool, sqlx::Error> {
-    let grant_expires: Option<DateTime<Utc>> = sqlx::query_scalar(
-        "SELECT expires_at FROM script_delegations WHERE user_id = $1 AND script_uri = $2",
-    )
-    .bind(&schedule.user_id)
-    .bind(&schedule.script_uri)
-    .fetch_optional(&mut **tx)
-    .await?;
-
     let next_run_at = schedule.cadence.next_after(Some(schedule.next_run_at), now);
 
+    // A script's own schedule runs as the script and needs nobody's grant.
+    if let Some(user_id) = &schedule.user_id {
+        let grant_expires: Option<DateTime<Utc>> = sqlx::query_scalar(
+            "SELECT expires_at FROM script_delegations WHERE user_id = $1 AND script_uri = $2",
+        )
+        .bind(user_id)
+        .bind(&schedule.script_uri)
+        .fetch_optional(&mut **tx)
+        .await?;
+        if !grant_allows_firing(tx, schedule, grant_expires, next_run_at, now).await? {
+            return Ok(false);
+        }
+    }
+
+    fire_task(tx, schedule, last_task_id, next_run_at, now).await
+}
+
+/// For a person's schedule: whether the grant lets it fire now. Without a
+/// grant the row goes; with a lapsed one it pauses until the grant is given
+/// again.
+async fn grant_allows_firing(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+    schedule: &Schedule,
+    grant_expires: Option<DateTime<Utc>>,
+    next_run_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<bool, sqlx::Error> {
     match grant_expires {
         // Withdrawing the grant deletes its schedules; this is a race with
         // that, finished here.
         None => {
-            sqlx::query("DELETE FROM personal_schedules WHERE schedule_id = $1")
+            sqlx::query("DELETE FROM schedules WHERE schedule_id = $1")
                 .bind(schedule.schedule_id)
                 .execute(&mut **tx)
                 .await?;
-            return Ok(false);
+            Ok(false)
         }
         Some(expires_at) if expires_at <= now => {
             sqlx::query(
-                "UPDATE personal_schedules SET state = 'paused', paused_reason = 'expired', \
+                "UPDATE schedules SET state = 'paused', paused_reason = 'expired', \
                  next_run_at = $2, updated_at = NOW() WHERE schedule_id = $1",
             )
             .bind(schedule.schedule_id)
@@ -1012,15 +1211,24 @@ async fn fire_one(
             .await?;
             info!(
                 script = %schedule.script_uri,
-                user = %schedule.user_id,
+                user = ?schedule.user_id,
                 key = %schedule.key,
                 "Personal schedule paused: the grant has expired"
             );
-            return Ok(false);
+            Ok(false)
         }
-        Some(_) => {}
+        Some(_) => Ok(true),
     }
+}
 
+/// Queue the task for a due slot, unless the previous one is still going.
+async fn fire_task(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+    schedule: &Schedule,
+    last_task_id: Option<Uuid>,
+    next_run_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<bool, sqlx::Error> {
     // Work that takes longer than its interval must not pile up behind itself.
     let unfinished = match last_task_id {
         Some(task_id) => {
@@ -1037,7 +1245,7 @@ async fn fire_one(
 
     if unfinished {
         sqlx::query(
-            "UPDATE personal_schedules SET next_run_at = $2, updated_at = NOW() \
+            "UPDATE schedules SET next_run_at = $2, updated_at = NOW() \
              WHERE schedule_id = $1",
         )
         .bind(schedule.schedule_id)
@@ -1064,9 +1272,13 @@ async fn fire_one(
             handler_name: schedule.handler.clone(),
             payload: schedule.payload.clone(),
             run_at: Some(now),
-            max_attempts: Some(ATTEMPTS_PER_RUN),
+            max_attempts: Some(if schedule.user_id.is_some() {
+                ATTEMPTS_PER_RUN
+            } else {
+                ATTEMPTS_PER_SCRIPT_RUN
+            }),
             enqueued_by: None,
-            run_as: Some(schedule.user_id.clone()),
+            run_as: schedule.user_id.clone(),
             lane: schedule.lane.clone(),
         },
         schedule.schedule_id,
@@ -1076,7 +1288,7 @@ async fn fire_one(
     .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
 
     sqlx::query(
-        "UPDATE personal_schedules SET next_run_at = $2, last_run_at = $3, last_task_id = $4, \
+        "UPDATE schedules SET next_run_at = $2, last_run_at = $3, last_task_id = $4, \
          updated_at = NOW() WHERE schedule_id = $1",
     )
     .bind(schedule.schedule_id)
@@ -1091,7 +1303,7 @@ async fn fire_one(
         key = %schedule.key,
         task = %task.task_id,
         next_run_at = %next_run_at,
-        "Personal schedule fired"
+        "Schedule fired"
     );
     Ok(true)
 }
@@ -1100,7 +1312,9 @@ async fn fire_one(
 /// transaction that records the task's outcome.
 ///
 /// Only a success or a run that has given up counts; a retry in between says
-/// nothing yet. Three given up in a row pause the schedule as `failing`.
+/// nothing yet. Three given up in a row pause a person's schedule as
+/// `failing`. A script's own is only counted: nobody but its code could
+/// resume it, and the next deployment would only start it failing again.
 pub async fn record_outcome_on(
     conn: &mut sqlx::PgConnection,
     schedule_id: Uuid,
@@ -1108,7 +1322,7 @@ pub async fn record_outcome_on(
 ) -> Result<(), sqlx::Error> {
     if succeeded {
         sqlx::query(
-            "UPDATE personal_schedules SET consecutive_failures = 0, updated_at = NOW() \
+            "UPDATE schedules SET consecutive_failures = 0, updated_at = NOW() \
              WHERE schedule_id = $1 AND consecutive_failures <> 0",
         )
         .bind(schedule_id)
@@ -1119,11 +1333,12 @@ pub async fn record_outcome_on(
 
     sqlx::query(
         r#"
-        UPDATE personal_schedules
+        UPDATE schedules
         SET consecutive_failures = consecutive_failures + 1,
-            state = CASE WHEN consecutive_failures + 1 >= $2 THEN 'paused' ELSE state END,
-            paused_reason = CASE WHEN consecutive_failures + 1 >= $2 THEN 'failing'
-                                 ELSE paused_reason END,
+            state = CASE WHEN user_id IS NOT NULL AND consecutive_failures + 1 >= $2
+                         THEN 'paused' ELSE state END,
+            paused_reason = CASE WHEN user_id IS NOT NULL AND consecutive_failures + 1 >= $2
+                                 THEN 'failing' ELSE paused_reason END,
             updated_at = NOW()
         WHERE schedule_id = $1
         "#,
@@ -1173,7 +1388,47 @@ pub mod blocking {
         })
     }
 
-    pub fn list(user_id: &str, script_uri: &str) -> Result<Vec<PersonalSchedule>, sqlx::Error> {
+    pub fn declare_for_script(
+        script_uri: &str,
+        spec: &ScheduleSpec,
+        lane: Option<&str>,
+    ) -> Result<Schedule, ScheduleError> {
+        let Some(db) = crate::database::get_global_database() else {
+            return Err(ScheduleError::Unavailable);
+        };
+        crate::database::run_blocking(async {
+            match get_current_executor(db.pool()) {
+                TransactionExecutor::Transaction(tx) => {
+                    declare_for_script_on(tx, script_uri, spec, lane).await
+                }
+                TransactionExecutor::Pool(pool) => {
+                    let mut conn = pool
+                        .acquire()
+                        .await
+                        .map_err(|e| ScheduleError::Storage(e.to_string()))?;
+                    declare_for_script_on(&mut conn, script_uri, spec, lane).await
+                }
+            }
+        })
+    }
+
+    pub fn remove_for_script(script_uri: &str, key: &str) -> Result<bool, sqlx::Error> {
+        let Some(db) = crate::database::get_global_database() else {
+            return Ok(false);
+        };
+        crate::database::run_blocking(async {
+            match get_current_executor(db.pool()) {
+                TransactionExecutor::Transaction(tx) => {
+                    remove_for_script_on(&mut **tx, script_uri, key).await
+                }
+                TransactionExecutor::Pool(pool) => {
+                    remove_for_script_on(pool, script_uri, key).await
+                }
+            }
+        })
+    }
+
+    pub fn list(user_id: &str, script_uri: &str) -> Result<Vec<Schedule>, sqlx::Error> {
         let Some(db) = crate::database::get_global_database() else {
             return Ok(Vec::new());
         };
@@ -1207,16 +1462,8 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
-    fn limits_with_floor(min_interval_ms: u64) -> ScheduleLimits {
-        ScheduleLimits {
-            min_interval_ms,
-            per_person_script: 10,
-            per_person: 50,
-        }
-    }
-
     fn spec(options: Value) -> Result<ScheduleSpec, ScheduleError> {
-        ScheduleSpec::from_json(&options, &limits_with_floor(15 * 60 * 1000))
+        ScheduleSpec::from_json(&options, 15 * 60 * 1000)
     }
 
     #[test]
@@ -1268,17 +1515,26 @@ mod tests {
         let every_minute = spec(serde_json::json!({
             "key": "k", "handler": "h", "cron": "* * * * *", "timeZone": "UTC",
         }));
-        assert_eq!(every_minute.unwrap_err(), ScheduleError::TooFrequent(15));
+        assert_eq!(
+            every_minute.unwrap_err(),
+            ScheduleError::TooFrequent(15 * 60 * 1000)
+        );
 
         let close_pair = spec(serde_json::json!({
             "key": "k", "handler": "h", "cron": "0,5 7 * * *", "timeZone": "UTC",
         }));
-        assert_eq!(close_pair.unwrap_err(), ScheduleError::TooFrequent(15));
+        assert_eq!(
+            close_pair.unwrap_err(),
+            ScheduleError::TooFrequent(15 * 60 * 1000)
+        );
 
         let short_interval = spec(serde_json::json!({
             "key": "k", "handler": "h", "intervalMinutes": 5,
         }));
-        assert_eq!(short_interval.unwrap_err(), ScheduleError::TooFrequent(15));
+        assert_eq!(
+            short_interval.unwrap_err(),
+            ScheduleError::TooFrequent(15 * 60 * 1000)
+        );
 
         let daily = spec(serde_json::json!({
             "key": "k", "handler": "h", "cron": "0 7 * * *", "timeZone": "Europe/Helsinki",

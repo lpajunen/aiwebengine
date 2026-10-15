@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::error::{AppError, AppResult};
-use crate::scheduler;
 use sqlx::Row;
 use std::collections::HashMap;
 use std::time::SystemTime;
@@ -1213,7 +1212,6 @@ pub fn delete_script(uri: &str) -> bool {
     match result {
         Ok(existed) => {
             if existed {
-                scheduler::clear_script_jobs(uri);
                 // And its queued work. Tasks deliberately survive `init()` —
                 // a new version of a script must not discard work already
                 // accepted — but there is no version left to run them, and a
@@ -1284,7 +1282,6 @@ pub fn rename_script(from: &str, to: &str) -> Result<(), RenameError> {
         Err(e) => return Err(RenameError::Storage(e.to_string())),
     }
 
-    scheduler::clear_script_jobs(from);
     crate::mcp::clear_script_mcp_registrations(from);
     crate::revisions::forget_current(from);
     crate::deployments::forget_pin(from);

@@ -149,7 +149,7 @@ Capture stops after 1,000 lines; anything past that is counted in
   and secret writes, which go through the same transaction. Stream messages
   wait for a commit that never comes, so they are not sent.
 - **Registrations do nothing.** `routeRegistry`, `mcpRegistry` and
-  `schedulerService` stay callable and report that they did nothing — a route or job registered from a snippet would outlive
+  `scriptTasks.schedule` stay callable and report that they did nothing — a route or job registered from a snippet would outlive
   the request with no rollback to undo it. This is the same rule a test run
   follows.
 - **Not isolated:** anything the engine does not mediate — an outbound `fetch`,

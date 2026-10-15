@@ -1,6 +1,6 @@
 use crate::error::AppResult;
 use crate::stream_registry::FilterMatchMode;
-use crate::{deployments, repository, revisions, scheduler, script_init};
+use crate::{deployments, repository, revisions, script_init};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgListener, PgPool};
 use std::collections::HashMap;
@@ -304,10 +304,6 @@ impl NotificationListener {
     /// Handle script deleted notification
     async fn handle_script_deleted(uri: &str) -> AppResult<()> {
         info!("Handling script deleted for: {}", uri);
-
-        // Clear any scheduled jobs for this script
-        scheduler::clear_script_jobs_async(uri).await;
-        debug!("Cleared scheduled jobs for script '{}'", uri);
 
         // Nothing is running here any more, so there is no revision to
         // attribute output to and nothing to be pinned to.

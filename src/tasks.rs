@@ -1,17 +1,14 @@
 //! A durable queue of work a script enqueued for itself.
 //!
 //! The shape the engine had no expression for: start something during a
-//! request, answer the request, and finish the work afterwards. A scheduled
-//! job could not do it — `schedulerService` is phase-gated, so a handler could
-//! not schedule its own continuation.
+//! request, answer the request, and finish the work afterwards.
 //!
-//! # Why this is not the scheduler
+//! # A task and a schedule
 //!
-//! `scheduler_jobs` models a *declaration*: a script says in `init()` what it
-//! runs on a schedule, the row is keyed `UNIQUE(script_uri, job_key)` so
-//! saying it again replaces what it said, and `script_init` wipes the script's
-//! jobs before every re-initialisation because the schedule belongs to the
-//! version of the code that declared it.
+//! A schedule ([`crate::schedules`]) is a *declaration*: keyed, so saying it
+//! again replaces what it said, and either the script's own (declared in
+//! `init()`, belonging to the version of the code) or a person's. It never runs
+//! anything itself; when it is due it inserts a task here.
 //!
 //! A task is the other thing. It exists because something happened, it carries
 //! what happened as a payload, and two of them are two pieces of work rather
@@ -21,8 +18,8 @@
 //!
 //! # What runs it
 //!
-//! [`spawn_worker`] polls for due tasks, claims them with the same renewed
-//! lease `scheduler` uses ([`crate::lease`]), and runs the named handler under
+//! [`spawn_worker`] polls for due tasks, claims them with a renewed lease
+//! ([`crate::lease`]), and runs the named handler under
 //! the job budget (`javascript.job_timeout_ms`). A task runs in **script
 //! context**: it holds what the script holds and nothing belonging to whoever
 //! enqueued it. Running as a person is a consent question — what they
@@ -67,6 +64,37 @@ const RETRY_MAX_SECONDS: i64 = 3600;
 
 /// How many due tasks one worker takes per tick.
 const CLAIM_BATCH_SIZE: i64 = 16;
+
+/// The budget for one task's handler, from configuration, set once at
+/// startup.
+static CONFIGURED_JOB_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
+
+/// Record the configured job budget (`javascript.job_timeout_ms`, falling back
+/// to `javascript.execution_timeout_ms`). Returns false if already set.
+pub fn configure_job_timeout(timeout_ms: u64) -> bool {
+    CONFIGURED_JOB_TIMEOUT_MS.set(timeout_ms).is_ok()
+}
+
+/// The job budget in effect.
+///
+/// Read by the two things that have to agree about it: the runtime a handler
+/// executes in, and the lease that stops a second instance claiming the task
+/// while it is still running. They are the same number because a claim shorter
+/// than the run is what lets a completed run happen twice.
+pub fn configured_job_timeout_ms() -> u64 {
+    CONFIGURED_JOB_TIMEOUT_MS
+        .get()
+        .copied()
+        .unwrap_or_else(|| crate::js_engine::current_execution_limits().timeout_ms)
+}
+
+/// An RFC 3339 timestamp in UTC (`Z`, or an offset of zero), or `None`.
+pub fn parse_utc_timestamp(value: &str) -> Option<DateTime<Utc>> {
+    match DateTime::parse_from_rfc3339(value) {
+        Ok(dt) if dt.offset().local_minus_utc() == 0 => Some(dt.with_timezone(&Utc)),
+        _ => None,
+    }
+}
 
 /// How often the worker looks for due tasks when nothing has woken it.
 const POLL_INTERVAL_MS: u64 = 500;
@@ -192,7 +220,7 @@ pub struct TaskInvocation {
     /// The claim this run holds the row under ([`crate::lease`]). Every write
     /// about how the run ended is guarded by it.
     pub claim_epoch: i64,
-    /// The personal schedule that fired this task, when one did.
+    /// The schedule that fired this task, when one did.
     pub schedule: Option<ScheduleRun>,
 }
 
@@ -299,7 +327,7 @@ where
 }
 
 /// Write the row for one run of a personal schedule, inside the transaction
-/// that fires it ([`crate::personal_schedules::fire_due`]).
+/// that fires it ([`crate::schedules::fire_due`]).
 pub(crate) async fn insert_scheduled<'e, E>(
     executor: E,
     task: NewTask,
@@ -711,7 +739,7 @@ pub async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocatio
         RETURNING tasks.task_id, tasks.script_uri, tasks.handler_name, tasks.payload,
                   tasks.attempts, tasks.max_attempts, tasks.run_as, tasks.claim_epoch,
                   tasks.schedule_id, tasks.scheduled_for,
-                  (SELECT schedule_key FROM personal_schedules AS ps
+                  (SELECT schedule_key FROM schedules AS ps
                    WHERE ps.schedule_id = tasks.schedule_id) AS schedule_key
         "#,
     )
@@ -858,12 +886,8 @@ async fn finalize(invocation: &TaskInvocation, outcome: Result<Option<Value>, St
                 return;
             }
             if let Some(schedule) = &invocation.schedule
-                && let Err(e) = crate::personal_schedules::record_outcome_on(
-                    &mut tx,
-                    schedule.schedule_id,
-                    true,
-                )
-                .await
+                && let Err(e) =
+                    crate::schedules::record_outcome_on(&mut tx, schedule.schedule_id, true).await
             {
                 warn!(task = %invocation.task_id, error = %e, "Failed recording a scheduled run's success");
                 return;
@@ -958,7 +982,7 @@ async fn finalize(invocation: &TaskInvocation, outcome: Result<Option<Value>, St
     if exhausted
         && let Some(schedule) = &invocation.schedule
         && let Err(e) =
-            crate::personal_schedules::record_outcome_on(&mut tx, schedule.schedule_id, false).await
+            crate::schedules::record_outcome_on(&mut tx, schedule.schedule_id, false).await
     {
         warn!(task = %invocation.task_id, error = %e, "Failed recording a scheduled run's failure");
         return;
@@ -1124,7 +1148,7 @@ pub async fn worker(worker_id: String, mut shutdown: oneshot::Receiver<()>) {
 
     loop {
         // Schedules first, so a slot that is due now is claimed in this tick.
-        crate::personal_schedules::fire_due(Utc::now()).await;
+        crate::schedules::fire_due(Utc::now()).await;
 
         for invocation in claim_due(&worker_id, Utc::now()).await {
             tokio::spawn(run(invocation));

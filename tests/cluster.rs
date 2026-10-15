@@ -1,6 +1,6 @@
 mod common;
 
-use aiwebengine::{notifications, scheduler};
+use aiwebengine::notifications;
 use chrono::Utc;
 use common::AdminServer;
 
@@ -72,124 +72,6 @@ fn test_server_id_generation() {
     assert_eq!(server_id_2.len(), 36);
 
     println!("✓ Server ID generation produces unique identifiers");
-}
-
-/// Test scheduler job key generation is deterministic
-#[test]
-fn test_scheduler_job_key_deterministic() {
-    let scheduler = scheduler::Scheduler::new();
-
-    // Register multiple jobs with different keys
-    let run_time = Utc::now() + chrono::Duration::minutes(5);
-
-    let job1 = scheduler
-        .register_one_off("script1.js", "handler1", Some("job1".to_string()), run_time)
-        .expect("Failed to register job1");
-
-    let job2 = scheduler
-        .register_one_off("script1.js", "handler2", Some("job2".to_string()), run_time)
-        .expect("Failed to register job2");
-
-    let job3 = scheduler
-        .register_one_off("script2.js", "handler1", Some("job1".to_string()), run_time)
-        .expect("Failed to register job3");
-
-    // Each job should have a unique ID but deterministic key
-    assert_ne!(job1.id, job2.id);
-    assert_ne!(job1.id, job3.id);
-    assert_ne!(job2.id, job3.id);
-
-    assert_eq!(job1.key, "job1");
-    assert_eq!(job2.key, "job2");
-    assert_eq!(job3.key, "job1"); // Same key but different script
-
-    println!("✓ Scheduler jobs have deterministic keys for advisory locking");
-}
-
-/// Test scheduler can get job counts per script
-#[test]
-fn test_scheduler_job_counts() {
-    let scheduler = scheduler::Scheduler::new();
-    let run_time = Utc::now() + chrono::Duration::minutes(5);
-
-    // Register jobs for multiple scripts
-    scheduler
-        .register_one_off("script1.js", "handler1", Some("job1".to_string()), run_time)
-        .expect("Failed to register job on script1");
-    scheduler
-        .register_one_off("script1.js", "handler2", Some("job2".to_string()), run_time)
-        .expect("Failed to register second job on script1");
-    scheduler
-        .register_one_off("script2.js", "handler1", Some("job1".to_string()), run_time)
-        .expect("Failed to register job on script2");
-
-    let counts = scheduler.get_job_counts();
-
-    assert_eq!(counts.get("script1.js"), Some(&2));
-    assert_eq!(counts.get("script2.js"), Some(&1));
-
-    let total: usize = counts.values().sum();
-    assert_eq!(total, 3);
-
-    println!("✓ Scheduler provides job counts for health monitoring");
-}
-
-/// Test scheduler clearing jobs for a script
-#[test]
-fn test_scheduler_clear_script_jobs() {
-    let scheduler = scheduler::Scheduler::new();
-    let run_time = Utc::now() + chrono::Duration::minutes(5);
-
-    // Register multiple jobs
-    scheduler
-        .register_one_off("script1.js", "handler1", Some("job1".to_string()), run_time)
-        .expect("Failed to register job1");
-    scheduler
-        .register_one_off("script1.js", "handler2", Some("job2".to_string()), run_time)
-        .expect("Failed to register job2");
-    scheduler
-        .register_one_off("script2.js", "handler1", Some("job1".to_string()), run_time)
-        .expect("Failed to register job on script2");
-
-    // Clear jobs for script1
-    let removed = scheduler.clear_script("script1.js");
-    assert_eq!(removed, 2);
-
-    let counts = scheduler.get_job_counts();
-    assert_eq!(counts.get("script1.js"), None);
-    assert_eq!(counts.get("script2.js"), Some(&1));
-
-    println!("✓ Scheduler can clear all jobs for a specific script");
-}
-
-/// Test recurring job interval validation
-#[test]
-fn test_recurring_job_interval_validation() {
-    let scheduler = scheduler::Scheduler::new();
-
-    // Intervals less than 100 milliseconds should fail
-    let result = scheduler.register_recurring(
-        "script.js",
-        "handler",
-        Some("job".to_string()),
-        chrono::Duration::milliseconds(99),
-        None,
-    );
-
-    assert!(result.is_err());
-
-    // 100 milliseconds or more should succeed
-    let result = scheduler.register_recurring(
-        "script.js",
-        "handler",
-        Some("job".to_string()),
-        chrono::Duration::milliseconds(100),
-        None,
-    );
-
-    assert!(result.is_ok());
-
-    println!("✓ Scheduler validates recurring job intervals (minimum 100 ms)");
 }
 
 /// Test that stream registry provides global access

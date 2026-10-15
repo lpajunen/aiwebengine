@@ -17,7 +17,7 @@ pub(super) fn render_delegations(
     csrf_token: &str,
     grants: &[crate::delegation::Grant],
     links: &[crate::delegation::ChannelIdentity],
-    schedules: &[crate::personal_schedules::PersonalSchedule],
+    schedules: &[crate::schedules::Schedule],
 ) -> String {
     if grants.is_empty() {
         return String::new();
@@ -147,10 +147,7 @@ pub(super) fn render_delegations(
 
 /// One schedule under its grant: what it is, when it runs next, and why it is
 /// paused if it is.
-fn render_schedule_row(
-    csrf_token: &str,
-    schedule: &crate::personal_schedules::PersonalSchedule,
-) -> String {
+fn render_schedule_row(csrf_token: &str, schedule: &crate::schedules::Schedule) -> String {
     let state = match schedule.paused_reason.as_deref() {
         Some("expired") => "paused: the authorisation lapsed".to_string(),
         Some("failing") => "paused: its last runs kept failing".to_string(),
@@ -412,7 +409,7 @@ pub async fn delegate_page(
     // Schedules that paused when an earlier grant lapsed start again when
     // this one is given, so the page says which: granting is then agreeing
     // to that, as it is agreeing to the scopes ticked above.
-    let resuming = crate::personal_schedules::paused_expired(&session.user_id, &script)
+    let resuming = crate::schedules::paused_expired(&session.user_id, &script)
         .await
         .unwrap_or_default();
     let resuming_note = if resuming.is_empty() {
@@ -945,21 +942,21 @@ pub async fn schedule_action_route(
     // a grant is: another account's schedule is not addressable from here.
     let (changed, notice) = match (schedule_id, request.action.as_deref()) {
         (Some(id), Some("pause")) => (
-            crate::personal_schedules::set_paused(&session.user_id, id, true)
+            crate::schedules::set_paused(&session.user_id, id, true)
                 .await
                 .ok()
                 .flatten(),
             "schedule_paused",
         ),
         (Some(id), Some("resume")) => (
-            crate::personal_schedules::set_paused(&session.user_id, id, false)
+            crate::schedules::set_paused(&session.user_id, id, false)
                 .await
                 .ok()
                 .flatten(),
             "schedule_resumed",
         ),
         (Some(id), Some("delete")) => {
-            let deleted = crate::personal_schedules::delete_by_id(&session.user_id, id)
+            let deleted = crate::schedules::delete_by_id(&session.user_id, id)
                 .await
                 .ok()
                 .flatten();
@@ -972,7 +969,7 @@ pub async fn schedule_action_route(
                 .with_resource("personal_schedule".to_string())
                 .with_action("delete_personal_schedule".to_string())
                 .with_detail("script_uri", &schedule.script_uri)
-                .with_detail("for_user", &schedule.user_id)
+                .with_detail("for_user", &session.user_id)
                 .with_detail("key", &schedule.key);
                 let pool = crate::database::get_global_database().map(|db| db.pool().clone());
                 crate::security::audit::SecurityAuditor::new(pool)

@@ -18,7 +18,7 @@ extern crate self as aiwebengine;
 /// prelude, or the shape of an operation `engine.call` reaches. A repository
 /// names the day it needs in `.aiwebengine-requires`, and an engine older than
 /// that refuses to pull it. Move it to the day of any such change.
-pub const SCRIPT_API: &str = "2026-10-15";
+pub const SCRIPT_API: &str = "2026-10-16";
 
 pub mod bytecode;
 pub mod config;
@@ -58,13 +58,12 @@ pub mod module_loader;
 pub mod notifications;
 pub mod openapi_schemas;
 pub mod parsers;
-pub mod personal_schedules;
 pub mod repository;
 pub mod resource_access;
 pub mod revisions;
 pub mod route_index;
 pub mod sandbox;
-pub mod scheduler;
+pub mod schedules;
 pub mod script_audit;
 pub mod script_check;
 pub mod script_eval;
@@ -1124,9 +1123,6 @@ async fn initialize_components(config: &config::AppConfig) -> AppResult<()> {
         }
     }
 
-    // Ensure scheduler state exists before scripts start registering jobs
-    scheduler::initialize_global_scheduler();
-
     // Register engine-provided streams (e.g. /engine/script_updates) before any
     // script or connection can reference them
     engine_api::register_engine_streams();
@@ -1494,7 +1490,7 @@ pub fn configure_limits(config: &config::AppConfig) {
         .javascript
         .job_timeout_ms
         .unwrap_or(config.javascript.execution_timeout_ms);
-    if !scheduler::configure_job_timeout(job_timeout_ms) {
+    if !tasks::configure_job_timeout(job_timeout_ms) {
         debug!("Scheduled job timeout was already configured");
     }
 
@@ -1511,9 +1507,7 @@ pub fn configure_limits(config: &config::AppConfig) {
         debug!("Developer-facing limits were already configured");
     }
 
-    if !personal_schedules::configure(personal_schedules::ScheduleLimits::from_config(
-        &config.javascript,
-    )) {
+    if !schedules::configure(schedules::ScheduleLimits::from_config(&config.javascript)) {
         debug!("Personal schedule limits were already configured");
     }
 
@@ -1607,18 +1601,14 @@ pub async fn start_server_with_config(
     // Initialize all core components
     initialize_components(&config).await?;
 
-    // Fan out shutdown notifications so both the HTTP server and scheduler worker can stop cleanly
+    // Fan out shutdown notifications so the HTTP server and the workers can stop cleanly
     let (server_shutdown_tx, server_shutdown_rx) = tokio::sync::oneshot::channel();
-    let (scheduler_shutdown_tx, scheduler_shutdown_rx) = tokio::sync::oneshot::channel();
     let (pruner_shutdown_tx, pruner_shutdown_rx) = tokio::sync::oneshot::channel();
     let (log_pruner_shutdown_tx, log_pruner_shutdown_rx) = tokio::sync::oneshot::channel();
     let (tasks_shutdown_tx, tasks_shutdown_rx) = tokio::sync::oneshot::channel();
     let (follow_shutdown_tx, follow_shutdown_rx) = tokio::sync::oneshot::channel();
 
-    scheduler::spawn_worker(scheduler_shutdown_rx);
-    // The queue's worker, beside the scheduler's rather than inside it: the two
-    // read different tables and answer different questions, and a task claimed
-    // while the scheduler is busy with a slow job should not wait for it.
+    // The queue's worker, which also fires due schedules into the queue.
     tasks::spawn_worker(notifications::generate_server_id(), tasks_shutdown_rx);
     revisions::spawn_pruner(config.revisions.clone(), pruner_shutdown_rx);
     log_retention::spawn_pruner(config.logs.clone(), log_pruner_shutdown_rx);
@@ -1630,7 +1620,6 @@ pub async fn start_server_with_config(
 
     tokio::spawn(async move {
         let _ = shutdown_rx.await;
-        let _ = scheduler_shutdown_tx.send(());
         let _ = tasks_shutdown_tx.send(());
         let _ = pruner_shutdown_tx.send(());
         let _ = log_pruner_shutdown_tx.send(());

@@ -103,7 +103,7 @@ test's own `database.transaction(fn)` is a savepoint inside the run's
 transaction, so it cannot commit its way past the rollback.
 
 Registrations are switched off during a run — `routeRegistry`, `mcpRegistry`,
-and `schedulerService` calls do nothing, because a route or job registered by a
+and `scriptTasks.schedule` calls do nothing, because a route or job registered by a
 test would outlive it and no rollback undoes that.
 
 ## Budgets

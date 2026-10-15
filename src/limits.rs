@@ -198,19 +198,21 @@ pub struct FetchLimits {
     pub supported_encodings: &'static str,
 }
 
-/// Scheduled jobs.
+/// Schedules: a script's own (`scriptTasks.schedule`) and a person's
+/// (`personalTasks.schedule`).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SchedulerLimits {
-    pub min_recurring_interval_ms: i64,
-    pub max_job_name_chars: usize,
+    /// Shortest gap between two runs of a script's own schedule.
+    pub script_min_interval_ms: u64,
+    /// Longest a schedule key may be, for either.
+    pub max_key_chars: usize,
     /// Shortest gap between two runs of a person's schedule
     /// (`javascript.personal_schedule_min_interval_ms`).
     pub personal_min_interval_ms: u64,
     /// Schedules one person may hold on one script, and in all.
     pub personal_per_person_script: u32,
     pub personal_per_person: u32,
-    pub personal_max_key_chars: usize,
 }
 
 /// What one `/engine/search_files` answers with before it stops looking.
@@ -283,7 +285,7 @@ pub fn snapshot() -> Limits {
     let (test_module_timeout_ms, test_run_timeout_ms) =
         crate::script_test::configured_test_timeouts();
     let logs = crate::log_retention::configured();
-    let personal = crate::personal_schedules::limits();
+    let personal = crate::schedules::limits();
 
     Limits {
         notes: vec![
@@ -307,7 +309,7 @@ pub fn snapshot() -> Limits {
         execution: ExecutionLimits {
             timeout_ms: js.timeout_ms,
             init_timeout_ms: crate::script_init::configured_init_timeout_ms(),
-            job_timeout_ms: crate::scheduler::configured_job_timeout_ms(),
+            job_timeout_ms: crate::tasks::configured_job_timeout_ms(),
             max_memory_bytes: js.max_memory_mb * 1024 * 1024,
             stack_size_bytes: js.stack_size_bytes,
             max_concurrent_executions: configured.max_concurrent_executions,
@@ -361,12 +363,11 @@ pub fn snapshot() -> Limits {
             supported_encodings: crate::http_client::SUPPORTED_ENCODINGS,
         },
         scheduler: SchedulerLimits {
-            min_recurring_interval_ms: crate::scheduler::MIN_RECURRING_INTERVAL_MS,
-            max_job_name_chars: crate::scheduler::MAX_JOB_NAME_CHARS,
+            script_min_interval_ms: crate::schedules::SCRIPT_MIN_INTERVAL_MS,
+            max_key_chars: crate::schedules::MAX_KEY_CHARS,
             personal_min_interval_ms: personal.min_interval_ms,
             personal_per_person_script: personal.per_person_script,
             personal_per_person: personal.per_person,
-            personal_max_key_chars: crate::personal_schedules::MAX_KEY_CHARS,
         },
         search: SearchLimits {
             max_files: crate::engine_api::MAX_SEARCH_FILES,
@@ -614,13 +615,10 @@ fn placeholder_values(limits: &Limits) -> Vec<(String, String)> {
         ("fetch.schemes", fetch.allowed_schemes.join(" and ")),
         ("fetch.encodings", fetch.supported_encodings.to_string()),
         (
-            "scheduler.minRecurringInterval",
-            duration(scheduler.min_recurring_interval_ms.max(0) as u64),
+            "scheduler.scriptMinInterval",
+            duration(scheduler.script_min_interval_ms),
         ),
-        (
-            "scheduler.maxJobNameChars",
-            count(scheduler.max_job_name_chars),
-        ),
+        ("scheduler.maxKeyChars", count(scheduler.max_key_chars)),
         (
             "scheduler.personalMinInterval",
             duration(scheduler.personal_min_interval_ms),
@@ -632,10 +630,6 @@ fn placeholder_values(limits: &Limits) -> Vec<(String, String)> {
         (
             "scheduler.personalPerPerson",
             count(scheduler.personal_per_person as usize),
-        ),
-        (
-            "scheduler.personalMaxKeyChars",
-            count(scheduler.personal_max_key_chars),
         ),
         (
             "retention.logsKeepPerScript",
@@ -733,8 +727,8 @@ mod tests {
             crate::repository::MAX_STORAGE_VALUE_BYTES
         );
         assert_eq!(
-            limits.scheduler.min_recurring_interval_ms,
-            crate::scheduler::MIN_RECURRING_INTERVAL_MS
+            limits.scheduler.script_min_interval_ms,
+            crate::schedules::SCRIPT_MIN_INTERVAL_MS
         );
         // An asset is bounded by storage rather than by the endpoint, which
         // allows a slightly larger body than storage will keep.

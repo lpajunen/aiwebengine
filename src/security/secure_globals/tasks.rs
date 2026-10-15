@@ -10,9 +10,9 @@ pub(super) const TASKS_PRELUDE: &str = include_str!("../../../assets/tasks_prelu
 impl SecureGlobalContext {
     /// The Rust half of `scriptTasks` — the durable queue ([`crate::tasks`]).
     ///
-    /// Deliberately *not* phase-gated, unlike `schedulerService` beside it.
-    /// That gate is right for a declaration, which belongs to the version of
-    /// the code that declared it; a task is a piece of work that exists because
+    /// Enqueueing is deliberately *not* phase-gated; `schedule` is. That gate
+    /// is right for a declaration, which belongs to the version of the code
+    /// that declared it; a task is a piece of work that exists because
     /// something happened, and the shape it is for — start during a request,
     /// answer, finish afterwards — only works if a handler can enqueue.
     ///
@@ -84,9 +84,9 @@ impl SecureGlobalContext {
                 };
 
                 let run_at = match options.get("runAt").and_then(|v| v.as_str()) {
-                    Some(value) => match crate::scheduler::parse_utc_timestamp(value) {
-                        Ok(parsed) => Some(parsed),
-                        Err(_) => {
+                    Some(value) => match crate::tasks::parse_utc_timestamp(value) {
+                        Some(parsed) => Some(parsed),
+                        None => {
                             return Ok(host_failure(
                                 "RangeError",
                                 "scriptTasks.enqueue: runAt must be a UTC timestamp ending with 'Z'",
@@ -209,6 +209,103 @@ impl SecureGlobalContext {
         })?;
         host.set("get", get)?;
 
+        // `scriptTasks.schedule` — the script's own schedule, declared with its
+        // code. Phase-gated, unlike the rest of `scriptTasks`: a schedule
+        // declared at runtime would be state rather than code, and would
+        // outlive a handler deleted from the source. Outside the phase it is
+        // refused as a value, `{ ok: false, reason }`, as `registerRoute` is,
+        // because top-level code runs on every execution and must not throw.
+        let script_uri_declare = script_uri.to_string();
+        let config_declare = self.config.clone();
+        let declare = Function::new(
+            ctx.clone(),
+            move |options_json: String| -> JsResult<String> {
+                const API: &str = "scriptTasks.schedule";
+                let options: serde_json::Value = match serde_json::from_str(&options_json) {
+                    Ok(options) => options,
+                    Err(e) => {
+                        return Ok(host_failure(
+                            "TypeError",
+                            &format!("{}: options are not valid JSON: {}", API, e),
+                        ));
+                    }
+                };
+                let spec = match crate::schedules::ScheduleSpec::from_json(
+                    &options,
+                    crate::schedules::SCRIPT_MIN_INTERVAL_MS,
+                ) {
+                    Ok(spec) => spec,
+                    Err(e) => return Ok(host_failure(e.js_name(), &format!("{}: {}", API, e))),
+                };
+                if !config_declare.registration_phase {
+                    return Ok(host_ok(serde_json::json!({
+                        "ok": false,
+                        "reason": registration_inactive(API, &spec.key),
+                    })));
+                }
+                if config_declare
+                    .collect(
+                        CollectedRegistration::new(
+                            RegistrationKind::ScheduledJob,
+                            spec.key.clone(),
+                        )
+                        .with_handler(spec.handler.clone()),
+                    )
+                    .is_some()
+                {
+                    return Ok(host_ok(serde_json::json!({ "ok": true })));
+                }
+                // No lane unless one is named: the script's runs are not one
+                // person's turns over one person's storage.
+                let lane = match &spec.lane {
+                    Some(Some(named)) => crate::tasks::normalize_lane(Some(named)),
+                    _ => None,
+                };
+                match crate::schedules::blocking::declare_for_script(
+                    &script_uri_declare,
+                    &spec,
+                    lane.as_deref(),
+                ) {
+                    Ok(schedule) => Ok(host_ok(serde_json::json!({
+                        "ok": true,
+                        "nextRunAt": schedule.next_run_at.to_rfc3339(),
+                    }))),
+                    Err(e) => Ok(host_failure(e.js_name(), &format!("{}: {}", API, e))),
+                }
+            },
+        )?;
+        host.set("scheduleScript", declare)?;
+
+        // Removing one is a change to what the code declares, so it is gated
+        // the same way. Usually unnecessary: what `init()` does not declare is
+        // removed after it.
+        let script_uri_undeclare = script_uri.to_string();
+        let config_undeclare = self.config.clone();
+        let undeclare = Function::new(ctx.clone(), move |key: String| -> JsResult<String> {
+            const API: &str = "scriptTasks.unschedule";
+            let key = key.trim().to_string();
+            if !config_undeclare.registration_phase {
+                return Ok(host_ok(serde_json::json!({
+                    "ok": false,
+                    "reason": format!(
+                        "{}: '{}' not removed - a script's schedules change only during \
+                         script startup and init()",
+                        API, key
+                    ),
+                })));
+            }
+            if config_undeclare.is_dry_run() {
+                return Ok(host_ok(serde_json::json!({ "ok": true, "removed": false })));
+            }
+            match crate::schedules::blocking::remove_for_script(&script_uri_undeclare, &key) {
+                Ok(removed) => Ok(host_ok(
+                    serde_json::json!({ "ok": true, "removed": removed }),
+                )),
+                Err(e) => Ok(host_failure("Error", &format!("{}: {}", API, e))),
+            }
+        })?;
+        host.set("unscheduleScript", undeclare)?;
+
         // `personalTasks` — the same queue, acting as the person who asked.
         //
         // Three things have to hold before a row is written, and all three are
@@ -304,9 +401,9 @@ impl SecureGlobalContext {
                 };
 
                 let run_at = match options.get("runAt").and_then(|v| v.as_str()) {
-                    Some(value) => match crate::scheduler::parse_utc_timestamp(value) {
-                        Ok(parsed) => Some(parsed),
-                        Err(_) => {
+                    Some(value) => match crate::tasks::parse_utc_timestamp(value) {
+                        Some(parsed) => Some(parsed),
+                        None => {
                             return Ok(host_failure(
                                 "RangeError",
                                 "personalTasks.enqueue: runAt must be a UTC timestamp ending with 'Z'",
@@ -503,9 +600,9 @@ impl SecureGlobalContext {
                 };
 
                 let run_at = match options.get("runAt").and_then(|v| v.as_str()) {
-                    Some(value) => match crate::scheduler::parse_utc_timestamp(value) {
-                        Ok(parsed) => Some(parsed),
-                        Err(_) => {
+                    Some(value) => match crate::tasks::parse_utc_timestamp(value) {
+                        Some(parsed) => Some(parsed),
+                        None => {
                             return Ok(host_failure(
                                 "RangeError",
                                 "personalTasks.enqueueFrom: runAt must be a UTC timestamp ending \
@@ -936,7 +1033,7 @@ impl SecureGlobalContext {
                         "personalTasks.schedules requires an authenticated user",
                     ));
                 };
-                match crate::personal_schedules::blocking::list(&user_id, &script_uri_schedules) {
+                match crate::schedules::blocking::list(&user_id, &script_uri_schedules) {
                     Ok(schedules) => Ok(host_ok(serde_json::Value::Array(
                         schedules.iter().map(|s| s.to_json()).collect(),
                     ))),
@@ -979,11 +1076,7 @@ impl SecureGlobalContext {
                 {
                     return Ok(refusal);
                 }
-                match crate::personal_schedules::blocking::remove(
-                    &user_id,
-                    &script_uri_unschedule,
-                    &key,
-                ) {
+                match crate::schedules::blocking::remove(&user_id, &script_uri_unschedule, &key) {
                     Ok(removed) => {
                         if removed {
                             Self::audit_schedule(
@@ -1167,9 +1260,9 @@ impl SecureGlobalContext {
                 );
             }
         };
-        let spec = match crate::personal_schedules::ScheduleSpec::from_json(
+        let spec = match crate::schedules::ScheduleSpec::from_json(
             &options,
-            &crate::personal_schedules::limits(),
+            crate::schedules::limits().min_interval_ms,
         ) {
             Ok(spec) => spec,
             Err(e) => return host_failure(e.js_name(), &format!("{}: {}", api, e)),
@@ -1184,12 +1277,7 @@ impl SecureGlobalContext {
             Some(Some(named)) => crate::tasks::normalize_lane(Some(named)),
         };
 
-        match crate::personal_schedules::blocking::declare(
-            user_id,
-            script_uri,
-            &spec,
-            lane.as_deref(),
-        ) {
+        match crate::schedules::blocking::declare(user_id, script_uri, &spec, lane.as_deref()) {
             Ok(declared) => {
                 // A restatement changed nothing, so there is nothing to audit.
                 if declared.changed {

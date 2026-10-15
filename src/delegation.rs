@@ -462,7 +462,7 @@ pub async fn grant(
 
     // Schedules that paused because the previous grant lapsed start again:
     // the consent page listed them, so granting is agreeing to that.
-    let resumed = crate::personal_schedules::resume_expired(user_id, script_uri)
+    let resumed = crate::schedules::resume_expired(user_id, script_uri)
         .await
         .unwrap_or_default();
 
@@ -538,8 +538,7 @@ pub async fn revoke(user_id: &str, script_uri: &str) -> Result<bool, sqlx::Error
         // Withdrawing is the person saying stop, so their schedules on this
         // script go rather than pause — unlike a lapsed grant, which only
         // pauses them until it is given again.
-        let unscheduled =
-            crate::personal_schedules::delete_for_grant(user_id, Some(script_uri)).await;
+        let unscheduled = crate::schedules::delete_for_grant(user_id, Some(script_uri)).await;
         // The senders that could set this work going go with it. A binding
         // that outlived its grant would be a row saying somebody may trigger
         // a delegation that no longer exists — harmless today, since the
@@ -594,7 +593,7 @@ pub async fn revoke_all(user_id: &str) -> Result<u64, sqlx::Error> {
         .execute(db.pool())
         .await;
 
-    let _ = crate::personal_schedules::delete_for_grant(user_id, None).await;
+    let _ = crate::schedules::delete_for_grant(user_id, None).await;
     let _ = crate::tasks::cancel_delegated(user_id, None).await;
     Ok(result.rows_affected())
 }

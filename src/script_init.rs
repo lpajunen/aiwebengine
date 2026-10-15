@@ -1,7 +1,6 @@
 use crate::error::AppResult;
 use crate::repository;
 use crate::repository::Repository;
-use crate::scheduler;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
@@ -225,14 +224,12 @@ impl ScriptInitializer {
             }
         };
 
-        // Prevent stale scheduled work from previous deployments.
-        //
-        // Awaited rather than blocked on. Startup runs this once per script
-        // with `init_concurrency()` inits in flight, and the blocking form
-        // drives its query from a thread parked outside the runtime — enough
-        // of those at once and there is nobody left to deliver the readiness
-        // that would wake any of them.
-        scheduler::clear_script_jobs_async(script_uri).await;
+        // The script's own schedules belong to the version of the code: what
+        // this init() does not declare is removed after it, by comparing when
+        // each was last declared with this moment. Not wiped beforehand, so a
+        // schedule it declares again keeps its next slot rather than starting
+        // over on every restart.
+        let declared_since = crate::schedules::declaration_mark().await;
 
         debug!("Initializing script: {}", script_uri);
 
@@ -285,7 +282,7 @@ impl ScriptInitializer {
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
 
-        match result {
+        let outcome = match result {
             Ok(Ok(init_result)) => match init_result {
                 Ok(Some(registrations)) => {
                     // Init function was called successfully and returned registrations
@@ -400,7 +397,12 @@ impl ScriptInitializer {
                     duration_ms,
                 ))
             }
+        };
+
+        if let Some(mark) = declared_since {
+            crate::schedules::sweep_undeclared(script_uri, mark).await;
         }
+        outcome
     }
 
     /// Initialize all registered scripts (typically called on server startup)

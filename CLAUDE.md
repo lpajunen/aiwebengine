@@ -54,7 +54,7 @@ cargo run -- --print-types         # aiwebengine.d.ts as served; what script rep
 | MCP server / client / tasks / ask                  | `mcp_http.rs` (the `/mcp` dispatch), `mcp.rs`, `mcp_client.rs`, `mcp_tasks.rs`, `mcp_elicitation.rs`     |
 | Auth: OAuth2/OIDC, local accounts, sessions        | `auth/`, `security/session.rs` — `docs/INTERNAL_AUTH.md`                                                 |
 | History, pins, read-views                          | `revisions.rs`, `deployments.rs`, `source_view.rs`                                                       |
-| Background work                                    | `scheduler/`, `tasks.rs`, `lease.rs` — `docs/SCRIPT_TASKS.md`                                            |
+| Background work                                    | `schedules.rs`, `tasks.rs`, `lease.rs` — `docs/SCRIPT_TASKS.md`                                          |
 | Narrowing authority                                | `sandbox.rs`, `delegation.rs`, `script_limits.rs`, `security/elevation.rs` — `docs/WHAT_NARROWS_WHAT.md` |
 | Git sync                                           | `git_sync.rs`, `git_github.rs`, `git_follow.rs` (scheduled), `git_install.rs` (startup) — `GIT_SYNC.md`  |
 | Outbound HTTP                                      | `http_client.rs` — `docs/FETCH_CONCURRENCY.md`                                                           |

@@ -17,40 +17,57 @@ function runExport(context) {
 }
 ```
 
-A script could not do this. `schedulerService.registerOnce` is phase-gated, so
-a handler could not schedule its own continuation. The engine had no expression
-at all for "start something, answer, finish it later" — which is most of what
-an agent does.
+A schedule cannot do this: a script's schedule is declared in `init()`, so a
+handler cannot use one to schedule its own continuation. "Start something,
+answer, finish it later" — which is most of what an agent does — needs
+something a request can write to.
 
-`scriptTasks` is that expression: a durable queue a request writes to and a
-background worker picks up.
+`scriptTasks` is that: a durable queue a request writes to and a background
+worker picks up.
 
-## Why this is not the scheduler
+## A task and a schedule
 
 The two look similar and are not, and the difference decides everything else.
 
-`schedulerService` registers a **declaration**. A script says in `init()` what
-it runs on a schedule; the row is keyed `UNIQUE(script_uri, job_key)` so saying
-it again replaces what it said; and every re-initialisation wipes the script's
-jobs before running `init()` again, because a schedule belongs to the version
-of the code that declared it. Delete the handler and the schedule goes with it,
-which is right.
+A schedule is a **declaration**. A script says in `init()` what it runs on a
+cadence (`scriptTasks.schedule`); the row is keyed per script so saying it
+again replaces what it said; and what an `init()` no longer declares is
+removed after it, because a script's schedule belongs to the version of the
+code that declared it. Delete the line and the schedule goes with it, which is
+right.
 
 A task is the other thing. It exists because something happened, it carries
 what happened as a payload, and two of them are two pieces of work rather than
 one restatement of the same intent. So:
 
 - **It survives deployment.** Writing a new version of a script does not
-  discard work already accepted. A scheduled job is wiped and re-declared; a
-  task is not.
+  discard work already accepted.
 - **It can be enqueued from anywhere.** No phase gate, because the whole shape
   depends on a handler being able to enqueue.
-- **It carries a payload**, which a scheduled job has nowhere to put —
-  `registerOnce` takes a handler name and nothing else.
 
-That is why this is a separate table rather than a relaxation of
-`scheduler_jobs`. Relaxing the uniqueness would let you enqueue two of the same
-work; keeping it means you cannot.
+The two meet in one place: a schedule never runs anything itself. When it is
+due it inserts a task into this queue — in script context, one attempt, with
+`context.meta.schedule = { key, scheduledFor }` — so every run, scheduled or
+not, is executed, leased, logged and listed the same way. A slot whose
+previous run has not finished is skipped, and after downtime a schedule runs
+once rather than once per missed slot.
+
+```javascript
+function init() {
+  scriptTasks.schedule({
+    key: "nightly-cleanup",
+    handler: "cleanup",
+    cron: "0 3 * * *",
+    timeZone: "Europe/Helsinki",
+  });
+}
+```
+
+A schedule declared again with the same cadence keeps its next slot, so a
+restart or an unrelated deployment does not push a nightly job back a night.
+A one-off is `scriptTasks.enqueue({ runAt })`; work wanted soon after a
+deployment is `firstRunAfterMs` on the schedule that does the same work
+afterwards.
 
 ## Enqueued inside a transaction
 
@@ -171,8 +188,9 @@ A handler that re-enqueues itself makes a chain, but nothing stops two chains
 for the same intent, nobody can see one running, and it dies silently when its
 retries run out. `personalTasks.schedule` is the declaration for that: keyed,
 kept across deployments, bounded by the person's grant, and listed on their
-account page. Each due slot becomes an ordinary task in this queue, with a
-`schedule_id` on the row so its outcome is written back. See
+account page. It shares the spec, the table and the firing path with the
+script's own schedules; its runs are delegated tasks with three attempts, and
+three runs in a row that give up pause it. See
 [DELEGATION.md](DELEGATION.md#schedules-that-belong-to-the-person).
 
 ## Seeing the queue
@@ -199,8 +217,10 @@ only change the meaning of a row that worker is about to write to.
 
 The queue is shared. Each worker claims a batch with `FOR UPDATE SKIP LOCKED`,
 so instances take disjoint work rather than queueing behind each other, and
-holds a lease it renews for as long as the run lasts ([`src/lease.rs`], shared
-with the scheduler). A worker that dies stops renewing, and its tasks become
+holds a lease it renews for as long as the run lasts ([`src/lease.rs`]).
+Due schedules are fired by the same worker, each in one transaction that
+locks its rows with `FOR UPDATE SKIP LOCKED`, so a slot becomes one task
+however many instances look at it. A worker that dies stops renewing, and its tasks become
 claimable again once the lease lapses — which is how work survives the instance
 that was running it.
 

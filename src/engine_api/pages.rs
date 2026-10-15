@@ -145,7 +145,7 @@ pub async fn lock_diagnostics(pool: &sqlx::PgPool) -> Value {
 ///
 /// Unlike the unauthenticated `/health` liveness probe, this reports internal
 /// topology — connection-pool metrics, notification-listener state, and
-/// per-script scheduler job counts — so it lives under the authorized
+/// per-script schedule counts — so it lives under the authorized
 /// `/engine` prefix rather than being world-readable.
 ///
 /// Like `/health`, it verifies the database with a real `SELECT 1` ping and
@@ -221,10 +221,18 @@ pub async fn cluster_health_route(auth_user: Option<Extension<AuthUser>>) -> Res
         })
     };
 
-    // Get scheduler job counts per script
-    let scheduler = crate::scheduler::get_scheduler();
-    let job_counts = scheduler.get_job_counts();
-    let total_jobs: usize = job_counts.values().sum();
+    // Schedules per script: its own, and its people's.
+    let schedule_counts = crate::schedules::count_by_script()
+        .await
+        .unwrap_or_default();
+    let total_schedules: i64 = schedule_counts
+        .iter()
+        .map(|(_, script, personal)| script + personal)
+        .sum();
+    let schedules_by_script: serde_json::Map<String, serde_json::Value> = schedule_counts
+        .into_iter()
+        .map(|(uri, script, personal)| (uri, json!({ "script": script, "personal": personal })))
+        .collect();
 
     // Reported rather than folded into `status`: a lost thread does not make
     // the engine unreachable, and a probe that starts failing would take the
@@ -259,9 +267,9 @@ pub async fn cluster_health_route(auth_user: Option<Extension<AuthUser>>) -> Res
                 "in_flight": census.in_flight,
             },
             "notification_listener": listener_status,
-            "scheduler": {
-                "total_jobs": total_jobs,
-                "jobs_by_script": job_counts,
+            "schedules": {
+                "total": total_schedules,
+                "by_script": schedules_by_script,
             }
         }),
     )

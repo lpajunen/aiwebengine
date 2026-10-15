@@ -37,7 +37,7 @@ pub struct GlobalSecurityConfig {
     ///
     /// This is what makes `/engine/check_script` safe to run against a deployed
     /// script. Only `registerRoute` collects by design — every other registry
-    /// (streams, asset routes, MCP, scheduler) is a process-wide
+    /// (streams, asset routes, MCP, schedules) is a process-wide
     /// singleton written to directly, so a candidate's `init()` would
     /// otherwise replace the deployed script's resolvers and jobs with its
     /// own, and a broken candidate would take the live script
@@ -284,7 +284,6 @@ impl SecureGlobalContext {
         self.setup_script_properties_functions(ctx, script_uri)?;
         self.setup_user_properties_functions(ctx, script_uri)?;
         self.setup_mcp_functions(ctx, script_uri)?;
-        self.setup_scheduler_functions(ctx, script_uri)?;
         self.setup_task_functions(ctx, script_uri)?;
         self.setup_sandbox_functions(ctx, script_uri)?;
         self.setup_tools_functions(ctx, script_uri)?;
@@ -334,7 +333,6 @@ mod api_surface_tests {
             "scriptStorage",
             "personalStorage",
             "secretStorage",
-            "schedulerService",
             "scriptTasks",
             "personalTasks",
             "mcpRegistry",
@@ -379,12 +377,8 @@ mod api_surface_tests {
                 "p",
             ),
             (
-                "schedulerService.registerOnce({ handler: 'h', runAt: '2030-01-01T00:00:00Z' })",
-                "h",
-            ),
-            (
-                "schedulerService.registerRecurring({ handler: 'h', intervalMinutes: 5 })",
-                "h",
+                "scriptTasks.schedule({ key: 'k', handler: 'h', intervalMinutes: 5 })",
+                "k",
             ),
         ] {
             let result = eval_outside_registration_phase(&format!(

@@ -202,7 +202,8 @@ into the abandoned run.
   This is what makes it safe to check a candidate against a deployed script:
   without it, a broken candidate's `init()` would replace the running script's
   resolvers and jobs with its own, and nothing would undo that.
-- **`schedulerService.clearAll()` clears nothing.**
+- **`scriptTasks.schedule` declares nothing**, and `unschedule` removes
+  nothing.
 - **Database writes roll back** with `rollback` (the default), including assets
   and secrets, which go through the same transaction. A script's own
   `database.transaction(fn)` is a savepoint inside the check's transaction, so

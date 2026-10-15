@@ -725,8 +725,8 @@ async fn test_openapi_publishes_the_limits_a_developer_can_meet() {
         Some(aiwebengine::repository::MAX_STORAGE_VALUE_BYTES as u64),
     );
     assert_eq!(
-        limits["scheduler"]["minRecurringIntervalMs"].as_i64(),
-        Some(aiwebengine::scheduler::MIN_RECURRING_INTERVAL_MS),
+        limits["scheduler"]["scriptMinIntervalMs"].as_u64(),
+        Some(aiwebengine::schedules::SCRIPT_MIN_INTERVAL_MS),
     );
 
     // The execution budget is configuration, so it has to arrive from the

@@ -14,7 +14,7 @@
 //! - **SecretStorage**: exists()
 //! - **Convert**: markdown_to_html(), render_handlebars_template(), btoa(), atob()
 //! - **Console**: log(), error(), warn(), info()
-//! - **SchedulerService**: registerOnce(), registerRecurring(), clearAll()
+//! - **scriptTasks.schedule**: present everywhere, effective only in init()
 //!
 //! ### Capability-gated APIs:
 //! - **RouteRegistry**: sendStreamMessage() and the subscription publishing
@@ -75,124 +75,31 @@ async fn test_secret_storage_exists_available_for_all() {
 }
 
 // ============================================================================
-// Public API Tests - SchedulerService
+// Public API Tests - scriptTasks.schedule
 // ============================================================================
 
+/// Every script sees `scriptTasks.schedule`, and it answers with a value.
+/// Which value depends on the phase; `tests/script_schedules.rs` covers that.
 #[tokio::test(flavor = "multi_thread")]
-async fn test_scheduler_service_available_for_admin() {
+async fn test_script_schedule_available_for_any_script() {
     setup_env().await;
     let admin = UserContext::admin("admin".to_string());
 
-    repository::upsert_script("test://scheduler-admin", "").expect("Failed to create script");
+    repository::upsert_script("test://schedule-any", "").expect("Failed to create script");
 
     let script = r#"
-        // SchedulerService should be available
-        schedulerService.clearAll();
-        const result = schedulerService.registerOnce({
-            handler: "testHandler",
-            runAt: new Date(Date.now() + 60000).toISOString(),
-            name: "test-job"
-        });
-        // Should not throw error
-    "#;
-
-    let result = execute_script_secure(
-        "test://scheduler-admin",
-        script,
-        aiwebengine::security::Principal::Caller(admin),
-    );
-    assert!(
-        result.success,
-        "Script should access schedulerService: {:?}",
-        result.error
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_scheduler_service_available_for_any_script() {
-    setup_env().await;
-    let admin = UserContext::admin("admin".to_string());
-
-    repository::upsert_script("test://scheduler-any", "").expect("Failed to create script");
-
-    let script = r#"
-        if (typeof schedulerService === "undefined") {
-            throw new Error("schedulerService should be defined");
-        }
-        // SchedulerService should be available for all scripts
-        schedulerService.clearAll();
-        const result = schedulerService.registerOnce({
-            handler: "testHandler",
-            runAt: new Date(Date.now() + 60000).toISOString(),
-            name: "test-job-non-priv"
-        });
-        // Should not throw error
-    "#;
-
-    let result = execute_script_secure(
-        "test://scheduler-any",
-        script,
-        aiwebengine::security::Principal::Caller(admin),
-    );
-    assert!(
-        result.success,
-        "Any script should access schedulerService: {:?}",
-        result.error
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_scheduler_register_once_available_for_any_script() {
-    setup_env().await;
-    let admin = UserContext::admin("admin".to_string());
-
-    repository::upsert_script("test://non-priv-sched", "").expect("Failed to create script");
-
-    let script = r#"
-        if (typeof schedulerService === "undefined") {
-            throw new Error("schedulerService should be defined");
-        }
-        // registerOnce should be available for all scripts
-        const result = schedulerService.registerOnce({
-            handler: "test",
-            runAt: new Date(Date.now() + 60000).toISOString()
-        });
-        if (!result || result.length === 0) {
-            throw new Error("registerOnce should return a result");
-        }
-    "#;
-
-    let result = execute_script_secure(
-        "test://non-priv-sched",
-        script,
-        aiwebengine::security::Principal::Caller(admin),
-    );
-    assert!(result.success, "Should be available: {:?}", result.error);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_scheduler_register_recurring_available_for_any_script() {
-    setup_env().await;
-    let admin = UserContext::admin("admin".to_string());
-
-    repository::upsert_script("test://non-priv-recur", "").expect("Failed to create script");
-
-    let script = r#"
-        if (typeof schedulerService === "undefined") {
-            throw new Error("schedulerService should be defined");
-        }
-        // registerRecurring should be available for all scripts
-        const result = schedulerService.registerRecurring({
+        const result = scriptTasks.schedule({
+            key: "nightly",
             handler: "test",
             intervalMinutes: 60
         });
-        if (!result || result.length === 0) {
-            throw new Error("registerRecurring should return a result");
+        if (typeof result.ok !== "boolean") {
+            throw new Error("it should answer with a value: " + JSON.stringify(result));
         }
     "#;
 
     let result = execute_script_secure(
-        "test://non-priv-recur",
+        "test://schedule-any",
         script,
         aiwebengine::security::Principal::Caller(admin),
     );

@@ -3,7 +3,6 @@
 
 use super::*;
 use crate::repository;
-use crate::scheduler::ScheduledInvocation;
 use crate::security::UserContext;
 use crate::security::secure_globals::{GlobalSecurityConfig, Principal};
 use rquickjs::{Context, Runtime, Value};
@@ -473,65 +472,10 @@ pub(super) fn build_http_response(result: Value<'_>) -> Result<JsHttpResponse, S
     }
 }
 
-/// Executes a JavaScript handler for scheduler jobs
-pub fn execute_scheduled_handler(
-    script_uri: &str,
-    handler_name: &str,
-    invocation: &ScheduledInvocation,
-    fence: Option<crate::lease::Fence>,
-) -> Result<(), String> {
-    let script_uri_owned = script_uri.to_string();
-    // The scheduler generated this id when it claimed the run, so the lines the
-    // engine wrote about the run and the lines the job itself wrote share it.
-    let log_context = HandlerInvocationKind::Scheduled.log_context(
-        &script_uri_owned,
-        invocation.invocation_id.clone(),
-        Some(invocation.key.clone()),
-    );
-
-    // A job's budget rather than a request's. The scheduler renews its claim
-    // for as long as the run lasts, so the two no longer have to agree on a
-    // number — but this is still what bounds the run. A job acts for nobody.
-    let execution = HandlerExecution::prepare(
-        script_uri,
-        Budget::Job(fence),
-        GlobalSecurityConfig::new(Principal::Engine("scheduler"), log_context),
-    )?;
-
-    execution.invoke(
-        &format!("Scheduled handler '{}'", handler_name),
-        |ctx| {
-            let schedule_meta = serde_json::json!({
-                "jobId": invocation.job_id.to_string(),
-                "name": invocation.key,
-                "type": invocation.kind.as_str(),
-                "scheduledFor": invocation.scheduled_for.to_rfc3339(),
-                "intervalSeconds": invocation.interval_seconds,
-                "intervalMilliseconds": invocation.interval_milliseconds,
-                "fencingToken": invocation.claim_epoch,
-            });
-
-            let handler_context = JsHandlerContextBuilder::new(HandlerInvocationKind::Scheduled)
-                .with_script_metadata(script_uri, handler_name)
-                .with_metadata_value("schedule", schedule_meta)
-                .with_invocation_id(invocation.invocation_id.clone())
-                .build(ctx)
-                .map_err(|e| format!("build context: {}", e))?;
-            install_handler_context(ctx, &handler_context)?;
-
-            call_global_function(ctx, handler_name, handler_context.into_value())
-        },
-        |_ctx, _value| Ok(()),
-    )
-}
-
-/// Run one attempt of a queued task ([`crate::tasks`]).
-///
-/// Deliberately the same execution as [`execute_scheduled_handler`]: the same
-/// job budget, the same script context, the same transaction handling. The two
-/// differ in what the handler is given — a task carries a payload and its
-/// attempt count, where a job carries its schedule — and in what the caller
-/// does with the outcome, which for a task is a retry with backoff.
+/// Run one attempt of a queued task ([`crate::tasks`]), including every run a
+/// schedule fires ([`crate::schedules`]): a schedule never runs a handler
+/// itself, so there is one execution for background work. The handler is
+/// given its payload, its attempt and, for a scheduled run, which slot it is.
 ///
 /// A task acts for nobody unless a person delegated it, and then for that
 /// person, narrowed to what they granted ([`crate::delegation`]).

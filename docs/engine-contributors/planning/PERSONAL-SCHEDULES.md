@@ -1,7 +1,11 @@
 # Personal Schedules
 
-The first change (personal schedules) is built; the second (script schedules
-onto the same path) is not. The question this answers: how does a script run work **as
+Both changes are built: personal schedules, and script schedules on the same
+path (`scriptTasks.schedule`; `schedulerService` and `scheduler_jobs` are gone).
+Where the build departed from this plan: one `schedules` table with `user_id`
+NULL for a script's own; a script's schedules are swept after `init()` rather
+than wiped before it, so one declared again keeps its next slot; a script's
+runs get one attempt and never pause. The question this answers: how does a script run work **as
 a person, on a schedule of that person's choosing**, while they are away — "every
 morning at seven, summarise the news I follow", "twice a day, look for jobs
 that match my profile"?

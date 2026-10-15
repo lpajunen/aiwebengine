@@ -10,7 +10,7 @@
 mod common;
 
 use aiwebengine::delegation::{self, Scope};
-use aiwebengine::personal_schedules::{self, ScheduleSpec};
+use aiwebengine::schedules::{self, ScheduleSpec};
 use aiwebengine::tasks::{self, NewTask};
 use aiwebengine::{js_engine, repository};
 use chrono::{Duration, Utc};
@@ -41,7 +41,7 @@ async fn declare(
     user_id: &str,
     script_uri: &str,
     spec: Value,
-) -> Result<personal_schedules::PersonalSchedule, personal_schedules::ScheduleError> {
+) -> Result<schedules::Schedule, schedules::ScheduleError> {
     declare_reporting(user_id, script_uri, spec)
         .await
         .map(|declared| declared.schedule)
@@ -52,14 +52,13 @@ async fn declare_reporting(
     user_id: &str,
     script_uri: &str,
     spec: Value,
-) -> Result<personal_schedules::Declared, personal_schedules::ScheduleError> {
-    let limits = personal_schedules::limits();
-    let spec = ScheduleSpec::from_json(&spec, &limits)?;
+) -> Result<schedules::Declared, schedules::ScheduleError> {
+    let limits = schedules::limits();
+    let spec = ScheduleSpec::from_json(&spec, limits.min_interval_ms)?;
     let pool = common::test_pool().await;
     let mut conn = pool.acquire().await.expect("a connection");
     let lane = format!("person:{}", user_id);
-    personal_schedules::declare_on(&mut conn, user_id, script_uri, &spec, Some(&lane), &limits)
-        .await
+    schedules::declare_on(&mut conn, user_id, script_uri, &spec, Some(&lane), &limits).await
 }
 
 fn hourly(key: &str, handler: &str) -> Value {
@@ -68,7 +67,7 @@ fn hourly(key: &str, handler: &str) -> Value {
 
 /// Move a schedule's next slot into the past, the way time would.
 async fn make_due(script_uri: &str, ago: Duration) {
-    sqlx::query("UPDATE personal_schedules SET next_run_at = $2 WHERE script_uri = $1")
+    sqlx::query("UPDATE schedules SET next_run_at = $2 WHERE script_uri = $1")
         .bind(script_uri)
         .bind(Utc::now() - ago)
         .execute(&common::test_pool().await)
@@ -83,7 +82,7 @@ async fn tasks_for(script_uri: &str) -> Vec<tasks::Task> {
 async fn schedule_row(script_uri: &str, key: &str) -> Option<sqlx::postgres::PgRow> {
     sqlx::query(
         "SELECT state, paused_reason, consecutive_failures, next_run_at, interval_ms, cron, \
-         handler_name, last_task_id, updated_at FROM personal_schedules \
+         handler_name, last_task_id, updated_at FROM schedules \
          WHERE script_uri = $1 AND schedule_key = $2",
     )
     .bind(script_uri)
@@ -94,7 +93,7 @@ async fn schedule_row(script_uri: &str, key: &str) -> Option<sqlx::postgres::PgR
 }
 
 async fn schedule_count(script_uri: &str) -> i64 {
-    sqlx::query_scalar("SELECT COUNT(*) FROM personal_schedules WHERE script_uri = $1")
+    sqlx::query_scalar("SELECT COUNT(*) FROM schedules WHERE script_uri = $1")
         .bind(script_uri)
         .fetch_one(&common::test_pool().await)
         .await
@@ -274,10 +273,7 @@ async fn a_due_schedule_fires_one_task_as_the_person() {
     make_due(script_uri, Duration::seconds(1)).await;
 
     let now = Utc::now();
-    let (a, b) = tokio::join!(
-        personal_schedules::fire_due(now),
-        personal_schedules::fire_due(now)
-    );
+    let (a, b) = tokio::join!(schedules::fire_due(now), schedules::fire_due(now));
     assert_eq!(a + b, 1, "two workers must fire one slot once");
 
     let queued = tasks_for(script_uri).await;
@@ -314,7 +310,7 @@ async fn a_scheduled_run_sees_its_schedule_in_meta() {
         .await
         .expect("declared");
     make_due(script_uri, Duration::seconds(1)).await;
-    personal_schedules::fire_due(Utc::now()).await;
+    schedules::fire_due(Utc::now()).await;
     tasks::run_due_now("test-worker").await;
 
     let expected = format!("slot morning string as {}", user_id);
@@ -339,11 +335,11 @@ async fn a_slot_whose_previous_run_is_unfinished_is_skipped() {
         .await
         .expect("declared");
     make_due(script_uri, Duration::seconds(1)).await;
-    assert_eq!(personal_schedules::fire_due(Utc::now()).await, 1);
+    assert_eq!(schedules::fire_due(Utc::now()).await, 1);
 
     // The first run has not been picked up yet, and the next slot comes due.
     make_due(script_uri, Duration::seconds(1)).await;
-    assert_eq!(personal_schedules::fire_due(Utc::now()).await, 0);
+    assert_eq!(schedules::fire_due(Utc::now()).await, 0);
     assert_eq!(tasks_for(script_uri).await.len(), 1, "skipped, not stacked");
 
     let row = schedule_row(script_uri, "k").await.expect("row");
@@ -365,8 +361,8 @@ async fn after_a_gap_of_several_slots_it_runs_once() {
         .expect("declared");
     make_due(script_uri, Duration::hours(5) + Duration::minutes(30)).await;
 
-    assert_eq!(personal_schedules::fire_due(Utc::now()).await, 1);
-    assert_eq!(personal_schedules::fire_due(Utc::now()).await, 0);
+    assert_eq!(schedules::fire_due(Utc::now()).await, 1);
+    assert_eq!(schedules::fire_due(Utc::now()).await, 0);
     assert_eq!(tasks_for(script_uri).await.len(), 1);
 
     let row = schedule_row(script_uri, "k").await.expect("row");
@@ -434,7 +430,7 @@ async fn expiry_pauses_and_granting_again_resumes() {
     .expect("the grant should lapse");
     make_due(script_uri, Duration::seconds(1)).await;
 
-    assert_eq!(personal_schedules::fire_due(Utc::now()).await, 0);
+    assert_eq!(schedules::fire_due(Utc::now()).await, 0);
     assert!(tasks_for(script_uri).await.is_empty(), "no pointless work");
     let row = schedule_row(script_uri, "k").await.expect("kept");
     assert_eq!(row.get::<String, _>("state"), "paused");
@@ -443,7 +439,7 @@ async fn expiry_pauses_and_granting_again_resumes() {
         Some("expired")
     );
 
-    let resuming = personal_schedules::paused_expired(&user_id, script_uri)
+    let resuming = schedules::paused_expired(&user_id, script_uri)
         .await
         .expect("listed");
     assert_eq!(resuming.len(), 1, "the consent page lists what will resume");
@@ -508,7 +504,7 @@ async fn three_given_up_runs_pause_it_and_a_success_resets_the_count() {
 
     async fn one_slot(script_uri: &str) -> tasks::Task {
         make_due(script_uri, Duration::seconds(1)).await;
-        assert_eq!(personal_schedules::fire_due(Utc::now()).await, 1);
+        assert_eq!(schedules::fire_due(Utc::now()).await, 1);
         let row = schedule_row(script_uri, "k").await.expect("row");
         let task_id: uuid::Uuid = row
             .get::<Option<uuid::Uuid>, _>("last_task_id")
@@ -527,7 +523,7 @@ async fn three_given_up_runs_pause_it_and_a_success_resets_the_count() {
     // A success in between resets the count.
     request_as(script_uri, &user_id, "fix").await;
     make_due(script_uri, Duration::seconds(1)).await;
-    personal_schedules::fire_due(Utc::now()).await;
+    schedules::fire_due(Utc::now()).await;
     let task_id: uuid::Uuid = schedule_row(script_uri, "k")
         .await
         .expect("row")
@@ -551,7 +547,7 @@ async fn three_given_up_runs_pause_it_and_a_success_resets_the_count() {
         Some("failing")
     );
     make_due(script_uri, Duration::seconds(1)).await;
-    assert_eq!(personal_schedules::fire_due(Utc::now()).await, 0);
+    assert_eq!(schedules::fire_due(Utc::now()).await, 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -567,7 +563,7 @@ async fn the_limits_refuse_the_eleventh_the_fifty_first_and_every_minute() {
     .await;
     assert!(matches!(
         every_minute,
-        Err(personal_schedules::ScheduleError::TooFrequent(_))
+        Err(schedules::ScheduleError::TooFrequent(_))
     ));
 
     for script in 0..5 {
@@ -581,7 +577,7 @@ async fn the_limits_refuse_the_eleventh_the_fifty_first_and_every_minute() {
         let eleventh = declare(&user_id, &script_uri, hourly("k10", "work")).await;
         assert_eq!(
             eleventh.unwrap_err(),
-            personal_schedules::ScheduleError::TooManyForScript(10)
+            schedules::ScheduleError::TooManyForScript(10)
         );
         // Restating one already held is not another.
         declare(&user_id, &script_uri, hourly("k0", "work"))
@@ -594,7 +590,7 @@ async fn the_limits_refuse_the_eleventh_the_fifty_first_and_every_minute() {
     let fifty_first = declare(&user_id, script_uri, hourly("k", "work")).await;
     assert_eq!(
         fifty_first.unwrap_err(),
-        personal_schedules::ScheduleError::TooManyForPerson(50)
+        schedules::ScheduleError::TooManyForPerson(50)
     );
 }
 
@@ -736,12 +732,11 @@ async fn schedule_from_resolves_the_sender_and_refuses_an_unlinked_one() {
     assert_eq!(schedule_count(script_uri).await, 0);
 
     assert_eq!(hook(script_uri, "12345").await, "scheduled k");
-    let owner: String =
-        sqlx::query_scalar("SELECT user_id FROM personal_schedules WHERE script_uri = $1")
-            .bind(script_uri)
-            .fetch_one(&common::test_pool().await)
-            .await
-            .expect("stored");
+    let owner: String = sqlx::query_scalar("SELECT user_id FROM schedules WHERE script_uri = $1")
+        .bind(script_uri)
+        .fetch_one(&common::test_pool().await)
+        .await
+        .expect("stored");
     assert_eq!(owner, user_id);
 }
 
@@ -760,7 +755,7 @@ async fn a_schedule_set_before_a_redeployment_still_fires_after_it() {
     repository::upsert_script(script_uri, "function work() { console.log('v2'); }")
         .expect("redeployed");
     make_due(script_uri, Duration::seconds(1)).await;
-    assert_eq!(personal_schedules::fire_due(Utc::now()).await, 1);
+    assert_eq!(schedules::fire_due(Utc::now()).await, 1);
 }
 
 /// The account page lists a schedule under its grant, and the person can
@@ -864,7 +859,7 @@ async fn the_account_page_lists_pauses_resumes_and_deletes_a_schedule() {
 
     // Paused by the person, it does not fire.
     make_due(script_uri, Duration::seconds(1)).await;
-    assert_eq!(personal_schedules::fire_due(Utc::now()).await, 0);
+    assert_eq!(schedules::fire_due(Utc::now()).await, 0);
 
     act("resume", id.clone()).await;
     let row = schedule_row(script_uri, "morning-digest")

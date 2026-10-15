@@ -51,6 +51,29 @@
     get: function (taskId) {
       return unwrap(host.get(String(taskId)));
     },
+
+    // schedule({key, handler, payload?, intervalMinutes | intervalMilliseconds
+    //           | cron, timeZone?, firstRunAfterMs?, lane?})
+    //   -> {ok: true, nextRunAt} | {ok: false, reason}
+    //
+    // The script's own schedule, declared with its code: in init() only.
+    // What init() does not declare is removed after it; one it declares
+    // again with the same cadence keeps its next slot.
+    schedule: function (spec) {
+      if (spec === null || typeof spec !== "object") {
+        throw new TypeError("scriptTasks.schedule requires a spec object");
+      }
+      return unwrap(host.scheduleScript(JSON.stringify(spec)));
+    },
+
+    // unschedule(key) -> {ok: true, removed} | {ok: false, reason}. In init()
+    // only, and rarely needed: not declaring it is enough.
+    unschedule: function (key) {
+      if (typeof key !== "string") {
+        throw new TypeError("scriptTasks.unschedule requires a key");
+      }
+      return unwrap(host.unscheduleScript(key));
+    },
   };
 
   // `personalTasks` — the same queue, acting as the person who asked.

@@ -469,7 +469,7 @@ pub async fn account_page(
             let links = crate::delegation::list_channels_for_user(&session.user_id)
                 .await
                 .unwrap_or_default();
-            let schedules = crate::personal_schedules::list_for_user(&session.user_id)
+            let schedules = crate::schedules::list_for_user(&session.user_id)
                 .await
                 .unwrap_or_default();
             render_delegations(&csrf_token, &grants, &links, &schedules)

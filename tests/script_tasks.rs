@@ -128,9 +128,8 @@ async fn an_undelegated_task_cannot_reach_the_management_tools() {
     );
 }
 
-/// The distinction from `scheduler_jobs`, which `script_init` wipes before
-/// every re-initialisation because a schedule belongs to the version of the
-/// code that declared it. Work already accepted does not.
+/// The distinction from a script's own schedule, which belongs to the version
+/// of the code that declared it. Work already accepted does not.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_task_survives_the_script_being_deployed_again() {
     setup_env().await;
@@ -142,8 +141,8 @@ async fn a_task_survives_the_script_being_deployed_again() {
         .await
         .expect("the task should be accepted");
 
-    // A second write is a re-initialisation: it clears the script's scheduled
-    // jobs and its listeners.
+    // A second write is a re-initialisation: it replaces the script's own
+    // schedules and its listeners.
     repository::upsert_script(script_uri, "function handleWork() { /* v2 */ }")
         .expect("the second version should store");
     aiwebengine::script_init::ScriptInitializer::with_configured_timeout()
@@ -359,9 +358,9 @@ async fn discarding_finished_tasks_leaves_the_pending_ones() {
 /// The shape the queue exists for, end to end: a request handler enqueues,
 /// answers, and the work runs afterwards.
 ///
-/// Enqueueing from a handler is the part `schedulerService` cannot do —
-/// `registerOnce` outside `init()` returns a string saying nothing was
-/// registered — so this is the test that says the gap is closed.
+/// Enqueueing from a handler is the part a schedule cannot do —
+/// `scriptTasks.schedule` outside `init()` declares nothing — so this is the
+/// test that says the gap is closed.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_request_handler_can_enqueue_work_that_runs_after_it_answers() {
     setup_env().await;

@@ -3,12 +3,11 @@ mod common;
 use common::{setup_env, test_mutex};
 
 use aiwebengine::js_engine::{
-    RequestExecutionParams, call_init_if_exists, execute_scheduled_handler,
-    execute_script_for_request_secure, execute_script_secure,
+    RequestExecutionParams, call_init_if_exists, execute_script_for_request_secure,
+    execute_script_secure, execute_task_handler,
 };
 use aiwebengine::module_loader;
 use aiwebengine::repository;
-use aiwebengine::scheduler::{ScheduledInvocation, ScheduledInvocationKind};
 use aiwebengine::script_init::InitContext;
 use aiwebengine::security::UserContext;
 use aiwebengine::source_view::SourceView;
@@ -679,21 +678,27 @@ async fn imported_asset_module_executes_in_scheduled_path() {
     repository::upsert_script(script_uri, script_content).expect("script should be stored");
     repository::clear_log_messages(script_uri).expect("logs should be clearable");
 
-    let invocation = ScheduledInvocation {
+    // A scheduled run is a task the schedule fired; it runs as any task does.
+    let invocation = aiwebengine::tasks::TaskInvocation {
+        task_id: Uuid::new_v4(),
         invocation_id: "test-invocation".to_string(),
-        job_id: Uuid::new_v4(),
-        key: "asset-module-schedule".to_string(),
         script_uri: script_uri.to_string(),
         handler_name: "runImportedSchedule".to_string(),
-        kind: ScheduledInvocationKind::OneOff,
-        scheduled_for: Utc::now(),
-        interval_seconds: None,
-        interval_milliseconds: None,
+        payload: serde_json::json!({}),
         attempts: 0,
+        max_attempts: 1,
+        run_as: None,
         claim_epoch: 0,
+        schedule: Some(aiwebengine::tasks::ScheduleRun {
+            schedule_id: Uuid::new_v4(),
+            key: Some("asset-module-schedule".to_string()),
+            scheduled_for: Utc::now(),
+        }),
     };
 
-    execute_scheduled_handler(script_uri, "runImportedSchedule", &invocation, None)
+    tokio::task::spawn_blocking(move || execute_task_handler(&invocation, None, None))
+        .await
+        .expect("no panic")
         .expect("scheduled handler should execute");
 
     let logs = repository::fetch_log_messages(script_uri);
@@ -711,10 +716,7 @@ async fn imported_asset_module_executes_in_scheduled_path() {
         .expect("logged entry should be present");
     assert_eq!(entry.context.request_id.as_deref(), Some("test-invocation"));
     assert_eq!(entry.context.kind.as_deref(), Some("scheduled"));
-    assert_eq!(
-        entry.context.route.as_deref(),
-        Some("asset-module-schedule")
-    );
+    assert_eq!(entry.context.route.as_deref(), Some("runImportedSchedule"));
 
     assert!(repository::delete_asset(script_uri, asset_uri));
 }

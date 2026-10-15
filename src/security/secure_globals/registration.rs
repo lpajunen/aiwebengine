@@ -36,7 +36,7 @@ impl RegistrationKind {
             RegistrationKind::McpTool => "mcpRegistry.registerTool",
             RegistrationKind::McpPrompt => "mcpRegistry.registerPrompt",
             RegistrationKind::McpResource => "mcpRegistry.registerResource",
-            RegistrationKind::ScheduledJob => "schedulerService",
+            RegistrationKind::ScheduledJob => "scriptTasks.schedule",
         }
     }
 }

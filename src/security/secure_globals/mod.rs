@@ -14,7 +14,6 @@ mod database;
 mod engine;
 mod fetch;
 mod files;
-mod jobs;
 mod mcp;
 mod rate_limit;
 mod registration;
