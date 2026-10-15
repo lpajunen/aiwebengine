@@ -1,6 +1,7 @@
 # Personal Schedules
 
-Design, not built. The question this answers: how does a script run work **as
+The first change (personal schedules) is built; the second (script schedules
+onto the same path) is not. The question this answers: how does a script run work **as
 a person, on a schedule of that person's choosing**, while they are away — "every
 morning at seven, summarise the news I follow", "twice a day, look for jobs
 that match my profile"?

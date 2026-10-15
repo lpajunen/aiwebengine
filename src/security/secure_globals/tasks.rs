@@ -792,6 +792,217 @@ impl SecureGlobalContext {
         )?;
         host.set("authorization", delegation_state)?;
 
+        // `personalTasks.schedule` — a declaration that belongs to this
+        // person: keyed so that saying it again replaces it, kept across
+        // deployments, and bounded by their grant ([`crate::personal_schedules`]).
+        //
+        // The same rule as `enqueue`, so there is one rule to learn: someone
+        // signed in, `EnqueueTasks` (which a read-only delegated run does not
+        // hold), and a live grant to this script.
+        let script_uri_schedule = script_uri.to_string();
+        let config_schedule = self.config.clone();
+        let user_schedule = self.user_context.clone();
+        let schedule = Function::new(
+            ctx.clone(),
+            move |ctx: rquickjs::Ctx<'_>, options_json: String| -> JsResult<String> {
+                const API: &str = "personalTasks.schedule";
+                if config_schedule.is_dry_run() {
+                    return Ok(host_failure(
+                        "DryRunError",
+                        "personalTasks.schedule: nothing was scheduled - this is a dry run",
+                    ));
+                }
+                if !user_schedule.has_capability(&Capability::EnqueueTasks) {
+                    return Ok(host_failure(
+                        "SecurityError",
+                        &capability_refusal(API, &Capability::EnqueueTasks, &user_schedule),
+                    ));
+                }
+                let Some(user_id) = Self::current_user_id(&ctx) else {
+                    return Ok(host_failure(
+                        "SecurityError",
+                        "personalTasks.schedule requires an authenticated user",
+                    ));
+                };
+                if let Err(refusal) = Self::require_live_grant(API, &user_id, &script_uri_schedule)
+                {
+                    return Ok(refusal);
+                }
+                Ok(Self::declare_schedule(
+                    API,
+                    &options_json,
+                    &user_id,
+                    &script_uri_schedule,
+                    &user_schedule,
+                    None,
+                ))
+            },
+        )?;
+        host.set("schedule", schedule)?;
+
+        // `personalTasks.scheduleFrom` — as `schedule`, for a linked sender.
+        // The sender is resolved exactly as `enqueueFrom` resolves it; the
+        // script never names an account.
+        let script_uri_schedule_from = script_uri.to_string();
+        let config_schedule_from = self.config.clone();
+        let user_schedule_from = self.user_context.clone();
+        let schedule_from = Function::new(
+            ctx.clone(),
+            move |options_json: String| -> JsResult<String> {
+                const API: &str = "personalTasks.scheduleFrom";
+                if config_schedule_from.is_dry_run() {
+                    return Ok(host_failure(
+                        "DryRunError",
+                        "personalTasks.scheduleFrom: nothing was scheduled - this is a dry run",
+                    ));
+                }
+                if !user_schedule_from.has_capability(&Capability::EnqueueTasks) {
+                    return Ok(host_failure(
+                        "SecurityError",
+                        &capability_refusal(API, &Capability::EnqueueTasks, &user_schedule_from),
+                    ));
+                }
+
+                let options: serde_json::Value = match serde_json::from_str(&options_json) {
+                    Ok(options) => options,
+                    Err(e) => {
+                        return Ok(host_failure(
+                            "TypeError",
+                            &format!("{}: options are not valid JSON: {}", API, e),
+                        ));
+                    }
+                };
+                let (channel, identity) = match Self::sender_from_options(&options) {
+                    Ok(pair) => pair,
+                    Err(message) => return Ok(host_failure("TypeError", &message)),
+                };
+
+                let user_id =
+                    match crate::database::run_blocking(crate::delegation::resolve_channel(
+                        &script_uri_schedule_from,
+                        &channel,
+                        &identity,
+                    )) {
+                        Ok(Some(user_id)) => user_id,
+                        Ok(None) => {
+                            return Ok(host_failure(
+                                "SecurityError",
+                                "personalTasks.scheduleFrom: nobody has linked that sender to this \
+                             script - `personalTasks.inviteLink()` mints a link to send them",
+                            ));
+                        }
+                        Err(e) => {
+                            return Ok(host_failure(
+                                "Error",
+                                &format!("{}: could not read the link: {}", API, e),
+                            ));
+                        }
+                    };
+                if let Err(refusal) =
+                    Self::require_live_grant(API, &user_id, &script_uri_schedule_from)
+                {
+                    return Ok(refusal);
+                }
+                // Inbound-triggered and writes, so it spends the budget a
+                // trigger does, after the link and the grant are established.
+                if let Err(message) =
+                    Self::spend_channel_budget(&script_uri_schedule_from, &channel, &identity)
+                {
+                    return Ok(host_failure("RangeError", &message));
+                }
+
+                Ok(Self::declare_schedule(
+                    API,
+                    &options_json,
+                    &user_id,
+                    &script_uri_schedule_from,
+                    &user_schedule_from,
+                    Some(&channel),
+                ))
+            },
+        )?;
+        host.set("scheduleFrom", schedule_from)?;
+
+        // This person's schedules on this script. A read, so it needs a
+        // signed-in person and nothing else. There is no call that lists
+        // anybody else's.
+        let script_uri_schedules = script_uri.to_string();
+        let schedules = Function::new(
+            ctx.clone(),
+            move |ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                let Some(user_id) = Self::current_user_id(&ctx) else {
+                    return Ok(host_failure(
+                        "SecurityError",
+                        "personalTasks.schedules requires an authenticated user",
+                    ));
+                };
+                match crate::personal_schedules::blocking::list(&user_id, &script_uri_schedules) {
+                    Ok(schedules) => Ok(host_ok(serde_json::Value::Array(
+                        schedules.iter().map(|s| s.to_json()).collect(),
+                    ))),
+                    Err(e) => Ok(host_failure(
+                        "Error",
+                        &format!("personalTasks.schedules: {}", e),
+                    )),
+                }
+            },
+        )?;
+        host.set("schedules", schedules)?;
+
+        let script_uri_unschedule = script_uri.to_string();
+        let config_unschedule = self.config.clone();
+        let user_unschedule = self.user_context.clone();
+        let unschedule = Function::new(
+            ctx.clone(),
+            move |ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<String> {
+                const API: &str = "personalTasks.unschedule";
+                if config_unschedule.is_dry_run() {
+                    return Ok(host_failure(
+                        "DryRunError",
+                        "personalTasks.unschedule: nothing was removed - this is a dry run",
+                    ));
+                }
+                if !user_unschedule.has_capability(&Capability::EnqueueTasks) {
+                    return Ok(host_failure(
+                        "SecurityError",
+                        &capability_refusal(API, &Capability::EnqueueTasks, &user_unschedule),
+                    ));
+                }
+                let Some(user_id) = Self::current_user_id(&ctx) else {
+                    return Ok(host_failure(
+                        "SecurityError",
+                        "personalTasks.unschedule requires an authenticated user",
+                    ));
+                };
+                if let Err(refusal) =
+                    Self::require_live_grant(API, &user_id, &script_uri_unschedule)
+                {
+                    return Ok(refusal);
+                }
+                match crate::personal_schedules::blocking::remove(
+                    &user_id,
+                    &script_uri_unschedule,
+                    &key,
+                ) {
+                    Ok(removed) => {
+                        if removed {
+                            Self::audit_schedule(
+                                "delete_personal_schedule",
+                                &user_unschedule,
+                                &script_uri_unschedule,
+                                &user_id,
+                                key.trim(),
+                                None,
+                            );
+                        }
+                        Ok(host_ok(serde_json::Value::Bool(removed)))
+                    }
+                    Err(e) => Ok(host_failure("Error", &format!("{}: {}", API, e))),
+                }
+            },
+        )?;
+        host.set("unschedule", unschedule)?;
+
         global.set("__hostScriptTasks", host)?;
 
         crate::bytecode::eval_program(ctx, "engine://tasks-prelude", TASKS_PRELUDE).map_err(
@@ -903,6 +1114,126 @@ impl SecureGlobalContext {
             Err("personalTasks.enqueueFrom: this sender has queued too much too quickly - the                  budget refills over the next few minutes"
                 .to_string())
         }
+    }
+}
+
+impl SecureGlobalContext {
+    /// Refuse unless `user_id` holds a live grant to `script_uri`, answering
+    /// with the envelope the prelude turns into the right exception.
+    pub(super) fn require_live_grant(
+        api: &str,
+        user_id: &str,
+        script_uri: &str,
+    ) -> Result<(), String> {
+        match crate::database::run_blocking(crate::delegation::get(user_id, script_uri)) {
+            Ok(Some(grant)) if grant.is_live(chrono::Utc::now()) => Ok(()),
+            Ok(Some(_)) => Err(host_failure(
+                "SecurityError",
+                &format!(
+                    "{}: this person's authorisation for this script has expired",
+                    api
+                ),
+            )),
+            Ok(None) => Err(host_failure(
+                "SecurityError",
+                &format!(
+                    "{}: this person has not authorised this script to act for them",
+                    api
+                ),
+            )),
+            Err(e) => Err(host_failure(
+                "Error",
+                &format!("{}: could not read the authorisation: {}", api, e),
+            )),
+        }
+    }
+
+    /// Check a schedule spec and store it for `user_id`, once whoever is
+    /// asking has been established. Answers with the host envelope.
+    pub(super) fn declare_schedule(
+        api: &str,
+        options_json: &str,
+        user_id: &str,
+        script_uri: &str,
+        acting: &crate::security::UserContext,
+        channel: Option<&str>,
+    ) -> String {
+        let options: serde_json::Value = match serde_json::from_str(options_json) {
+            Ok(options) => options,
+            Err(e) => {
+                return host_failure(
+                    "TypeError",
+                    &format!("{}: options are not valid JSON: {}", api, e),
+                );
+            }
+        };
+        let spec = match crate::personal_schedules::ScheduleSpec::from_json(
+            &options,
+            &crate::personal_schedules::limits(),
+        ) {
+            Ok(spec) => spec,
+            Err(e) => return host_failure(e.js_name(), &format!("{}: {}", api, e)),
+        };
+
+        // Per person by default, as `personalTasks.enqueue` is: a morning
+        // digest and a reply to a message from the same person must not
+        // interleave over the same storage.
+        let lane = match &spec.lane {
+            None => Some(Self::person_lane(user_id)),
+            Some(None) => None,
+            Some(Some(named)) => crate::tasks::normalize_lane(Some(named)),
+        };
+
+        match crate::personal_schedules::blocking::declare(
+            user_id,
+            script_uri,
+            &spec,
+            lane.as_deref(),
+        ) {
+            Ok(schedule) => {
+                Self::audit_schedule(
+                    "declare_personal_schedule",
+                    acting,
+                    script_uri,
+                    user_id,
+                    &schedule.key,
+                    channel,
+                );
+                host_ok(schedule.to_json())
+            }
+            Err(e) => host_failure(e.js_name(), &format!("{}: {}", api, e)),
+        }
+    }
+
+    /// An audit line for a schedule declared or removed. `acting` is whoever
+    /// did it — the person in their own request, a delegated run, or a
+    /// webhook naming a linked sender — and `user_id` whose schedule it is.
+    pub(super) fn audit_schedule(
+        action: &str,
+        acting: &crate::security::UserContext,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+        channel: Option<&str>,
+    ) {
+        use crate::security::audit::{
+            Actor, SecurityAuditor, SecurityEvent, SecurityEventType, SecuritySeverity,
+        };
+        let pool = crate::database::get_global_database().map(|db| db.pool().clone());
+        let mut event = SecurityEvent::by(
+            SecurityEventType::SystemSecurityEvent,
+            SecuritySeverity::Low,
+            Actor::of(acting),
+        )
+        .with_resource("personal_schedule".to_string())
+        .with_action(action.to_string())
+        .with_detail("script_uri", script_uri)
+        .with_detail("for_user", user_id)
+        .with_detail("key", key);
+        if let Some(channel) = channel {
+            event = event.with_detail("channel", channel);
+        }
+        crate::database::run_blocking(SecurityAuditor::new(pool).log_event(event));
     }
 }
 

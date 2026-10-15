@@ -460,7 +460,13 @@ pub async fn grant(
     .fetch_one(db.pool())
     .await?;
 
-    debug!(user = %user_id, script = %script_uri, scopes = ?names, "Delegation granted");
+    // Schedules that paused because the previous grant lapsed start again:
+    // the consent page listed them, so granting is agreeing to that.
+    let resumed = crate::personal_schedules::resume_expired(user_id, script_uri)
+        .await
+        .unwrap_or_default();
+
+    debug!(user = %user_id, script = %script_uri, scopes = ?names, resumed, "Delegation granted");
     Ok(Grant::from_row(&row))
 }
 
@@ -508,7 +514,7 @@ pub async fn list_for_user(user_id: &str) -> Result<Vec<Grant>, sqlx::Error> {
     Ok(rows.iter().map(Grant::from_row).collect())
 }
 
-/// Withdraw one grant, and cancel the work queued under it.
+/// Withdraw one grant, and cancel the work queued and scheduled under it.
 ///
 /// Both, in that order, because a grant that is gone while its tasks still run
 /// is a revocation that revoked nothing the person could see. Cancelling
@@ -529,6 +535,11 @@ pub async fn revoke(user_id: &str, script_uri: &str) -> Result<bool, sqlx::Error
     let removed = result.rows_affected() > 0;
     if removed {
         let cancelled = crate::tasks::cancel_delegated(user_id, Some(script_uri)).await;
+        // Withdrawing is the person saying stop, so their schedules on this
+        // script go rather than pause — unlike a lapsed grant, which only
+        // pauses them until it is given again.
+        let unscheduled =
+            crate::personal_schedules::delete_for_grant(user_id, Some(script_uri)).await;
         // The senders that could set this work going go with it. A binding
         // that outlived its grant would be a row saying somebody may trigger
         // a delegation that no longer exists — harmless today, since the
@@ -548,6 +559,7 @@ pub async fn revoke(user_id: &str, script_uri: &str) -> Result<bool, sqlx::Error
             user = %user_id,
             script = %script_uri,
             cancelled = cancelled.unwrap_or(0),
+            unscheduled = unscheduled.unwrap_or(0),
             unlinked = unlinked,
             "Delegation revoked"
         );
@@ -557,7 +569,7 @@ pub async fn revoke(user_id: &str, script_uri: &str) -> Result<bool, sqlx::Error
 }
 
 /// Withdraw every grant this person has made, and cancel everything queued
-/// under them.
+/// and scheduled under them.
 ///
 /// Reached from `security::delete_sessions_for_user`, which is what runs when
 /// an account's roles change, its realm narrows, or it is deleted. A session
@@ -582,6 +594,7 @@ pub async fn revoke_all(user_id: &str) -> Result<u64, sqlx::Error> {
         .execute(db.pool())
         .await;
 
+    let _ = crate::personal_schedules::delete_for_grant(user_id, None).await;
     let _ = crate::tasks::cancel_delegated(user_id, None).await;
     Ok(result.rows_affected())
 }

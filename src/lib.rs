@@ -18,7 +18,7 @@ extern crate self as aiwebengine;
 /// prelude, or the shape of an operation `engine.call` reaches. A repository
 /// names the day it needs in `.aiwebengine-requires`, and an engine older than
 /// that refuses to pull it. Move it to the day of any such change.
-pub const SCRIPT_API: &str = "2026-10-13";
+pub const SCRIPT_API: &str = "2026-10-15";
 
 pub mod bytecode;
 pub mod config;
@@ -58,6 +58,7 @@ pub mod module_loader;
 pub mod notifications;
 pub mod openapi_schemas;
 pub mod parsers;
+pub mod personal_schedules;
 pub mod repository;
 pub mod resource_access;
 pub mod revisions;
@@ -138,6 +139,7 @@ What a script may spend is worth knowing before writing one: each invocation get
         auth::routes::delegate_route,
         auth::routes::revoke_delegation_route,
         auth::routes::unlink_sender_route,
+        auth::routes::schedule_action_route,
         auth::routes::start_login,
         auth::routes::oauth_callback,
         auth::routes::logout,
@@ -1507,6 +1509,12 @@ pub fn configure_limits(config: &config::AppConfig) {
     // shipped with.
     if !limits::configure(config) {
         debug!("Developer-facing limits were already configured");
+    }
+
+    if !personal_schedules::configure(personal_schedules::ScheduleLimits::from_config(
+        &config.javascript,
+    )) {
+        debug!("Personal schedule limits were already configured");
     }
 
     // How many SSE connections this engine will hold. Read on every connection

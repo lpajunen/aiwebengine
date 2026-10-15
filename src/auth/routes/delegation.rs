@@ -17,6 +17,7 @@ pub(super) fn render_delegations(
     csrf_token: &str,
     grants: &[crate::delegation::Grant],
     links: &[crate::delegation::ChannelIdentity],
+    schedules: &[crate::personal_schedules::PersonalSchedule],
 ) -> String {
     if grants.is_empty() {
         return String::new();
@@ -84,6 +85,22 @@ pub(super) fn render_delegations(
                 .collect::<Vec<_>>()
                 .join("\n                ");
 
+            // What runs as you on a schedule, under the grant that lets it.
+            // Pause and delete, no edit: changing what runs is the app's to
+            // offer.
+            let scheduled = schedules
+                .iter()
+                .filter(|schedule| schedule.script_uri == grant.script_uri)
+                .map(|schedule| render_schedule_row(csrf_token, schedule))
+                .collect::<Vec<_>>();
+
+            let senders = [senders]
+                .into_iter()
+                .filter(|rows| !rows.is_empty())
+                .chain(scheduled)
+                .collect::<Vec<_>>()
+                .join("\n                ");
+
             let senders = if senders.is_empty() {
                 String::new()
             } else {
@@ -119,11 +136,61 @@ pub(super) fn render_delegations(
     format!(
         r#"<h2>Apps acting for you</h2>
         <p class="aw-explain">These can work on your behalf while you are away. Withdrawing one stops
-        it, cancels whatever it had queued, and unlinks every sender that could start it.</p>
+        it, cancels whatever it had queued, deletes its schedules, and unlinks every sender that
+        could start it.</p>
         <ul class="aw-rows">
             {rows}
         </ul>"#,
         rows = rows,
+    )
+}
+
+/// One schedule under its grant: what it is, when it runs next, and why it is
+/// paused if it is.
+fn render_schedule_row(
+    csrf_token: &str,
+    schedule: &crate::personal_schedules::PersonalSchedule,
+) -> String {
+    let state = match schedule.paused_reason.as_deref() {
+        Some("expired") => "paused: the authorisation lapsed".to_string(),
+        Some("failing") => "paused: its last runs kept failing".to_string(),
+        Some(_) => "paused by you".to_string(),
+        None => format!("next {}", page_timestamp_utc(schedule.next_run_at)),
+    };
+    let last = schedule
+        .last_run_at
+        .map(|at| format!(" · last {}", page_timestamp_utc(at)))
+        .unwrap_or_default();
+    let (toggle, toggle_label) = if schedule.is_paused() {
+        ("resume", "Resume")
+    } else {
+        ("pause", "Pause")
+    };
+    let form = |action: &str, label: &str, class: &str| {
+        format!(
+            r#"<form method="post" action="/auth/delegations/schedule">
+                        <input type="hidden" name="csrf_token" value="{csrf}">
+                        <input type="hidden" name="schedule" value="{id}">
+                        <input type="hidden" name="action" value="{action}">
+                        <button type="submit" class="{class} aw-button--small">{label}</button>
+                    </form>"#,
+            csrf = html_attribute(csrf_token),
+            id = schedule.schedule_id,
+        )
+    };
+    format!(
+        r#"<li>
+                    <div>
+                        <span class="aw-row-title">{key}</span>
+                        <span class="aw-row-meta">runs {cadence} · {state}{last}</span>
+                    </div>
+                    {toggle}
+                    {delete}
+                </li>"#,
+        key = html_escape::encode_text(&schedule.key),
+        cadence = html_escape::encode_text(&schedule.cadence.describe()),
+        toggle = form(toggle, toggle_label, "aw-button--secondary"),
+        delete = form("delete", "Delete", "aw-button--danger"),
     )
 }
 
@@ -342,6 +409,34 @@ pub async fn delegate_page(
         ),
     };
 
+    // Schedules that paused when an earlier grant lapsed start again when
+    // this one is given, so the page says which: granting is then agreeing
+    // to that, as it is agreeing to the scopes ticked above.
+    let resuming = crate::personal_schedules::paused_expired(&session.user_id, &script)
+        .await
+        .unwrap_or_default();
+    let resuming_note = if resuming.is_empty() {
+        String::new()
+    } else {
+        let items = resuming
+            .iter()
+            .map(|schedule| {
+                format!(
+                    "<li><strong>{key}</strong> — runs {cadence}</li>",
+                    key = html_escape::encode_text(&schedule.key),
+                    cadence = html_escape::encode_text(&schedule.cadence.describe()),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n            ");
+        format!(
+            r#"<p class="aw-explain">These will start again:</p>
+        <ul>
+            {items}
+        </ul>"#
+        )
+    };
+
     let body = format!(
         r#"<h1>Authorise an app</h1>
         <p class="aw-identity"><strong>{script}</strong> is asking to work on your behalf
@@ -350,6 +445,7 @@ pub async fn delegate_page(
         carry on after you close the page — for example to finish something long, or to check
         for you on a schedule. You can withdraw it at any time from your account page.</p>
         {sender_note}
+        {resuming_note}
         <form method="post" action="/auth/delegate">
             <input type="hidden" name="csrf_token" value="{csrf}">
             <input type="hidden" name="script" value="{script_value}">
@@ -457,6 +553,16 @@ pub struct UnlinkSenderRequest {
     pub script: Option<String>,
     pub channel: Option<String>,
     pub identity: Option<String>,
+    pub csrf_token: Option<String>,
+    pub redirect: Option<String>,
+}
+
+/// What a person posted to pause, resume or delete one of their schedules.
+#[derive(Debug, Deserialize, Default)]
+pub struct ScheduleActionRequest {
+    pub schedule: Option<String>,
+    /// `pause`, `resume` or `delete`.
+    pub action: Option<String>,
     pub csrf_token: Option<String>,
     pub redirect: Option<String>,
 }
@@ -778,6 +884,115 @@ pub async fn unlink_sender_route(
             "delegation_missing"
         },
         serde_json::json!({ "unlinked": unlinked }),
+    ))
+}
+
+/// Pause, resume or delete one of this person's schedules.
+#[utoipa::path(
+    post,
+    path = "/auth/delegations/schedule",
+    tags = ["Authentication"],
+    responses(
+        (status = 200, description = "Whether anything changed"),
+        (status = 302, description = "Form post; redirected back with a notice"),
+        (status = 401, description = "No session"),
+    )
+)]
+pub async fn schedule_action_route(
+    State(auth_manager): State<Arc<AuthManager>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, AuthErrorResponse> {
+    let (request, style) = parse_auth_body::<ScheduleActionRequest>(&headers, &body);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
+    let config = auth_manager.config();
+
+    let token = session_token_from_headers(&headers, &config.session_cookie_name)
+        .ok_or(crate::auth::error::AuthError::AuthenticationRequired)?;
+    let session = auth_manager
+        .get_session(
+            &token,
+            &ip_addr,
+            &user_agent,
+            get_request_host(&headers).as_deref(),
+        )
+        .await
+        .map_err(|_| crate::auth::error::AuthError::AuthenticationRequired)?;
+
+    if require_session_form_csrf(
+        &auth_manager,
+        style,
+        request.csrf_token.as_deref(),
+        &session.user_id,
+        true,
+    )
+    .await
+    .is_err()
+    {
+        return Ok(redirect_to_form_with_error(
+            &crate::auth::error::AuthError::CsrfValidationFailed,
+            request.redirect.as_deref().or(Some(ACCOUNT_PATH)),
+        ));
+    }
+
+    let schedule_id = request
+        .schedule
+        .as_deref()
+        .and_then(|value| uuid::Uuid::parse_str(value.trim()).ok());
+
+    // Scoped to the caller's own user id inside each statement, as withdrawing
+    // a grant is: another account's schedule is not addressable from here.
+    let (changed, notice) = match (schedule_id, request.action.as_deref()) {
+        (Some(id), Some("pause")) => (
+            crate::personal_schedules::set_paused(&session.user_id, id, true)
+                .await
+                .ok()
+                .flatten(),
+            "schedule_paused",
+        ),
+        (Some(id), Some("resume")) => (
+            crate::personal_schedules::set_paused(&session.user_id, id, false)
+                .await
+                .ok()
+                .flatten(),
+            "schedule_resumed",
+        ),
+        (Some(id), Some("delete")) => {
+            let deleted = crate::personal_schedules::delete_by_id(&session.user_id, id)
+                .await
+                .ok()
+                .flatten();
+            if let Some(schedule) = &deleted {
+                let event = crate::security::audit::SecurityEvent::by(
+                    crate::security::audit::SecurityEventType::SystemSecurityEvent,
+                    crate::security::audit::SecuritySeverity::Low,
+                    crate::security::audit::Actor::of_session(&session),
+                )
+                .with_resource("personal_schedule".to_string())
+                .with_action("delete_personal_schedule".to_string())
+                .with_detail("script_uri", &schedule.script_uri)
+                .with_detail("for_user", &schedule.user_id)
+                .with_detail("key", &schedule.key);
+                let pool = crate::database::get_global_database().map(|db| db.pool().clone());
+                crate::security::audit::SecurityAuditor::new(pool)
+                    .log_event(event)
+                    .await;
+            }
+            (deleted, "schedule_deleted")
+        }
+        _ => (None, "schedule_missing"),
+    };
+
+    let found = changed.is_some();
+    Ok(delegation_answer(
+        style,
+        request.redirect.as_deref(),
+        if found { notice } else { "schedule_missing" },
+        serde_json::json!({
+            "changed": found,
+            "schedule": changed.map(|schedule| schedule.to_json()),
+        }),
     ))
 }
 

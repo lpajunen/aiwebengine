@@ -52,8 +52,15 @@ pub(super) fn account_notice_message(code: &str) -> &'static str {
              at any time."
         }
         "delegation_withdrawn" => {
-            "That app can no longer act for you, and anything it had queued has been cancelled."
+            "That app can no longer act for you. Anything it had queued has been cancelled, \
+             and its schedules deleted."
         }
+        "schedule_paused" => "That schedule is paused. Nothing runs until you resume it.",
+        "schedule_resumed" => {
+            "That schedule is running again. If it missed a slot while paused, it runs once soon."
+        }
+        "schedule_deleted" => "That schedule is gone.",
+        "schedule_missing" => "There was no such schedule.",
         "delegation_declined" => "Nothing was authorised.",
         "delegation_missing" => "There was nothing to withdraw.",
         "elevation_granted" => {
@@ -462,7 +469,10 @@ pub async fn account_page(
             let links = crate::delegation::list_channels_for_user(&session.user_id)
                 .await
                 .unwrap_or_default();
-            render_delegations(&csrf_token, &grants, &links)
+            let schedules = crate::personal_schedules::list_for_user(&session.user_id)
+                .await
+                .unwrap_or_default();
+            render_delegations(&csrf_token, &grants, &links, &schedules)
         }
         Err(e) => {
             tracing::error!("Could not list delegations for an account page: {}", e);

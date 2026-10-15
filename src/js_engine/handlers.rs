@@ -598,6 +598,18 @@ pub fn execute_task_handler(
                 .with_metadata_value("task", task_meta)
                 .with_invocation_id(invocation.invocation_id.clone());
 
+            // Which slot of which schedule this run is for, so a digest can
+            // say "since yesterday's 07:00" without keeping its own record.
+            if let Some(schedule) = &invocation.schedule {
+                builder = builder.with_metadata_value(
+                    "schedule",
+                    serde_json::json!({
+                        "key": schedule.key,
+                        "scheduledFor": schedule.scheduled_for.to_rfc3339(),
+                    }),
+                );
+            }
+
             if let Some(delegated) = delegated {
                 builder = builder
                     .with_request(JsRequestContext::default())

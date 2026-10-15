@@ -398,9 +398,36 @@ pub struct JavaScriptConfig {
     #[serde(default)]
     pub test_run_timeout_ms: Option<u64>,
 
+    /// Shortest gap between two runs of a person's schedule, in milliseconds.
+    /// A cron whose two nearest slots are closer than this is refused when it
+    /// is declared, so one person's schedule cannot hammer what it calls.
+    #[serde(default = "default_personal_schedule_min_interval_ms")]
+    pub personal_schedule_min_interval_ms: u64,
+
+    /// How many schedules one person may hold on one script. A script that
+    /// restates keys in a loop meets this rather than filling the table.
+    #[serde(default = "default_personal_schedules_per_person_script")]
+    pub personal_schedules_per_person_script: u32,
+
+    /// How many schedules one person may hold across every script.
+    #[serde(default = "default_personal_schedules_per_person")]
+    pub personal_schedules_per_person: u32,
+
     /// Fail server startup if any script init fails
     #[serde(default)]
     pub fail_startup_on_init_error: bool,
+}
+
+fn default_personal_schedule_min_interval_ms() -> u64 {
+    15 * 60 * 1000
+}
+
+fn default_personal_schedules_per_person_script() -> u32 {
+    10
+}
+
+fn default_personal_schedules_per_person() -> u32 {
+    50
 }
 
 fn default_enable_init_functions() -> bool {
@@ -833,6 +860,9 @@ impl Default for JavaScriptConfig {
             job_timeout_ms: Some(60_000),
             test_timeout_ms: Some(30_000),
             test_run_timeout_ms: Some(300_000),
+            personal_schedule_min_interval_ms: default_personal_schedule_min_interval_ms(),
+            personal_schedules_per_person_script: default_personal_schedules_per_person_script(),
+            personal_schedules_per_person: default_personal_schedules_per_person(),
             fail_startup_on_init_error: false,
         }
     }
@@ -1393,6 +1423,18 @@ mod tests {
         assert_eq!(
             shipped.javascript.stack_size_bytes,
             defaults.stack_size_bytes
+        );
+        assert_eq!(
+            shipped.javascript.personal_schedule_min_interval_ms,
+            defaults.personal_schedule_min_interval_ms
+        );
+        assert_eq!(
+            shipped.javascript.personal_schedules_per_person_script,
+            defaults.personal_schedules_per_person_script
+        );
+        assert_eq!(
+            shipped.javascript.personal_schedules_per_person,
+            defaults.personal_schedules_per_person
         );
     }
 

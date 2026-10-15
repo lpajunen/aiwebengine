@@ -58,6 +58,7 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
         .route("/elevate/drop", post(elevate_drop_route))
         .route("/delegations/revoke", post(revoke_delegation_route))
         .route("/delegations/unlink", post(unlink_sender_route))
+        .route("/delegations/schedule", post(schedule_action_route))
         .route("/logout", get(logout).post(logout))
         .route("/refresh", post(refresh_session))
         .route("/status", get(auth_status))

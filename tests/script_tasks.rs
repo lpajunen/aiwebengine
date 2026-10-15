@@ -56,6 +56,7 @@ async fn a_task_runs_its_handler_with_the_payload_it_carried() {
         max_attempts: task.max_attempts,
         run_as: None,
         claim_epoch: 0,
+        schedule: None,
     };
 
     tokio::task::spawn_blocking(move || js_engine::execute_task_handler(&invocation, None, None))
@@ -111,6 +112,7 @@ async fn an_undelegated_task_cannot_reach_the_management_tools() {
         max_attempts: task.max_attempts,
         run_as: None,
         claim_epoch: 0,
+        schedule: None,
     };
 
     tokio::task::spawn_blocking(move || js_engine::execute_task_handler(&invocation, None, None))
@@ -523,6 +525,7 @@ async fn a_fenced_run_stops_and_a_handler_sees_its_fencing_token() {
         max_attempts: 1,
         run_as: None,
         claim_epoch: 7,
+        schedule: None,
     };
 
     let fence = aiwebengine::lease::Fence::default();

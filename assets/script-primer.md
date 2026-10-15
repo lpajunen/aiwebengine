@@ -247,7 +247,8 @@ steps, and answer with an error rather than loop.
 
 ## Not in this primer
 
-Streams, scheduled jobs and tasks, `database` schemas, delegation, outbound MCP
+Streams, scheduled jobs and tasks, `database` schemas, delegation and personal
+schedules, outbound MCP
 clients, sandboxed code and elevation. Read their sections of
 `aiwebengine.d.ts` before using one, and ask the person before changing a
 database schema.

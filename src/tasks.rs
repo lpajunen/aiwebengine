@@ -79,6 +79,12 @@ fn wake_signal() -> &'static Notify {
     WAKE.get_or_init(Notify::new)
 }
 
+/// Wake the worker, for a caller that queued work through its own
+/// transaction and has just committed it.
+pub fn wake() {
+    wake_signal().notify_waiters();
+}
+
 /// Why an enqueue was refused.
 ///
 /// Separate variants rather than one string because the JavaScript side turns
@@ -186,6 +192,19 @@ pub struct TaskInvocation {
     /// The claim this run holds the row under ([`crate::lease`]). Every write
     /// about how the run ended is guarded by it.
     pub claim_epoch: i64,
+    /// The personal schedule that fired this task, when one did.
+    pub schedule: Option<ScheduleRun>,
+}
+
+/// Which schedule a task is a run of, and which slot.
+#[derive(Debug, Clone)]
+pub struct ScheduleRun {
+    pub schedule_id: Uuid,
+    /// The schedule's key, as the handler reads it in `context.meta.schedule`.
+    /// `None` when the schedule was deleted after it fired.
+    pub key: Option<String>,
+    /// The slot this run is for, which retries do not move.
+    pub scheduled_for: DateTime<Utc>,
 }
 
 /// How long to wait before the attempt after `attempts` failures.
@@ -219,7 +238,7 @@ const MAX_LANE_CHARS: usize = 128;
 /// reason: the caller's intent is legible and losing the tail still
 /// serialises everything that shares the prefix, which is the direction that
 /// errs toward running less at once rather than more.
-fn normalize_lane(lane: Option<&str>) -> Option<String> {
+pub(crate) fn normalize_lane(lane: Option<&str>) -> Option<String> {
     let lane = lane?.trim();
     if lane.is_empty() {
         return None;
@@ -276,6 +295,31 @@ async fn insert<'e, E>(executor: E, task: NewTask) -> Result<Task, EnqueueError>
 where
     E: sqlx::PgExecutor<'e>,
 {
+    insert_row(executor, task, None).await
+}
+
+/// Write the row for one run of a personal schedule, inside the transaction
+/// that fires it ([`crate::personal_schedules::fire_due`]).
+pub(crate) async fn insert_scheduled<'e, E>(
+    executor: E,
+    task: NewTask,
+    schedule_id: Uuid,
+    scheduled_for: DateTime<Utc>,
+) -> Result<Task, EnqueueError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    insert_row(executor, task, Some((schedule_id, scheduled_for))).await
+}
+
+async fn insert_row<'e, E>(
+    executor: E,
+    task: NewTask,
+    schedule: Option<(Uuid, DateTime<Utc>)>,
+) -> Result<Task, EnqueueError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
     let (max_attempts, handler) = validate(&task)?;
     let lane = normalize_lane(task.lane.as_deref());
 
@@ -285,8 +329,9 @@ where
     let row = sqlx::query(
         r#"
         INSERT INTO script_tasks
-            (task_id, script_uri, handler_name, payload, state, max_attempts, run_at, enqueued_by, run_as, lane)
-        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9)
+            (task_id, script_uri, handler_name, payload, state, max_attempts, run_at, enqueued_by,
+             run_as, lane, schedule_id, scheduled_for)
+        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11)
         RETURNING task_id, script_uri, handler_name, payload, state, attempts, max_attempts,
                   last_error, run_at, enqueued_by, run_as, lane, created_at, updated_at
         "#,
@@ -300,6 +345,8 @@ where
     .bind(task.enqueued_by.as_deref())
     .bind(task.run_as.as_deref())
     .bind(lane.as_deref())
+    .bind(schedule.map(|(id, _)| id))
+    .bind(schedule.map(|(_, at)| at))
     .fetch_one(executor)
     .await
     .map_err(|e| EnqueueError::Storage(e.to_string()))?;
@@ -662,7 +709,10 @@ pub async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocatio
             )
           )
         RETURNING tasks.task_id, tasks.script_uri, tasks.handler_name, tasks.payload,
-                  tasks.attempts, tasks.max_attempts, tasks.run_as, tasks.claim_epoch
+                  tasks.attempts, tasks.max_attempts, tasks.run_as, tasks.claim_epoch,
+                  tasks.schedule_id, tasks.scheduled_for,
+                  (SELECT schedule_key FROM personal_schedules AS ps
+                   WHERE ps.schedule_id = tasks.schedule_id) AS schedule_key
         "#,
     )
     .bind(now)
@@ -695,6 +745,15 @@ pub async fn claim_due(worker_id: &str, now: DateTime<Utc>) -> Vec<TaskInvocatio
             max_attempts: row.get("max_attempts"),
             run_as: row.get("run_as"),
             claim_epoch: row.get("claim_epoch"),
+            schedule: row
+                .get::<Option<Uuid>, _>("schedule_id")
+                .map(|schedule_id| ScheduleRun {
+                    schedule_id,
+                    key: row.get("schedule_key"),
+                    scheduled_for: row
+                        .get::<Option<DateTime<Utc>>, _>("scheduled_for")
+                        .unwrap_or(now),
+                }),
         })
         .collect()
 }
@@ -798,6 +857,17 @@ async fn finalize(invocation: &TaskInvocation, outcome: Result<Option<Value>, St
                 warn!(task = %invocation.task_id, error = %e, "Failed settling a completed task's handle");
                 return;
             }
+            if let Some(schedule) = &invocation.schedule
+                && let Err(e) = crate::personal_schedules::record_outcome_on(
+                    &mut tx,
+                    schedule.schedule_id,
+                    true,
+                )
+                .await
+            {
+                warn!(task = %invocation.task_id, error = %e, "Failed recording a scheduled run's success");
+                return;
+            }
             if let Err(e) = tx.commit().await {
                 warn!(task = %invocation.task_id, error = %e, "Failed recording a completed task");
             }
@@ -880,6 +950,17 @@ async fn finalize(invocation: &TaskInvocation, outcome: Result<Option<Value>, St
         .await
     {
         warn!(task = %invocation.task_id, error = %e, "Failed settling a failed task's handle");
+        return;
+    }
+
+    // A schedule counts given-up runs, not attempts: a retry that then
+    // succeeds is a run that worked.
+    if exhausted
+        && let Some(schedule) = &invocation.schedule
+        && let Err(e) =
+            crate::personal_schedules::record_outcome_on(&mut tx, schedule.schedule_id, false).await
+    {
+        warn!(task = %invocation.task_id, error = %e, "Failed recording a scheduled run's failure");
         return;
     }
 
@@ -1042,6 +1123,9 @@ pub async fn worker(worker_id: String, mut shutdown: oneshot::Receiver<()>) {
     info!(worker = %worker_id, "Task worker started");
 
     loop {
+        // Schedules first, so a slot that is due now is claimed in this tick.
+        crate::personal_schedules::fire_due(Utc::now()).await;
+
         for invocation in claim_due(&worker_id, Utc::now()).await {
             tokio::spawn(run(invocation));
         }

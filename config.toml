@@ -116,6 +116,13 @@ enable_init_functions = true
 # budget rather than a small number of them.
 test_timeout_ms = 30000
 test_run_timeout_ms = 300000
+# A person's own schedules (`personalTasks.schedule`). The floor is the
+# shortest gap between two runs, so one person's cron cannot hammer what it
+# calls; the counts stop a script restating keys in a loop from filling the
+# table.
+personal_schedule_min_interval_ms = 900000
+personal_schedules_per_person_script = 10
+personal_schedules_per_person = 50
 
 [repository]
 # PostgreSQL is the only storage backend, and its URL is always an environment

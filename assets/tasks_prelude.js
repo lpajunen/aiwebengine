@@ -134,6 +134,46 @@
       return unwrap(host.inviteLink(JSON.stringify(options)));
     },
 
+    // Declare, or replace, this person's schedule under `spec.key`:
+    // {key, handler, payload?, intervalMinutes | intervalMilliseconds | cron,
+    //  timeZone? (required with cron), firstRunAfterMs?, lane?}.
+    //
+    // It belongs to the person, not to this version of the code: it survives
+    // a deployment, ends when they withdraw their grant, pauses while the
+    // grant has lapsed, and is listed on their account page. Declaring it
+    // again with the same cadence keeps its next slot, so calling this on
+    // every visit is safe; it also resumes a paused one.
+    schedule: function (spec) {
+      if (spec === null || typeof spec !== "object") {
+        throw new TypeError("personalTasks.schedule requires a spec object");
+      }
+      return unwrap(host.schedule(JSON.stringify(spec)));
+    },
+
+    // As `schedule`, for the person a linked sender belongs to — the spec
+    // plus {channel, identity}, resolved as `enqueueFrom` resolves them.
+    scheduleFrom: function (spec) {
+      if (spec === null || typeof spec !== "object") {
+        throw new TypeError(
+          "personalTasks.scheduleFrom requires a spec object",
+        );
+      }
+      return unwrap(host.scheduleFrom(JSON.stringify(spec)));
+    },
+
+    // This person's schedules for this script. Never anybody else's.
+    schedules: function () {
+      return unwrap(host.schedules());
+    },
+
+    // Remove one. False if there was nothing under that key.
+    unschedule: function (key) {
+      if (typeof key !== "string") {
+        throw new TypeError("personalTasks.unschedule requires a key");
+      }
+      return unwrap(host.unschedule(key));
+    },
+
     cancel: function (taskId) {
       return unwrap(host.cancel(String(taskId)));
     },

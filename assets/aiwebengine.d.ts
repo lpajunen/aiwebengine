@@ -164,7 +164,11 @@ declare function init(context?: HandlerContext): void;
  *
  * **Scheduled jobs.** A recurring interval is at least
  * {{limits.scheduler.minRecurringInterval}} and a job name
- * 1-{{limits.scheduler.maxJobNameChars}} characters.
+ * 1-{{limits.scheduler.maxJobNameChars}} characters. A person's schedule
+ * (`personalTasks.schedule`) runs at most every
+ * {{limits.scheduler.personalMinInterval}}, and one person may hold
+ * {{limits.scheduler.personalPerScript}} on a script and
+ * {{limits.scheduler.personalPerPerson}} in all.
  *
  * **Retention.** Logs are not storage: a line survives only while it is within
  * both the newest {{limits.retention.logsKeepPerScript}} of its script and
@@ -375,7 +379,9 @@ interface HandlerContext {
 
   /**
    * What this particular kind of invocation was given. A scheduled handler
-   * finds its schedule under `meta.schedule`; a task handler finds `meta.task`.
+   * finds its schedule under `meta.schedule`; a task handler finds `meta.task`,
+   * and when a person's schedule fired the task, also `meta.schedule` as a
+   * {@link PersonalScheduleRun}.
    */
   meta?: {
     task?: TaskContext;
@@ -401,6 +407,16 @@ interface TaskContext {
    * write carrying an older token than one it has seen.
    */
   fencingToken: number;
+}
+
+/**
+ * Which slot of which personal schedule a task is a run of —
+ * `context.meta.schedule` in a task that `personalTasks.schedule` fired.
+ */
+interface PersonalScheduleRun {
+  key: string;
+  /** The slot this run is for (UTC). Retries do not move it. */
+  scheduledFor: string;
 }
 
 // ============================================================================
@@ -1247,8 +1263,107 @@ interface PersonalTasks {
    */
   inviteLink(options: { channel: string; identity: string }): LinkInvitation;
 
+  /**
+   * Declare, or replace, this person's schedule under `spec.key`: work that
+   * runs as them, on a cadence of their choosing, while they are away.
+   *
+   * It belongs to the person, not to this version of the code. It survives a
+   * deployment; it is deleted when they withdraw their grant, paused while the
+   * grant has lapsed and resumed when they give it again; and it is listed on
+   * their account page, where they can pause or delete it. Each run is an
+   * ordinary `enqueue`d task: their lane, retries, the job budget.
+   *
+   * Declaring it again with the same cadence keeps its next slot, so calling
+   * this on every visit is safe. It also resumes a paused schedule.
+   *
+   * A slot whose previous run has not finished is skipped, not stacked. After
+   * downtime a schedule runs once, not once per missed slot. Three runs in a
+   * row that give up pause it as `failing`.
+   *
+   * Grants last at most 90 days and the engine does not yet tell anybody when
+   * one is about to lapse. Read `authorization().expiresAt` in the handler and
+   * say so in whatever channel the app already uses.
+   *
+   * @throws SecurityError as `enqueue` does — nobody signed in, no live grant,
+   *   or a read-only delegated run.
+   * @throws RangeError for an invalid cron, an unknown time zone, runs closer
+   *   than {{limits.scheduler.personalMinInterval}} (`* * * * *` is refused,
+   *   `0 7 * * *` passes), or more schedules than one person may hold
+   *   ({{limits.scheduler.personalPerScript}} per script,
+   *   {{limits.scheduler.personalPerPerson}} in all).
+   *
+   * @example
+   * personalTasks.schedule({
+   *   key: "morning-digest",
+   *   handler: "sendDigest",
+   *   cron: "0 7 * * *",
+   *   timeZone: "Europe/Helsinki",
+   * });
+   */
+  schedule(spec: ScheduleSpec): PersonalSchedule;
+
+  /**
+   * As `schedule`, for the person a linked sender belongs to (a Telegram or
+   * Slack webhook). The sender is resolved as `enqueueFrom` resolves it.
+   */
+  scheduleFrom(
+    spec: ScheduleSpec & { channel: string; identity: string },
+  ): PersonalSchedule;
+
+  /** This person's schedules for this script. Never anybody else's. */
+  schedules(): PersonalSchedule[];
+
+  /** Remove one. False if there was nothing under that key. */
+  unschedule(key: string): boolean;
+
   cancel(taskId: string): boolean;
   get(taskId: string): ScriptTask | null;
+}
+
+/** When, and what: the argument to `personalTasks.schedule`. */
+interface ScheduleSpec {
+  /**
+   * Saying it again under the same key replaces it. Up to
+   * {{limits.scheduler.personalMaxKeyChars}} characters.
+   */
+  key: string;
+  handler: string;
+  payload?: Record<string, unknown>;
+  /** Exactly one of `intervalMinutes`, `intervalMilliseconds` and `cron`. */
+  intervalMinutes?: number;
+  intervalMilliseconds?: number;
+  /**
+   * Five fields (minute hour day month weekday), e.g. `"0 7 * * *"`,
+   * evaluated in `timeZone` so seven stays at seven across daylight saving.
+   * A local time that does not exist (the spring gap) runs at the first
+   * instant after it; one that happens twice (the autumn overlap) runs once,
+   * at the first.
+   */
+  cron?: string;
+  /** IANA name, such as `"Europe/Helsinki"`. Required with `cron`, refused with an interval. */
+  timeZone?: string;
+  /** The first run, when it should not wait a whole interval. */
+  firstRunAfterMs?: number;
+  /** As `enqueue`: defaults to the person; `null` for no lane. */
+  lane?: string | null;
+}
+
+/** A person's schedule, as `personalTasks.schedule` and `schedules()` answer. */
+interface PersonalSchedule {
+  key: string;
+  handler: string;
+  cron: string | null;
+  intervalMinutes: number | null;
+  timeZone: string | null;
+  /** UTC. */
+  nextRunAt: string;
+  lastRunAt: string | null;
+  state: "active" | "paused";
+  /**
+   * Why it is paused: the grant lapsed, three runs in a row gave up, or the
+   * person paused it on their account page.
+   */
+  pausedReason?: "expired" | "failing" | "person";
 }
 
 /** What `personalTasks.sender()` answers. */

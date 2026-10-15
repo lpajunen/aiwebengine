@@ -331,6 +331,51 @@ account had.
   somebody after their access has changed, and it is the one a session list
   cannot show, so "signed out everywhere" has to include it.
 
+## Schedules that belong to the person
+
+`personalTasks.schedule({ key, handler, cron, timeZone })` (or an
+`intervalMinutes`) declares work that runs as the person on a cadence of their
+choosing — "every morning at seven, summarise the news I follow". The row lives
+in `personal_schedules` (`src/personal_schedules.rs`) and says only _when_.
+When it is due, the task worker inserts an ordinary delegated task, so a run is
+exactly what `personalTasks.enqueue` gives: the person's lane, retries, the job
+budget, and the grant re-read when it runs. The handler also finds
+`context.meta.schedule = { key, scheduledFor }`.
+
+Who may declare one is the rule `enqueue` already has: someone signed in,
+`EnqueueTasks` (which a delegated run holds only with `write`), and a live
+grant. `scheduleFrom` resolves a linked sender as `enqueueFrom` does.
+`schedules()` lists only the caller's own; nothing lists anybody else's.
+
+It follows the grant rather than the code:
+
+| Event                            | Schedule                                           |
+| -------------------------------- | -------------------------------------------------- |
+| Script redeployed                | Kept                                               |
+| Script renamed or deleted        | Follows, or is deleted (foreign key)               |
+| Grant withdrawn, or `revoke_all` | Deleted                                            |
+| Grant lapsed                     | Paused, `expired`; resumes when the grant is given |
+| Account deleted                  | Deleted (foreign key)                              |
+| Three runs in a row give up      | Paused, `failing`                                  |
+
+Withdrawing deletes and expiry only pauses on purpose: withdrawing is the
+person saying stop, and expiry is a deadline passing. The consent page lists
+the paused schedules that granting will start again.
+
+A slot whose previous run has not finished is skipped rather than stacked, and
+after downtime a schedule runs once rather than once per missed slot. A cron is
+evaluated in its time zone; a local time in the spring gap runs at the first
+instant after it, and one in the autumn overlap runs once, at the first.
+
+Limits sit in `[javascript]`: `personal_schedule_min_interval_ms` (15 minutes),
+`personal_schedules_per_person_script` (10) and `personal_schedules_per_person`
+(50). A cron whose two nearest slots are closer than the floor is refused when
+declared.
+
+The engine cannot yet warn anybody that a grant is about to lapse, so a
+scheduled app should read `personalTasks.authorization().expiresAt` in its run
+and say so in whatever channel it already uses.
+
 ## What the person sees
 
 `/auth/delegate?script=<uri>` states what is being asked for in their terms,
@@ -345,3 +390,10 @@ agreeing to something that was not on the page.
 The form's CSRF token is bound to the user (`validate_token_for`), because an
 unbound one is something anybody can fetch with no browser and no account —
 and this form is a grant of authority.
+
+The account page lists each grant's schedules under it — the key, "daily at
+07:00 (Europe/Helsinki)" or "every 6 hours", the next and last run, and why it
+is paused — with **Pause/Resume** and **Delete**
+(`POST /auth/delegations/schedule`). There is no edit: changing what runs is
+the app's to offer. Declaring and deleting a schedule write audit lines naming
+how the actor was acting.

@@ -204,6 +204,13 @@ pub struct FetchLimits {
 pub struct SchedulerLimits {
     pub min_recurring_interval_ms: i64,
     pub max_job_name_chars: usize,
+    /// Shortest gap between two runs of a person's schedule
+    /// (`javascript.personal_schedule_min_interval_ms`).
+    pub personal_min_interval_ms: u64,
+    /// Schedules one person may hold on one script, and in all.
+    pub personal_per_person_script: u32,
+    pub personal_per_person: u32,
+    pub personal_max_key_chars: usize,
 }
 
 /// What one `/engine/search_files` answers with before it stops looking.
@@ -276,6 +283,7 @@ pub fn snapshot() -> Limits {
     let (test_module_timeout_ms, test_run_timeout_ms) =
         crate::script_test::configured_test_timeouts();
     let logs = crate::log_retention::configured();
+    let personal = crate::personal_schedules::limits();
 
     Limits {
         notes: vec![
@@ -355,6 +363,10 @@ pub fn snapshot() -> Limits {
         scheduler: SchedulerLimits {
             min_recurring_interval_ms: crate::scheduler::MIN_RECURRING_INTERVAL_MS,
             max_job_name_chars: crate::scheduler::MAX_JOB_NAME_CHARS,
+            personal_min_interval_ms: personal.min_interval_ms,
+            personal_per_person_script: personal.per_person_script,
+            personal_per_person: personal.per_person,
+            personal_max_key_chars: crate::personal_schedules::MAX_KEY_CHARS,
         },
         search: SearchLimits {
             max_files: crate::engine_api::MAX_SEARCH_FILES,
@@ -608,6 +620,22 @@ fn placeholder_values(limits: &Limits) -> Vec<(String, String)> {
         (
             "scheduler.maxJobNameChars",
             count(scheduler.max_job_name_chars),
+        ),
+        (
+            "scheduler.personalMinInterval",
+            duration(scheduler.personal_min_interval_ms),
+        ),
+        (
+            "scheduler.personalPerScript",
+            count(scheduler.personal_per_person_script as usize),
+        ),
+        (
+            "scheduler.personalPerPerson",
+            count(scheduler.personal_per_person as usize),
+        ),
+        (
+            "scheduler.personalMaxKeyChars",
+            count(scheduler.personal_max_key_chars),
         ),
         (
             "retention.logsKeepPerScript",

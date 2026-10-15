@@ -165,6 +165,16 @@ The lane is on the row, so `list_tasks` and `/engine/list_tasks` answer "why has
 this not run" with "it is behind another task in its lane" rather than
 leaving you to guess.
 
+## Recurring work for a person
+
+A handler that re-enqueues itself makes a chain, but nothing stops two chains
+for the same intent, nobody can see one running, and it dies silently when its
+retries run out. `personalTasks.schedule` is the declaration for that: keyed,
+kept across deployments, bounded by the person's grant, and listed on their
+account page. Each due slot becomes an ordinary task in this queue, with a
+`schedule_id` on the row so its outcome is written back. See
+[DELEGATION.md](DELEGATION.md#schedules-that-belong-to-the-person).
+
 ## Seeing the queue
 
 ```bash

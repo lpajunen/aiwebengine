@@ -100,6 +100,8 @@ postgresql_embedded = { version = "0.21.0", default-features = false, features =
 resvg = { version = "0.48", default-features = false, features = ["text"] }
 # Parses `svg_to_png`'s `background` as a CSS color; the version usvg uses.
 svgtypes = "0.16"
+croner = "4.0.1"
+chrono-tz = "0.10.4"
 
 [target.'cfg(unix)'.dependencies]
 # `setrlimit` for the SVG renderer's child process (`svg_to_png.rs`).
