@@ -58,6 +58,7 @@ pub mod module_loader;
 pub mod notifications;
 pub mod openapi_schemas;
 pub mod parsers;
+pub mod reader;
 pub mod repository;
 pub mod resource_access;
 pub mod revisions;

@@ -27,6 +27,18 @@
     return value;
   }
 
+  function optionsJson(options, api) {
+    if (
+      options !== undefined &&
+      (options === null ||
+        typeof options !== "object" ||
+        Array.isArray(options))
+    ) {
+      throw new TypeError(api + ": options must be an object");
+    }
+    return JSON.stringify(options || {});
+  }
+
   var host = globalThis.__hostConvert;
 
   var convert = {
@@ -52,16 +64,26 @@
     // svg_to_png(svg, { width, height, background }) — the PNG as base64.
     svg_to_png: function (svg, options) {
       var api = "convert.svg_to_png";
-      if (
-        options !== undefined &&
-        (options === null ||
-          typeof options !== "object" ||
-          Array.isArray(options))
-      ) {
-        throw new TypeError(api + ": options must be an object");
-      }
       return unwrap(
-        host.svg_to_png(text(svg, api), JSON.stringify(options || {})),
+        host.svg_to_png(text(svg, api), optionsJson(options, api)),
+        api,
+      );
+    },
+
+    // parse_feed(xml, { baseUrl }) — RSS, Atom or JSON Feed as one shape.
+    parse_feed: function (source, options) {
+      var api = "convert.parse_feed";
+      return unwrap(
+        host.parse_feed(text(source, api), optionsJson(options, api)),
+        api,
+      );
+    },
+
+    // extract_article(html, { url, format }) — the article, or null.
+    extract_article: function (html, options) {
+      var api = "convert.extract_article";
+      return unwrap(
+        host.extract_article(text(html, api), optionsJson(options, api)),
         api,
       );
     },

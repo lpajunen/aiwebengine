@@ -102,6 +102,13 @@ resvg = { version = "0.48", default-features = false, features = ["text"] }
 svgtypes = "0.16"
 croner = "4.0.1"
 chrono-tz = "0.10.4"
+# `convert.parse_feed`: RSS 0.9x/1.0/2.0, Atom and JSON Feed. Without
+# `sanitize`: feed HTML is reduced to text here, never passed on as markup.
+feed-rs = "3"
+# `convert.extract_article`: a port of Mozilla's Readability.
+dom_smoothie = "0.18"
+# Feed HTML to text; the version dom_smoothie parses with.
+dom_query = "0.28"
 
 [target.'cfg(unix)'.dependencies]
 # `setrlimit` for the SVG renderer's child process (`svg_to_png.rs`).

@@ -2250,6 +2250,69 @@ interface SvgToPngOptions {
   background?: string;
 }
 
+/** What {@link Convert.parse_feed} reads. Unknown keys are refused. */
+interface ParseFeedOptions {
+  /** Resolves relative links, for a feed without an `xml:base` of its own: the feed's URL. */
+  baseUrl?: string;
+}
+
+/** A feed, whichever format it arrived in. Every text field is plain text: HTML in the feed is reduced to its text. */
+interface Feed {
+  format: "rss0" | "rss1" | "rss2" | "atom" | "json";
+  title: string | null;
+  description: string | null;
+  /** The site the feed is for. */
+  link: string | null;
+  language: string | null;
+  /** ISO 8601, UTC. */
+  updated: string | null;
+  items: FeedItem[];
+}
+
+interface FeedItem {
+  /**
+   * The feed's own id (`guid`, Atom `id`), or one derived from the item when
+   * it has none. Stable from one read to the next: key what was seen by it.
+   */
+  id: string;
+  title: string | null;
+  /** The page to read, not the feed's `self` link or an enclosure. */
+  link: string | null;
+  /** ISO 8601, UTC. */
+  published: string | null;
+  updated: string | null;
+  /** The teaser (`description`, Atom `summary`). */
+  summary: string | null;
+  /** The full body, when the feed carries one (`content:encoded`, Atom `content`). */
+  content: string | null;
+  authors: string[];
+  categories: string[];
+  /** An image URL: MediaRSS, an image enclosure, or the first `<img>` in the item. */
+  image: string | null;
+}
+
+/** What {@link Convert.extract_article} reads. Unknown keys are refused. */
+interface ExtractArticleOptions {
+  /** The page's own URL, absolute: links and images in the text resolve against it. */
+  url?: string;
+  /** `"markdown"` (the default) keeps headings, lists and links; `"text"` is plain. */
+  format?: "markdown" | "text";
+}
+
+/** The article in a page, without the navigation, ads and footers around it. */
+interface Article {
+  title: string;
+  byline: string | null;
+  siteName: string | null;
+  language: string | null;
+  /** As the page states it, usually ISO 8601. */
+  published: string | null;
+  excerpt: string | null;
+  image: string | null;
+  /** The body in the requested `format`. Never HTML. */
+  text: string;
+}
+
 /**
  * Conversion utilities for data transformation
  */
@@ -2302,6 +2365,34 @@ interface Convert {
    * });
    */
   svg_to_png(svg: string, options?: SvgToPngOptions): string;
+
+  /**
+   * Read an RSS (0.9x, 1.0, 2.0), Atom or JSON Feed document into one shape.
+   * Items come in the feed's order. Throws when the text is not a feed, or is
+   * over {{limits.size.maxReaderInput}}.
+   * @example
+   * const res = fetch("https://news.example/rss.xml");
+   * const feed = convert.parse_feed(res.body, { baseUrl: "https://news.example/rss.xml" });
+   * const fresh = feed.items.filter((item) => !scriptStorage.getItem(`seen:${item.id}`));
+   */
+  parse_feed(source: string, options?: ParseFeedOptions): Feed;
+
+  /**
+   * Find the article in an HTML page, as Firefox's reader view does, and
+   * answer its text and metadata. `null` when the page holds no article: an
+   * index, a paywall or login page, or a page built in the browser by
+   * JavaScript (nothing here runs the page's scripts). Throws when the input
+   * is over {{limits.size.maxReaderInput}} or has more than
+   * {{limits.size.maxArticleElements}} elements.
+   * @example
+   * const page = fetch(item.link);
+   * const article = convert.extract_article(page.body, { url: item.link });
+   * if (article) summarise(article.title, article.text);
+   */
+  extract_article(
+    html: string,
+    options?: ExtractArticleOptions,
+  ): Article | null;
 
   /** Base64-encode a string (as UTF-8). Throws on a value that is not a string. */
   btoa(data: string): string;

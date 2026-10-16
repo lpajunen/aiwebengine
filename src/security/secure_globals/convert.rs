@@ -73,7 +73,54 @@ impl SecureGlobalContext {
                 }
             })?;
 
+        // Options arrive as JSON text, `{}` when omitted, as for `svg_to_png`.
+        let parse_feed = Function::new(
+            ctx.clone(),
+            move |source: String, options: String| -> String {
+                let options: crate::reader::ParseFeedOptions = match serde_json::from_str(&options)
+                {
+                    Ok(options) => options,
+                    Err(e) => {
+                        return host_failure(
+                            "TypeError",
+                            &format!("convert.parse_feed: options: {}", e),
+                        );
+                    }
+                };
+                match crate::reader::parse_feed(&source, &options)
+                    .and_then(|feed| serde_json::to_value(feed).map_err(|e| e.to_string()))
+                {
+                    Ok(feed) => host_ok(feed),
+                    Err(e) => host_failure("Error", &format!("convert.parse_feed: {}", e)),
+                }
+            },
+        )?;
+
+        let extract_article = Function::new(
+            ctx.clone(),
+            move |html: String, options: String| -> String {
+                let options: crate::reader::ExtractArticleOptions =
+                    match serde_json::from_str(&options) {
+                        Ok(options) => options,
+                        Err(e) => {
+                            return host_failure(
+                                "TypeError",
+                                &format!("convert.extract_article: options: {}", e),
+                            );
+                        }
+                    };
+                match crate::reader::extract_article(&html, &options)
+                    .and_then(|article| serde_json::to_value(article).map_err(|e| e.to_string()))
+                {
+                    Ok(article) => host_ok(article),
+                    Err(e) => host_failure("Error", &format!("convert.extract_article: {}", e)),
+                }
+            },
+        )?;
+
         host.set("markdown_to_html", markdown_to_html)?;
+        host.set("parse_feed", parse_feed)?;
+        host.set("extract_article", extract_article)?;
         host.set("svg_to_png", svg_to_png)?;
         host.set("render_handlebars_template", render_handlebars_template)?;
         host.set("btoa", btoa)?;

@@ -149,6 +149,10 @@ pub struct SizeLimits {
     pub max_png_edge: u32,
     pub max_png_pixels: u64,
     pub max_svg_nodes: usize,
+    /// `convert.parse_feed` and `convert.extract_article`: the input, and the
+    /// elements in a page an article is extracted from.
+    pub max_reader_input_bytes: usize,
+    pub max_article_elements: usize,
     /// Bytes of diff `/engine/diff_revisions` will render before truncating.
     pub max_revision_diff_bytes: usize,
     /// Characters in an `import` specifier.
@@ -340,6 +344,8 @@ pub fn snapshot() -> Limits {
             max_png_edge: crate::svg_to_png::MAX_PNG_EDGE,
             max_png_pixels: crate::svg_to_png::MAX_PNG_PIXELS,
             max_svg_nodes: crate::svg_to_png::MAX_SVG_NODES,
+            max_reader_input_bytes: crate::reader::MAX_READER_INPUT_BYTES,
+            max_article_elements: crate::reader::MAX_ARTICLE_ELEMENTS,
             max_revision_diff_bytes: crate::revisions::MAX_DIFF_BYTES,
             max_module_specifier_chars: crate::module_loader::MAX_MODULE_SPECIFIER_LENGTH,
         },
@@ -572,6 +578,8 @@ fn placeholder_values(limits: &Limits) -> Vec<(String, String)> {
         ("size.maxPngEdge", count(size.max_png_edge as usize)),
         ("size.maxPngPixels", count(size.max_png_pixels as usize)),
         ("size.maxSvgNodes", count(size.max_svg_nodes)),
+        ("size.maxReaderInput", bytes(size.max_reader_input_bytes)),
+        ("size.maxArticleElements", count(size.max_article_elements)),
         (
             "size.maxModuleSpecifierChars",
             count(size.max_module_specifier_chars),

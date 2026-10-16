@@ -39,6 +39,17 @@ allow = [
   "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
+# MPL-2.0 is copyleft per file, not per program: it binds changes to these
+# crates' own files, never the code that links them, so used unmodified they
+# put nothing on the engine. Servo's CSS parsing, through dom_query, which
+# `convert.extract_article` and `convert.parse_feed` read HTML with. Named one
+# by one, so another MPL-2.0 crate still needs a decision.
+exceptions = [
+  { allow = ["MPL-2.0"], crate = "cssparser" },
+  { allow = ["MPL-2.0"], crate = "cssparser-macros" },
+  { allow = ["MPL-2.0"], crate = "dtoa-short" },
+  { allow = ["MPL-2.0"], crate = "selectors" },
+]
 
 [bans]
 # Two versions of one crate are normal in a tree this size; report, don't fail.
