@@ -5,7 +5,10 @@
 //! are reduced to plain text or Markdown here, so nothing either returns can
 //! carry a script into a page that shows it.
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::sync::OnceLock;
 
 /// Input to either: what one `fetch` may return, so any response can be read.
 pub const MAX_READER_INPUT_BYTES: usize = crate::http_client::MAX_RESPONSE_SIZE;
@@ -51,6 +54,24 @@ pub struct ParseFeedOptions {
     pub base_url: Option<String>,
 }
 
+/// feed-rs refuses a whole feed over one empty `<media:title>` or
+/// `<media:description>`, which real feeds carry (`<media:description
+/// type="plain"></media:description>`). An empty one says nothing, so it is
+/// removed before parsing. Only the conventional `media:` prefix is matched.
+fn without_empty_media_text(source: &str) -> Cow<'_, str> {
+    static EMPTY: OnceLock<Option<Regex>> = OnceLock::new();
+    let empty = EMPTY.get_or_init(|| {
+        Regex::new(
+            r"<media:(?:title|description)\b[^>]*?(?:/>|>\s*(?:<!\[CDATA\[\s*\]\]>)?\s*</media:(?:title|description)\s*>)",
+        )
+        .ok()
+    });
+    match empty {
+        Some(empty) => empty.replace_all(source, ""),
+        None => Cow::Borrowed(source),
+    }
+}
+
 pub fn parse_feed(source: &str, options: &ParseFeedOptions) -> Result<Feed, String> {
     if source.trim().is_empty() {
         return Err("the feed is empty".to_string());
@@ -62,6 +83,7 @@ pub fn parse_feed(source: &str, options: &ParseFeedOptions) -> Result<Feed, Stri
             MAX_READER_INPUT_BYTES
         ));
     }
+    let source = without_empty_media_text(source);
     let feed = feed_rs::parser::Builder::new()
         .base_uri(options.base_url.as_deref())
         .build()
@@ -330,6 +352,33 @@ mod tests {
             Some("https://news.example/i.png")
         );
         assert_eq!(feed.items[1].summary.as_deref(), Some("Text."));
+    }
+
+    #[test]
+    fn empty_media_text_does_not_sink_the_feed() {
+        let rss = r#"<?xml version="1.0"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Example News</title>
+    <item>
+      <title>Kept</title>
+      <link>https://news.example/kept</link>
+      <media:content url="https://news.example/k.jpg" type="image/jpeg" medium="image">
+        <media:credit></media:credit>
+        <media:description type="plain"></media:description>
+        <media:title/>
+      </media:content>
+      <media:description><![CDATA[]]></media:description>
+    </item>
+  </channel>
+</rss>"#;
+        let feed = parse_feed(rss, &ParseFeedOptions::default()).unwrap();
+        assert_eq!(feed.items.len(), 1);
+        assert_eq!(feed.items[0].title.as_deref(), Some("Kept"));
+        assert_eq!(
+            feed.items[0].image.as_deref(),
+            Some("https://news.example/k.jpg")
+        );
     }
 
     #[test]
