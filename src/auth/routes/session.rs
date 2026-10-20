@@ -107,11 +107,15 @@ pub async fn auth_status(
             )
             .await
     {
-        let label = session
-            .email
-            .clone()
-            .or_else(|| session.name.clone())
-            .unwrap_or_else(|| session.user_id.clone());
+        // A failed lookup names them as the session would rather than
+        // failing the whole answer: this is a label, not a decision.
+        let username = crate::auth::local::username_for_user(&session.user_id)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("Could not read the username for /auth/status: {}", e);
+                None
+            });
+        let label = account_label(username, &session);
         return Json(AuthResponse {
             success: true,
             user_id: Some(session.user_id),

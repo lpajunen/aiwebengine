@@ -1074,7 +1074,11 @@ interface DelegationState {
   expired?: boolean;
   expiresAt?: string;
   scopes?: DelegationScope[];
-  /** Where to send them to authorise it. Absent when nobody is signed in. */
+  /**
+   * Where to send them to authorise it. Absent when nobody is signed in.
+   * Append `&redirect=<path>` to bring them back to that page whether they
+   * authorise or not.
+   */
   consentUrl?: string;
 }
 

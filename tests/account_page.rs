@@ -274,6 +274,33 @@ async fn the_page_names_the_account_and_is_never_cached() {
     engine.shutdown().await;
 }
 
+/// The account menu on every page asks `/auth/status` who is signed in. A
+/// password sign-in carries no address, so a label taken from the session
+/// alone named the account by its id; it should match the account page.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_menu_names_a_password_account_by_its_username() {
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let http = engine.anonymous().clone();
+    let (username, cookie) = register_account(&engine, &http)
+        .await
+        .expect("registration should succeed");
+
+    let status: serde_json::Value = http
+        .get(engine.url("/auth/status"))
+        .header(reqwest::header::COOKIE, &cookie)
+        .send()
+        .await
+        .expect("status should answer")
+        .json()
+        .await
+        .expect("status is JSON");
+
+    assert_eq!(status["success"], true);
+    assert_eq!(status["label"], username.as_str());
+
+    engine.shutdown().await;
+}
+
 /// The round trip the whole page exists for, including the half that is not
 /// about the new password: every other session the account had ends.
 #[tokio::test(flavor = "multi_thread")]

@@ -273,6 +273,15 @@ pub async fn delegate_page(
     // different solution.
     let invitation = invitation.filter(|(for_script, _, _)| *for_script == script);
 
+    // Where the person came from, when the page that sent them said: both
+    // where "Authorise" lands and where "Not now" goes. Only a path on this
+    // engine.
+    let back = params
+        .redirect
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| safe_redirect_target(Some(value)));
+
     let token =
         session_token_from_headers(&headers, &config.session_cookie_name).unwrap_or_default();
     let session = if token.is_empty() {
@@ -291,10 +300,14 @@ pub async fn delegate_page(
         // from a chat with no session does not lose what they came to link.
         // The token is not spent by being shown, so it survives the round
         // trip.
-        let here = match params.link.as_deref() {
+        let mut here = match params.link.as_deref() {
             Some(token) => crate::delegation::link_url(token),
             None => crate::delegation::consent_url(&script),
         };
+        // And where they came from, so the way back survives the sign-in.
+        if let Some(back) = back.as_deref() {
+            here.push_str(&format!("&redirect={}", urlencoding::encode(back)));
+        }
         return Redirect::to(&format!(
             "/auth/login?redirect={}",
             urlencoding::encode(&here)
@@ -459,10 +472,16 @@ pub async fn delegate_page(
             </label>
             <button type="submit">Authorise</button>
         </form>
-        <p class="aw-small"><a href="/auth/account">Not now — back to your account</a></p>"#,
+        <p class="aw-small"><a href="{not_now}">{not_now_label}</a></p>"#,
         script = html_escape::encode_text(&script),
         script_value = html_attribute(&script),
-        redirect = html_attribute(params.redirect.as_deref().unwrap_or(ACCOUNT_PATH)),
+        redirect = html_attribute(back.as_deref().unwrap_or(ACCOUNT_PATH)),
+        not_now = html_attribute(back.as_deref().unwrap_or(ACCOUNT_PATH)),
+        not_now_label = if back.is_some() {
+            "Not now — go back"
+        } else {
+            "Not now — back to your account"
+        },
         csrf = html_attribute(&csrf_token),
         checkboxes = checkboxes,
         sender_note = sender_note,

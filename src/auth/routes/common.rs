@@ -146,6 +146,21 @@ pub(super) fn safe_redirect_target(candidate: Option<&str>) -> String {
     target.to_string()
 }
 
+/// What a signed-in person is called wherever the engine names them: the
+/// username of a local account, else the address or name the provider gave,
+/// else the id. One rule, so the account menu (`/auth/status`) and the
+/// account page cannot disagree — a password sign-in carries no address, and
+/// naming it by the session alone showed the id there.
+pub(super) fn account_label(
+    username: Option<String>,
+    session: &crate::auth::session::AuthSession,
+) -> String {
+    username
+        .or_else(|| session.email.clone())
+        .or_else(|| session.name.clone())
+        .unwrap_or_else(|| session.user_id.clone())
+}
+
 /// Escape a value being placed inside a double-quoted HTML attribute.
 ///
 /// Both of the values this page interpolates are engine-produced — an HMAC

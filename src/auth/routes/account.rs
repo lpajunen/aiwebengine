@@ -397,11 +397,7 @@ pub async fn account_page(
         .await
         .token;
 
-    let label = username
-        .clone()
-        .or_else(|| session.email.clone())
-        .or_else(|| session.name.clone())
-        .unwrap_or_else(|| session.user_id.clone());
+    let label = account_label(username.clone(), &session);
 
     let notice_block = match (params.error.as_deref(), params.notice.as_deref()) {
         (Some(code), _) => format!(

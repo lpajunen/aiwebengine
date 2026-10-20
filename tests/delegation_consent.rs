@@ -314,3 +314,66 @@ async fn the_page_offers_no_way_to_name_a_sender_by_hand() {
 
     engine.shutdown().await;
 }
+
+/// A page that sends somebody here names itself in `redirect`, and both ways
+/// off the page lead back to it: "Authorise" through the form, "Not now" as
+/// the link. Somewhere off this engine is not a way back.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_page_leads_back_to_where_the_person_came_from() {
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let http = engine.anonymous().clone();
+    let (_, cookie) = register(&engine, &http).await.expect("registered");
+
+    let script = "test://consent/way-back";
+    repository::upsert_script(script, "function work() {}").expect("script should store");
+
+    let page = |redirect: &str| {
+        http.get(engine.url(&format!(
+            "{}&redirect={}",
+            aiwebengine::delegation::consent_url(script),
+            urlencoding::encode(redirect)
+        )))
+        .header(reqwest::header::COOKIE, &cookie)
+        .send()
+    };
+
+    let html = page("/news-digest")
+        .await
+        .expect("the page should answer")
+        .text()
+        .await
+        .expect("a body");
+    assert!(html.contains(r#"name="redirect" value="/news-digest""#));
+    assert!(html.contains(r#"<a href="/news-digest">Not now — go back</a>"#));
+
+    let html = page("https://elsewhere.example/")
+        .await
+        .expect("the page should answer")
+        .text()
+        .await
+        .expect("a body");
+    assert!(!html.contains("elsewhere.example"));
+
+    // Signed out, the way back survives the sign-in.
+    let response = http
+        .get(engine.url(&format!(
+            "{}&redirect=%2Fagent",
+            aiwebengine::delegation::consent_url(script)
+        )))
+        .send()
+        .await
+        .expect("the page should answer");
+    let location = response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        location.contains("redirect%3D%252Fagent"),
+        "the sign-in should come back with the way back: {}",
+        location
+    );
+
+    engine.shutdown().await;
+}
