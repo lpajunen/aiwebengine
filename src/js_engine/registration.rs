@@ -325,10 +325,10 @@ pub struct DryRunParams {
 /// thread-local, so the rollback only covers work done on the thread that
 /// opened it — the same constraint the test runner works under.
 pub fn dry_run_registration_pass(params: &DryRunParams) -> RegistrationPassOutcome {
-    // Held for the whole pass and never committed: `TransactionGuard` rolls
-    // back when it drops, including on an early return.
+    // Held for the whole pass and never committed: `IsolationGuard` rolls the
+    // whole transaction back when it drops, including on an early return.
     let rollback_guard = if params.rollback {
-        match crate::database::Database::begin_transaction(Some(params.timeout_ms)) {
+        match crate::database::Database::begin_isolation(Some(params.timeout_ms)) {
             Ok(guard) => Some(guard),
             Err(e) => {
                 return RegistrationPassOutcome {

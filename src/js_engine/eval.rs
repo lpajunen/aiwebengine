@@ -159,10 +159,11 @@ pub fn evaluate_snippet(params: &EvalParams) -> EvalOutcome {
         crate::security::secure_globals::ConsoleCapture::default(),
     ));
 
-    // Held for the whole evaluation and never committed: `TransactionGuard`
-    // rolls back when it drops, including on an early return.
+    // Held for the whole evaluation and never committed: `IsolationGuard`
+    // rolls the whole transaction back when it drops, including on an early
+    // return.
     let rollback_guard = if params.rollback {
-        match crate::database::Database::begin_transaction(Some(params.timeout_ms)) {
+        match crate::database::Database::begin_isolation(Some(params.timeout_ms)) {
             Ok(guard) => Some(guard),
             Err(e) => fail_early!(format!(
                 "could not isolate the evaluation in a transaction: {}",

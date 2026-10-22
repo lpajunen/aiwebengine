@@ -278,6 +278,25 @@ pub fn get_current_transaction_ptr() -> Option<*mut Transaction<'static, Postgre
     })
 }
 
+/// A transaction that isolates a run — a test module, an evaluation, a dry
+/// run of `init()` — and is rolled back whole when it drops.
+///
+/// Whole means savepoints included. A script's `database.transaction()` inside
+/// the run is a savepoint whose guard the script has released, and a run cut
+/// short by its deadline leaves it open; rolling back one level would pop only
+/// that savepoint and leave the run's transaction in this pooled thread's
+/// state, where every later request on the thread would join it.
+#[derive(Debug)]
+pub struct IsolationGuard {
+    _private: (),
+}
+
+impl Drop for IsolationGuard {
+    fn drop(&mut self) {
+        let _ = Database::rollback_entire_transaction();
+    }
+}
+
 /// RAII guard for automatic transaction rollback on drop
 #[derive(Debug)]
 pub struct TransactionGuard {
@@ -797,6 +816,41 @@ impl Database {
         Ok(())
     }
 
+    /// Opens a transaction that isolates a run and is always rolled back whole
+    /// (see [`IsolationGuard`]). Refuses when one is already open on this
+    /// thread: an isolation nested in someone else's transaction would roll
+    /// back their work with its own.
+    pub fn begin_isolation(timeout_ms: Option<u64>) -> Result<IsolationGuard, String> {
+        if get_current_transaction_active() {
+            return Err("a transaction is already open on this thread".to_string());
+        }
+        Database::begin_transaction(timeout_ms)?.release();
+        Ok(IsolationGuard { _private: () })
+    }
+
+    /// Rolls back the current transaction whole — every savepoint opened
+    /// inside it and the transaction itself — and clears the thread's state.
+    /// Does nothing when no transaction is open.
+    pub fn rollback_entire_transaction() -> Result<(), String> {
+        let tx = CURRENT_TRANSACTION.with(|tx_cell| {
+            let mut tx_option = tx_cell.borrow_mut();
+            let tx = tx_option.as_mut().and_then(|state| {
+                state.finalized = true;
+                state.transaction.take()
+            });
+            *tx_option = None;
+            tx
+        });
+        let Some(tx) = tx else {
+            return Ok(());
+        };
+        run_blocking(async {
+            tx.rollback()
+                .await
+                .map_err(|e| format!("Failed to rollback transaction: {}", e))
+        })
+    }
+
     /// Rollback the current transaction
     ///
     /// If savepoints are active, this will rollback to the most recent savepoint.
@@ -1008,6 +1062,53 @@ mod tests {
             format!("{}s", config.statement_timeout_ms / 1_000),
             "a transaction's budget must not follow its connection into the pool"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_isolation_rolls_back_what_a_run_left_open_inside_it() {
+        let config = test_repository_config();
+        let db = Database::new(&config)
+            .await
+            .expect("connect to the test database");
+        assert!(initialize_global_database(Arc::new(db)));
+
+        // A run cut short inside a script's `database.transaction()` leaves a
+        // savepoint whose guard the script released. Dropping the isolation
+        // must still end the run's transaction, or this pooled thread hands it
+        // to every request it serves next.
+        let left_open = tokio::task::spawn_blocking(|| {
+            let isolation = Database::begin_isolation(Some(5000))?;
+            Database::begin_transaction(None)?.release();
+            Database::begin_transaction(None)?.release();
+            drop(isolation);
+            Ok::<_, String>(get_current_transaction_active())
+        })
+        .await
+        .expect("task panicked")
+        .expect("isolated run");
+
+        assert!(!left_open, "the run's transaction outlived its isolation");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_isolation_is_refused_inside_an_open_transaction() {
+        let config = test_repository_config();
+        let db = Database::new(&config)
+            .await
+            .expect("connect to the test database");
+        assert!(initialize_global_database(Arc::new(db)));
+
+        let refused = tokio::task::spawn_blocking(|| {
+            let outer = Database::begin_transaction(None)?;
+            let refused = Database::begin_isolation(None).is_err();
+            drop(outer);
+            Ok::<_, String>(refused && !get_current_transaction_active())
+        })
+        .await
+        .expect("task panicked")
+        .expect("outer transaction");
+
+        assert!(refused);
     }
 
     #[tokio::test(flavor = "multi_thread")]

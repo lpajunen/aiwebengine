@@ -260,11 +260,12 @@ pub(super) fn run_test_module(
     let collected =
         context.with(|ctx| install_and_collect_tests(&ctx, params, module_path, code))?;
 
-    // Held for the whole loop and never committed: `TransactionGuard` rolls
-    // back when it drops, including on an early return.
+    // Held for the whole loop and never committed: `IsolationGuard` rolls the
+    // whole transaction back when it drops, including what a case cut short
+    // by the deadline left open inside it.
     let _rollback_guard = if params.rollback {
         Some(
-            crate::database::Database::begin_transaction(Some(budget_ms))
+            crate::database::Database::begin_isolation(Some(budget_ms))
                 .map_err(|e| format!("could not isolate the run in a transaction: {}", e))?,
         )
     } else {

@@ -253,10 +253,17 @@ pub(super) fn finish_transaction(succeeded: bool) -> Result<(), String> {
         return Ok(());
     }
     if succeeded {
-        crate::database::Database::commit_transaction()
-            .map_err(|e| format!("transaction commit failed: {}", e))
+        // Every level the handler left open, savepoints first, so none of it
+        // stays behind on this pooled thread.
+        while crate::database::get_current_transaction_active() {
+            if let Err(e) = crate::database::Database::commit_transaction() {
+                let _ = crate::database::Database::rollback_entire_transaction();
+                return Err(format!("transaction commit failed: {}", e));
+            }
+        }
+        Ok(())
     } else {
-        let _ = crate::database::Database::rollback_transaction();
+        let _ = crate::database::Database::rollback_entire_transaction();
         Ok(())
     }
 }
@@ -293,7 +300,7 @@ impl Drop for StrayTransaction {
                 "a transaction was left open and is being rolled back; \
                  do the work inside database.transaction(fn) to keep its writes"
             );
-            let _ = crate::database::Database::rollback_transaction();
+            let _ = crate::database::Database::rollback_entire_transaction();
         }
     }
 }
