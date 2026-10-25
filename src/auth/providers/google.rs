@@ -530,4 +530,32 @@ mod tests {
         let provider = GoogleProvider::new(config).unwrap();
         assert_eq!(provider.name(), "google");
     }
+
+    /// The public half of a throwaway RSA key, as a JWKS publishes it, and an
+    /// ID token it signed (expiring in 2100). The private key was discarded.
+    const TEST_JWK_N: &str = "t0DzS_nkSWD19hBdcl5Fw4S_4bZCM7WAAy98AnJ0kNtbGReJd1YwOJ3Ul0sKwGNKQHxNoeAQ2oWG33gQO_pSQqvi3ubKrPsQ_xJBSe6TBwrj7QEPhn1Jl7vA47yJrQDmc0xhCw8tx9VfQSiV9rfqNsF1zFVdIwVqaZuMQd5Ct9jUvQyyIpNL5aFkm6BalqsexA-uqO-WWI4aujXKMqTYAlYTs8Du2AvlbXShOi9a1GGctxQKI5450NfI4vDZM5ohp61RNX-QIyuVG5e0IIr9xoH2UCPU7Tav65D3yXyn3xRi4o6N_dbijTsYKdCgjjyvf7Lu6AWnQYBMjPXO2giVzQ";
+    const TEST_JWK_E: &str = "AQAB";
+    const TEST_ID_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InRlc3Qta2lkIn0.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20iLCJhdWQiOiJ0ZXN0LWNsaWVudC1pZCIsInN1YiI6IjEyMzQ1Njc4OTAiLCJleHAiOjQxMDI0NDQ4MDB9.DYjD-OSPt54wxOxLpPJt7HaR3KDdVz4f6AjMLcqtxXbIY91ZiDgFnidqaLwZLrfvMkJusdpLSqv3yWtM6_UHm2dkW6SUhDaVWC2UDfHeWhzPYfJwKNehwmE44IhubGty8Jmc7jIr4in19--ugNVdMOpVG0eQzZDapJhmS-OQTGIjK0Ty-LO_8kwTsCPlMntM5WZhs_Bm7L5oSeLSaQAe5XslNB24LLvleDrHEUD3LmMJpe7k1tXD6Ja7-bvHqSlizHHV8KdSt5OBKcp25iKOl0llcli2CltPinqLms9mBQ-oGdDw0skAIc-7cUy-i4ohb8QhLEGW2Uf0aSrsVi_ouw";
+
+    /// The calls verify_id_token makes once it has the JWKS entry — every
+    /// provider verifies RS256 this way — so the crypto backend is exercised
+    /// without the network fetch around it.
+    #[test]
+    fn test_rs256_id_token_verifies_against_jwk_components() {
+        let key = DecodingKey::from_rsa_components(TEST_JWK_N, TEST_JWK_E).unwrap();
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.set_audience(&["test-client-id"]);
+        validation.set_issuer(&[GOOGLE_ISSUER, "accounts.google.com"]);
+
+        let claims = decode::<serde_json::Value>(TEST_ID_TOKEN, &key, &validation)
+            .unwrap()
+            .claims;
+        assert_eq!(claims["sub"], "1234567890");
+
+        // One flipped signature character must not verify.
+        let mut tampered = TEST_ID_TOKEN.to_string();
+        let last = tampered.pop().unwrap();
+        tampered.push(if last == 'w' { 'x' } else { 'w' });
+        assert!(decode::<serde_json::Value>(&tampered, &key, &validation).is_err());
+    }
 }

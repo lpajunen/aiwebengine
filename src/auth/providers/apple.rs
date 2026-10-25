@@ -584,4 +584,33 @@ mod tests {
         let provider = AppleProvider::new(config).unwrap();
         assert_eq!(provider.name(), "apple");
     }
+
+    /// A throwaway P-256 key in the PKCS#8 form Apple issues `.p8` files in,
+    /// and its public half. Test-only; it signs nothing anywhere else.
+    const TEST_P8: &str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg1BqPnsb4I9C0eyAf\nDV1OQcZvySrB/hPpJZns8GrXIa2hRANCAASKz8xkt4lZiSRc6DZj2fEDALRkgDZa\n7pHZRRRbaqAMwhc1nlfxqKpGDeFiGP9KKJe9oqmk1j8gxn/eB7fmH9NE\n-----END PRIVATE KEY-----\n";
+    const TEST_P8_PUBLIC: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEis/MZLeJWYkkXOg2Y9nxAwC0ZIA2\nWu6R2UUUW2qgDMIXNZ5X8aiqRg3hYhj/SiiXvaKppNY/IMZ/3ge35h/TRA==\n-----END PUBLIC KEY-----\n";
+
+    #[test]
+    fn test_client_secret_is_an_es256_jwt_apple_can_verify() {
+        let mut config = create_test_config();
+        config
+            .extra_params
+            .insert("private_key".to_string(), TEST_P8.to_string());
+        let provider = AppleProvider::new(config).unwrap();
+
+        let secret = provider.generate_client_secret().unwrap();
+
+        let header = decode_header(&secret).unwrap();
+        assert_eq!(header.alg, Algorithm::ES256);
+        assert_eq!(header.kid.as_deref(), Some("TEST_KEY_ID"));
+
+        let mut validation = Validation::new(Algorithm::ES256);
+        validation.set_audience(&[APPLE_ISSUER]);
+        validation.set_issuer(&["TEST_TEAM_ID"]);
+        let key = DecodingKey::from_ec_pem(TEST_P8_PUBLIC.as_bytes()).unwrap();
+        let claims = decode::<serde_json::Value>(&secret, &key, &validation)
+            .unwrap()
+            .claims;
+        assert_eq!(claims["sub"], "com.example.service");
+    }
 }
