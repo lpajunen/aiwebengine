@@ -1,14 +1,25 @@
 name: Cleanup Old Docker Images
 
+# Prunes the sha-* images CI publishes on every push, keeping every image that
+# carries a branch, `latest` or version tag — script repositories' CI pulls
+# `:main`, so deleting it breaks them all.
+#
+# ghcr-cleanup-action rather than actions/delete-package-versions because it
+# works on tags and walks manifest indices: `exclude-tags` takes priority over
+# every other rule, and a child manifest (platform image, attestation) is only
+# ever deleted together with its parent. delete-package-versions matches a
+# container version by its digest, so it can protect neither.
+
 on:
   schedule:
     # Run every Sunday at 2 AM UTC
     - cron: '0 2 * * 0'
-  workflow_dispatch: # Allow manual triggering
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Log what would be deleted without deleting it'
+        type: boolean
+        default: true
 
 jobs:
   cleanup:
@@ -17,15 +28,20 @@ jobs:
       packages: write
 
     steps:
-      - name: Delete old sha-tagged images
-        continue-on-error: true
-        uses: actions/delete-package-versions@v5
+      - name: Delete old sha-tagged and untagged images
+        uses: dataaxiom/ghcr-cleanup-action@v1
         with:
-          package-name: 'aiwebengine'
-          package-type: 'container'
-          min-versions-to-keep: 0
-          delete-only-pre-release-versions: "false"
-          # Delete sha-* tagged images older than 7 days
-          # Keep latest, develop, and all version tags (0.x.x, v0.x.x)
-          ignore-versions: '^(latest|develop|v?[0-9]+\.[0-9]+\.[0-9]+.*|v?[0-9]+\.[0-9]+|v?[0-9]+)$'
+          package: aiwebengine
+          use-regex: true
+          # A sha-* tag is removed; an image that also carries another tag
+          # only loses that tag, and is deleted once it has none left.
+          delete-tags: '^sha-'
+          # An older main/latest image, once its tag moved on to a newer one.
+          delete-untagged: true
+          # Always kept, whatever else matches: branches, latest, versions.
+          exclude-tags: '^(main|develop|latest|v?[0-9]+(\.[0-9]+){0,2}.*)$'
+          older-than: 7 days
+          validate: true
+          # Scheduled runs delete; a manual run is a dry run unless unticked.
+          dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
           token: ${{ secrets.GITHUB_TOKEN }}
