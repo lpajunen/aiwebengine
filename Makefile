@@ -9,6 +9,7 @@
 .PHONY: docker-rebuild docker-stats docker-env docker-setup
 .PHONY: docker-backup docker-backup-list docker-backup-fetch docker-restore
 .PHONY: docker-pull docker-deploy check-shell-env check-mounts
+.PHONY: build-locally-deploy-prod deploy-prod
 .PHONY: postgres-local postgres-local-stop postgres-local-logs
 .PHONY: docker-dns check-dns clean-acme-dns
 
@@ -40,6 +41,7 @@ help:
 	@echo "Docker, server environments (ENV=production by default; ENV=staging for the other):"
 	@echo "  make docker-build        - Build the production image"
 	@echo "  make docker-prod         - Start production"
+	@echo "  make deploy-prod         - Build here, ship to PROD_HOST, start production there"
 	@echo "  make docker-staging      - Start staging"
 	@echo "  make docker-logs         - Follow the engine logs        (ENV=...)"
 	@echo "  make docker-ps           - Container status              (ENV=...)"
@@ -696,12 +698,21 @@ postgres-local-stop:
 postgres-local-logs:
 	$(DEV_COMPOSE) logs -f postgres
 
+# The production server, as an ssh host (an alias from ~/.ssh/config works).
+PROD_HOST ?= softagen
+
 build-locally-deploy-prod:
 	@echo "Building production Docker image for amd64 platform using Buildx..."
 	@DOCKER_HOST='' docker buildx inspect aiwebengine-builder >/dev/null 2>&1 || \
 		DOCKER_HOST='' docker buildx create --name aiwebengine-builder --bootstrap
 	@DOCKER_HOST='' docker buildx build --builder aiwebengine-builder --platform linux/amd64 -t aiwebengine:latest --load .
 	@DOCKER_HOST='' docker save aiwebengine:latest -o aiwebengine_latest.tar
-	scp aiwebengine_latest.tar softagen:/tmp/
-	ssh softagen 'docker load -i /tmp/aiwebengine_latest.tar && rm /tmp/aiwebengine_latest.tar'
+	scp aiwebengine_latest.tar $(PROD_HOST):/tmp/
+	ssh $(PROD_HOST) 'docker load -i /tmp/aiwebengine_latest.tar && rm /tmp/aiwebengine_latest.tar'
 	@echo "✓ Docker amd64 image built and copied to remote server!"
+
+# Build the image here, load it on PROD_HOST, and start production against that
+# host's daemon. DOCKER_HOST is set for the docker-prod step only, so nothing
+# needs exporting in the shell.
+deploy-prod: build-locally-deploy-prod
+	@DOCKER_HOST=ssh://$(PROD_HOST) $(MAKE) --no-print-directory docker-prod
