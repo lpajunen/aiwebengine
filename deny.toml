@@ -12,10 +12,6 @@ all-features = true
 # Every RustSec advisory fails the check, including unmaintained and unsound
 # crates. An exception names the advisory and says why it does not apply.
 ignore = [
-  # Marvin: timing leaks recover an RSA private key during decryption or
-  # signing. `rsa` arrives through jsonwebtoken, and the engine only verifies
-  # provider ID tokens with public keys; it holds no RSA private key.
-  { id = "RUSTSEC-2023-0071", reason = "RSA is used for public-key verification only" },
   # unsafe-libyaml is unmaintained. It arrives through figment's `yaml` feature,
   # which reads an optional config.yaml; dropping that format removes it.
   { id = "RUSTSEC-2024-0449", reason = "only parses the operator's own config file" },
