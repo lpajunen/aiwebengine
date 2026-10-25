@@ -32,14 +32,15 @@ jobs:
         uses: dataaxiom/ghcr-cleanup-action@v1
         with:
           package: aiwebengine
-          use-regex: true
           # A sha-* tag is removed; an image that also carries another tag
           # only loses that tag, and is deleted once it has none left.
-          delete-tags: '^sha-'
+          delete-tags: 'sha-*'
           # An older main/latest image, once its tag moved on to a newer one.
           delete-untagged: true
           # Always kept, whatever else matches: branches, latest, versions.
-          exclude-tags: '^(main|develop|latest|v?[0-9]+(\.[0-9]+){0,2}.*)$'
+          # Globs, not a regex: the action refuses an alternation as ReDoS-prone,
+          # and its globs have no character classes, hence one per digit.
+          exclude-tags: 'main,develop,latest,v*,0*,1*,2*,3*,4*,5*,6*,7*,8*,9*'
           older-than: 7 days
           validate: true
           # Scheduled runs delete; a manual run is a dry run unless unticked.
