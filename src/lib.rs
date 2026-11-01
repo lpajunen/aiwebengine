@@ -1634,9 +1634,6 @@ pub async fn start_server_with_config(
     // `embedded_db::stop()` after the shutdown wait instead; an embedder
     // driving the server itself owns the same call.
 
-    // Clone the timeout value to avoid borrow checker issues in async closures
-    let script_timeout_ms = config.javascript.execution_timeout_ms;
-
     // Get database pool if available
     let pool = database::get_global_database().map(|db| db.pool().clone());
 
@@ -1647,14 +1644,7 @@ pub async fn start_server_with_config(
     let auth_enabled = auth_manager.is_some();
 
     // Build the router with all routes and middleware
-    let app = setup_routes(
-        &config,
-        script_timeout_ms,
-        auth_enabled,
-        auth_manager.as_ref(),
-        pool,
-    )
-    .await;
+    let app = setup_routes(&config, auth_enabled, auth_manager.as_ref(), pool).await;
 
     let (actual_port, actual_addr) = find_available_port(&config)?;
 
@@ -1793,7 +1783,6 @@ async fn initialize_auth_if_enabled(
 /// Setup all routes and middleware for the application
 async fn setup_routes(
     config: &config::AppConfig,
-    script_timeout_ms: u64,
     auth_enabled: bool,
     auth_manager: Option<&Arc<auth::AuthManager>>,
     pool: Option<sqlx::PgPool>,
@@ -1999,8 +1988,6 @@ async fn setup_routes(
     // Add catch-all dynamic routes
     let auth_enabled_for_home = auth_enabled;
     let auth_enabled_for_path = auth_enabled;
-    let script_timeout_for_home = script_timeout_ms;
-    let script_timeout_for_path = script_timeout_ms;
     let max_upload_for_home = config.repository.max_upload_size_bytes;
     let max_upload_for_path = config.repository.max_upload_size_bytes;
 
@@ -2010,7 +1997,6 @@ async fn setup_routes(
             any(move |req: Request<Body>| async move {
                 handle_dynamic_request(
                     req,
-                    script_timeout_for_home,
                     auth_enabled_for_home,
                     max_upload_for_home,
                     max_request_body,
@@ -2023,7 +2009,6 @@ async fn setup_routes(
             any(move |req: Request<Body>| async move {
                 handle_dynamic_request(
                     req,
-                    script_timeout_for_path,
                     auth_enabled_for_path,
                     max_upload_for_path,
                     max_request_body,
@@ -2088,7 +2073,6 @@ async fn setup_routes(
 /// Handle dynamic requests by routing to registered JavaScript handlers
 async fn handle_dynamic_request(
     req: Request<Body>,
-    script_timeout_ms: u64,
     _auth_enabled: bool,
     max_upload_size: usize,
     max_request_body_bytes: usize,
@@ -2444,6 +2428,12 @@ async fn handle_dynamic_request(
     // leaves no trace beyond one log line, and a leak is invisible until the
     // pool is empty.
     let (ticket, watch) = worker_census::watch(format!("{} {}", method_for_census, route_pattern));
+
+    // The script's own budget: an administrator may have raised it so a
+    // handler can wait out a model call, or lowered it to contain one. A
+    // wrapper on the engine's default would stop the first early and leave
+    // the second holding its slot past its budget.
+    let script_timeout_ms = script_limits::for_script(&owner_uri).timeout_ms;
 
     // The wait for a slot is inside the timeout on purpose: a request that
     // cannot get one within its budget fails as a slow request rather than as

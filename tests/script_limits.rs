@@ -8,7 +8,7 @@ mod common;
 
 use aiwebengine::script_limits::{self, Overrides};
 use aiwebengine::{js_engine, repository};
-use common::setup_env;
+use common::{AdminServer, setup_env};
 use std::collections::HashMap;
 
 fn anonymous_get(script_uri: &str, handler: &str, path: &str) -> js_engine::RequestExecutionParams {
@@ -97,6 +97,64 @@ async fn a_lowered_timeout_actually_stops_a_slow_script() {
         "it should have been stopped at its own 300ms budget rather than the engine's, \
          but took {:?}",
         elapsed
+    );
+}
+
+/// Raising is what the override is for: an agent's handler waiting out a model
+/// call. The HTTP request that runs it has to wait as long as the script may
+/// run, not give up at the engine's default and abandon a handler that is
+/// still within its budget.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_raised_timeout_lets_an_http_request_run_past_the_engines() {
+    let engine = AdminServer::start_customized(|config| {
+        config.javascript.execution_timeout_ms = 1_000;
+    })
+    .await
+    .expect("server failed to start");
+
+    let script_uri = "https://example.com/limits_raised";
+    engine
+        .deploy_script(
+            script_uri,
+            r#"
+            function slow() {
+              const until = Date.now() + 2500;
+              while (Date.now() < until) { /* a slow call, past the engine's 1s */ }
+              return { status: 200, body: "finished" };
+            }
+            function init() {
+              routeRegistry.registerRoute("/limits-raised", { handler: "slow" });
+            }
+            "#,
+        )
+        .await;
+    script_limits::set(
+        script_uri,
+        Overrides {
+            timeout_ms: Some(10_000),
+            ..Default::default()
+        },
+        Some("a test waiting out a slow call"),
+        None,
+    )
+    .await
+    .expect("the override should store");
+
+    let response = engine
+        .anonymous()
+        .get(engine.url("/limits-raised"))
+        .send()
+        .await
+        .expect("request should complete");
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    script_limits::clear(script_uri).await.expect("cleanup");
+    engine.shutdown().await;
+
+    assert_eq!(
+        (status.as_u16(), body.as_str()),
+        (200, "finished"),
+        "a handler within its raised budget should finish, not time out at the engine's"
     );
 }
 
