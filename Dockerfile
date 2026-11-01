@@ -3,8 +3,9 @@
 
 # Build stage
 # The same Debian release as the runtime image, so the binary links against
-# the glibc it will run with.
-FROM rust:trixie AS builder
+# the glibc it will run with. The Rust release is pinned: rustc 1.99.1 fails
+# to compile clap_builder (E0391, a query cycle on async drop).
+FROM rust:1.98-trixie AS builder
 
 # TLS is rustls throughout, so nothing links OpenSSL.
 RUN rustup default nightly
