@@ -879,6 +879,28 @@ interface SecretStorage {
 
   /** Remove every secret the signed-in person stored in this script. */
   clear(): void;
+
+  /**
+   * In `init()`: people may give this script a secret under `key`, entered on
+   * the engine's own page (`entryUrl`) under this label. The page takes only
+   * declared keys. A registration: outside `init()` it changes nothing and
+   * answers `{ ok: false, reason }`.
+   * @example
+   * secretStorage.declare("FINNHUB_API_KEY", { label: "Finnhub API key" });
+   */
+  declare(
+    key: string,
+    options: { label: string },
+  ): { ok: boolean; reason?: string };
+
+  /**
+   * Where the signed-in person enters, replaces or removes their secret under
+   * `key` for this script: the engine's page, so the value never passes
+   * through the script. Append `&redirect=<path>` to bring them back.
+   * @example
+   * const url = secretStorage.entryUrl("FINNHUB_API_KEY") + "&redirect=/stock-monitor";
+   */
+  entryUrl(key: string): string;
 }
 
 // ============================================================================

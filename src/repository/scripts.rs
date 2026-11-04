@@ -1287,6 +1287,7 @@ pub fn rename_script(from: &str, to: &str) -> Result<(), RenameError> {
     crate::deployments::forget_pin(from);
     crate::script_limits::forget(from);
     crate::exposure::clear_for_script(from);
+    crate::declared_secrets::clear_for_script(from);
     let target = to.to_string();
     let _ = run_bounded(async move {
         crate::revisions::refresh_current(&target).await;

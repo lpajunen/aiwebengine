@@ -93,9 +93,13 @@ curl -X POST https://manage.example.com/engine/write_secret \
 ```
 
 `list_secrets` names a script's keys, `delete_secret` removes one and
-`clear_secrets` removes them all. A signed-in person can also store their own
-with `secretStorage.setSecret(key, value)`; theirs is found before the
-script's.
+`clear_secrets` removes them all. A signed-in person can also store their own,
+found before the script's: on the engine's page at `/auth/secret`, for a key
+the script declared in `init()` (`secretStorage.declare`, linked with
+`secretStorage.entryUrl`), or through the script's own form with
+`secretStorage.setSecret(key, value)`. The page writes the value straight to
+their account, so no script holds it; its posts are logged by key name, never
+value.
 
 **Using one.** A script checks a key with `secretStorage.exists(key)` and names
 it in a `{{secret:key}}` template in a request header or the URL:

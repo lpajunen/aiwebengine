@@ -22,6 +22,7 @@ mod elevation;
 mod login;
 mod oauth2;
 mod presence;
+mod secret;
 mod session;
 pub use account::*;
 pub use common::*;
@@ -31,6 +32,7 @@ pub use elevation::*;
 pub use login::*;
 pub use oauth2::*;
 use presence::*;
+pub use secret::*;
 pub use session::*;
 
 /// Create authentication router with all routes
@@ -54,6 +56,7 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
         .route("/sessions", get(list_sessions_route))
         .route("/sessions/revoke", post(revoke_session_route))
         .route("/delegate", get(delegate_page).post(delegate_route))
+        .route("/secret", get(secret_page).post(secret_route))
         .route("/elevate", get(elevate_page).post(elevate_route))
         .route("/elevate/drop", post(elevate_drop_route))
         .route("/delegations/revoke", post(revoke_delegation_route))

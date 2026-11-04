@@ -25,6 +25,7 @@ pub mod config;
 pub mod conversion;
 pub mod database;
 pub mod db_schema_utils;
+pub mod declared_secrets;
 pub mod delegation;
 pub mod deployments;
 pub mod desktop;
@@ -138,6 +139,8 @@ What a script may spend is worth knowing before writing one: each invocation get
         auth::routes::delegate_page,
         auth::routes::delegate_route,
         auth::routes::revoke_delegation_route,
+        auth::routes::secret_page,
+        auth::routes::secret_route,
         auth::routes::unlink_sender_route,
         auth::routes::schedule_action_route,
         auth::routes::start_login,

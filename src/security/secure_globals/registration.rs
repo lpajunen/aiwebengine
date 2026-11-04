@@ -23,6 +23,7 @@ pub enum RegistrationKind {
     McpPrompt,
     McpResource,
     ScheduledJob,
+    Secret,
 }
 
 impl RegistrationKind {
@@ -37,6 +38,7 @@ impl RegistrationKind {
             RegistrationKind::McpPrompt => "mcpRegistry.registerPrompt",
             RegistrationKind::McpResource => "mcpRegistry.registerResource",
             RegistrationKind::ScheduledJob => "scriptTasks.schedule",
+            RegistrationKind::Secret => "secretStorage.declare",
         }
     }
 }

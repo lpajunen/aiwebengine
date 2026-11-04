@@ -258,6 +258,8 @@ impl ScriptInitializer {
         // being reported as refused, which is the one thing a report about
         // exposure must not do.
         crate::exposure::clear_for_script(script_uri);
+        // And what it asks people for, which it is about to declare again.
+        crate::declared_secrets::clear_for_script(script_uri);
 
         debug!("Spawning blocking task for {}", script_uri);
         let init_timeout_ms = self.timeout_ms;

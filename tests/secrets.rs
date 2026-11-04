@@ -76,7 +76,7 @@ async fn test_secrets_cannot_access_values_directly() {
         }
         
         // Verify only expected methods exist
-        const allowedMethods = ['exists', 'setSecret', 'removeSecret', 'clear'];
+        const allowedMethods = ['exists', 'setSecret', 'removeSecret', 'clear', 'declare', 'entryUrl'];
         const actualMethods = Object.keys(secretStorage).filter(key => typeof secretStorage[key] === 'function');
         
         for (const method of actualMethods) {

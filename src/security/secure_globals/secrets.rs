@@ -61,6 +61,8 @@ impl SecureGlobalContext {
     /// - secretStorage.setSecret(key, value): undefined
     /// - secretStorage.removeSecret(key): boolean
     /// - secretStorage.clear(): undefined
+    /// - secretStorage.declare(key, label): a registration, made in init()
+    /// - secretStorage.entryUrl(key): the engine's page for the person's key
     pub(super) fn setup_secrets_functions(
         &self,
         ctx: &rquickjs::Ctx<'_>,
@@ -207,6 +209,58 @@ impl SecureGlobalContext {
             }
         })?;
         secret_storage_obj.set("clear", clear_fn)?;
+
+        // secretStorage.declare(key, label) - What this script asks people
+        // for, so the engine's secret page will take it. A registration:
+        // outside init() it changes nothing and says so rather than throwing,
+        // because top-level code runs again on every request, and a dry run
+        // records it instead of declaring.
+        let script_uri_declare = script_uri_owned.clone();
+        let config_declare = self.config.clone();
+        let declare_fn = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, key: String, label: String| -> String {
+                if !config_declare.registration_phase {
+                    return refusal_answer(registration_inactive("secretStorage.declare", &key));
+                }
+                if let Err(reason) = crate::declared_secrets::validate(&key, &label) {
+                    return host_failure(
+                        "TypeError",
+                        &format!("secretStorage.declare: {}", reason),
+                    );
+                }
+                if config_declare
+                    .collect(CollectedRegistration::new(
+                        RegistrationKind::Secret,
+                        key.clone(),
+                    ))
+                    .is_some()
+                {
+                    return host_ok(serde_json::json!({ "ok": true }));
+                }
+                match crate::declared_secrets::declare(&script_uri_declare, &key, &label) {
+                    Ok(()) => host_ok(serde_json::json!({ "ok": true })),
+                    Err(reason) => {
+                        host_failure("TypeError", &format!("secretStorage.declare: {}", reason))
+                    }
+                }
+            },
+        )?;
+        secret_storage_obj.set("declare", declare_fn)?;
+
+        // secretStorage.entryUrl(key) - Where the person enters, changes or
+        // removes this secret: the engine's page, so the value never passes
+        // through this script. The page takes only a declared name.
+        let script_uri_entry = script_uri_owned.clone();
+        let entry_url_fn = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, key: String| -> String {
+                host_ok(serde_json::Value::String(
+                    crate::declared_secrets::entry_url(&script_uri_entry, &key),
+                ))
+            },
+        )?;
+        secret_storage_obj.set("entryUrl", entry_url_fn)?;
 
         global.set("__hostSecrets", secret_storage_obj)?;
         crate::bytecode::eval_program(ctx, "engine://secrets-prelude", SECRETS_PRELUDE).map_err(

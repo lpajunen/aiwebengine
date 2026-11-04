@@ -57,6 +57,24 @@
     clear: function () {
       unwrap(host.clear(), "secretStorage.clear");
     },
+
+    // declare(key, { label }) -> { ok, reason? }. In init(): the engine's
+    // secret page will ask people for this key, under this label.
+    declare: function (name, options) {
+      var api = "secretStorage.declare";
+      var label = options && options.label;
+      if (typeof label !== "string") {
+        throw new TypeError(api + ": options.label must be a string");
+      }
+      return unwrap(host.declare(key(name, api), label), api);
+    },
+
+    // entryUrl(key) -> string: the engine's page where the signed-in person
+    // enters, changes or removes this key. Append "&redirect=<path>".
+    entryUrl: function (name) {
+      var api = "secretStorage.entryUrl";
+      return unwrap(host.entryUrl(key(name, api)), api);
+    },
   };
 
   Object.defineProperty(globalThis, "secretStorage", {
