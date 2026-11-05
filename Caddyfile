@@ -88,12 +88,11 @@
 # The engine cluster. One upstream or several, depending on ENGINE_UPSTREAMS.
 (engine_upstream) {
 	reverse_proxy {$ENGINE_UPSTREAMS} {
-		# Overwrite rather than append: Caddy adds the peer to whatever the
-		# client sent, so an appended chain still starts with a value the
-		# client wrote. The engine only reads this header from a proxy named
-		# in server.trusted_proxies, and reads it right-to-left, but leaving
-		# an invented chain in place serves no one.
-		header_up X-Forwarded-For {remote_host}
+		# X-Forwarded-For is Caddy's own: the socket address, replacing
+		# whatever the client sent, because no trusted_proxies is configured
+		# here. Do not set it with `header_up ... {remote_host}`: that
+		# placeholder is empty for an HTTP/3 request sent as 0-RTT early data,
+		# the header is then dropped, and the engine sees Caddy as the client.
 		lb_policy round_robin
 
 		health_uri /health

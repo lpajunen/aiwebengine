@@ -278,9 +278,9 @@ and a `.env-production` holding everything specific to this deployment —
 the same three files staging uses, with a `.env-staging` instead:
 
 - Caddy holds `:80`/`:443` (and `:443/udp` for HTTP/3), obtains certificates
-  automatically, sets `header_up X-Forwarded-For {remote_host}` so the proxy
-  overwrites rather than appends the chain, and health-checks `/health` on each
-  engine before sending it traffic.
+  automatically, sets `X-Forwarded-For` to the socket address (discarding what
+  the client sent), and health-checks `/health` on each engine before sending
+  it traffic.
 - The engine containers publish nothing to the host — `expose: 3000` on the
   internal network only. A Host header arriving at the engine has therefore
   already been matched by one of Caddy's site blocks.
