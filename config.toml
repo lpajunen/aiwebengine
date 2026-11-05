@@ -237,7 +237,8 @@ audit_retention_days = 365
 enabled = true
 # No default: APP_AUTH__JWT_SECRET is required, and the engine refuses to start
 # without it. Minimum 32 characters.
-session_timeout = 3600
+# Idle time before a session ends; each request slides it. 10 days.
+session_timeout = 864000
 max_session_age = 2592000
 max_concurrent_sessions = 3
 # Addresses that receive the administrator role on sign-in, matched against an

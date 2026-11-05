@@ -155,6 +155,33 @@ pub async fn normalize_client_ip(
 
     let resolved = resolve(peer, request.headers(), &trusted);
 
+    // A trusted proxy that names no client leaves the proxy itself as the
+    // address, and every session it carries then looks as if it moved. Say
+    // what it sent, so the proxy's configuration can be put right. Addresses
+    // only: these headers hold nothing else.
+    if let (Some(peer), Some(addr)) = (peer, resolved)
+        && trusted.contains(peer)
+        && trusted.contains(addr)
+    {
+        let all = |name: &str| {
+            request
+                .headers()
+                .get_all(name)
+                .iter()
+                .map(|value| value.to_str().unwrap_or("<not text>"))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
+        tracing::warn!(
+            peer = %peer,
+            resolved = %addr,
+            forwarded_for = %all(FORWARDED_FOR),
+            real_ip = %all(REAL_IP),
+            path = %request.uri().path(),
+            "a trusted proxy named no client address"
+        );
+    }
+
     let headers = request.headers_mut();
     headers.remove(REAL_IP);
     match resolved.and_then(|addr| HeaderValue::from_str(&addr.to_string()).ok()) {
