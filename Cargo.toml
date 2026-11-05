@@ -66,7 +66,7 @@ tar = { version = "0.4", default-features = false }
 flate2 = "1"
 
 # TypeScript/JSX transpilation
-oxc = { version = "0.154.0", features = ["full"] }
+oxc = { version = "0.157.0", features = ["full"] }
 
 # Security and encryption (Phase 0.5)
 aes-gcm = "0.11"
@@ -89,7 +89,7 @@ sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "migrate", "u
 # (without it `pg_ctl` blocks the runtime); `theseus` names the release archives
 # to install from, and without it `Settings` carries no releases URL at all;
 # rustls, matching the rest of the crate, is what fetches one on first run.
-postgresql_embedded = { version = "0.21.0", default-features = false, features = [
+postgresql_embedded = { version = "0.22.0", default-features = false, features = [
   "theseus",
   "tokio",
   "tls-rustls-ring",
@@ -97,7 +97,7 @@ postgresql_embedded = { version = "0.21.0", default-features = false, features =
 # `convert.svg_to_png`. Text only: no system fonts (the output would depend on
 # the host and reveal what it has installed), no raster-image decoders (an
 # `<image>` is never loaded) and no svgz.
-resvg = { version = "0.48", default-features = false, features = ["text"] }
+resvg = { version = "0.49", default-features = false, features = ["text"] }
 # Parses `svg_to_png`'s `background` as a CSS color; the version usvg uses.
 svgtypes = "0.16"
 croner = "4.0.1"
@@ -106,9 +106,9 @@ chrono-tz = "0.10.4"
 # `sanitize`: feed HTML is reduced to text here, never passed on as markup.
 feed-rs = "3"
 # `convert.extract_article`: a port of Mozilla's Readability.
-dom_smoothie = "0.18"
+dom_smoothie = "0.19"
 # Feed HTML to text; the version dom_smoothie parses with.
-dom_query = "0.28"
+dom_query = "0.29"
 
 [target.'cfg(unix)'.dependencies]
 # `setrlimit` for the SVG renderer's child process (`svg_to_png.rs`).
@@ -129,7 +129,7 @@ lto = "thin"
 
 # Test-only dependencies
 [dev-dependencies]
-jsonschema = "0.58.0"
+jsonschema = "0.60.2"
 
 # Build-time dependencies (for capturing build metadata)
 [build-dependencies]
