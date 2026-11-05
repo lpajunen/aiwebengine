@@ -23,9 +23,9 @@ ENGINE_IMAGE ?= ghcr.io/lpajunen/aiwebengine:main
 TYPES_FROM ?=
 TYPES := types/aiwebengine.d.ts
 
-PRETTIER := npx --yes --loglevel=error prettier@3.9.6
-MARKDOWNLINT := npx --yes --loglevel=error markdownlint-cli@0.49.1
-TSC := npx --yes --loglevel=error -p typescript@6.0.3 tsc
+PRETTIER := npx --yes --loglevel=error prettier@3.9.10
+MARKDOWNLINT := npx --yes --loglevel=error markdownlint-cli@0.50.0
+TSC := npx --yes --loglevel=error -p typescript@7.0.2 tsc
 
 # Prettier leaves alone what .gitignore names; markdownlint is told to.
 FORMATTED := "**/*.{js,mjs,jsx,ts,tsx,json,md}"

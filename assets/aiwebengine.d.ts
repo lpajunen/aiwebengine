@@ -809,10 +809,7 @@ declare class Headers {
 declare class URLSearchParams {
   constructor(
     init?:
-      | string
-      | URLSearchParams
-      | Record<string, string>
-      | [string, string][],
+      string | URLSearchParams | Record<string, string> | [string, string][],
   );
   /** How many name/value pairs there are, repeats counted separately. */
   readonly size: number;
