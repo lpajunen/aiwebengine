@@ -38,6 +38,8 @@ pub struct SecurityEvent {
     pub ip_address: Option<String>,
     pub resource: Option<String>,
     pub action: Option<String>,
+    /// Which thing the event was about (a script, a path, a key's name),
+    /// printed in every log line: never a secret's or a password's value.
     pub details: HashMap<String, String>,
     pub error_message: Option<String>,
     /// How `user_id` was acting: `session`, `token`, `delegated`, `engine` or
@@ -212,6 +214,7 @@ impl SecurityAuditor {
                     elevation = ?event.elevation,
                     resource = ?event.resource,
                     action = ?event.action,
+                    details = ?event.details,
                     threat_level = ?threat_assessment.threat_level,
                     confidence_score = threat_assessment.confidence_score,
                     "Security event logged"
@@ -227,6 +230,7 @@ impl SecurityAuditor {
                     elevation = ?event.elevation,
                     resource = ?event.resource,
                     action = ?event.action,
+                    details = ?event.details,
                     error = ?event.error_message,
                     threat_level = ?threat_assessment.threat_level,
                     confidence_score = threat_assessment.confidence_score,
