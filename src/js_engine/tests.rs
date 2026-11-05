@@ -120,7 +120,7 @@ fn execute_mcp_tool_handler(
         arguments,
         auth_context,
         crate::security::Principal::Caller(user_context),
-        crate::mcp_elicitation::Exchange::unattended(),
+        crate::mcp::ToolCaller::Client(crate::mcp_elicitation::Exchange::unattended()),
     )? {
         crate::mcp::ToolOutcome::Complete(result) => Ok(result),
         crate::mcp::ToolOutcome::InputRequired(_) => {
@@ -168,6 +168,7 @@ fn test_execute_mcp_tool_handler_includes_request_auth_context() {
             return {
                 kind: context.kind,
                 toolName: context.meta.mcp.toolName,
+                via: context.meta.mcp.via,
                 auth: {
                     isAuthenticated: context.request.auth.isAuthenticated,
                     isAdmin: context.request.auth.isAdmin,
@@ -204,6 +205,7 @@ fn test_execute_mcp_tool_handler_includes_request_auth_context() {
 
     assert_eq!(parsed["kind"], "mcpTool");
     assert_eq!(parsed["toolName"], "whoami");
+    assert_eq!(parsed["via"], "client");
     assert_eq!(parsed["auth"]["isAuthenticated"], true);
     assert_eq!(parsed["auth"]["isAdmin"], false);
     assert_eq!(parsed["auth"]["isEditor"], true);

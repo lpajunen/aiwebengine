@@ -19,7 +19,7 @@ const CALLER: &str = "test://tools-from-js/caller";
 
 const PROVIDER_SOURCE: &str = r#"
 function echo(context) {
-  return { echoed: context.args };
+  return { echoed: context.args, via: context.meta.mcp.via };
 }
 
 function remember(context) {
@@ -105,7 +105,8 @@ async fn a_script_lists_and_calls_another_scripts_tool() {
         )
         .await,
     );
-    assert_eq!(answer, json!({ "echoed": { "x": 7 } }));
+    // The tool is told another script called it, not a client.
+    assert_eq!(answer, json!({ "echoed": { "x": 7 }, "via": "script" }));
 }
 
 /// `readOnly` is enforced underneath the tool, not asked of it: the same

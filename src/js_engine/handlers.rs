@@ -671,9 +671,10 @@ pub fn execute_mcp_prompt_handler(
 
 /// Execute an MCP tool handler function.
 ///
-/// Takes the exchange rather than building one, because whether this caller can
-/// be asked anything is a property of the request that arrived — `lib.rs` reads
-/// the client's declared capabilities — and not of the script. Hands back what
+/// Takes the caller, with its exchange, rather than building one, because
+/// whether this caller can be asked anything is a property of the request that
+/// arrived — `lib.rs` reads the client's declared capabilities — and not of the
+/// script. The handler is told which kind of caller it was. Hands back what
 /// the handler asked for alongside its result, since a handler that asks
 /// produces no result at all.
 pub fn execute_mcp_tool_handler(
@@ -683,7 +684,7 @@ pub fn execute_mcp_tool_handler(
     arguments: serde_json::Value,
     auth_context: Option<crate::auth::JsAuthContext>,
     principal: Principal,
-    exchange: crate::mcp_elicitation::Exchange,
+    caller: crate::mcp::ToolCaller,
 ) -> Result<crate::mcp::ToolOutcome, String> {
     let invocation_id = crate::middleware::generate_request_id();
     let log_context = HandlerInvocationKind::McpTool.log_context(
@@ -703,7 +704,8 @@ pub fn execute_mcp_tool_handler(
     )
     .map_err(|e| format!("JavaScript execution error: {}", e))?;
 
-    let guard = crate::mcp_elicitation::ExchangeGuard::install(exchange);
+    let via = caller.as_str();
+    let guard = crate::mcp_elicitation::ExchangeGuard::install(caller.into_exchange());
 
     let result_exec = execution.invoke(
         &format!("MCP tool handler '{}'", handler_function),
@@ -725,7 +727,10 @@ pub fn execute_mcp_tool_handler(
                 .with_request(request_context)
                 .with_invocation_id(invocation_id.clone())
                 .with_args(arguments)
-                .with_metadata_value("mcp", serde_json::json!({ "toolName": tool_name }));
+                .with_metadata_value(
+                    "mcp",
+                    serde_json::json!({ "toolName": tool_name, "via": via }),
+                );
 
             if let Some(auth_context) = auth_context {
                 context_builder = context_builder.with_auth_context(auth_context);

@@ -761,9 +761,39 @@ pub fn execute_mcp_tool(
         arguments,
         auth_context,
         crate::security::Principal::Caller(user_context),
-        exchange,
+        ToolCaller::Client(exchange),
     )
     .map_err(|e| format!("Tool execution failed: {}", e))
+}
+
+/// How a tool call reached its handler, told to it as `context.meta.mcp.via`.
+///
+/// Not an authorization: the call is authorized against the person it runs
+/// for either way. It lets a tool that is for people refuse to be driven by
+/// another script acting for the same person, which the person never saw.
+#[derive(Debug)]
+pub enum ToolCaller {
+    /// A client called it over `/mcp`, with what it can be asked.
+    Client(crate::mcp_elicitation::Exchange),
+    /// Another script called it with `tools.call`: there is no client to ask.
+    Script,
+}
+
+impl ToolCaller {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ToolCaller::Client(_) => "client",
+            ToolCaller::Script => "script",
+        }
+    }
+
+    /// The exchange the handler runs with: unattended for a script.
+    pub fn into_exchange(self) -> crate::mcp_elicitation::Exchange {
+        match self {
+            ToolCaller::Client(exchange) => exchange,
+            ToolCaller::Script => crate::mcp_elicitation::Exchange::unattended(),
+        }
+    }
 }
 
 /// Why `tools.call` did not produce a result.
@@ -844,7 +874,7 @@ pub fn call_tool_from_script(
         arguments,
         auth_context,
         principal,
-        crate::mcp_elicitation::Exchange::unattended(),
+        ToolCaller::Script,
     )
     .map_err(ScriptToolRefusal::Failed)?;
 

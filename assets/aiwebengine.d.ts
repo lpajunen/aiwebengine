@@ -380,13 +380,29 @@ interface HandlerContext {
   /**
    * What this particular kind of invocation was given. A task handler finds
    * `meta.task`, and when a schedule fired the task — the script's own or a
-   * person's — also `meta.schedule`.
+   * person's — also `meta.schedule`. An MCP tool handler finds `meta.mcp`.
    */
   meta?: {
     task?: TaskContext;
     schedule?: ScheduleRun;
+    mcp?: McpToolCall;
     [key: string]: any;
   };
+}
+
+/**
+ * What an MCP tool handler is told about the call — `context.meta.mcp`.
+ */
+interface McpToolCall {
+  toolName: string;
+  /**
+   * How the call arrived: `"client"` over `/mcp`, from an app the person
+   * connected; `"script"` from another script's `tools.call`, acting for the
+   * same person. Either way it is authorized against that person. A tool for
+   * people to use themselves can refuse `"script"`, so another script cannot
+   * read or answer on their behalf.
+   */
+  via: "client" | "script";
 }
 
 /**

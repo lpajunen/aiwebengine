@@ -18,6 +18,12 @@ and capabilities, narrowing included. A delegated run stays delegated, with the
 same scopes, so the tool reaches only what the person granted. Which script
 makes the call decides nothing.
 
+The tool is told how it was reached: `context.meta.mcp.via` is `"script"`
+here and `"client"` over `/mcp`. That authorizes nothing, since the person is
+the same either way. It lets a tool meant for the person's own apps (reading
+or answering their inbox, say) refuse to be driven by another script working
+for them, which they never saw.
+
 `readOnly: true` takes every write capability away for the call. A tool that
 tries to change something then gets the refusal it would get anywhere else,
 and the engine enforces that, not the tool.
