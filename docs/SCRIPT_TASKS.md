@@ -96,8 +96,8 @@ the per-request one. A task is not answering a request.
 A task runs in **script context**. It holds what the script holds and nothing
 belonging to whoever enqueued it, so `personalStorage` and a per-user secret
 are not reachable from one. Acting as a person in the background is a grant
-that person has to make — what they authorised, for which script, for how long,
-and how they revoke it — and there is nowhere yet for them to make it.
+that person makes on `/auth/delegate`; `personalTasks.enqueue` then queues work
+that runs as them, under what they authorised (`DELEGATION.md`).
 
 ## Failure, and what is kept
 
