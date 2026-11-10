@@ -195,6 +195,36 @@ async fn test_convert_markdown_to_html_available_for_all() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_convert_markdown_to_html_is_safe_unless_asked() {
+    setup_env().await;
+    let user = create_user_with_capabilities("user", vec![]);
+
+    let script = r##"
+        const md = "<b>hi</b> [x](javascript:alert(1))";
+        const safe = convert.markdown_to_html(md);
+        if (safe.indexOf("<b>") >= 0 || safe.indexOf("javascript") >= 0) {
+            throw new Error("not safe: " + safe);
+        }
+        const trusted = convert.markdown_to_html(md, { html: true });
+        if (trusted.indexOf("<b>hi</b>") < 0 || trusted.indexOf("javascript:") < 0) {
+            throw new Error("html: true did not pass through: " + trusted);
+        }
+        let refused = null;
+        try { convert.markdown_to_html(md, { raw: true }); } catch (e) { refused = e; }
+        if (!refused || refused.name !== "TypeError") {
+            throw new Error("an unknown option should throw a TypeError");
+        }
+    "##;
+
+    let result = execute_script_secure(
+        "test://api-test",
+        script,
+        aiwebengine::security::Principal::Caller(user),
+    );
+    assert!(result.success, "{:?}", result.error);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_convert_render_handlebars_available_for_all() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);

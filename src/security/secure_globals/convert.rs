@@ -19,12 +19,26 @@ impl SecureGlobalContext {
         // with those words.
         let host = rquickjs::Object::new(ctx.clone())?;
 
-        let markdown_to_html = Function::new(ctx.clone(), move |markdown: String| -> String {
-            match crate::conversion::convert_markdown_to_html(&markdown) {
-                Ok(html) => host_ok(serde_json::Value::String(html)),
-                Err(e) => host_failure("Error", &format!("convert.markdown_to_html: {}", e)),
-            }
-        })?;
+        // Options arrive as JSON text, `{}` when omitted, as for `svg_to_png`.
+        let markdown_to_html = Function::new(
+            ctx.clone(),
+            move |markdown: String, options: String| -> String {
+                let options: crate::conversion::MarkdownOptions =
+                    match serde_json::from_str(&options) {
+                        Ok(options) => options,
+                        Err(e) => {
+                            return host_failure(
+                                "TypeError",
+                                &format!("convert.markdown_to_html: options: {}", e),
+                            );
+                        }
+                    };
+                match crate::conversion::convert_markdown_to_html(&markdown, &options) {
+                    Ok(html) => host_ok(serde_json::Value::String(html)),
+                    Err(e) => host_failure("Error", &format!("convert.markdown_to_html: {}", e)),
+                }
+            },
+        )?;
 
         let render_handlebars_template = Function::new(
             ctx.clone(),

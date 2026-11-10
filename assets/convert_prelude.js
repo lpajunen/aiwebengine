@@ -42,9 +42,13 @@
   var host = globalThis.__hostConvert;
 
   var convert = {
-    markdown_to_html: function (markdown) {
+    // markdown_to_html(markdown, { html }) — safe HTML unless html is true.
+    markdown_to_html: function (markdown, options) {
       var api = "convert.markdown_to_html";
-      return unwrap(host.markdown_to_html(text(markdown, api)), api);
+      return unwrap(
+        host.markdown_to_html(text(markdown, api), optionsJson(options, api)),
+        api,
+      );
     },
 
     // render_handlebars_template(template, data) — data is an object, or the

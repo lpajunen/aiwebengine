@@ -2330,6 +2330,12 @@ interface FeedItem {
   image: string | null;
 }
 
+/** What {@link Convert.markdown_to_html} reads. Unknown keys are refused. */
+interface MarkdownOptions {
+  /** Pass raw HTML, every link and image URL, and heading attributes through. Default `false`. */
+  html?: boolean;
+}
+
 /** What {@link Convert.extract_article} reads. Unknown keys are refused. */
 interface ExtractArticleOptions {
   /** The page's own URL, absolute: links and images in the text resolve against it. */
@@ -2359,10 +2365,16 @@ interface Convert {
   /**
    * Markdown to HTML. Throws when the input cannot be converted — empty, or
    * over {{limits.size.maxMarkdown}}.
+   *
+   * The result is safe to put in a page whoever wrote the Markdown: raw HTML
+   * comes out as text, a link or image whose URL is not http(s), `mailto:` or
+   * relative keeps only its text, and headings keep `{#id .class}` but no
+   * other attributes. `{ html: true }` passes all of it through, for Markdown
+   * you trust as much as your own code.
    * @example
    * const html = convert.markdown_to_html("# Hello\n\nThis is **bold**");
    */
-  markdown_to_html(markdown: string): string;
+  markdown_to_html(markdown: string, options?: MarkdownOptions): string;
 
   /**
    * Render a Handlebars template. `data` is an object, or the JSON text of
