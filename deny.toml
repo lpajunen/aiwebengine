@@ -15,10 +15,6 @@ ignore = [
   # unsafe-libyaml is unmaintained. It arrives through figment's `yaml` feature,
   # which reads an optional config.yaml; dropping that format removes it.
   { id = "RUSTSEC-2024-0449", reason = "only parses the operator's own config file" },
-  # pin-utils is unmaintained. It is in the lockfile only through the optional
-  # embedded-postgres feature (postgresql_embedded → reqwest-retry → wasmtimer),
-  # and wasmtimer is built only for wasm32, which the engine never targets.
-  { id = "RUSTSEC-2026-0441", reason = "never built: a wasm32-only dependency of an optional feature" },
 ]
 
 [licenses]

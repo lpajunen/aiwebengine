@@ -15,7 +15,7 @@ serde_json = "1.0"
 anyhow = "1.0"
 thiserror = "2.0"
 futures-util = "0.3"
-axum-server = "0.8"
+axum-server = "0.9"
 # CIDR parsing for server.trusted_proxies: a forwarding header is only
 # evidence when the hop that wrote it is one the operator named.
 ipnet = "2"
@@ -66,7 +66,7 @@ tar = { version = "0.4", default-features = false }
 flate2 = "1"
 
 # TypeScript/JSX transpilation
-oxc = { version = "0.157.0", features = ["full"] }
+oxc = { version = "0.158.0", features = ["full"] }
 
 # Security and encryption (Phase 0.5)
 aes-gcm = "0.11"
@@ -74,7 +74,7 @@ argon2 = "0.6.0"
 subtle = "2.5"
 
 # OAuth2 and JWT (Phase 2)
-jsonwebtoken = { version = "11.0.0", features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "12.0.0", features = ["aws_lc_rs"] }
 async-trait = "0.1"
 urlencoding = "2.1.3"
 multer = "3.0"
@@ -97,7 +97,7 @@ postgresql_embedded = { version = "0.22.0", default-features = false, features =
 # `convert.svg_to_png`. Text only: no system fonts (the output would depend on
 # the host and reveal what it has installed), no raster-image decoders (an
 # `<image>` is never loaded) and no svgz.
-resvg = { version = "0.49", default-features = false, features = ["text"] }
+resvg = { version = "0.50", default-features = false, features = ["text"] }
 # Parses `svg_to_png`'s `background` as a CSS color; the version usvg uses.
 svgtypes = "0.16"
 croner = "4.0.1"
@@ -129,7 +129,7 @@ lto = "thin"
 
 # Test-only dependencies
 [dev-dependencies]
-jsonschema = "0.60.2"
+jsonschema = "0.61.2"
 
 # Build-time dependencies (for capturing build metadata)
 [build-dependencies]
