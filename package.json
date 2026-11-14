@@ -5,16 +5,16 @@
     "typecheck": "tsc -p tsconfig.typecheck.json --pretty false"
   },
   "devDependencies": {
-    "@types/node": "^25.9.9",
+    "@types/node": "^26.6.6",
     "markdownlint-cli": "^0.50.0",
-    "prettier": "^3.9.10",
+    "prettier": "^3.10.1",
     "typescript": "^7.0.2"
   },
   "overrides": {
-    "js-yaml": "^5.4.1",
-    "katex": "^0.18.2",
-    "minimatch": "^11.0.4",
-    "re2js": "^2.9.1",
-    "smol-toml": "^1.9.0"
+    "js-yaml": "^5.5.0",
+    "katex": "^0.19.1",
+    "minimatch": "^11.0.8",
+    "re2js": "^2.10.0",
+    "smol-toml": "^1.9.1"
   }
 }
